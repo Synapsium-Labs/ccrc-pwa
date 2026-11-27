@@ -23,7 +23,7 @@ import {
   type DocsSettings, type DocsSettingsResponse, type DocsSettingsStoreWrite, type DocsSettingsStored,
 } from '../../../shared/docsTracker.js';
 import type { AccountGate } from '../accounts/gate.js';
-import type { ArtifactTree } from '../artifacts/ports.js';
+import type { ArtifactBytes, ArtifactPrepareAnswer, ArtifactReadAnswer, ArtifactTree } from '../artifacts/ports.js';
 import {
   TREE_FAILURE_REFUSAL, artifactAvailability, artifactTreeDefect, artifactTreeRef, capabilityInput, htmlRefusal, listAnswer,
   mintAnswer, originsRefusal, ownOrigins, parseMintBody, parseScopeQuery, revokeAnswer, scopeAnswer, scopeOfTree, tierStep,
@@ -43,7 +43,8 @@ import {
   type DocsLaneRun, type DocsReadLane,
 } from './lane.js';
 import {
-  DOCS_PRIMARY_NODE, DOCS_REFRESH_SKIPPED, HISTORY_JOB, LISTING_JOB, docsAnswerShape, docsBusyBody, docsCacheFill, docsCacheHitAnswer,
+  ARTIFACT_UNREADABLE, DOCS_PRIMARY_NODE, DOCS_REFRESH_SKIPPED, HISTORY_JOB, LISTING_JOB, artifactFrameLength, artifactJob, artifactListedBlob,
+  artifactRangeFits, artifactRangeTarget, artifactReadWord, artifactShowJob, artifactShowPin, artifactSizeWord, docsAnswerShape, docsBusyBody, docsCacheFill, docsCacheHitAnswer,
   docsCacheVerdict, docsFileReply, docsFolderFailureBody, docsFolderFileReply, docsFolderKey, docsFolderLabelRows,
   docsFolderListFlightKey, docsFolderPathRows, docsFolderRangeFlightKey, docsFolderRangePlan, docsFolderShowFlightKey, docsFolderTreeBody,
   docsFolderTreeFlightKey, docsIndexCacheable,
@@ -878,6 +879,103 @@ function artifactTree(reader: DocsReader, at: DocsNodeLanes, node: string): Arti
         return run.value.ok ? { ok: true, tree: run.value.answer } : { ok: false, detail: run.value };
       } catch {
         return { ok: false, detail: artifactTreeDefect() };
+      }
+    },
+  };
+}
+
+/** What an artifact exec that threw is called to `artifactReadWord`: no docs failure word, so it answers `unreadable`. */
+const ARTIFACT_EXEC_THREW = 'exec-threw';
+
+/** The answer of a finished read. */
+const ARTIFACT_READ_DONE = Object.freeze({ ok: true } as const);
+
+/**
+ * One artifact exec booked on the node's read lane (X5 A3.3): the lane runs `exec` as a job of the caller's (an artifact job), with
+ * the caller's `signal`. It answers the believed value, or the docs failure word of whatever kept it from one: the lane's own
+ * `docs-busy` (a busy lane, a closed one or an abandoned job), the failure body's word, or an exec that threw. It never throws.
+ */
+async function artifactExec<T extends { ok: true }>(at: DocsNodeLanes, job: DocsJob, signal: AbortSignal,
+  exec: () => Promise<T | DocsFailureBody>): Promise<{ ok: true; value: T } | { ok: false; failure: string }> {
+  try {
+    const run = await at.read.run(job, signal, exec);
+    if (run.kind !== 'ran') return { ok: false, failure: docsBusyBody('read').failure };
+    const got = run.value;
+    return got.ok ? { ok: true, value: got } : { ok: false, failure: got.failure };
+  } catch {
+    return { ok: false, failure: ARTIFACT_EXEC_THREW };
+  }
+}
+
+/**
+ * The artifact content door's bytes port over the console's own docs reads (X5 A3.3, spec section 5; D-9136: a closure here, because
+ * `ccdsource.ts` is L3 and books no lane). Every exec is a job of source `artifact` on the primary node's shared read lane, run through
+ * the same reader checks the console's reads pass (`believeShow`, `believeRangePrepare` and `believeRangeFrame`), and the read always
+ * names the capability's pinned version (`ArtifactReadAt`), never the tree's tip. A file at most `DOCS_LANE_LARGE_RAW` is one show,
+ * read whole and cut to the range; a larger one is a prepare and then frames, each handed to the sink only after it has passed its
+ * checks and its size is the manifest's, and the next frame read only once the sink has answered. Nothing is cached, and no log line
+ * is written beyond the `believe*` helpers' (which name no path). It decides nothing: every pin, plan, size and word is L1's.
+ */
+export function artifactBytes(readers: DocsNodes<DocsReader>, lanes: DocsNodes<DocsNodeLanes>): ArtifactBytes {
+  const node = readers.primary;
+  const reader = forNode(readers, node, 'reader');
+  const at = forNode(lanes, node, 'lanes');
+  const source = (project: string): DocsSourceId => ({ node, project });
+
+  return {
+    prepare: async (where, entry, signal): Promise<ArtifactPrepareAnswer> => {
+      try {
+        const target = artifactRangeTarget(where, entry);
+        if (target === null) return ARTIFACT_UNREADABLE;
+        const plan = docsRangePlan({ target, frame: null });
+        if (!plan.ok) return { ok: false, error: artifactReadWord('prepare', plan.failure) };
+        const src = source(where.project);
+        const run = await artifactExec(at, artifactJob(plan.job), signal,
+          async () => believeRangePrepare(await reader.range.prepare(src, target)));
+        if (!run.ok) return { ok: false, error: artifactReadWord('prepare', run.failure) };
+        const sized = artifactSizeWord('prepare', run.value.answer.size, entry.size);
+        return sized === null ? { ok: true, snapshot: run.value.answer.snapshot } : { ok: false, error: sized };
+      } catch {
+        return { ok: false, error: artifactReadWord('prepare', ARTIFACT_EXEC_THREW) };
+      }
+    },
+
+    read: async (where, entry, range, snapshot, sink, signal): Promise<ArtifactReadAnswer> => {
+      try {
+        if (!artifactRangeFits(range, entry.size)) return ARTIFACT_UNREADABLE;
+        const src = source(where.project);
+        if (snapshot === null) {
+          const pin = artifactShowPin(where, entry);
+          if (pin === null) return ARTIFACT_UNREADABLE;
+          const job = artifactShowJob(entry.size);
+          const ask = { maxBytes: entry.size, job, listedBlob: artifactListedBlob(entry) };
+          // No listing is passed: the manifest's pin, not the listing map, names this entry's blob, so the blob cache is never filled
+          // from an artifact read.
+          const run = await artifactExec(at, job, signal,
+            async () => believeShow(at, node, pin, undefined, job, await reader.show(src, pin, ask)));
+          if (!run.ok) return { ok: false, error: artifactReadWord('show', run.failure) };
+          const sized = artifactSizeWord('show', run.value.bytes.length, entry.size);
+          if (sized !== null) return { ok: false, error: sized };
+          await sink(run.value.bytes.subarray(range.start, range.end + 1));
+          return ARTIFACT_READ_DONE;
+        }
+        const target = artifactRangeTarget(where, entry);
+        if (target === null) return ARTIFACT_UNREADABLE;
+        for (let offset = range.start; offset <= range.end;) {
+          const frame = { snapshot, offset, length: artifactFrameLength(offset, range.end) };
+          const plan = docsRangePlan({ target, frame });
+          if (!plan.ok) return { ok: false, error: artifactReadWord('frame', plan.failure) };
+          const run = await artifactExec(at, artifactJob(plan.job), signal,
+            async () => believeRangeFrame(await reader.range.frame(src, target, frame)));
+          if (!run.ok) return { ok: false, error: artifactReadWord('frame', run.failure) };
+          const sized = artifactSizeWord('frame', run.value.answer.total, entry.size);
+          if (sized !== null) return { ok: false, error: sized };
+          if (await sink(Buffer.from(run.value.answer.bytesB64, 'base64')) === 'stop') return ARTIFACT_READ_DONE;
+          offset += frame.length;
+        }
+        return ARTIFACT_READ_DONE;
+      } catch {
+        return { ok: false, error: artifactReadWord('show', ARTIFACT_EXEC_THREW) };
       }
     },
   };

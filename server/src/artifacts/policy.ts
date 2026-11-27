@@ -9,7 +9,8 @@
 // never too little: its one way to be wrong is a refusal.
 import { isExactHttpsOrigin } from '../../../shared/httpsOrigin.js';
 import {
-  ARTIFACT_MAX_ORIGINS, ARTIFACT_PUBLIC_SUFFIXES, artifactMime, type ArtifactListOk, type ArtifactMintOk, type ArtifactOffWhy,
+  ARTIFACT_MAX_INFLIGHT, ARTIFACT_MAX_INFLIGHT_BOX, ARTIFACT_QUEUE_PER_CAPABILITY, ARTIFACT_SANDBOX_BASE, ARTIFACT_SANDBOX_WINDOWS,
+  ARTIFACT_MAX_ORIGINS, ARTIFACT_PUBLIC_SUFFIXES, ARTIFACT_QUEUE_WAIT_MS, ARTIFACT_HOURLY_BYTES, ARTIFACT_RESPONSE_MAX_MS, artifactMime, type ArtifactListOk, type ArtifactMintOk, type ArtifactOffWhy,
   type ArtifactRefusal, type ArtifactRevokeOk, type ArtifactRow, type ArtifactScopeOk,
 } from '../../../shared/artifacts.js';
 import {
@@ -17,7 +18,7 @@ import {
   type DocPin, type DocsEntry, type DocsFailureBody, type DocsRangePin, type DocsRefSpec, type DocsTreeOk,
 } from '../../../shared/docs.js';
 import {
-  badQuery, docsOwn as own, firstUnknownKey, isDocsRecord as isRecord, parseDocsProjectParam, parseFilePin, type DocsSignIn,
+  DOCS_LANE_LARGE_RAW, badQuery, docsOwn as own, firstUnknownKey, isDocsRecord as isRecord, parseDocsProjectParam, parseFilePin, type DocsSignIn,
 } from '../docs/policy.js';
 import type { ArtifactManifestEntry, CapabilityInput } from './store.js';
 
@@ -253,14 +254,45 @@ export function artifactMethodAllowed(method: string): boolean {
   return method === 'GET' || method === 'HEAD';
 }
 
-/** The status of an answer for a request Node could not parse (its `clientError` code): an oversized header is 431, a request
- *  that outlived Node's request timeout is 408 (both of Node's own defaults answer so), anything else is 400. Node's own
- *  default maps a few more codes to other statuses (a chunk-extension overflow to 413, for one); here those are 400, with the
- *  same fixed words. */
-export function clientErrorStatus(code: unknown): 400 | 408 | 431 {
+/** The status of an answer for a request Node could not parse (its `clientError` code), as Node's own default answers it: an
+ *  oversized header is 431, a chunk extension past Node's limit is 413, a request that outlived Node's request timeout is 408,
+ *  anything else is 400 (X5 A3 took the 413 from the A1 review, which measured 400 here where Node answers 413). */
+export function clientErrorStatus(code: unknown): 400 | 408 | 413 | 431 {
   if (code === 'HPE_HEADER_OVERFLOW') return 431;
+  if (code === 'HPE_CHUNK_EXTENSIONS_OVERFLOW') return 413;
   if (code === 'ERR_HTTP_REQUEST_TIMEOUT') return 408;
   return 400;
+}
+
+/** What the artifact instance does with a request Node could not parse, by Node's own rule (`socketOnError` in its HTTP server):
+ *  answer with `clientErrorStatus` only while the socket is writable and the response in flight on it, if any, has not sent its
+ *  headers. A connection reset, a socket that cannot be written, or a response already under way (its headers on the wire, its
+ *  body streaming) is destroyed with nothing written, because a status line written then would land inside that response's
+ *  body (X5 A3, from the A1 review). */
+export function clientErrorAction(code: unknown, writable: boolean, headersSent: boolean):
+  { kind: 'answer'; status: 400 | 408 | 413 | 431 } | { kind: 'destroy' } {
+  if (code === 'ECONNRESET' || !writable || headersSent) return { kind: 'destroy' };
+  return { kind: 'answer', status: clientErrorStatus(code) };
+}
+
+/** The status of Fastify's own answer to an error it raises before any hook runs (its `frameworkErrors` codes), as Fastify's
+ *  defaults answer it: a malformed percent-escape in the path is 400, an over-long path parameter is 414, anything else (an
+ *  async constraint's failure) is 500. Both instances answer with this status and fixed words, never the default body, whose
+ *  `message` echoes the request path, and a path on this tier holds a capability token (X5 A3, from the A1 reviews). */
+export function frameworkErrorStatus(code: unknown): 400 | 414 | 500 {
+  if (code === 'FST_ERR_BAD_URL') return 400;
+  if (code === 'FST_ERR_MAX_PARAM_LENGTH') return 414;
+  return 500;
+}
+
+/** The fixed `error` words of the console's answer to a framework error: the runtime's own reason phrase for each status
+ *  `frameworkErrorStatus` can answer (Node's `http.STATUS_CODES`, and Fastify's default), so the console's 414 reads `URI Too
+ *  Long`, not `Bad Request`. A literal table, with no import of `node:http` here; the answer still echoes nothing of the path
+ *  (X5 A3 fix round 1, review 4050 A4). */
+export function frameworkErrorPhrase(status: 400 | 414 | 500): string {
+  if (status === 400) return 'Bad Request';
+  if (status === 414) return 'URI Too Long';
+  return 'Internal Server Error';
 }
 
 // ---- The availability read, the scope read and the mint (plan Task A2.3, spec 3.2) ----
@@ -548,4 +580,388 @@ export function capabilityInput(
     section: ask.pin.section, dir: slash < 0 ? '' : ask.pin.path.slice(0, slash), page: ask.pin.path,
     manifest: new Map(scope.entries.map((e) => [e.rel, e])), origins: [...origins], windows,
   };
+}
+
+// ---- The content door's policy: CSP, headers, fetch fences, cache, ranges, admission (X5 A3.2; spec 4.3 and 5) -----------------
+// Pure decisions the content door (`routes.ts`, L4) applies and never makes itself. Every directive, header and fence row is the
+// design's text; a change here is a change to the design.
+
+/** The header CSP of every content response (spec 4.3, directives in the design's order). `S` is the capability path on the content
+ *  host, so a source never admits another capability's files, and `'self'` is never used. The confirmed `origins` go to script,
+ *  style, image and font only, never to `connect-src` (or media, worker, frame or child): a page that fetches from an outside API
+ *  still fails. The `sandbox` directive repeats the frame's, so a content URL opened top-level is sandboxed too; `allow-popups`
+ *  joins it only for a capability minted with windows. */
+export function contentCsp(
+  contentOrigin: string, artifactOrigin: string, token: string, origins: readonly string[], windows: boolean,
+): string {
+  const s = `${contentOrigin}/c/${token}/`;
+  const o = origins.length === 0 ? '' : ` ${origins.join(' ')}`;
+  const sandbox = windows ? [...ARTIFACT_SANDBOX_BASE, ARTIFACT_SANDBOX_WINDOWS] : [...ARTIFACT_SANDBOX_BASE];
+  return [
+    `default-src 'none'`,
+    `script-src ${s} 'unsafe-inline' 'unsafe-eval' 'wasm-unsafe-eval' blob: data:${o}`,
+    `style-src ${s} 'unsafe-inline' data:${o}`,
+    `img-src ${s} data: blob:${o}`,
+    `font-src ${s} data:${o}`,
+    `media-src ${s} data: blob:`,
+    `connect-src ${s} data: blob:`,
+    `worker-src ${s} blob:`,
+    `frame-src ${s}`,
+    `child-src ${s} blob:`,
+    `manifest-src 'none'`,
+    `object-src 'none'`,
+    `base-uri ${s}`,
+    `form-action 'none'`,
+    `frame-ancestors ${artifactOrigin} ${contentOrigin}`,
+    `sandbox ${sandbox.join(' ')}`,
+  ].join('; ');
+}
+
+/** The other headers on every content response (spec 4.3 and 5), lower-case names. No `access-control-allow-origin`: every
+ *  legitimate request is same-origin. Frozen, so no importer adds a header to it at run time. */
+export const CONTENT_HEADERS: Readonly<Record<string, string>> = Object.freeze({
+  'x-content-type-options': 'nosniff',
+  'cross-origin-resource-policy': 'same-origin',
+  'referrer-policy': 'no-referrer',
+  'x-dns-prefetch-control': 'off',
+  'x-robots-tag': 'noindex, nofollow',
+  'accept-ranges': 'bytes',
+  'permissions-policy':
+    'camera=(), microphone=(), geolocation=(), usb=(), serial=(), hid=(), bluetooth=(), payment=(), display-capture=(), fullscreen=(self), clipboard-write=(self)',
+  // D-9145 (the coordinator's ruling of 2026-11-27): a browser's HTTP cache must never stand in for the service-worker fence. A
+  // response stored for a script tag or a fetch was asked with another `Sec-Fetch-Dest` and no `Service-Worker` header, so it never
+  // answers a worker's script request, which goes to the network and meets `fetchFence`.
+  vary: 'Sec-Fetch-Dest, Service-Worker',
+});
+
+/** Every JavaScript MIME type essence a browser accepts as a script (the MIME Sniffing standard's list), the one place the tier
+ *  names them: `cacheKind` reads it for every type the MIME table can answer, so a script extension added to the table later is
+ *  never stored either (D-9145). */
+const JAVASCRIPT_ESSENCES: ReadonlySet<string> = new Set([
+  'application/ecmascript', 'application/javascript', 'application/x-ecmascript', 'application/x-javascript',
+  'text/ecmascript', 'text/javascript', 'text/javascript1.0', 'text/javascript1.1', 'text/javascript1.2', 'text/javascript1.3',
+  'text/javascript1.4', 'text/javascript1.5', 'text/jscript', 'text/livescript', 'text/x-ecmascript', 'text/x-javascript',
+]);
+
+/** Whether a MIME type essence is an XML MIME type in the MIME Sniffing standard's sense: `text/xml`, `application/xml`, or any
+ *  essence whose SUBTYPE ends in `+xml` (`image/svg+xml`, `application/xhtml+xml`, `application/rss+xml`, ...). The caller passes
+ *  the essence, so a parameter such as `x=+xml` never reaches the test. The one place the tier names them (D-9149). */
+function isXmlEssence(essence: string): boolean {
+  if (essence === 'text/xml' || essence === 'application/xml') return true;
+  const subtype = essence.slice(essence.indexOf('/') + 1);
+  return essence.includes('/') && subtype.endsWith('+xml');
+}
+
+/** Which cache rule a served file takes, by its MIME type's essence (the type less any parameter, trimmed, lower-cased): `html`
+ *  for a document a browser opens and runs script in, which is the MIME Sniffing standard's HTML MIME type (`text/html`) and
+ *  every XML MIME type (an SVG, an XHTML page or an XSLT sheet run script on the content origin when opened as a document;
+ *  D-9149), `script` for a JavaScript type a browser runs as a script, `other` for everything else (D-9145). */
+export function cacheKind(mime: string): 'html' | 'script' | 'other' {
+  const essence = mime.split(';')[0]!.trim().toLowerCase();
+  if (essence === 'text/html' || isXmlEssence(essence)) return 'html';
+  return JAVASCRIPT_ESSENCES.has(essence) ? 'script' : 'other';
+}
+
+/** The fetch-metadata fence (spec 4.3's table), decided before a byte is read. The first row that matches wins. The caller passes
+ *  the header values lower-cased, as browsers send them. A client that is not a browser can send any header, so for such a client
+ *  the capability is the whole check (spec 7). */
+export function fetchFence(
+  h: { dest?: string; mode?: string; site?: string; serviceWorker?: string }, windows: boolean,
+): 'ok' | 'refused' {
+  // Fails closed: all three fetch-metadata headers must be there.
+  if (!h.dest || !h.mode || !h.site) return 'refused';
+  // A `Service-Worker` header, even an empty one, is a service worker's script fetch.
+  if (h.serviceWorker !== undefined) return 'refused';
+  if (h.dest === 'serviceworker' || h.dest === 'embed' || h.dest === 'object') return 'refused';
+  if (h.mode === 'navigate') {
+    if (h.dest === 'iframe') return 'ok';
+    if (h.dest === 'document') return windows ? 'ok' : 'refused';
+    // A download the page starts (`<a download>`) is sent as a navigation with dest `empty`, from the same origin only.
+    if (h.dest === 'empty') return h.site === 'same-origin' ? 'ok' : 'refused';
+    return 'refused';
+  }
+  return h.site === 'same-origin' ? 'ok' : 'refused';
+}
+
+/** The browser cache rule (spec 5, "Browser cache", amended by D-9145 and D-9149): a response of kind `html`, a document that can
+ *  run script (HTML or any XML type), is never cached, so a dead capability cannot start a page, nor can Back/Forward or a
+ *  reload replay one; a script is never cached either, so a worker's script fetch always reaches the network and the
+ *  service-worker fence, whatever a browser does with `Vary` (D-9145); any other file is cached for the seconds the capability
+ *  may still live, at most an hour, because a pin's bytes never change. `cacheKind` picks the kind from the MIME type. */
+export function cacheControl(kind: 'html' | 'script' | 'other', secondsLeft: number): string {
+  if (kind === 'html' || kind === 'script') return 'no-store';
+  // A value that is not a number (a missing expiry) is 0, never a malformed `max-age=NaN`.
+  const n = Number.isFinite(secondsLeft) ? Math.min(3600, Math.max(0, Math.floor(secondsLeft))) : 0;
+  return `private, max-age=${n}, immutable`;
+}
+
+/** What a `Range` header asks of a file of `size` bytes (spec 5, "Ranges"; RFC 9110 section 14). `end` is inclusive. A header that
+ *  is not one `bytes=` range spec is ignored (the whole file), which RFC 9110 lets a server do with a Range it cannot parse;
+ *  several ranges, or one the file cannot satisfy, are unsatisfiable (416). */
+export function parseRange(
+  header: string | undefined, size: number,
+): { kind: 'whole' } | { kind: 'one'; start: number; end: number } | { kind: 'unsatisfiable' } {
+  const whole = { kind: 'whole' } as const;
+  const unsatisfiable = { kind: 'unsatisfiable' } as const;
+  if (header === undefined) return whole;
+  if (!header.startsWith('bytes=')) return whole;
+  const spec = header.slice('bytes='.length);
+  if (spec.includes(',')) return unsatisfiable;
+  const m = /^(\d*)-(\d*)$/.exec(spec);
+  if (m === null) return whole;
+  const [, a, b] = m as unknown as [string, string, string];
+  if (a === '' && b === '') return whole;
+  // More than 15 digits can pass `Number.MAX_SAFE_INTEGER`; such a spec is ignored.
+  if (a.length > 15 || b.length > 15) return whole;
+  if (a === '') {
+    const n = Number(b);
+    if (n === 0 || size === 0) return unsatisfiable;
+    return { kind: 'one', start: Math.max(0, size - n), end: size - 1 };
+  }
+  const start = Number(a);
+  if (b !== '') {
+    const end = Number(b);
+    if (start > end) return whole;
+    if (start >= size) return unsatisfiable;
+    return { kind: 'one', start, end: Math.min(end, size - 1) };
+  }
+  if (start >= size) return unsatisfiable;
+  return { kind: 'one', start, end: size - 1 };
+}
+
+/** The `Content-Type` a served file carries: its MIME, with the charset on served text, so a browser never guesses one. */
+export function artifactContentType(mime: string): string {
+  return mime.startsWith('text/') || mime === 'application/json' || mime === 'image/svg+xml' ? `${mime}; charset=utf-8` : mime;
+}
+
+/** A new request's admission (spec 5, "Waiting, not refusing"): it runs when nothing of its capability waits and both the
+ *  capability and the box have room; else it waits in its capability's queue; past the queue's bound it is refused (429). */
+export function admitLoad(c: { inflight: number; queued: number }, boxInflight: number): 'run' | 'wait' | 'full' {
+  if (c.queued === 0 && c.inflight < ARTIFACT_MAX_INFLIGHT && boxInflight < ARTIFACT_MAX_INFLIGHT_BOX) return 'run';
+  return c.queued < ARTIFACT_QUEUE_PER_CAPABILITY ? 'wait' : 'full';
+}
+
+/** Whether a request already at the head of its capability's queue may start now: the same two bounds, with no queue to look at. */
+export function admitQueued(c: { inflight: number }, boxInflight: number): boolean {
+  return c.inflight < ARTIFACT_MAX_INFLIGHT && boxInflight < ARTIFACT_MAX_INFLIGHT_BOX;
+}
+
+// ---- The content door's route decisions (X5 A3.3; spec 3.4, 4.3 and 5) -----------------------------------------------------
+// Pure decisions `content.ts` (L4) applies and never makes itself: the raw path, which host a route answers on, the fences'
+// input, every fixed answer, the whole header set, the prepare slot and what a failed read becomes.
+
+/** The path of a content request from the RAW request URL, never from the router's `*` parameter (which may already be decoded).
+ *  The query and fragment are cut first; the path must be `/c/<token>/<rest>`; `token` is the raw segment (not decoded) and `rest`
+ *  is decoded ONCE. `null` for a malformed escape, and for any segment that is empty, `.` or `..` or holds `\` or NUL, so a
+ *  traversal spelling is never a lookup. No file-system path is ever built from the answer. */
+export function contentRequestPath(rawUrl: string): { token: string; rel: string } | null {
+  let path = rawUrl;
+  const cut = path.search(/[?#]/);
+  if (cut >= 0) path = path.slice(0, cut);
+  if (!path.startsWith('/c/')) return null;
+  const rest = path.slice('/c/'.length);
+  const slash = rest.indexOf('/');
+  if (slash <= 0) return null;
+  const raw = rest.slice(slash + 1);
+  if (raw === '') return null;
+  let rel: string;
+  try {
+    rel = decodeURIComponent(raw);
+  } catch {
+    return null;
+  }
+  if (rel.split('/').some((s) => s === '' || s === '.' || s === '..' || s.includes('\\') || s.includes('\u0000'))) return null;
+  return { token: rest.slice(0, slash), rel };
+}
+
+/** The manifest key of a request path: the manifest is keyed by SECTION-relative path, a capability's `dir` is the page's directory
+ *  in its section (`''` at the root), and the request's path is relative to `dir`. */
+export function contentKey(dir: string, rel: string): string {
+  return dir === '' ? rel : `${dir}/${rel}`;
+}
+
+/** Which host each route answers on (spec 3.4's table): the wrapper on the artifact host, the content door and `/clear` on the
+ *  content host, `GET /` on either. A wrong host on a known route is that route's identical 404, never a 421: the 421 stays the
+ *  fence's, for a host that is neither. */
+export function routeHostOk(
+  route: 'wrapper' | 'content' | 'clear' | 'root', host: string | undefined, cfg: { artifactHost: string; contentHost: string },
+): boolean {
+  if (route === 'wrapper') return hostMatches(host, [cfg.artifactHost]);
+  if (route === 'root') return hostMatches(host, [cfg.artifactHost, cfg.contentHost]);
+  return hostMatches(host, [cfg.contentHost]);
+}
+
+/** `/clear` is loaded only into the wrapper's frame: exactly `iframe`. */
+export function clearDestOk(dest: string | undefined): boolean {
+  return dest === 'iframe';
+}
+
+/** The CSP of `/clear`'s page (spec 3.4): nothing loads, and only the artifact host may frame it. */
+export function CLEAR_CSP(artifactOrigin: string): string {
+  return `default-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors ${artifactOrigin}`;
+}
+
+/** The fence's input from the request's raw header values: the three `Sec-Fetch-*` values lower-cased, and a `Service-Worker`
+ *  header of ANY value, an empty one included, as present. The fence itself is `fetchFence`. */
+export function contentFence(
+  h: { dest?: string | string[]; mode?: string | string[]; site?: string | string[]; serviceWorker?: string | string[] },
+  windows: boolean,
+): 'ok' | 'refused' {
+  const low = (v: string | string[] | undefined): string | undefined =>
+    v === undefined ? undefined : (Array.isArray(v) ? v.join(',') : v).toLowerCase();
+  return fetchFence({ dest: low(h.dest), mode: low(h.mode), site: low(h.site), serviceWorker: low(h.serviceWorker) }, windows);
+}
+
+/** The artifact prepare slot (spec 5, "Prepare busy" and "Box budget"): at most this many prepares run at once, and this many start
+ *  in any minute, half of ccd's box-wide 2 and 6, so console prepares keep the other half. (The docs lane already holds one artifact
+ *  job at a time, but its own wait is 10 s, shorter than the minute, so the window is the door's, inside the request's wait.) */
+export const ARTIFACT_PREPARES_AT_ONCE = 1;
+export const ARTIFACT_PREPARES_PER_MINUTE = 3;
+/** The pause before a prepare asks ccd again after its `prepare-busy`. */
+export const ARTIFACT_PREPARE_RETRY_MS = 2000;
+const PREPARE_WINDOW_MS = 60000;
+
+/** Whether a prepare may start now, from whether one runs and when the recent ones started: a running one makes it wait with no
+ *  time to wake at (it wakes when that one ends); three starts within the last minute make it wait until the oldest counted one is
+ *  a minute old; else it starts. */
+export function prepareSlot(state: { running: boolean; starts: readonly number[] }, now: number):
+  { kind: 'start' } | { kind: 'wait'; until: number | null } {
+  if (state.running) return { kind: 'wait', until: null };
+  const recent = state.starts.filter((t) => now - t < PREPARE_WINDOW_MS).sort((a, b) => a - b);
+  if (recent.length >= ARTIFACT_PREPARES_PER_MINUTE) {
+    return { kind: 'wait', until: recent[recent.length - ARTIFACT_PREPARES_PER_MINUTE]! + PREPARE_WINDOW_MS };
+  }
+  return { kind: 'start' };
+}
+
+/** Whether a manifest entry is read as range frames with a snapshot: above `DOCS_LANE_LARGE_RAW`, derived, never restated. A
+ *  smaller one is one whole show cut to the range. */
+export function artifactFramed(entry: { size: number }): boolean {
+  return entry.size > DOCS_LANE_LARGE_RAW;
+}
+
+/** How long a request that arrived at `arrivedAt` may still wait, at `now`: `ARTIFACT_QUEUE_WAIT_MS` from its arrival, never below 0. */
+export function queueWaitLeft(arrivedAt: number, now: number): number {
+  return Math.max(0, ARTIFACT_QUEUE_WAIT_MS - (now - arrivedAt));
+}
+
+/** Whole seconds a capability may still live at `now`, from its expiry: never below 0. */
+export function secondsLeftOf(expiresAtMs: number, now: number): number {
+  return Math.max(0, Math.floor((expiresAtMs - now) / 1000));
+}
+
+/** The bytes a response carries: the range's length, or the whole file's. `range` is inclusive. */
+export function responseLength(range: { start: number; end: number } | null, size: number): number {
+  return range === null ? size : range.end - range.start + 1;
+}
+
+/** Whether a frame of `length` bytes still fits in a response of `total` bytes of which `sent` are out: a response never sends
+ *  past its `Content-Length`. */
+export function frameFits(sent: number, length: number, total: number): boolean {
+  return sent + length <= total;
+}
+
+/** The whole header set of a 200 or a 206 (spec 4.3 and 5): the type (with its charset on text), the length, the CSP built for this
+ *  capability, every `CONTENT_HEADERS` entry, the cache rule by the file's MIME kind, an attachment disposition for a file the
+ *  MIME table does not know, and for a range the `Content-Range`. No `set-cookie` and no `access-control-*`. */
+export function contentHeaders(i: {
+  key: string; entry: { mime: string; size: number }; range: { start: number; end: number } | null;
+  contentOrigin: string; artifactOrigin: string; token: string; origins: readonly string[]; windows: boolean; secondsLeft: number;
+}): Record<string, string> {
+  const h: Record<string, string> = {
+    'content-type': artifactContentType(i.entry.mime),
+    'content-length': String(responseLength(i.range, i.entry.size)),
+    'content-security-policy': contentCsp(i.contentOrigin, i.artifactOrigin, i.token, i.origins, i.windows),
+    ...CONTENT_HEADERS,
+    'cache-control': cacheControl(cacheKind(i.entry.mime), i.secondsLeft),
+  };
+  if (artifactMime(i.key).attachment) h['content-disposition'] = 'attachment';
+  if (i.range !== null) h['content-range'] = `bytes ${i.range.start}-${i.range.end}/${i.entry.size}`;
+  return h;
+}
+
+/** The content door's fixed answers other than the identical 404: a status, a fixed text body and the headers. None echoes
+ *  anything of the request. Each carries the `Vary` of `CONTENT_HEADERS` (D-9145). `wait-out` is the 503 of a wait that ran out or
+ *  a lane that is busy; `too-many` the 429 of a full queue or a spent hour. */
+export type ContentAnswerKind = 'forbidden' | 'too-many' | 'wait-out' | 'draft-changed';
+export function contentAnswer(kind: ContentAnswerKind): { status: number; body: string; headers: Record<string, string> } {
+  const vary = { vary: CONTENT_HEADERS['vary']! };
+  switch (kind) {
+    case 'forbidden': return { status: 403, body: 'Forbidden.', headers: vary };
+    case 'too-many': return { status: 429, body: 'Too many requests.', headers: vary };
+    case 'wait-out': return { status: 503, body: 'Busy. Try again shortly.', headers: { ...vary, 'retry-after': '5' } };
+    case 'draft-changed': return { status: 409, body: 'This draft file changed since the page was opened.', headers: vary };
+  }
+}
+
+/** The 416 of a range the file cannot satisfy, or several (RFC 9110: `Content-Range: bytes * /size`). */
+export function unsatisfiableAnswer(size: number): { status: 416; body: string; headers: Record<string, string> } {
+  return { status: 416, body: 'Range not satisfiable.', headers: { vary: CONTENT_HEADERS['vary']!, 'content-range': `bytes */${size}` } };
+}
+
+/** What a failed READ becomes. `wrote` is whether a byte is out already; `reprepared` whether the snapshot was already prepared
+ *  once more for this response. A `snapshot-gone` the first time is a re-prepare (before a byte or after, reading on from the next
+ *  unsent byte). After a byte every other failure destroys the socket short of `Content-Length`, never a short 200. Before one:
+ *  `draft-changed` is the 409, `busy` the 503 (kept apart from `unreadable`), anything else the identical 404. */
+export type ReadFailureAction =
+  { kind: 'status'; status: 404 | 409 | 503 } | { kind: 'reprepare' } | { kind: 'destroy' };
+export function readFailureAction(error: string, wrote: boolean, reprepared: boolean): ReadFailureAction {
+  if (error === 'snapshot-gone' && !reprepared) return { kind: 'reprepare' };
+  if (wrote) return { kind: 'destroy' };
+  if (error === 'draft-changed') return { kind: 'status', status: 409 };
+  if (error === 'busy') return { kind: 'status', status: 503 };
+  return { kind: 'status', status: 404 };
+}
+
+/** What a failed PREPARE becomes: `prepare-busy` (ccd's own word) is asked again after `ARTIFACT_PREPARE_RETRY_MS`, inside the
+ *  request's wait; the rest are `readFailureAction`'s before a byte, and after one the socket is destroyed. */
+export function prepareFailureAction(error: string, wrote: boolean): ReadFailureAction | { kind: 'retry' } {
+  if (error === 'prepare-busy') return { kind: 'retry' };
+  return readFailureAction(error, wrote, true);
+}
+
+// ---- The content door's small decisions, fix round of X5 A3.3 -----------------------------------------------------------
+
+/** The hour's byte budget is a window that restarts this long after its start: the store's rule, spelled once here and read by it. */
+export const ARTIFACT_BUDGET_WINDOW_MS = 3600000;
+
+/** Whether a capability's byte budget is already spent at `now` (spec 5: "1 GiB served an hour"): the window has not restarted and
+ *  the bytes served in it have reached the budget. A request is refused (429) only then; what it is then served is charged frame by
+ *  frame, so a ranged read that stops early costs only what it was sent. */
+export function budgetSpent(c: { servedThisHour: number; hourStart: number }, now: number): boolean {
+  return now - c.hourStart < ARTIFACT_BUDGET_WINDOW_MS && c.servedThisHour >= ARTIFACT_HOURLY_BYTES;
+}
+
+/** The status of a 200 or 206 head: a range is 206, the whole file 200. The one place that says so. */
+export function contentStatus(range: { start: number; end: number } | null): 200 | 206 {
+  return range === null ? 200 : 206;
+}
+
+/** What a read that answered `ok` becomes: the response is complete only when exactly its `Content-Length` was sent; any other
+ *  count is a cut socket, never a short 200. */
+export function readEndVerdict(sent: number, total: number): 'complete' | 'destroy' {
+  return sent === total ? 'complete' : 'destroy';
+}
+
+/** What a prepare whose wait ran out becomes: the 503 before a byte, a cut socket after one. */
+export function prepareTimeoutAction(wrote: boolean): 'wait-out' | 'destroy' {
+  return wrote ? 'destroy' : 'wait-out';
+}
+
+/** The answer a status from `readFailureAction` stands for: the identical 404 or one of the fixed answers. */
+export function statusAnswerKind(status: 404 | 409 | 503): 'not-found' | 'draft-changed' | 'wait-out' {
+  return status === 404 ? 'not-found' : status === 409 ? 'draft-changed' : 'wait-out';
+}
+
+/** The prepare starts still counted at `now`, with this one added: only those inside the prepare window are kept. */
+export function withPrepareStart(starts: readonly number[], now: number): number[] {
+  return [...starts.filter((t) => now - t < PREPARE_WINDOW_MS), now];
+}
+
+/** The instant a request's wait for a snapshot ends. The first prepare gets `ARTIFACT_QUEUE_WAIT_MS` from the request's arrival. A
+ *  re-prepare after `snapshot-gone`, which can come long after that, gets a fresh wait from `now`, never past the response
+ *  deadline (`ARTIFACT_RESPONSE_MAX_MS` from admission). */
+export function prepareWaitUntil(kind: 'first' | 'again', arrivedAt: number, admittedAt: number, now: number): number {
+  if (kind === 'first') return arrivedAt + ARTIFACT_QUEUE_WAIT_MS;
+  return Math.min(now + ARTIFACT_QUEUE_WAIT_MS, admittedAt + ARTIFACT_RESPONSE_MAX_MS);
 }
