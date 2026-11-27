@@ -88,7 +88,7 @@ Traced against X2's plan (`2026-11-18-native-docs-parity.md`) and `main` at `2b5
 | The one `popstate` dispatcher and `onPop`, with the router's, `useReaderOnly`'s and the release gate's listeners moved onto it | Global Constraints, XR1.3 | P5.3 (`lib/popstate.ts`, `lib/router.ts`, `docs/readerHistory.ts`, `lib/swupdate.ts`) | No |
 | The pop decider `decidePop` and its answers (`close-overlay`, `goto`, `consume`, `skip`, `router`) | XR1.3 | P5.3 (`lib/historyPlaces.ts`) | No |
 | The place host, `setPlaceHost`, beside which XR1.3 adds the reader host | XR1.3 | P5.3 (`lib/popstate.ts`) | No |
-| The tab record (`visit`, `doc`, `places`, `pendingSeq`, `lastIdx`, `next`), `docsIdx` on every entry, and `PLACES_MAX = 50` | XR1.3 | P5.3 | No |
+| The tab record (`visit`, `doc`, `places`, `pendingSeq`, `lastIdx`, `next`), `docsIdx` on every entry, and `PLACES_MAX = 20` (amended 2026-11-26; D-9139: was 50) | XR1.3 | P5.3 | No |
 | The place push in `docs/reader/places.ts`, to which XR1.3 adds the drop of recorded places above `lastIdx` | XR1.3 | P5.3 | No |
 | The frame's `place` (`overlay`, `overlay-closed`) and a `hash` with `push` reaching ccrc: `onPlace` and the two-argument `onHash`, passed by the bridge | XR1.3; XR1.4 (wake-lock activity) | P5.3's wiring in `ReaderFrame.tsx` and `reader/bridge.ts` | No. It needs the library at 1.2.0, which is wave C's pin |
 | `close-overlay` sent on the step-back's pop | XR1.3 | P5.3, through `DocFrame.closeOverlay()`, which 1.2.0 adds (the shipped 1.1.0's `COMMAND_OPS` has only the four tools) | No. It needs wave C's pin, like the places |

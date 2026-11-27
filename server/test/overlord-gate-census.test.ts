@@ -35,9 +35,10 @@ const NAME_LIST_ROUTES = 'server/src/operatorModel/nameListRoutes.ts';
 const LINKING_ROUTES = 'server/src/linking/routes.ts';
 const INBOX_ROUTES = 'server/src/coord/overlordInboxRoutes.ts';
 const HISTORY_ROUTES = 'server/src/coord/overlordHistoryRoutes.ts';
-/** The files an `overlord` row may name: the same seven `overlord-doors-census.test.ts` reads (D-8809 added the linking file, the inbox
- *  piece its own, the history door (W1, PR B1) its own). */
-const SCANNED = [OVERLORD_ROUTES, CONTINUITY, LEDGERS_ROUTES, NAME_LIST_ROUTES, LINKING_ROUTES, INBOX_ROUTES, HISTORY_ROUTES] as const;
+const SEQUENCE_ROUTES = 'server/src/coord/overlordSequenceRoutes.ts';
+/** The files an `overlord` row may name: the same eight `overlord-doors-census.test.ts` reads (D-8809 added the linking file, the inbox
+ *  piece its own, the history door (W1, PR B1) its own, the cursor read of the sequence (W1 sequence C) its own). */
+const SCANNED = [OVERLORD_ROUTES, CONTINUITY, LEDGERS_ROUTES, NAME_LIST_ROUTES, LINKING_ROUTES, INBOX_ROUTES, HISTORY_ROUTES, SEQUENCE_ROUTES] as const;
 const sourceOf = (rel: string): string => readFileSync(path.join(REPO, rel), 'utf8');
 const VERBS = new Set(['get', 'post', 'put', 'delete']);
 
@@ -278,6 +279,17 @@ describe('every overlord door asks the one gate, with its own row, before the st
   it('CONTROL: a history door that skips the gate call is found', () => {
     const t = mutate(sourceOf(HISTORY_ROUTES), /const g = await deps\.gate\(req, reply, 'history'[^\n]*\n\s*if \(g\.kind === 'refused'\) return reply;\n/, '');
     expect(violationsOf(t, HISTORY_ROUTES).join('\n')).toMatch(/history: the handler never calls gate\(/);
+  });
+
+  it('the sequence file registers the cursor read, which holds the form (a zero would make its loop case vacuous)', () => {
+    const rows = overlordRowsOf(SEQUENCE_ROUTES);
+    expect([...rows.entries()]).toEqual([['GET /api/overlord/sequence', ['sequence']]]);
+    expect(violationsOf(sourceOf(SEQUENCE_ROUTES), SEQUENCE_ROUTES)).toEqual([]);
+  });
+
+  it('CONTROL: a cursor read that skips the gate call is found', () => {
+    const t = mutate(sourceOf(SEQUENCE_ROUTES), /const g = await deps\.gate\(req, reply, 'sequence'[^\n]*\n\s*if \(g\.kind === 'refused'\) return reply;\n/, '');
+    expect(violationsOf(t, SEQUENCE_ROUTES).join('\n')).toMatch(/sequence: the handler never calls gate\(/);
   });
 
   it('the whole continuity file is clean, over every overlord row', () => {

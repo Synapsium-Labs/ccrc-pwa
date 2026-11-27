@@ -130,6 +130,9 @@ import { overlordGateRun, overlordReadGate, type OverlordGateDeps } from './coor
 import { registerOverlordInboxRoutes } from './coord/overlordInboxRoutes.js';
 import { runOverlordRead } from './coord/overlordRead.js';
 import { registerOverlordHistoryRoutes } from './coord/overlordHistoryRoutes.js';
+import { registerOverlordSequenceRoutes } from './coord/overlordSequenceRoutes.js';
+import { sequenceAfter } from './coord/overlordSequenceStore.js';
+import { invariantsReadOver } from './coord/invariantLane.js';
 import { readTurnMarkMeasured } from './turnmark.js';
 import { actKeyFact, advanceCounterGuarded, recordFenceRefusal } from './coord/overlordGateStore.js';
 import { CONTINUITY_LANE } from '../../shared/lane-arm.js';
@@ -325,6 +328,9 @@ export const MASKED_GET_ROUTES: ReadonlySet<string> = new Set([
   '/api/portfolio', '/api/overlord/ladder', '/api/overlord/readiness',
   // The operator's messages, one by its id (W1 inbox piece): the text is the operator's own words, masked by the one answer hook.
   '/api/overlord/inbox', '/api/overlord/messages/:id',
+  // The operator's read of the invariant monitor (sequence C): findings' messages and unmeasured reasons carry composed text, a
+  // producer's error detail among it, as the ladder's and the readiness word's `why` do.
+  '/api/overlord/invariants',
   // Docs settings (X2 P4.3): the link rules are operator-entered text, not fixed server vocabulary.
   '/api/docs/settings',
 ]);
@@ -2283,7 +2289,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   const consoleActor = (req: FastifyRequest): string =>
     consoleSubject(identity.console(deps.cfg.authEnabled, deps.cfg.authEnabled ? sessionAuth(req).device : null)) ?? 'unmeasured';
   // The ladder's composed read, built once for its doors and the gate.
-  const ladderDeps = deps.coord === undefined ? undefined : { coord: deps.coord, inputs: deps.ladderInputs ?? ladderConditionInputs({ coord: deps.coord, serverCaps: deps.ladderServerCaps ?? SERVER_CAPS, sidecar: (id) => watcher?.currentUsage().get(id), isolation: deps.isolation, accountFacts: () => { const l = watcher?.currentLimits(); return l === null || l === undefined ? null : loadFactsOf(deps.cfg.roster, l.limits, deps.coord!.accountPoolEdges(), Math.floor(deps.time.clock.wall() / 1000)); }, noWitnessSinceBoot: () => deps.overlordAuthorityExchange?.noWitnessSinceBoot() ?? 'unmeasured' }), witness: deps.ladderWitness ?? deps.overlordAuthorityExchange, serverCaps: deps.ladderServerCaps ?? SERVER_CAPS, journal: deps.overlordAuthority ?? NO_LADDER_AUTHORITY };
+  const ladderDeps = deps.coord === undefined ? undefined : { coord: deps.coord, inputs: deps.ladderInputs ?? ladderConditionInputs({ coord: deps.coord, serverCaps: deps.ladderServerCaps ?? SERVER_CAPS, sidecar: (id) => watcher?.currentUsage().get(id), isolation: deps.isolation, accountFacts: () => { const l = watcher?.currentLimits(); return l === null || l === undefined ? null : loadFactsOf(deps.cfg.roster, l.limits, deps.coord!.accountPoolEdges(), Math.floor(deps.time.clock.wall() / 1000), deps.coord!.accountHolds()); }, noWitnessSinceBoot: () => deps.overlordAuthorityExchange?.noWitnessSinceBoot() ?? 'unmeasured' }), witness: deps.ladderWitness ?? deps.overlordAuthorityExchange, serverCaps: deps.ladderServerCaps ?? SERVER_CAPS, journal: deps.overlordAuthority ?? NO_LADDER_AUTHORITY };
   // THE OVERLORD GATE (W1 gates B, §11.2): its one runner, each fact read through its owner's reader. The witness ports are
   // door process B's (`continuity/witnessPorts.ts`): `unmeasured` (502) until the fleet's ccd advertises `door-witness-v1`.
   const noCoord = 'no coordination store';
@@ -2348,6 +2354,10 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     mailToken: () => deps.mailToken ?? null, gate, inboxStore: deps.operatorModel, reads: deps.coord, continuityLive, now: () => deps.time.clock.wall(), readRunner,
   });
   registerOverlordHistoryRoutes(app, { mailToken: () => deps.mailToken ?? null, gate, readRunner, io: deps.io, links: () => (deps.fleetState === undefined ? [] : [deps.fleetState]) });
+  // The Overlord's cursor read of the sequence (W1 sequence C): `coord.db`'s one cursor read and the restore counter's one reader.
+  registerOverlordSequenceRoutes(app, { mailToken: () => deps.mailToken ?? null, gate, readRunner,
+    sequence: (after, limit) => (deps.coord === undefined ? { kind: 'unmeasured', why: 'no coordination store' } : sequenceAfter(deps.coord.db, after, limit)),
+    restoreGeneration: () => deps.overlordRestore?.restoreGeneration() ?? { kind: 'unmeasured' } });
   // The Overlord's account reads, one object for the designation doors and the designation's lane port.
   const overlordAccountReads = { roster: () => deps.cfg.roster, limits: () => readLimits(deps.io, deps.cfg), shares: () => readSharesMeasured(deps.io, deps.cfg.registryDir) };
   // The loads door's settle step (W1 sandbox B, Task 9): the designation's writers and its one drain, on the serialiser.
@@ -2498,6 +2508,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   registerOverlordRoutes(app, {
     gate: accountGate, identity, serial: coordRoutes.serial, ...overlordStore, exchange: deps.overlordAuthorityExchange, consoleFacts: (req) => ({ armed: deps.cfg.authEnabled, device: deps.cfg.authEnabled ? sessionAuth(req).device : null }), host: renewalHostOf(deps, deps.coord ?? { startsOf: () => ({ ok: false, detail: 'no coordination store' }) }, null),
     ladder: ladderDeps, restore: deps.overlordRestore, readiness: () => deps.overlordReadiness?.read() ?? null,
+    invariants: deps.invariantMonitor === undefined || deps.coord === undefined ? undefined : invariantsReadOver(deps.invariantMonitor, deps.coord.db),
     // Read at call time, as the continuity routes read `deps.time`: a test server may hand none.
     clock: { wall: () => deps.time.clock.wall() }, entropy: { uuid: () => deps.time.entropy.uuid(), hex: (n) => deps.time.entropy.hex(n) }, dec: pwaDec,
     body: overlordBody,

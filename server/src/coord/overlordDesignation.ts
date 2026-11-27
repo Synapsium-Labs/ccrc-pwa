@@ -16,6 +16,7 @@ import type { Roster } from '../../../shared/roster.js';
 import { poolRule } from '../../../shared/poolrule.js';
 import { serviceability } from '../../../shared/serviceability.js';
 import type { LaneFacts } from '../../../shared/serviceability.js';
+import { heldOutOfList, type AccountHoldsRead } from '../../../shared/renewal-readings.js';
 import type { AccountLimits } from '../limits.js';
 import { parsePoolAnswer, poolRostered, resolvedAccountPool } from '../poolrule.js';
 import { rowStanding } from '../sessionReading.js';
@@ -27,6 +28,9 @@ export interface AccountFacts {
   /** One entry per roster account, built by the door with `limits.ts#laneFactsOf`; a missing entry is unmeasured. */
   readonly lanes: Readonly<Record<string, LaneFacts>>;
   readonly nowS: number;
+  /** The standing account holds (renewal readings PR H, §3.6; `continuity/accountHolds.ts#accountHolds`), read once per call by
+   *  every caller that builds these facts. Unread: the list is the unfiltered one, marked `unread`, never an empty one. */
+  readonly held: AccountHoldsRead;
 }
 
 export interface DesignateFacts {
@@ -68,9 +72,14 @@ export type DesignateVerdict =
  *  for the class now; `unmeasured` are those whose servability nothing has measured. An unmeasured account is in the
  *  list, never in `counted`, and never folded into "unservable": a count that could pass on it must refuse instead. No
  *  pay-per-use or other-provider lane is listed until an operator-lists-it fact exists (review F10, ruled). The list
- *  orders and never admits: every member passes `poolRule` under the set. */
+ *  orders and never admits: every member passes `poolRule` under the set.
+ *  THE HOLDS (renewal readings PR H, §3.6): `list` leaves every held account out (L0's `heldOutOfList`), so every caller of the
+ *  list leaves it out and no second list exists; holds that would leave none keep the list as it was, `overridden`; holds that
+ *  could not be read keep it unfiltered, `unread`. `counted` and `unmeasured` are over the list before the holds: C56 counts the
+ *  accounts that can serve, and a hold orders, it does not disable. */
 export function overlordAccounts(set: PoolSet, cls: OverlordModelClass, f: AccountFacts): {
   readonly list: readonly string[]; readonly counted: readonly string[]; readonly unmeasured: readonly string[];
+  readonly holds: 'applied' | 'overridden' | 'unread';
 } {
   const side = { state: 'set', set } as const;
   const ranked: { id: string; rank: number; at: number }[] = [];
@@ -90,10 +99,12 @@ export function overlordAccounts(set: PoolSet, cls: OverlordModelClass, f: Accou
     ranked.push({ id: a.id, rank: named >= 0 ? named : set.pools.length, at });
   });
   ranked.sort((x, y) => x.rank - y.rank || x.at - y.at);
-  const list = ranked.map((r) => r.id);
+  const all = ranked.map((r) => r.id);
+  const kept = f.held.ok ? heldOutOfList(all, f.held.lanes) : null;
+  const list = kept === null ? all : kept.list;
   const counted: string[] = [];
   const unmeasured: string[] = [];
-  for (const id of list) {
+  for (const id of all) {
     if (f.limits[id]?.authDead === true) continue;
     const lane = f.lanes[id];
     if (lane === undefined) { unmeasured.push(id); continue; }
@@ -101,7 +112,7 @@ export function overlordAccounts(set: PoolSet, cls: OverlordModelClass, f: Accou
     if (s.kind === 'servable') counted.push(id);
     else if (s.kind !== 'unservable') unmeasured.push(id);
   }
-  return { list, counted, unmeasured };
+  return { list, counted, unmeasured, holds: kept === null ? 'unread' : kept.overridden ? 'overridden' : 'applied' };
 }
 
 const present = (words: readonly string[] | null, w: string): boolean => words !== null && words.includes(w);
@@ -157,8 +168,11 @@ function createSteps(f: Omit<DesignateFacts, 'read'>): DesignateVerdict {
         : `${counted.length} counted account(s); the Overlord needs at least two`,
     };
   }
-  // 6. the pick is always inside the counted list.
-  const wrapper = f.home !== null && counted.includes(f.home.wrapper) ? f.home.wrapper : counted[0]!;
+  // 6. the pick is always inside the counted list, and inside the held-out list when any counted account is (renewal readings PR
+  //    H, slug designate-pick-avoids-a-held-account): a hold leaves its account out of the start's pick as it does of the list.
+  const open = counted.filter((id) => list.includes(id));
+  const pickable = open.length > 0 ? open : counted;
+  const wrapper = f.home !== null && pickable.includes(f.home.wrapper) ? f.home.wrapper : pickable[0]!;
   // `empty` cannot reach here: it counts zero above.
   const poolset = spelled.kind === 'spelled' ? spelled.spelling : '';
   return { act: 'create', wrapper, acctorder: list.join(','), poolset };

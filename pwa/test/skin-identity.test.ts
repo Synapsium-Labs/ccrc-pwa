@@ -405,7 +405,11 @@ function sheetCensus(tree: string, registry: readonly string[] = SHEET_REGISTRY)
  *  registered file with no hit is not red, because `pwa/src/lib/skin.ts`
  *  reaches the attribute only through `applySkin`. A registered path that no
  *  longer exists is red. */
-const SOURCE_REGISTRY: readonly string[] = ['ui/src/styles/skins.ts', 'pwa/src/lib/skin.ts', 'pwa/index.html'];
+const SOURCE_REGISTRY: readonly string[] = [
+  'ui/src/styles/skins.ts', 'pwa/src/lib/skin.ts', 'pwa/index.html',
+  'pwa/src/lib/appearance.ts', // Observes the root skin attribute for changes to the applied appearance.
+  'pwa/src/lib/appearanceStamp.ts', // Reads the root skin attribute to derive the applied appearance stamp.
+];
 const SOURCE_ROOTS: readonly string[] = ['pwa/src', 'ui/src', 'ui/.storybook'];
 const SOURCE_FILES: readonly string[] = ['pwa/index.html'];
 

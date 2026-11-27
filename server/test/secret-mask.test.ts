@@ -1261,6 +1261,7 @@ describe('the rulings: every egress of session-derived text goes through the mas
     '/api/overlord/private-names': "whether a private-name list is stored, its row count, its upload time and an unreadable reason word: never a name, an entry, a hash or the key (Overlord W2, private names B)",
     '/api/decision-model': "each decision-model row's mode, ceiling, hold and line counts, today's call counts, and the host's kind, endpoint, origin and model id and the key's set time and masked flag: never the key, a price or a model's answer (Overlord W2, decision model B)",
     '/api/continuity/renewal-backstop': 'an hour, an IANA zone name, a flag and a time: no session text (Overlord W1 renewal readings A)',
+    '/api/continuity/account-holds': "each standing hold's account lane, its one cause word, a start id and a time: no session text (Overlord W1 renewal readings H)",
     '/api/coord/roll-idle': 'one setting word and its two choices (D-7453)',
     '/api/coord/plain-auto-memory': 'one setting word, its default and its two choices (Overlord W1a launch profiles PR B)',
     '/api/coord/coordinator-advisor': 'one setting word, a cap, a scope of session ids, and the defaults and choices: no session text (D-8967)',
@@ -1311,6 +1312,9 @@ describe('the rulings: every egress of session-derived text goes through the mas
     // is the registry's, the team key is the operator's (its shape is closed), the override and mode are two-word sets, and the
     // reading is a repository slug from gh, a visibility and template word, a time and a failure word held to `^[a-z-]{1,24}$`.
     '/api/overlord/designation': "the designation row's view (server-minted session ids and generations, the operator's model class and pool names, the actor label, closed outcome words and times), the ordered account ids and warnings naming the operator's pools: no session-written text (Overlord W1 designation A)",
+    // The Overlord's cursor read of the sequence (Overlord W1 sequence C): each line is a closed kind, a server-minted id, a closed
+    // state word, an actor label and its kind, a time and a seq; the page's facts are integers; no session-written text.
+    '/api/overlord/sequence': "the sequence's lines (closed kinds and state words, server-minted ids, actor labels and kinds, times and seqs), the cursor, the head, the prune floor and the restore generation: no session-written text (Overlord W1 sequence C)",
     '/api/overlord/restore': "the authority guard's state: one of three closed words and a closed cause or reason word (AUTHORITY_STATE_WORDS, AUTHORITY_STATE_CAUSES, AUTHORITY_STATE_WHYS); no session-written text (Overlord W1 authority journal C)",
     '/api/linking': "the caller's project name, the operator's team key and override, and the measured visibility: closed words, a repository slug, a time; no session text (D-8147)",
   };

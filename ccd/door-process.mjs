@@ -55,6 +55,9 @@ const isPage = (v) => Number.isInteger(v) && v >= 1 && v <= 999_999;
  *  import (Node built-ins only); door-tools.test.ts holds the two sources equal (D-8809). */
 export const TEAM_KEY_SHAPE = /^[A-Z][A-Z0-9_]{0,15}$/;
 const isId = (v) => Number.isInteger(v) && v >= 1;
+/** The most lines one sequence page serves: the SAME value as `SEQUENCE_PAGE_MAX` (shared/overlord-sequence.ts), which this file
+ *  cannot import (Node built-ins only); door-tools.test.ts holds the two equal. */
+export const SEQUENCE_PAGE_MAX = 500;
 const pageSchema = { type: 'integer', minimum: 1, description: 'The page to read; 1 when absent.' };
 const object = (properties, required = [], extra = false) => ({ type: 'object', properties, required, additionalProperties: extra });
 
@@ -67,7 +70,7 @@ const need = (ok, why) => { if (!ok) throw new InputRefused(why); };
  *  `fenced` calls carry the act key, the generation and the counter; the fenced `view` rows are those whose Overlord door row is
  *  a write (`card`, `inbox`, `messages`): the page that completes a full read of the card is a write (gates B's `card-record`,
  *  F9), and a read of the inbox or of one message is a write too (the inbox plan's question 15), and this process cannot tell
- *  which call is the one that writes. */
+ *  which call is the one that writes. The `sequence` read's door row is not a write, so its row is not fenced. */
 const BASE_TOOLS = [
   {
     name: 'card', verb: 'sessions.card', class: 'view', fenced: true, reader: false,
@@ -159,6 +162,22 @@ const BASE_TOOLS = [
     description: 'Acknowledge one inbox message by its id.',
     input: object({ id: { type: 'integer', minimum: 1 } }, ['id']),
     argv: (i) => { need(isId(i.id), 'id is a message id'); return ['overlord', 'acknowledge', String(i.id)]; },
+  },
+  {
+    // The Overlord's cursor read of the one sequence (Overlord W1, sequence C): a view, unfenced by this table's rule (its door
+    // row is not a write), and no reader's door (the door-process plan's question 9 opens only the board and the history to
+    // readers). Its input is the client verb's two bounded integers.
+    name: 'sequence', verb: 'overlord.sequence', class: 'view', fenced: false, reader: false,
+    description: `Read your sequence from a cursor, one page per call: after is the last line you hold (0, or absent, from the start), limit at most ${SEQUENCE_PAGE_MAX}. A gap answer names the oldest cursor still served; an ahead answer means the sequence is behind your cursor, so start again from its head.`,
+    input: object({
+      after: { type: 'integer', minimum: 0, maximum: Number.MAX_SAFE_INTEGER, description: 'The last sequence number you hold; 0 when absent.' },
+      limit: { type: 'integer', minimum: 1, maximum: SEQUENCE_PAGE_MAX, description: `The most lines to read; ${SEQUENCE_PAGE_MAX} when absent.` },
+    }),
+    argv: (i) => {
+      need(i.after === undefined || (Number.isSafeInteger(i.after) && i.after >= 0), 'after is a non-negative integer');
+      need(i.limit === undefined || (Number.isInteger(i.limit) && i.limit >= 1 && i.limit <= SEQUENCE_PAGE_MAX), `limit is an integer from 1 to ${SEQUENCE_PAGE_MAX}`);
+      return ['overlord', 'sequence', ...(i.after === undefined ? [] : ['--after', String(i.after)]), ...(i.limit === undefined ? [] : ['--limit', String(i.limit)])];
+    },
   },
   {
     // D-8809: the Overlord's confirm of one current team candidate for a project with no Linear key, a call made in the

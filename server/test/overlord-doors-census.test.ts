@@ -26,7 +26,9 @@ const LINKING_ROUTES = 'server/src/linking/routes.ts';
 const INBOX_ROUTES = 'server/src/coord/overlordInboxRoutes.ts';
 // The Overlord's history door (W1, PR B1): a routes file of its own beside the inbox's.
 const HISTORY_ROUTES = 'server/src/coord/overlordHistoryRoutes.ts';
-const FILES = [OVERLORD_ROUTES, CONTINUITY_ROUTES, LEDGERS_ROUTES, NAME_LIST_ROUTES, LINKING_ROUTES, INBOX_ROUTES, HISTORY_ROUTES] as const;
+// The Overlord's cursor read of the sequence (W1 sequence C): a routes file of its own beside the history's.
+const SEQUENCE_ROUTES = 'server/src/coord/overlordSequenceRoutes.ts';
+const FILES = [OVERLORD_ROUTES, CONTINUITY_ROUTES, LEDGERS_ROUTES, NAME_LIST_ROUTES, LINKING_ROUTES, INBOX_ROUTES, HISTORY_ROUTES, SEQUENCE_ROUTES] as const;
 /** Table 11.1d's server words (the later waves' words join here when their pieces land). */
 const SERVER_WORDS = ['continuity-v1', 'timers-v1', 'overlord-v1'];
 const VERBS = new Set(['get', 'post', 'put', 'delete']);
@@ -61,7 +63,7 @@ describe('the door table against the routes files', () => {
       expect(regs[r.file], key).toContain(rowRegistration(r));
     }
   });
-  for (const f of [OVERLORD_ROUTES, CONTINUITY_ROUTES, NAME_LIST_ROUTES, INBOX_ROUTES, HISTORY_ROUTES]) {
+  for (const f of [OVERLORD_ROUTES, CONTINUITY_ROUTES, NAME_LIST_ROUTES, INBOX_ROUTES, HISTORY_ROUTES, SEQUENCE_ROUTES]) {
     it(`${f}: every registration has a row or a NOT_OVERLORD_DOORS entry`, () => {
       expect(unaccounted(f, regs[f]!)).toEqual([]);
     });
@@ -77,7 +79,7 @@ describe('the door table against the routes files', () => {
     }
   });
   it('CONTROL: a planted registration with no row or entry is found, in each exhaustively scanned file', () => {
-    for (const f of [OVERLORD_ROUTES, CONTINUITY_ROUTES, NAME_LIST_ROUTES, INBOX_ROUTES, HISTORY_ROUTES]) {
+    for (const f of [OVERLORD_ROUTES, CONTINUITY_ROUTES, NAME_LIST_ROUTES, INBOX_ROUTES, HISTORY_ROUTES, SEQUENCE_ROUTES]) {
       const planted = `${sourceOf(f)}\napp.post('/api/planted/door', async () => 1);\n`;
       expect(unaccounted(f, registrationsOf(planted, f)), f).toEqual(['POST /api/planted/door']);
     }
@@ -118,7 +120,10 @@ describe('the table itself', () => {
   });
   it('the rows on landing include the ratify and designation C Settings doors already on main', () => {
     expect(rows.map(([k]) => k)).toEqual([
-      'designate', 'retire', 'rebind', 'restart', 'designation', 'model', 'account-set', 'ladder', 'readiness', 'rung', 'pause', 'latch-clear', 'witness',
+      'designate', 'retire', 'rebind', 'restart', 'designation', 'model', 'account-set', 'ladder', 'readiness',
+      // The operator's read of the invariant monitor (W1 sequence C).
+      'invariants',
+      'rung', 'pause', 'latch-clear', 'witness',
       // Confirm the restore (authority journal C): the guard's state, and the door.
       'restore-read', 'restore-confirm',
       'portfolio-rank', 'goals-ratify', 'private-names-read', 'private-names-write',
@@ -129,6 +134,8 @@ describe('the table itself', () => {
       'inbox', 'messages', 'acknowledge',
       // The Overlord's history door (W1, PR B1).
       'history',
+      // The Overlord's cursor read of the sequence (W1 sequence C): not fenced, its row not a write.
+      'sequence',
       // The timer doors (W1, the Overlord's timers): every other session keeps W1a's path.
       'timer-set', 'timer-list', 'timer-cancel',
     ]);
