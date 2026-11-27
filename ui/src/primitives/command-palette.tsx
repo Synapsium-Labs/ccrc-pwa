@@ -31,7 +31,7 @@
 import { useEffect, useId, useState, type KeyboardEvent, type ReactNode } from 'react';
 import { Drawer } from 'vaul';
 import { cn } from '../lib/cn';
-import { recordModalLayer } from '../lib/modal-layers';
+import { liftHeld, recordModalLayer } from '../lib/modal-layers';
 import { PALETTE_MOTION_VARS, VAUL_MOTION } from '../lib/motion';
 import { Icon } from './icon';
 import { KEYCAP } from './keycap';
@@ -137,6 +137,13 @@ export function CommandPalette({
   // runs. `options` is compared by identity, so a caller memoises it.
   useEffect(() => { setActive(0); }, [query, options]);
   const at = options.length === 0 ? -1 : Math.min(active, options.length - 1);
+
+  // THE PALETTE'S CLOSE AND UNMOUNT GIVE BACK WHAT READER MODE HELD (`../lib/modal-layers.ts#liftHeld`, review 4052 A1). The
+  // palette lifts none of its own marks, so a console node reader mode left hidden for a Docs sheet that then unmounted under the
+  // open palette (its "Go to" path) had no layer left to lift it. The lift gives a node back only when no open dialog stands, so
+  // the console is never announced under one; while reader mode is never used nothing is held and it does nothing.
+  useEffect(() => { if (!open) liftHeld(); }, [open]);
+  useEffect(() => liftHeld, []);
 
   useEffect(() => {
     if (!open || at < 0) return;

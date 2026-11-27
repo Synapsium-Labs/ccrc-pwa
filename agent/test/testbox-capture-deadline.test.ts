@@ -29,14 +29,20 @@ import { appendFileSync, mkdirSync, realpathSync, writeFileSync } from 'node:fs'
 import path from 'node:path';
 import type { TestboxConfig } from '../src/testbox/config.js';
 import { captureDeskComposed, deliveryOf, deliveryWiring } from '../src/testbox/main.js';
+import { framesWorstCaseMs } from '../src/testbox/captureFrames.js';
+import type { FramesDriver } from '../src/testbox/captureFramesRun.js';
+import { framesDriveSteps } from '../../shared/framesCapture.js';
+import { FRAMES_STATUS_TEXT } from '../../shared/framesReduce.js';
+import { FRAMES_PARTS } from '../../shared/framesResult.js';
 import { mkTmp } from './tmpHelpers.js';
 
 const T: CaptureTimings = {
   stepMs: 1000, exitMs: 100, pollMs: 10, tmuxCallMs: 20, stopWaitMs: 50, standInCloseMs: 30, setupMs: 5, removeMs: 7,
   deliveryDriveMs: 300, deliveryKillGraceMs: 60, deliverySettleMs: 200, deliveryQuietMs: 40,
+  framesDriveMs: 250, framesPersonDriveMs: 900, framesHoldMs: 600,
 };
 /** The delivery recipe's bounds in the contract (Desktop polish wave 178): build trust's worst case never reads them. */
-const DELIVERY_KEYS: readonly (keyof CaptureTimings)[] = ['deliveryDriveMs', 'deliveryKillGraceMs', 'deliverySettleMs', 'deliveryQuietMs'];
+const DELIVERY_KEYS: readonly (keyof CaptureTimings)[] = ['deliveryDriveMs', 'deliveryKillGraceMs', 'deliverySettleMs', 'deliveryQuietMs', 'framesDriveMs', 'framesPersonDriveMs', 'framesHoldMs'];
 
 describe('the worst case of one capture by the wired runner (capture.ts#captureWorstCaseMs)', () => {
   it('adds the setup allowance, the start, each typed step\'s two calls, each step\'s wait and a poll, the exit wait and a poll, the stop, the stop wait and a poll, the stand-in\'s close and the removal allowance', () => {
@@ -453,6 +459,87 @@ describe('gate G1: a delivery part, composed, every bound taken, ends within its
     expect([part + part, part + trust, trust + part].map((pair) => pair + CAPTURE_DEADLINE_MARGIN_MS)).toEqual([832_000, 830_500, 830_500]);
     for (const pair of [part + part, part + trust, trust + part]) expect(pair + CAPTURE_DEADLINE_MARGIN_MS).toBeLessThanOrEqual(TESTBOX_CAPTURE_DEADLINE_MS);
     expect(deliveryPartCount(t)).toBe(3);
+  });
+});
+
+// Review 4069's A2 (plan step F6): gate G1 for the box frames recipe, the delivery part's twin above. The composed desk and
+// runner, the real launcher, a virtual clock, every driver step at its bound (the person's at the person's) with its kill
+// grace and drain, every settle and quiet in full, /exit at its bound, the exit wait and the stop: each part ends within its
+// own worst case, and two of the longest with the margin inside the fleet agent's wait.
+describe('gate G1: a frames part, composed, every bound taken, ends within its worst case and the pair inside the wait', () => {
+  const t = CAPTURE_TIMINGS;
+  const longest = FRAMES_PARTS.reduce((best, _, i) => (framesWorstCaseMs(t, i) > framesWorstCaseMs(t, best) ? i : best), 0);
+
+  async function composedRun(part: number): Promise<{ at: number; drives: number; ended: CaptureAnswer | undefined }> {
+    const root = realpathSync(mkTmp('ccrc-capg1f-'));
+    mkdirSync(path.join(root, 'captures', 'builds'), { recursive: true });
+    writeFileSync(path.join(root, 'captures', 'builds', BUILD), 'bytes');
+    const cfg = { root, lines: new Map([['A_BOX_LINE', { key: 'A_BOX_LINE', def: '', value: root, from: 'file' }]]) } as unknown as TestboxConfig;
+    const clock = { now: 1_000_000 };
+    const call = t.tmuxCallMs + UPDATE_SPAWN_DRAIN_MS;
+    let cur: { recording: string; step: number; began: number; written: number } | null = null;
+    const sleep = async (ms: number): Promise<void> => {
+      clock.now += ms;
+      if (cur !== null && cur.written < cur.step + 1 && cur.step < DELIVERY_STEPS_BEFORE.length && clock.now >= cur.began + t.stepMs) {
+        for (const event of DELIVERY_STEPS_BEFORE[cur.step]!.waitFor) appendFileSync(cur.recording, `${JSON.stringify({ kind: 'hook', event, payload: {}, status: null })}\n`);
+        cur.written = cur.step + 1;
+      }
+    };
+    // Each driver step at its limit: its bound (the person's for a person step), TERM, KILL a grace later, one drain. A send
+    // is one the build took, so its settle and quiet run in full (no turn ever ends); the frame step reads one settled frame.
+    const steps = framesDriveSteps(part);
+    let i = 0;
+    const driver: FramesDriver = {
+      async step(_word, _input, _place, person) {
+        const s = steps[i++]!;
+        clock.now += (person ? t.framesPersonDriveMs : t.framesDriveMs) + t.deliveryKillGraceMs + UPDATE_SPAWN_DRAIN_MS;
+        if (s.kind === 'frame') return { kind: 'frame', frame: `plain row\n${'─'.repeat(40)}\n  ${FRAMES_STATUS_TEXT}\n`, cursor: null, settled: true };
+        if (s.kind === 'turn' || s.kind === 'send' || s.kind === 'queued' || s.kind === 'held') return { kind: 'sent', send: 'ok' };
+        return { kind: 'typed', typed: true };
+      },
+    };
+    const desk = captureDeskComposed(cfg, root, true, { home: root, seams: {
+      now: () => clock.now, sleep,
+      tmux: {
+        spawner: (env) => async (_file, args) => {
+          clock.now += call;
+          if (args.includes('new-session')) {
+            cur = { recording: env['CCRC_CAPTURE_RECORDING']!, step: 0, began: clock.now, written: 0 };
+            return { status: 0, stdout: '4242\n', stderr: '', killed: false };
+          }
+          if (args.at(-1) === 'Enter' && cur !== null) { cur.step++; cur.began = clock.now; }
+          return { status: 0, stdout: '', stderr: '', killed: false };
+        },
+        signal: () => undefined,
+      },
+      standIn: async () => ({ port: 1, requests: [], routes: [], close: () => new Promise<void>(() => undefined) }),
+      frames: { driver, tmuxConf: null, privates: [], scan: () => false },
+    } });
+    const t0 = clock.now;
+    let at = -1;
+    const frames: CaptureAnswer[] = [];
+    desk.submit({ ...SUBMIT(1), recipe: 'frames', part }, { send: (f: CaptureAnswer): void => { frames.push(f); if (f.state === 'ended') at = clock.now - t0; } });
+    await desk.settled();
+    return { at, drives: i, ended: frames.find((f) => f.state === 'ended') };
+  }
+
+  // The person part by name, since the longest part is chosen by the very formula a case must hold.
+  const person = FRAMES_PARTS.findIndex((p) => p.case === 'person-turns');
+  for (const [name, part] of [['the first part', 0], ['the longest part', longest], ['the person part, with its own bound', person]] as const) {
+    it(`${name}: every step at its bound, ended with its frame, within its own worst case`, async () => {
+      const r = await composedRun(part);
+      expect(r.drives).toBe(framesDriveSteps(part).length);
+      expect(r.ended).toMatchObject({ state: 'ended', detail: null, frames: { part, frame: { outcome: 'drawn' } } });
+      // Measured EXACTLY, as the delivery part's is: the worst case less its two allowances and the polls' overruns, which
+      // this clock never has (the steps before's and after's, two per turn or send, one per held step, the exit wait's and
+      // the stop wait's).
+      const ds = framesDriveSteps(part);
+      const polls = DELIVERY_STEPS_BEFORE.length + 1 + 2 * ds.filter((s) => s.kind === 'turn' || s.kind === 'send').length + ds.filter((s) => s.kind === 'held').length + 2;
+      expect(r.at).toBe(framesWorstCaseMs(t, part) - t.setupMs - t.removeMs - polls * t.pollMs);
+    });
+  }
+  it('two of the longest part in a row, with the margin, fit the fleet agent\'s wait', () => {
+    expect(2 * framesWorstCaseMs(t, longest) + CAPTURE_DEADLINE_MARGIN_MS).toBeLessThanOrEqual(TESTBOX_CAPTURE_DEADLINE_MS);
   });
 });
 

@@ -168,7 +168,10 @@ tree contradicts. The plan builds every recommendation unless the coordinator or
 9. **Which doors may a reader read?** **Recommendation:** the read tool serves the rows of the tool table marked
    `reader: true`, which in W1 are `board` and `history` (each once its piece has added its row). Never `messages` (the
    operator's words reach the main thread only, §3.8), and never `card`, `probe` or the notes (the generation's own
-   memory, which closed-book grading counts).
+   memory, which closed-book grading counts). (Corrected 2026-11-27, call 1590: `board` and `history` are unfenced
+   views, attributed reads and not proven ones, which is what the read tool's rule asks of a readable door; in
+   `ccd/door-process.mjs` both rows read `fenced: false, reader: true`, and `inbox`, `messages` and `card` stay fenced
+   and not readable.)
 10. **The bound of three readers** (slug `reader-bound-in-the-scope-arm`). §3.3.10 says "at most three readers run at
     once" and names no enforcer. **Recommendation:** the B2 arm refuses a fourth `Agent` call while the hook's
     subagent roster (`subs` in `hookstate.json`, D-5232, from which a `SubagentStop` removes the entry) holds three.

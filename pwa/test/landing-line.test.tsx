@@ -2,19 +2,29 @@
 // the pause control, the sheet that outlives the block (F1), the re-read on each answer of the withdraw door (fix round 1,
 // F1), and where focus goes (m7, R6). The doors are fakes passed as props; the card's section is a stand-in that holds the
 // fallback ref.
-import { afterEach, describe, expect, it, vi } from 'vitest';
-import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { act, cleanup, fireEvent, render, screen, within, type RenderResult } from '@testing-library/react';
 import { useRef } from 'react';
-import type { ReactNode } from 'react';
+import type { ReactElement, ReactNode } from 'react';
 import { ApiError } from '../src/lib/apiError';
+import { resetLandingLineOpen } from '../src/fleet/foldState';
 import { LandingLine, type LandingPauser } from '../src/fleet/LandingLine';
 import type { LandingWithdrawer } from '../src/fleet/LandingWithdrawSheet';
 import type { LandingCardState } from '../src/fleet/landingLineView';
-import { LANDING_ROUTE_WORDS, SHEET_DONE, SHEET_GONE, STALE_PREFIX } from '../src/fleet/landingWords';
+import { LANDING_ROUTE_WORDS, LINE_TITLE, SHEET_DONE, SHEET_GONE, STALE_PREFIX } from '../src/fleet/landingWords';
 import { E101, E104, NONE, P, deferred, e, lineView, onlyView, pausedEmpty, stateOf, withdrawn } from './landingLineFixture';
 
+// Desktop polish wave 192: the block starts rolled up, and its open state is module state that outlives a case, so every
+// case starts from a reload's state.
+beforeEach(resetLandingLineOpen);
 afterEach(cleanup);
 const flush = async (): Promise<void> => { await act(async () => { for (let i = 0; i < 5; i++) await Promise.resolve(); }); };
+/** Wave 192: draw the card, then the one added tap that opens its block, so each case below reads today's open view. */
+const renderOpen = (ui: ReactElement): RenderResult => {
+  const r = render(ui);
+  fireEvent.click(screen.getByRole('button', { name: LINE_TITLE }));
+  return r;
+};
 
 function Card({ state, onReload, pause, withdraw }: {
   state: LandingCardState; onReload?: () => void; pause?: LandingPauser; withdraw?: LandingWithdrawer;
@@ -45,7 +55,7 @@ describe('the block', () => {
 
   it('a line renders the named region, the status, each row, the chips, and a Withdraw on every row, the set-aside one too', () => {
     const view = lineView({ entries: [E101, e(102, { state: 'ejected', ejectionKind: 'new-head' }), E104, e(107, { afterIds: [1003] }), e(109, { state: 'unknown' }), e(110, { runId: null })] });
-    render(<Card state={stateOf(view)} />);
+    renderOpen(<Card state={stateOf(view)} />);
     const r = region();
     expect(within(r).getByRole('status').textContent).toBe('Next to land: #101.');
     expect(within(r).getByText('Landing line')).toBeTruthy();
@@ -66,13 +76,13 @@ describe('the block', () => {
     const prev = stateOf(lineView());
     const stale: LandingCardState = prev.kind === 'line'
       ? { ...prev, stale: { text: LANDING_ROUTE_WORDS['landing-fenced'].text, scope: 'box', outcomeUnknown: false } } : prev;
-    render(<Card state={stale} />);
+    renderOpen(<Card state={stale} />);
     expect(region().textContent).toContain(`Not read again: ${LANDING_ROUTE_WORDS['landing-fenced'].text}`);
   });
 
   it('with no onReload prop a tap and its answer do not throw (F12)', async () => {
     const pause = vi.fn<LandingPauser>(() => Promise.resolve({ ok: true, project: P, operatorPaused: true, changed: true, seq: 1 }));
-    render(<Card state={stateOf(lineView())} pause={pause} />);
+    renderOpen(<Card state={stateOf(lineView())} pause={pause} />);
     fireEvent.click(pauseButton('Pause line'));
     await flush();
     expect(pause).toHaveBeenCalledTimes(1);
@@ -84,7 +94,7 @@ describe('the pause control', () => {
     const d = deferred<{ ok: true; project: string; operatorPaused: boolean; changed: boolean; seq: number | null }>();
     const pause = vi.fn<LandingPauser>(() => d.promise);
     const onReload = vi.fn();
-    const { rerender } = render(<Card state={stateOf(lineView())} pause={pause} onReload={onReload} />);
+    const { rerender } = renderOpen(<Card state={stateOf(lineView())} pause={pause} onReload={onReload} />);
     fireEvent.click(pauseButton('Pause line'));
     expect(pause.mock.calls).toEqual([[P, true]]);
     expect(pauseButton('Pausing…').textContent).toBe('Pausing…');
@@ -103,7 +113,7 @@ describe('the pause control', () => {
   it('a refusal shows its sentence in an alert, never a changed label, and re-reads', async () => {
     const pause = vi.fn<LandingPauser>(() => Promise.reject(new ApiError(404, { ok: false, error: 'landing-project-unknown' })));
     const onReload = vi.fn();
-    render(<Card state={stateOf(pausedEmpty())} pause={pause} onReload={onReload} />);
+    renderOpen(<Card state={stateOf(pausedEmpty())} pause={pause} onReload={onReload} />);
     fireEvent.click(pauseButton('Resume line'));
     await flush();
     expect(screen.getByRole('alert').textContent).toBe(LANDING_ROUTE_WORDS['landing-project-unknown'].text);
@@ -114,7 +124,7 @@ describe('the pause control', () => {
   it('unmounting before the answer lands calls nothing', async () => {
     const d = deferred<never>();
     const onReload = vi.fn();
-    const { unmount } = render(<Card state={stateOf(lineView())} pause={() => d.promise} onReload={onReload} />);
+    const { unmount } = renderOpen(<Card state={stateOf(lineView())} pause={() => d.promise} onReload={onReload} />);
     fireEvent.click(pauseButton('Pause line'));
     unmount();
     await act(async () => { d.reject(new Error('late')); });
@@ -128,7 +138,7 @@ describe('the sheet outlives the line (F1)', () => {
   it('a withdrawal of the only entry: the sheet keeps its answer after the re-read empties the line; Done leaves nothing, focus on the card', async () => {
     const withdraw = vi.fn<LandingWithdrawer>(() => Promise.resolve(withdrawn(E104, [{ word: 'landing-withdrawn', entryId: 1004, kind: 'queued', toId: 'lane-a-project-a', mailId: 1, deliveryId: 2 }])));
     const onReload = vi.fn();
-    const { rerender } = render(<Card state={stateOf(one)} withdraw={withdraw} onReload={onReload} />);
+    const { rerender } = renderOpen(<Card state={stateOf(one)} withdraw={withdraw} onReload={onReload} />);
     fireEvent.click(withdrawButton(104));
     fireEvent.click(screen.getByRole('button', { name: 'Withdraw #104' }));
     await flush();
@@ -146,7 +156,7 @@ describe('the sheet outlives the line (F1)', () => {
 
   it('landing-entry-terminal on the only entry, then an empty read: the sentence and the gone line stay until closed, confirm off', async () => {
     const withdraw = vi.fn<LandingWithdrawer>(() => Promise.reject(new ApiError(409, { ok: false, error: 'landing-entry-terminal' })));
-    const { rerender } = render(<Card state={stateOf(one)} withdraw={withdraw} onReload={() => {}} />);
+    const { rerender } = renderOpen(<Card state={stateOf(one)} withdraw={withdraw} onReload={() => {}} />);
     fireEvent.click(withdrawButton(104));
     fireEvent.click(screen.getByRole('button', { name: 'Withdraw #104' }));
     await flush();
@@ -161,7 +171,7 @@ describe('the sheet outlives the line (F1)', () => {
 
   it('a refusal followed by an empty read keeps its sentence', async () => {
     const withdraw = vi.fn<LandingWithdrawer>(() => Promise.reject(new ApiError(409, { ok: false, error: 'landing-recovery-unresolved' })));
-    const { rerender } = render(<Card state={stateOf(one)} withdraw={withdraw} onReload={() => {}} />);
+    const { rerender } = renderOpen(<Card state={stateOf(one)} withdraw={withdraw} onReload={() => {}} />);
     fireEvent.click(withdrawButton(104));
     fireEvent.click(screen.getByRole('button', { name: 'Withdraw #104' }));
     await flush();
@@ -176,27 +186,27 @@ describe('focus on close (m7, R6)', () => {
   const cancel = async (): Promise<void> => { fireEvent.click(screen.getByRole('button', { name: 'Cancel' })); await flush(); };
 
   it('Cancel with the row still drawn: its Withdraw', async () => {
-    render(<Card state={stateOf(lineView())} withdraw={never} />);
+    renderOpen(<Card state={stateOf(lineView())} withdraw={never} />);
     open(104);
     await cancel();
     expect(document.activeElement).toBe(withdrawButton(104));
   });
   it('Cancel with the row gone and the block drawn: the pause button', async () => {
-    const { rerender } = render(<Card state={stateOf(lineView())} withdraw={never} />);
+    const { rerender } = renderOpen(<Card state={stateOf(lineView())} withdraw={never} />);
     open(104);
     rerender(<Card state={stateOf(withoutRow)} withdraw={never} />);
     await cancel();
     expect(document.activeElement).toBe(pauseButton('Pause line'));
   });
   it('Cancel with the block gone: the card', async () => {
-    const { rerender } = render(<Card state={stateOf(lineView())} withdraw={never} />);
+    const { rerender } = renderOpen(<Card state={stateOf(lineView())} withdraw={never} />);
     open(104);
     rerender(<Card state={NONE} withdraw={never} />);
     await cancel();
     expect(document.activeElement).toBe(screen.getByTestId('card'));
   });
   it('Done after the re-read removed the row: the pause button', async () => {
-    const { rerender } = render(<Card state={stateOf(lineView())} withdraw={() => Promise.resolve(withdrawn(E104))} onReload={() => {}} />);
+    const { rerender } = renderOpen(<Card state={stateOf(lineView())} withdraw={() => Promise.resolve(withdrawn(E104))} onReload={() => {}} />);
     open(104);
     fireEvent.click(screen.getByRole('button', { name: 'Withdraw #104' }));
     await flush();
@@ -206,7 +216,7 @@ describe('focus on close (m7, R6)', () => {
     expect(document.activeElement).toBe(pauseButton('Pause line'));
   });
   it('Done before the re-read lands: the pause button, and still the pause button once the re-read removes the row', async () => {
-    const { rerender } = render(<Card state={stateOf(lineView())} withdraw={() => Promise.resolve(withdrawn(E104))} onReload={() => {}} />);
+    const { rerender } = renderOpen(<Card state={stateOf(lineView())} withdraw={() => Promise.resolve(withdrawn(E104))} onReload={() => {}} />);
     open(104);
     fireEvent.click(screen.getByRole('button', { name: 'Withdraw #104' }));
     await flush();
@@ -227,7 +237,7 @@ describe('the re-read on each answer of the withdraw door is the line\'s (fix ro
       .mockImplementationOnce(() => Promise.resolve(withdrawn(E104)))
       .mockImplementationOnce(() => Promise.reject(new ApiError(409, { ok: false, error: 'landing-entry-moved' })));
     const onReload = vi.fn();
-    render(<Card state={stateOf(lineView())} withdraw={withdraw} onReload={onReload} />);
+    renderOpen(<Card state={stateOf(lineView())} withdraw={withdraw} onReload={onReload} />);
     open(104);
     confirm104();
     await flush();
@@ -244,7 +254,7 @@ describe('the re-read on each answer of the withdraw door is the line\'s (fix ro
   it('closed by Cancel while the door is in flight, then its answer: one re-read, nothing more drawn, and focus from the removed row to the pause button', async () => {
     const d = deferred<Awaited<ReturnType<LandingWithdrawer>>>();
     const onReload = vi.fn();
-    const { rerender } = render(<Card state={stateOf(lineView())} withdraw={() => d.promise} onReload={onReload} />);
+    const { rerender } = renderOpen(<Card state={stateOf(lineView())} withdraw={() => d.promise} onReload={onReload} />);
     open(104);
     confirm104();
     fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
@@ -264,7 +274,7 @@ describe('the re-read on each answer of the withdraw door is the line\'s (fix ro
   it('closed by Escape while the door is in flight, then a refusal: one re-read, no alert, no sheet', async () => {
     const d = deferred<Awaited<ReturnType<LandingWithdrawer>>>();
     const onReload = vi.fn();
-    render(<Card state={stateOf(lineView())} withdraw={() => d.promise} onReload={onReload} />);
+    renderOpen(<Card state={stateOf(lineView())} withdraw={() => d.promise} onReload={onReload} />);
     open(104);
     confirm104();
     fireEvent.keyDown(document.activeElement ?? document.body, { key: 'Escape' });
@@ -281,7 +291,7 @@ describe('the re-read on each answer of the withdraw door is the line\'s (fix ro
     const d = deferred<Awaited<ReturnType<LandingWithdrawer>>>();
     const onReload = vi.fn();
     const withdraw = vi.fn<LandingWithdrawer>(() => d.promise);
-    const { unmount } = render(<Card state={stateOf(lineView())} withdraw={withdraw} onReload={onReload} />);
+    const { unmount } = renderOpen(<Card state={stateOf(lineView())} withdraw={withdraw} onReload={onReload} />);
     open(104);
     confirm104();
     // Wave 5m (review 3983, F2a): the door was called, so a "no re-read" below is the generation check's and not a door never reached.
@@ -299,7 +309,7 @@ describe('the re-read on each answer of the withdraw door is the line\'s (fix ro
     const d = deferred<Awaited<ReturnType<LandingWithdrawer>>>();
     const withdraw = vi.fn<LandingWithdrawer>().mockImplementationOnce(() => d.promise).mockImplementation(never);
     const onReload = vi.fn();
-    render(<Card state={stateOf(lineView())} withdraw={withdraw} onReload={onReload} />);
+    renderOpen(<Card state={stateOf(lineView())} withdraw={withdraw} onReload={onReload} />);
     open(104);
     confirm104();
     fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
@@ -320,7 +330,7 @@ describe('the re-read on each answer of the withdraw door is the line\'s (fix ro
 describe('the block removes itself (R6)', () => {
   it('Resume on a line with no entries, then an empty read: focus on the card', async () => {
     const pause = vi.fn<LandingPauser>(() => Promise.resolve({ ok: true, project: P, operatorPaused: false, changed: true, seq: 2 }));
-    const { rerender } = render(<Card state={stateOf(pausedEmpty())} pause={pause} onReload={() => {}} />);
+    const { rerender } = renderOpen(<Card state={stateOf(pausedEmpty())} pause={pause} onReload={() => {}} />);
     pauseButton('Resume line').focus();
     fireEvent.click(pauseButton('Resume line'));
     await flush();
@@ -329,7 +339,7 @@ describe('the block removes itself (R6)', () => {
     expect(document.activeElement).toBe(screen.getByTestId('card'));
   });
   it('a blur to nowhere (the window lost focus) keeps the control, so the empty read still puts focus on the card (fix round 1, F3)', async () => {
-    const { rerender } = render(<Card state={stateOf(pausedEmpty())} onReload={() => {}} />);
+    const { rerender } = renderOpen(<Card state={stateOf(pausedEmpty())} onReload={() => {}} />);
     pauseButton('Resume line').focus();
     fireEvent.blur(pauseButton('Resume line'), { relatedTarget: null });
     rerender(<Card state={NONE} onReload={() => {}} />);
@@ -337,7 +347,7 @@ describe('the block removes itself (R6)', () => {
     expect(document.activeElement).toBe(screen.getByTestId('card'));
   });
   it('focus on another element while the block still holds its record: a read that removes the held row moves no focus (fix round 2, F2)', async () => {
-    const { rerender } = render(<Card state={stateOf(lineView())} onReload={() => {}} />);
+    const { rerender } = renderOpen(<Card state={stateOf(lineView())} onReload={() => {}} />);
     const elsewhere = screen.getByRole('button', { name: 'elsewhere' });
     elsewhere.focus();
     // The block records #104's Withdraw as its control (a focus event, as from script), and no blur to an element
@@ -352,7 +362,7 @@ describe('the block removes itself (R6)', () => {
   // the removed row's control is taken as the one focus was on, and focus goes to the pause button. With no record the
   // effect returns early and focus stays on the body; the assertion before the re-render shows where focus stood.
   it('the same steps with the page\'s focus on the body: the block took its record from the focus event, and the read puts focus on the pause button', async () => {
-    const { rerender } = render(<Card state={stateOf(lineView())} onReload={() => {}} />);
+    const { rerender } = renderOpen(<Card state={stateOf(lineView())} onReload={() => {}} />);
     const elsewhere = screen.getByRole('button', { name: 'elsewhere' });
     elsewhere.focus();
     fireEvent.focus(withdrawButton(104));
@@ -365,7 +375,7 @@ describe('the block removes itself (R6)', () => {
   // Wave 5m fix round 1 (review run 4030, F3): the other half of the control. The record is also NEEDED: with the page's
   // focus on the body and no focus event on any control of the block, the same read moves no focus.
   it('the page\'s focus on the body and no control recorded: a read that removes a row moves no focus', async () => {
-    const { rerender } = render(<Card state={stateOf(lineView())} onReload={() => {}} />);
+    const { rerender } = renderOpen(<Card state={stateOf(lineView())} onReload={() => {}} />);
     const elsewhere = screen.getByRole('button', { name: 'elsewhere' });
     elsewhere.focus();
     elsewhere.blur();
@@ -375,7 +385,7 @@ describe('the block removes itself (R6)', () => {
     expect(document.activeElement).toBe(document.body);
   });
   it('the same empty read while focus is outside the block moves no focus', async () => {
-    const { rerender } = render(<Card state={stateOf(pausedEmpty())} onReload={() => {}} />);
+    const { rerender } = renderOpen(<Card state={stateOf(pausedEmpty())} onReload={() => {}} />);
     pauseButton('Resume line').focus();
     const elsewhere = screen.getByRole('button', { name: 'elsewhere' });
     elsewhere.focus();
@@ -391,10 +401,12 @@ describe('accessibility', () => {
     const stale: LandingCardState = prev.kind === 'line'
       ? { ...prev, stale: { text: LANDING_ROUTE_WORDS['landing-fenced'].text, scope: 'box', outcomeUnknown: false } } : prev;
     const pause = vi.fn<LandingPauser>(() => Promise.reject(new ApiError(404, { ok: false, error: 'landing-project-unknown' })));
-    render(<Card state={stale} pause={pause} onReload={() => {}} />);
+    renderOpen(<Card state={stale} pause={pause} onReload={() => {}} />);
     fireEvent.click(pauseButton('Pause line'));
     await flush();
-    const kinds = [...region().children].map((el) => (
+    // Wave 192: the pause button, the alert and the rows sit in the disclosed body, which draws no box (`display:
+    // contents`), so the document order is read through it; the order asserted is unchanged.
+    const kinds = [...region().children].flatMap((el) => (el.classList.contains('landing-line-body') ? [...el.children] : [el])).map((el) => (
       el.classList.contains('landing-line-title') ? 'title'
         : el.getAttribute('role') === 'status' ? 'status'
           : el.classList.contains('landing-line-stale') ? 'stale'
@@ -405,7 +417,7 @@ describe('accessibility', () => {
   });
 
   it('the region, the status, every control\'s name, and the sheet is a dialog named by its title', () => {
-    render(<Card state={stateOf(lineView())} withdraw={never} />);
+    renderOpen(<Card state={stateOf(lineView())} withdraw={never} />);
     expect(region().getAttribute('aria-label')).toBe(`Landing line of ${P}`);
     expect(within(region()).getByRole('status').getAttribute('aria-live')).toBe('polite');
     expect(pauseButton('Pause line')).toBeTruthy();

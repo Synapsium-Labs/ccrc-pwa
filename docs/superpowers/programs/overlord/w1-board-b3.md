@@ -30,7 +30,7 @@ as gone. A plain file is still skipped silently, and so is an entry that vanishe
 named, because the walk cannot tell it from a failed read. Those entries leave the walk measured, so the rest of it stands. The
 cache keeps its rule (a measured walk is kept, an unmeasured one is not), and a kept walk keeps its names with it, so a read served
 from the cache names them too (`ProjectWalkCache.keptWalkRead`). At the first build `keptWalk` and `keepWalk`'s old call shape were
-unchanged; since fix round 1 (A9) `keepWalk` takes the names as a required third argument, and `keptWalk` is still unchanged. The
+unchanged; since fix round 1 (A9) `keepWalk` takes the names as a required third argument, and `keptWalk` is unchanged in its call shape and answer (its body hands off to `keptWalkRead`, which dates from the first build). The
 board's projects part carries the list (`unreadable`, new and optional). `listProjects`, which every other caller uses, answers
 exactly its old three fields, and the projects route's wire does not change.
 
@@ -163,8 +163,10 @@ declares them as its words (`isBoardKebab`), derived from `settingSwitchNames` a
 - The projects route still folds the walk's flag and its names (the ticket B2 named); only the board reads them.
 - A settings row carries its own column only (slug `board-setting-row-is-its-column`).
 - A settings row's value is the setting as its owner reads it from the row, never what is in effect for the lane it feeds (fix round
-  2, F1). Whether that lane is armed, held or stopped is not on the board. The collect lane's row carries the stored choice, so a
-  stored `live` reads `live` while the lane's own state can still stop or shadow it. The stall watch's row carries its resolver's
+  2, F1). A row's value is not the lane's state: the board gives no per-lane verdict, only the markers and the ladder's inputs
+  beside it. The collect lane's row carries the stored choice, so a stored `live` reads `live` while the lane's own state can
+  still stop or shadow it, and a stored `off` or the seed can still be live through the legacy marker while its latch is unset
+  (the latch is not on the board; the marker is). The stall watch's row carries its resolver's
   chosen level, not the level in effect on the box. The plain sessions' auto memory and the coordinator advisor rows say the
   setting, not whether their lane acts.
 - The answer mask and the attribution limits of B2 stand unchanged.
@@ -178,7 +180,7 @@ lost row, measured row by row:
 
 | Row | Owner's reader | Seeded or lost row, by its owner | Board before | Board now |
 |---|---|---|---|---|
-| `stall-watch-level` | `resolveStallWatch` over `parseStallSettings` | a lost row, or a row with a field it cannot read, applies nothing: the box's files decide | lost: `absent`, null; a chosen level beside an unreadable quiet time: that level | `follow` for both; a row whose level word it cannot read: `unknown` |
+| `stall-watch-level` | `resolveStallWatch` over `parseStallSettings` | a lost row, or a row with a field it cannot read, applies nothing: the box's files decide (a row whose level word it cannot read is read `unknown`, in the last column) | lost: `absent`, null; a chosen level beside an unreadable quiet time: that level | `follow` for both; a row whose level word it cannot read: `unknown` |
 | `collect-lane-choice` | `measureCollectLaneRow` | tells the seed apart; a lost row is unmeasurable (`row-absent`), no word | the seed read `row` | seed `seed` / `off`; lost `absent`, null (no word); malformed `unknown` |
 | `roll-idle-targets` | `rollTargetsOf` | the seed and a lost row read the default, `all` | seed `coordinators`, lost null | `all` for both |
 | `dispatch-abandon-choice` | `dispatchAbandonViewOf` | a lost row arms nothing, no choice word | lost `absent`, null | the same (the owner gives no word) |
@@ -220,7 +222,8 @@ answers. A known limit says what the board leaves out.
 
 **F2, two collect lane cases.** The board file gains one fake-store case for the collect lane's lost-row arm (`absent`, no word)
 and one for its malformed-row arm (`unknown`, beside a choice the lane knows). Red first: the reviewer's mutant drops both arms, so
-a lost or malformed row reads as a stored `live`. On it, 2 of 67 red, the two new cases; 67 green on the restored gatherer.
+the next line reads a choice off a measure that has no row, which throws, and a lost or malformed row reads `unmeasured`
+(`threw`), not a stored `live` (a variant that does read `live` reds the same two cases). On it, 2 of 67 red, the two new cases; 67 green on the restored gatherer.
 
 **F3, G1 and G2 at this tip** (each applied with the edit tool, the board file run, the gatherer restored and its sha256 compared
 with the kept copy):

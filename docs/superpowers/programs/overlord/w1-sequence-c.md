@@ -14,7 +14,8 @@ the Overlord doors census, `CLAUDE.md`). Stage 2 adds those, after the readiness
 **Task 0, the monitor's review carries.**
 - The lost-record retry case in `invariant-lane.test.ts` pins the rig's sequence head (`headPin`). Since #3395 a latch raise
   stamps a `ladder-latch` line, so a moved head made the next pass due anyway, and the case could not tell a pass remembered
-  before its record from one remembered after. With the head pinned, it alone among the latch cases goes red on that mutant.
+  before its record from one remembered after. With the head pinned, it goes red on that mutant, and so do the
+  refused-latch, shadow-record and failed-resolve cases (four reds in all, as the mutation table says).
 - A fail-once switch for the resolve (`failResolveNext`) and one case: an open finding that now holds, a resolve that fails
   once when the cadence passes, and the next pass with no clock advance resolves it.
 - `invariantLane.ts#invariantMonitorOver` binds the sequence store's `designationBaseline` itself, like the head, the open
@@ -181,7 +182,10 @@ stage 2, the route suite run on the test box, the file restored byte for byte:
 
 - The sequence door's row is not a write, so the read runner runs it unfenced, and its ceiling (120 an hour) counts every
   attributed line: a session that forges the designated session's pair spends the Overlord's ceiling (the inbox plan's
-  question 18). The inbox and history doors are fenced reads; this one is not, by the plan's table and the ruling.
+  question 18). The inbox door is a fenced read; this one is not, by the plan's table and the ruling. (The history door was
+  a fenced read when this was written; call 1590 made it unfenced, like the sequence read and the board.) Such a forged
+  read also counts as a served read for the readiness proof, because the proof counts every read door
+  (`lastServedReadAt`), a sentence the first version of this note left out.
 - After a server restart the operator's read answers `no-pass-yet` until the monitor's first pass (at most a minute), though
   the findings table already holds the record.
 - The findings lists are cut at 200 rows each.

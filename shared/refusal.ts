@@ -378,6 +378,12 @@ export const ARTIFACT_MINT_REFUSALS = {
   'pin-moved': 409, 'page-too-large': 413, 'draft-too-large': 413,
 } as const;
 export type ArtifactMintRefusal = keyof typeof ARTIFACT_MINT_REFUSALS;
+/** The box frames read's own words (Desktop polish wave 187, `GET /api/testbox/frames`), each with its one status, spread into
+ *  `REFUSAL_STATUS` (`TIMER_REFUSALS`' idiom). CHOSEN, not measured: 400 for a build or a frame id the caller can fix, 404 for a
+ *  frame with no stored text (set aside past the newest four builds, or never stored), 503 for a frames store the box could
+ *  not read. */
+export const FRAMES_READ_REFUSALS = { 'bad-build': 400, 'bad-frame': 400, 'no-text': 404, 'unreadable': 503 } as const;
+export type FramesReadRefusal = keyof typeof FRAMES_READ_REFUSALS;
 
 /** The approval routes' own words (plan Task 16, D-5298): typed from the start, as D-5381 set out to make them. */
 export type RouteRefusal = ClaimRefusal | MailRouteRefusal | UpdateRouteError | CollectLaneRouteRefusal | SwapRefusal | GenericRefusal
@@ -423,6 +429,8 @@ export type RouteRefusal = ClaimRefusal | MailRouteRefusal | UpdateRouteError | 
   | AccountRouteRefusal
   // The test box connect routes (D-8166): their one word of their own.
   | TestboxAdminRouteRefusal
+  // The box frames read (Desktop polish wave 187): its four words, each with its status in `FRAMES_READ_REFUSALS`.
+  | FramesReadRefusal
   // The Linear proxy's routes (#1444, spec §6.8): their fourteen words of their own.
   | LinearProxyRefusal
   // The write routes (accounts plan Task A17, D-7739): their words of their own.
@@ -713,6 +721,7 @@ export const REFUSAL_STATUS: Readonly<Record<RouteRefusal, number>> = {
   'unknown-ref': 404, 'bad-carry': 409,
   // Programme work map WM1 (D-8727): evidence that does not verify is a refusal of a state that exists.
   'evidence-unverified': 409,
+  ...FRAMES_READ_REFUSALS,
 };
 
 /** The runtime list, derived from the table (`PR_REASONS`'s idiom). */

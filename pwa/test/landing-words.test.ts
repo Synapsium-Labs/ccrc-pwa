@@ -4,7 +4,8 @@ import { describe, it, expect } from 'vitest';
 import { LANDING_INFRASTRUCTURE_CODES, LANDING_MUTATION_CODES, type LandingNoticeOutcome } from '../../shared/landingLine';
 import { ApiError } from '../src/lib/apiError';
 import {
-  LANDING_ROUTE_TEXT, LANDING_ROUTE_WORDS, OUTCOME_UNKNOWN_TAIL, UNKNOWN_WORD_READ_TEXT, UNKNOWN_WORD_TEXT, UNREACHABLE_READ_TEXT,
+  LANDING_ROUTE_TEXT, LANDING_ROUTE_WORDS, OUTCOME_UNKNOWN_TAIL, SUMMARY_COUNT, SUMMARY_ENTRY, SUMMARY_MORE, SUMMARY_WORD,
+  UNKNOWN_WORD_READ_TEXT, UNKNOWN_WORD_TEXT, UNREACHABLE_READ_TEXT,
   UNREACHABLE_WRITE_TEXT, UNWORDED_READ_TEXT, UNWORDED_TEXT, landingFailureOf, landingNoticeText, type LandingDoor,
 } from '../src/fleet/landingWords';
 
@@ -154,5 +155,19 @@ describe('landingNoticeText (wave 5k)', () => {
     expect(at({ word: 'landing-held', entryId: 555, kind: 'queued', toId: 'lane-c', mailId: 5, deliveryId: 6 }))
       .toBe('Told lane-c, coordinator of entry 555, which now waits on it.');
     expect(at({ word: 'landing-held', entryId: 555, kind: 'none', reason: 'unrecorded' })).not.toContain('#null');
+  });
+});
+
+describe('the rolled-up summary\'s words (desktop polish wave 192)', () => {
+  it('the count says one for one entry and the number for several', () => {
+    expect(SUMMARY_COUNT(1)).toBe('One in line');
+    expect(SUMMARY_COUNT(2)).toBe('2 in line');
+    expect(SUMMARY_COUNT(13)).toBe('13 in line');
+  });
+  it('the short words, an entry with and without one, and the cut\'s tail', () => {
+    expect(SUMMARY_WORD).toEqual({ waits: 'waiting on a withdrawn entry', ejected: 'sent back', unknown: 'set aside' });
+    expect(SUMMARY_ENTRY(101, null)).toBe('#101');
+    expect(SUMMARY_ENTRY(102, SUMMARY_WORD.ejected)).toBe('#102 (sent back)');
+    expect(SUMMARY_MORE(1)).toBe('and 1 more');
   });
 });

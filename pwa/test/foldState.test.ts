@@ -2,7 +2,9 @@
 // "everything expanded", never to a fleet the reader cannot see.
 import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest';
 import { cleanup, renderHook, act } from '@testing-library/react';
-import { loadFolded, loadRollupPrefs, saveFolded, useFolded, useRollupPrefs } from '../src/fleet/foldState';
+import {
+  loadFolded, loadRollupPrefs, resetLandingLineOpen, saveFolded, toggleLandingLineOpen, useFolded, useLandingLineOpen, useRollupPrefs,
+} from '../src/fleet/foldState';
 import { NO_ROLLUP_PREFS, toggleChildren } from '../src/fleet/rollup';
 
 const KEY = 'ccrc.fleet-folded.v1';
@@ -118,5 +120,46 @@ describe('loadRollupPrefs (D-6088)', () => {
     expect(setItem).not.toHaveBeenCalled();
     act(() => result.current[1]((p) => toggleChildren(p, 'coord')));
     expect(JSON.parse(window.localStorage.getItem(RKEY) ?? 'null')).toEqual({ projects: {}, openChildren: ['coord'] });
+  });
+});
+
+// Desktop polish wave 192: the landing block's fold. Absent is rolled up; kept in memory for the page's life, never in
+// the browser, so a reload starts every block rolled up.
+describe('the landing line\'s fold (wave 192)', () => {
+  beforeEach(resetLandingLineOpen);
+  it('rolled up until toggled, per project; a second toggle rolls it up again', () => {
+    const { result } = renderHook(() => useLandingLineOpen());
+    expect([...result.current]).toEqual([]);
+    act(() => toggleLandingLineOpen('project-a'));
+    expect([...result.current]).toEqual(['project-a']);
+    act(() => toggleLandingLineOpen('project-b'));
+    expect([...result.current].sort()).toEqual(['project-a', 'project-b']);
+    act(() => toggleLandingLineOpen('project-a'));
+    expect([...result.current]).toEqual(['project-b']);
+  });
+  it('the choice outlives the hook that read it: a new reader sees it', () => {
+    const first = renderHook(() => useLandingLineOpen());
+    act(() => toggleLandingLineOpen('project-a'));
+    first.unmount();
+    const second = renderHook(() => useLandingLineOpen());
+    expect(second.result.current.has('project-a')).toBe(true);
+  });
+  it('a toggle writes nothing to the browser\'s storage', () => {
+    const local = vi.spyOn(Storage.prototype, 'setItem');
+    act(() => toggleLandingLineOpen('project-a'));
+    act(() => toggleLandingLineOpen('project-b'));
+    expect(local).not.toHaveBeenCalled();
+    expect(window.localStorage.length).toBe(0);
+    expect(window.sessionStorage.length).toBe(0);
+  });
+  it('a reload (the module evaluated afresh) starts rolled up after a toggle', async () => {
+    act(() => toggleLandingLineOpen('project-a'));
+    vi.resetModules();
+    // Fresh copies of the testing library and React with it, so the fresh module's hook runs under its own React.
+    const rtl = await import('@testing-library/react');
+    const fresh = await import('../src/fleet/foldState');
+    const { result, unmount } = rtl.renderHook(() => fresh.useLandingLineOpen());
+    expect(result.current.size).toBe(0);
+    unmount();
   });
 });
