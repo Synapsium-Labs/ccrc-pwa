@@ -41,3 +41,27 @@ the walls it had. P6.1 (Print) is not in this wave (the coordinator's split).
   - `XMLHttpRequest`, a URL built from `import.meta.url`, a glTF's own external buffers and textures, and JSON module
     imports are not answered.
   - Phones and Firefox are acceptance's, unmeasured here.
+
+## Fix round 1 (review 4066)
+
+The plan's Results carry each item's case, mutation row and printed red line under "Fix round 1, review 4066".
+
+- **One more departure, issued for this round:** D-9152, a-map-the-plan-refuses-is-refused-whole. An import map with any
+  entry whose plan verdict is neither inline, nor an `https` offer, nor a budget skip is refused whole and removed, as
+  an unreadable map is. On the coordinator's ruling, a budget skip keeps its own row, and the written map holds no
+  value the build did not replace. Spec 4.8's sentence already says this, so the spec is not amended.
+- **Fixed:**
+  - F1: each module scanned once per file in the build; only fetch-shaped literals kept and decoded.
+  - F2: the byte scan's bound on the byte length alone.
+  - F4: cases at 256 and 257 map entries. The bound claim above is now true of all four bounds; at the wave's first
+    head it was not true of the map's.
+  - A1: a script, module or fetched file the build's cut keeps out is told as the page cap, with its own sentence.
+  - A3, A5 and the round's own review: a map with a `src` or inside a `noscript` is refused; an accepted map is moved
+    ahead of every module script.
+  - A7: the comment opener's own word, `html-comment`.
+  - A13: Stop scripts stays while the over-budget answer shows.
+  - Cases A8 to A12, and the browser row now records the policy's violation reports.
+- **Records:** the A2 comment on CSP3's `worker-src` fallback corrected, with no policy change. A4 and A6 are recorded as
+  fail-closed residues.
+- **A slip owed to the ledger:** after the first push, a listing of the fleet's secrets directory was refused by the
+  account hook, with nothing read. It is in Results, Slips.

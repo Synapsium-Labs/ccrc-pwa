@@ -466,7 +466,8 @@ export function scriptChildRefs(
  *  now"). Refused: text that is not JSON, anything but one top-level `imports` object (a `scopes` or `integrity` key
  *  included), more than `MOCKUP_IMPORT_MAP_MAX_ENTRIES` entries, a value that is not a string, a value that is neither a
  *  path (`./`, `../`, `/`) nor an `https:` URL, and a key ending in `/` whose value is a path (a sibling directory cannot be
- *  inlined file by file). Whether a path value names a sibling is the planner's to decide. */
+ *  inlined file by file). Whether a path value names a sibling is the planner's to decide, and a value it refuses refuses
+ *  the map whole too (D-9152, `plan.ts#importMapRefusedBy`, `load.ts#planMockupPage`). */
 export function readImportMap(text: string): { ok: true; entries: [string, string][] } | { ok: false } {
   let v: unknown;
   try {
