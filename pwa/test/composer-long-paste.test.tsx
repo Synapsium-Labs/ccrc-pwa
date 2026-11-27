@@ -527,6 +527,30 @@ describe('a send is one snapshot taken at the tap (review 4119 F1)', () => {
     await up.release();
     expect(sentFiles(onSend)).toBeUndefined();
   });
+
+  it('a caller\'s control in the input bar (#3488\'s leading slot) cannot be used while saving, and says so', async () => {
+    const up = deferPaste();
+    const onLeading = vi.fn();
+    mount({ leading: <button type="button" onClick={onLeading}>Off the record</button> });
+    pasteText(lines(20));
+    const toggle = screen.getByRole('button', { name: 'Off the record' });
+    expect(toggle).toBeEnabled();
+    await act(async () => { fireEvent.click(sendButton()); });
+    expect(toggle).toBeDisabled();
+    expect(toggle.closest('fieldset')).toHaveProperty('disabled', true);
+    await up.release();
+    expect(toggle).toBeEnabled();
+  });
+
+  it('with no session id (a composer that can never save) the leading slot is drawn bare, as #3488 draws it: no group', () => {
+    mount({ id: undefined, leading: <button type="button">Off the record</button> });
+    const toggle = screen.getByRole('button', { name: 'Off the record' });
+    const bar = toggle.closest('.inputbar')!;
+    expect(toggle.parentElement).toBe(bar);
+    expect(bar.querySelector('fieldset')).toBeNull();
+    expect(screen.queryByRole('group')).toBeNull();
+    expect([...bar.children].map((c) => c.tagName)).toEqual(['SPAN', 'TEXTAREA', 'BUTTON', 'BUTTON']);
+  });
 });
 
 describe('the save hook on its own', () => {
