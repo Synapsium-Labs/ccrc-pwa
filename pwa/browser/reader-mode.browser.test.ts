@@ -817,12 +817,30 @@ describe('screen pages, on the real 1.2.0 release (XR2.3)', () => {
       expect(link.y, 'the link is in the first screen, so tapping it scrolls nothing by itself').toBeLessThan(h);
       const x = link.x + link.width / 2;
       const y = link.y + link.height / 2;
-      if (by === 'touch') await page.touchscreen.tap(x, y); else await page.mouse.click(x, y);
       const at = (): Promise<{ top: number; scroll: number }> => frame.evaluate(() => ({
         top: document.getElementById('part-20')!.getBoundingClientRect().top, scroll: Math.round(document.scrollingElement!.scrollTop),
       }));
-      await becomes(async () => { const r = await at(); return r.top >= -1 && r.top < 300; }, true, 'the fragment\'s target at the top of the frame', page);
-      const reached = await at();
+      // The jump is measured in the frame itself, in one step, on every animation frame, from before the tap: the library's revert
+      // comes about 160 to 200 ms after the jump, so a poll from outside (100 ms apart, then a second read) could miss it or read past it.
+      // The reading it answers is the one of the frame that first shows the target at the top, and it is `reached`.
+      const jumped = frame.evaluate(() => new Promise<{ ok: boolean; top: number; scroll: number }>((resolve) => {
+        const until = performance.now() + 2000;
+        const read = (): { top: number; scroll: number } => ({
+          top: document.getElementById('part-20')!.getBoundingClientRect().top, scroll: Math.round(document.scrollingElement!.scrollTop),
+        });
+        const tick = (): void => {
+          const r = read();
+          if (r.top >= -1 && r.top < 300) resolve({ ok: true, ...r });
+          else if (performance.now() > until) resolve({ ok: false, ...r });
+          else requestAnimationFrame(tick);
+        };
+        tick();
+      }));
+      jumped.catch(() => undefined); // a failed tap below is the row's error, not this promise's
+      if (by === 'touch') await page.touchscreen.tap(x, y); else await page.mouse.click(x, y);
+      const jump = await jumped;
+      if (!jump.ok) throw new Error(`the fragment's target never reached the top of the frame within 2 s (last reading top ${jump.top}, scroll ${jump.scroll})`);
+      const reached = { top: jump.top, scroll: jump.scroll };
       // With a settle time, the place the link took the frame to is read again once the jump has settled.
       if (settleMs > 0) await page.waitForTimeout(settleMs);
       const later = settleMs > 0 ? await at() : reached;
