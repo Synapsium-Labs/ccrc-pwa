@@ -1159,6 +1159,7 @@ describe('every stylesheet under src/ is audited', () => {
             : [],
       );
     const APP_SHEETS = [
+      'src/docs/artifact/artifact.css', // the artifact launch sheet (X5 A5.2): layout and the tap floor only, no colour of its own
       'src/docs/docs.css',
       'src/docs/export/export.css', // Export's own chrome (W5 Export): never imported by the app; read into every export's <style>
       'src/face/splash.css', // the splash (Overlord face Task 9): a still layer on --bg-page, tokens only

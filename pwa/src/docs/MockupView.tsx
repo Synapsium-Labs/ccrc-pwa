@@ -28,6 +28,7 @@ import { useDocsHighlightStore } from '../lib/highlighterContext';
 import { onAuthRegained } from '../lib/auth';
 import { navigate } from '../lib/router';
 import { ArtifactOffer } from './artifact/ArtifactOffer';
+import { aboveFolderCount, type ArtifactCensusState } from './artifact/tier';
 import { DocsAssetContext } from './DocImage';
 import { DOC_NOT_UTF8_NOTE, docMarkdownSource } from './DocMarkdown';
 import { DocsFailureView } from './DocsFailureView';
@@ -131,23 +132,33 @@ function SourceActions(p: { readonly text: string; readonly download: ReactNode;
 }
 
 /** The artifact tier's offer beside this view (X5 A5.1; spec 2026-11-19 §6.1): on every inline view, whatever the walls did, and
- *  none in the full-screen view. The census stays null: only `MockupLive` has one to give (A5.2). */
-function Offer(p: { readonly context: MockupContext; readonly page: Leaf }): ReactNode {
+ *  none in the full-screen view. Its sheet reads three things from here (A5.2): the pre-scan's census, which only `MockupLive`
+ *  has after its load and every other view states as null (the pre-scan did not run); this view's own refusal line for the page,
+ *  when it shows one; and the visit's tree re-list. */
+function Offer(p: {
+  readonly context: MockupContext; readonly page: Leaf; readonly census: ArtifactCensusState; readonly wallsNote: string | null;
+  readonly relist: () => void;
+}): ReactNode {
   if (p.page.frame === 'full') return null;
-  return <ArtifactOffer project={p.page.project} pin={p.context.pin} page={p.page} census={null} />;
+  return (
+    <ArtifactOffer
+      project={p.page.project} pin={p.context.pin} page={p.page} census={p.census} wallsNote={p.wallsNote} retryTree={p.relist}
+    />
+  );
 }
 
 /** The refusal line, its reason, the measured counts and the limits, then Source and Download (base 5.6.8), then the offer. */
 function Refusal(p: {
   readonly prescan: Extract<MockupPrescan, { ok: false }>; readonly text: string; readonly download: ReactNode; readonly chip: ReactNode;
-  readonly context: MockupContext; readonly page: Leaf;
+  readonly context: MockupContext; readonly page: Leaf; readonly relist: () => void;
 }): ReactNode {
   const { prescan } = p;
+  const refusal = fillSentence(MOCKUP_TEXT.refusal, { reason: MOCKUP_REFUSAL_SENTENCE[prescan.why] });
   return (
     <div className="docs-mockup" data-state="refused">
       {p.chip}
       <p className="docs-note">{MOCKUP_TEXT.tooComplex}</p>
-      <p className="docs-note">{fillSentence(MOCKUP_TEXT.refusal, { reason: MOCKUP_REFUSAL_SENTENCE[prescan.why] })}</p>
+      <p className="docs-note">{refusal}</p>
       <p className="docs-note">
         {fillSentence(MOCKUP_TEXT.measured, {
           depth: prescan.depth, tags: prescan.tags, formatting: prescan.formatting, maxDepth: MOCKUP_MAX_DEPTH,
@@ -155,7 +166,7 @@ function Refusal(p: {
         })}
       </p>
       <SourceActions text={p.text} download={p.download} />
-      <Offer context={p.context} page={p.page} />
+      <Offer context={p.context} page={p.page} census={null} wallsNote={refusal} relist={p.relist} />
     </div>
   );
 }
@@ -345,6 +356,17 @@ function MockupLive(p: MockupViewProps & {
     () => (loaded === null ? null : originsOf(loaded.result.plan.rows, scriptOrigins, location.hostname)),
     [loaded, scriptOrigins],
   );
+  // The census the artifact launch sheet reads (X5 A5.2): the outside origins the page names and how many of its references point
+  // above its folder. 'pending' until the load has answered: null would say the page was not scanned, which is not yet so.
+  const artifactCensus = useMemo<ArtifactCensusState>(
+    () => (loaded === null || origins === null
+      ? 'pending'
+      : {
+        origins: origins.offered.map((o) => o.origin),
+        above: aboveFolderCount(loaded.result.plan.rows, { section: pin.section, path: pin.path }),
+      }),
+    [loaded, origins, pin.section, pin.path],
+  );
   // A chosen origin the current page no longer names is dropped before the build, so the policy never lists one.
   const extra = useMemo(
     () => (origins === null ? [] : chosen.filter((o) => origins.offered.some((x) => x.origin === o))),
@@ -424,6 +446,14 @@ function MockupLive(p: MockupViewProps & {
   // reason is the plan's budget or the built page's size (fix round 1 of review 4066, A1).
   const unfit = scripted && loaded !== null && build !== null && build.ok ? loaderUnfit(loaded.result.plan.rows, build.plan.rows) : null;
   const overBudget = unfit !== null;
+  // The over-budget answer's one sentence: the region draws it, and the artifact sheet repeats it under its Why line.
+  const overBudgetNote = unfit === null
+    ? null
+    : unfit === 'budget'
+      ? fillSentence(MOCKUP_TEXT.overBudget, { n: MOCKUP_MAX_ASSETS, size: kib(MOCKUP_MAX_ASSET_BYTES) })
+      : fillSentence(MOCKUP_TEXT.overPageCap, { chars: MOCKUP_MAX_SRCDOC_CHARS.toLocaleString('en-US') });
+  // What this view says about why the page is not framed, repeated in the artifact sheet: a build over the size cap, or the over-budget answer.
+  const wallsNote = build !== null && !build.ok ? MOCKUP_TEXT.tooLarge : overBudgetNote;
   let region: ReactNode;
   if (build === null) {
     region = <p className="docs-loading">{DOCS_VIEW_TEXT.loading}</p>;
@@ -431,13 +461,7 @@ function MockupLive(p: MockupViewProps & {
     region = <p className="docs-note">{MOCKUP_TEXT.tooLarge}</p>;
   } else if (overBudget) {
     // X2 P6.2 (spec 4.8): what the loader must give the page does not fit, so it does not run; Source and Download stay.
-    region = (
-      <p className="docs-note">
-        {unfit === 'budget'
-          ? fillSentence(MOCKUP_TEXT.overBudget, { n: MOCKUP_MAX_ASSETS, size: kib(MOCKUP_MAX_ASSET_BYTES) })
-          : fillSentence(MOCKUP_TEXT.overPageCap, { chars: MOCKUP_MAX_SRCDOC_CHARS.toLocaleString('en-US') })}
-      </p>
-    );
+    region = <p className="docs-note">{overBudgetNote}</p>;
   } else if (away) {
     region = (
       <NoteAction note={MOCKUP_TEXT.navigatedAway} label={MOCKUP_TEXT.reload} onClick={() => { setAway(false); remount(); }} />
@@ -491,7 +515,7 @@ function MockupLive(p: MockupViewProps & {
           {p.download}
         </div>
       )}
-      {!full && <Offer context={context} page={page} />}
+      {!full && <Offer context={context} page={page} census={artifactCensus} wallsNote={wallsNote} relist={p.relist} />}
       {changing && <NoteAction note={MOCKUP_TEXT.changing} label={MOCKUP_TEXT.retry} onClick={retry} />}
       {region}
       {!full && framed && (
@@ -594,7 +618,7 @@ function MockupRun(p: MockupViewProps & { readonly text: string; readonly chip: 
     return (
       <Refusal
         prescan={parsed.prescan as Extract<MockupPrescan, { ok: false }>} text={p.text} download={p.download} chip={p.chip}
-        context={p.context} page={p.page}
+        context={p.context} page={p.page} relist={p.relist}
       />
     );
   }
@@ -619,7 +643,9 @@ export function MockupView(p: MockupViewProps): ReactNode {
     return <DocsFailureView answer={{ s: 'failed', body: { ok: false, failure: 'malformed-answer', why: DOCS_SHOW_NO_BYTES } }} />;
   }
   const chip = src.kind === 'not-utf8' ? <p className="doc-plain-note">{DOC_NOT_UTF8_NOTE}</p> : null;
-  if (pre !== null && !pre.ok) return <Refusal prescan={pre} text={text} download={p.download} chip={chip} context={p.context} page={p.page} />;
+  if (pre !== null && !pre.ok) {
+    return <Refusal prescan={pre} text={text} download={p.download} chip={chip} context={p.context} page={p.page} relist={p.relist} />;
+  }
   if (gated) {
     return (
       <div className="docs-mockup" data-state="gated">
@@ -630,7 +656,7 @@ export function MockupView(p: MockupViewProps): ReactNode {
             <Action onClick={() => setTapped(true)}>{fillSentence(MOCKUP_TEXT.render, { size: kib(show.size) })}</Action>
           )}
         />
-        <Offer context={p.context} page={p.page} />
+        <Offer context={p.context} page={p.page} census={null} wallsNote={null} relist={p.relist} />
       </div>
     );
   }

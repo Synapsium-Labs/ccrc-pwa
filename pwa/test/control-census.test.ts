@@ -544,6 +544,12 @@ const CONTROLS: Record<string, string> = {
   'docs/artifact/ArtifactOffer.tsx <button> docs-leaf-action':
     "TOKEN. Open as artifact (X5 A5.1), beside every HTML page's walls view, the too-large view and the stand-in: the leaf's "
     + "bordered `.docs-leaf-action`, whose own rule carries the floor.",
+  'docs/artifact/LaunchSheet.tsx <input> (none)':
+    'SELECTOR .docs-artifact-check. One choice of the artifact launch sheet (X5 A5.2), an outside host or windows: a checkbox '
+    + 'inside its label, whose rule carries the floor, so the whole label line toggles it.',
+  'docs/artifact/LaunchSheet.tsx <a> (computed)':
+    'VARIANT buttonVariants. The launch sheet\'s Open (X5 A5.2): the one real link to the artifact tab, with rel noopener noreferrer, '
+    + 'drawn with the button variant classes.',
   'docs/DocMarkdown.tsx <button> doc-gate-btn': "TOKEN. The large-document gate's two choices.",
   'docs/DocMarkdown.tsx <button> doc-plain-action': "TOKEN. Plain text's Format anyway or Retry.",
   'docs/DocImage.tsx <button> doc-img-load': 'TOKEN. Load image, for an image the page budget held back.',
