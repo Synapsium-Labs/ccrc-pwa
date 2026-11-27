@@ -10,12 +10,12 @@ import type { DocsIndexRow, DocsProjectsResponse } from '../../shared/docs';
 import type { ArtifactListOk, ArtifactRevokeOk, ArtifactRow } from '../../shared/artifacts';
 import { ArtifactList } from '../src/docs/artifact/ArtifactList';
 import { ARTIFACT_REFUSAL_TEXT } from '../src/docs/artifact/artifactWords';
-import { ARTIFACT_LIST_FRESH_MS, ARTIFACT_LIST_TEXT } from '../src/docs/artifact/listWords';
-import type { ArtifactAnswer, ArtifactDoors } from '../src/docs/artifact/tier';
+import { ARTIFACT_LIST_FRESH_MS, ARTIFACT_LIST_TEXT, artifactUnlisted } from '../src/docs/artifact/listWords';
+import type { ArtifactAnswer, ArtifactDoors, ArtifactKnown } from '../src/docs/artifact/tier';
 import { ArtifactDoorsContext, resetArtifactsForTest, useArtifacts } from '../src/docs/artifact/useArtifacts';
 import { DocsIndexView } from '../src/docs/DocsIndexView';
 import { DocsScreen } from '../src/screens/DocsScreen';
-import { DOCS_HEAD_TEXT, DOCS_SLOT_SENTENCE } from '../src/docs/docsText';
+import { DOCS_HEAD_TEXT, DOCS_SLOT_SENTENCE, fillSentence } from '../src/docs/docsText';
 import type { DocsLoaders } from '../src/docs/failures';
 import { parseMarkdown } from '../src/lib/markdownParse';
 import type { MarkdownParser } from '../src/lib/markdownRunner';
@@ -348,6 +348,24 @@ describe('list: a list left standing is read again', () => {
   });
 });
 
+describe('artifactUnlisted: what this console minted and a stale list does not hold', () => {
+  const knownOf = (id: string, over: Partial<ArtifactKnown> = {}): ArtifactKnown => (
+    { id, project: 'demo', section: 'specs', path: 'm.html', ...over }
+  );
+  const SCOPE = { project: 'demo', section: 'specs', path: 'm.html' } as const;
+
+  it('leaves out what the list holds, by id', () => {
+    const known = [knownOf('aaaaaaaa-A'), knownOf('x-new'), knownOf('x-other')];
+    expect(artifactUnlisted(known, [A], undefined).map((k) => k.id)).toEqual(['x-new', 'x-other']);
+  });
+
+  it('a scope keeps one page\'s capabilities; no scope keeps every page\'s', () => {
+    const known = [knownOf('x-here'), knownOf('x-path', { path: 'o.html' }), knownOf('x-section', { section: 'plans' }), knownOf('x-project', { project: 'demo-two' })];
+    expect(artifactUnlisted(known, [], SCOPE).map((k) => k.id)).toEqual(['x-here']);
+    expect(artifactUnlisted(known, [], undefined).map((k) => k.id)).toEqual(['x-here', 'x-path', 'x-section', 'x-project']);
+  });
+});
+
 describe('list: a failed re-read keeps the last good list', () => {
   const STALE = 'This list could not be read again; it shows what it last read.';
   const SCOPE_A = { project: 'demo', section: 'specs', path: 'm.html' } as const;
@@ -419,6 +437,24 @@ describe('list: a failed re-read keeps the last good list', () => {
     await waitFor(() => expect(f.list.mock.calls.length).toBe(reads + 1));
     await waitFor(() => expect(screen.queryByText(STALE)).toBeNull());
     expect(rowsShown()).toHaveLength(2);
+  });
+
+  it('F1c: the "{n} in all" note is drawn on a fresh list and dropped while the list is stale (its count would be one short)', async () => {
+    const f = flaky([A, B]);
+    render(within_(f.doors, <><Again /><ArtifactList /></>));
+    await waitFor(() => expect(rowsShown()).toHaveLength(2));
+    const note = fillSentence(ARTIFACT_LIST_TEXT.revokeAllNote, { n: 2 });
+    expect(screen.getByText(note)).toBeInTheDocument();
+    f.control.failing = 'unreachable';
+    readAgain();
+    await screen.findByText(STALE);
+    expect(rowsShown()).toHaveLength(2);
+    expect(screen.queryByText(note)).toBeNull();
+    expect(screen.queryByText(/in all/)).toBeNull();
+    f.control.failing = false;
+    readAgain();
+    await waitFor(() => expect(screen.queryByText(STALE)).toBeNull());
+    expect(screen.getByText(note)).toBeInTheDocument();
   });
 
   it('F1: a first read that fails still draws nothing (failed, not stale)', async () => {

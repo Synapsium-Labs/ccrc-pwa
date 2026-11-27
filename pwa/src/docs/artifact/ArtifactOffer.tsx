@@ -42,7 +42,8 @@ export function ArtifactOffer(p: ArtifactOfferProps): ReactNode {
       {offer.kind === 'disabled' && <p id={reasonId} className="docs-note">{offer.text}</p>}
       {offer.kind === 'button' && state.sheetFor === key && (
         <LaunchSheet
-          project={p.project} pin={p.pin} census={p.census} wallsNote={p.wallsNote} retryTree={p.retryTree} onClose={closeSheet}
+          project={p.project} pin={p.pin} page={{ section: p.page.section, path: p.page.path }} census={p.census}
+          wallsNote={p.wallsNote} retryTree={p.retryTree} onClose={closeSheet}
         />
       )}
     </>

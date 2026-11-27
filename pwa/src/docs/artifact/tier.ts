@@ -25,6 +25,12 @@ export interface ArtifactCensus { readonly origins: readonly string[]; readonly 
  *  two are never one value: a caller that has not heard back must not read as one that did not scan. */
 export type ArtifactCensusState = ArtifactCensus | null | 'pending';
 
+/** A capability this console minted and still knows of: its id and page, never its URL or token (and not its end, which the box
+ *  slides forward with use). */
+export interface ArtifactKnown {
+  readonly id: string; readonly project: string; readonly section: DocSectionSlug; readonly path: string;
+}
+
 /** What the offer draws: a live button, a disabled one with its sentence, or no button (a sentence, or nothing when `text` is ''). */
 export interface ArtifactOfferView { readonly kind: 'button' | 'disabled' | 'none'; readonly text: string }
 

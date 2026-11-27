@@ -7,6 +7,10 @@
 //     replaces the last good answer: the store keeps that ok list and marks it `stale: true`, so the offer, an open sheet (and the
 //     capability it minted) and the lists with their Revoke stay as they were, and the list says it could not read again. A good read
 //     replaces it (`stale: false`); a consumer that mounts while it is stale reads again.
+//   - `known`: the capabilities this console minted and has not seen revoked. A stale list lacks one minted while the re-read after
+//     the mint failed, so the list draws it from here, with its Revoke, until a good read settles it or a revoke of it ends. A good
+//     read settles only what was noted BEFORE that read started (a read that began earlier may not hold a capability minted after
+//     it): each note takes the next number, a read records the last number at its start, and a good read keeps the later notes.
 //   - `sheetFor`: the page key whose launch sheet is open. It lives here and not in the offer, because `MockupView` is keyed by a
 //     draft's fingerprint and remounts, and a remount must not close a sheet the operator is using.
 // The doors come from `ArtifactDoorsContext`; its default is `api.docs.artifacts`, and tests provide a fake.
@@ -14,7 +18,7 @@ import { createContext, useCallback, useContext, useEffect, useRef, useSyncExter
 import { ARTIFACT_OFF_WHYS, type ArtifactListOk, type ArtifactRow } from '../../../../shared/artifacts';
 import { api } from '../../lib/api';
 import { useAuthLost } from '../../lib/auth';
-import type { ArtifactAvailability, ArtifactDoors } from './tier';
+import type { ArtifactAvailability, ArtifactDoors, ArtifactKnown } from './tier';
 
 export type ArtifactListState =
   | { readonly s: 'idle' }
@@ -22,7 +26,13 @@ export type ArtifactListState =
   | { readonly s: 'ok'; readonly avail: ArtifactAvailability; readonly live: readonly ArtifactRow[]; readonly stale: boolean }
   | { readonly s: 'failed' };
 
-export interface ArtifactsState { readonly list: ArtifactListState; readonly sheetFor: string | null }
+export interface ArtifactsState {
+  readonly list: ArtifactListState;
+  readonly sheetFor: string | null;
+  /** The capabilities this console minted and has not seen revoked: a stale list that lacks one still lists it. A good read clears
+   *  the ones noted before it started. */
+  readonly known: readonly ArtifactKnown[];
+}
 
 /** `api.docs.artifacts`, looked up at call time (never at import), so a suite that replaces `api` still imports this module. */
 const API_DOORS: ArtifactDoors = {
@@ -39,7 +49,7 @@ export const ArtifactDoorsContext = createContext<ArtifactDoors>(API_DOORS);
 /** A page's key: its project, section and path, joined by U+0000. */
 export const artifactPageKey = (project: string, section: string, path: string): string => [project, section, path].join('\u0000');
 
-const IDLE: ArtifactsState = { list: { s: 'idle' }, sheetFor: null };
+const IDLE: ArtifactsState = { list: { s: 'idle' }, sheetFor: null, known: [] };
 let state: ArtifactsState = IDLE;
 // Bumped by a reset, so a read that started before it never publishes into the next test's store.
 let generation = 0;
@@ -49,6 +59,10 @@ let newest = 0;
 let inflight = 0;
 // When the last ok answer was published (`Date.now()`), or null before one: the one clock `ensureFresh` reads.
 let readAt: number | null = null;
+// Each noted capability takes the next number: a read records the last one at its start, and a good read settles only the notes
+// numbered at or below it. `notedAt` holds the number of every id in `state.known`.
+let notedSeq = 0;
+const notedAt = new Map<string, number>();
 const listeners = new Set<() => void>();
 
 function publish(next: ArtifactsState): void {
@@ -77,6 +91,7 @@ function listOf(value: ArtifactListOk): ArtifactListState {
 async function read(doors: ArtifactDoors): Promise<void> {
   const mine = generation;
   const my = ++newest;
+  const before = notedSeq;
   inflight += 1;
   if (state.list.s === 'idle' || state.list.s === 'failed') publish({ ...state, list: { s: 'loading' } });
   let next: ArtifactListState;
@@ -92,7 +107,15 @@ async function read(doors: ArtifactDoors): Promise<void> {
   if (my === newest) {
     if (next.s === 'ok') readAt = Date.now();
     const held = state.list;
-    publish({ ...state, list: next.s !== 'ok' && held.s === 'ok' ? { ...held, stale: true } : next });
+    // A good read is the server's list at the time it was taken, which settles the capabilities noted before it started; one noted
+    // after it (a mint that answered while it was out) may be missing from it, so it stays known until a later good read.
+    if (next.s === 'ok') {
+      const kept = state.known.filter((k) => (notedAt.get(k.id) ?? 0) > before);
+      for (const id of [...notedAt.keys()]) if (!kept.some((k) => k.id === id)) notedAt.delete(id);
+      publish({ ...state, list: next, known: kept });
+    } else {
+      publish({ ...state, list: held.s === 'ok' ? { ...held, stale: true } : next });
+    }
   }
 }
 
@@ -101,6 +124,8 @@ export function resetArtifactsForTest(): void {
   generation += 1;
   inflight = 0;
   readAt = null;
+  notedSeq = 0;
+  notedAt.clear();
   state = IDLE;
   for (const fn of [...listeners]) fn();
 }
@@ -115,6 +140,11 @@ export interface UseArtifacts {
   ensureFresh(maxAgeMs: number): void;
   openSheet(key: string): void;
   closeSheet(): void;
+  /** Notes a capability this console just minted, so a stale list that lacks it still lists it (no duplicate id). */
+  noteMinted(k: ArtifactKnown): void;
+  /** Forgets one noted capability (its revoke ended) or every one (Revoke all ended). */
+  forgetKnown(id: string): void;
+  forgetAllKnown(): void;
 }
 
 export function useArtifacts(): UseArtifacts {
@@ -142,5 +172,19 @@ export function useArtifacts(): UseArtifacts {
   }, [doors]);
   const openSheet = useCallback((key: string) => publish({ ...state, sheetFor: key }), []);
   const closeSheet = useCallback(() => publish({ ...state, sheetFor: null }), []);
-  return { state: now, refresh, ensureFresh, openSheet, closeSheet };
+  const noteMinted = useCallback((k: ArtifactKnown) => {
+    if (state.known.some((n) => n.id === k.id)) return;
+    notedSeq += 1;
+    notedAt.set(k.id, notedSeq);
+    publish({ ...state, known: [...state.known, k] });
+  }, []);
+  const forgetKnown = useCallback((id: string) => {
+    notedAt.delete(id);
+    publish({ ...state, known: state.known.filter((n) => n.id !== id) });
+  }, []);
+  const forgetAllKnown = useCallback(() => {
+    notedAt.clear();
+    publish({ ...state, known: [] });
+  }, []);
+  return { state: now, refresh, ensureFresh, openSheet, closeSheet, noteMinted, forgetKnown, forgetAllKnown };
 }

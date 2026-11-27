@@ -6,7 +6,7 @@ import type { ArtifactRow } from '../../../../shared/artifacts';
 import type { DocSectionSlug } from '../../../../shared/docs';
 import { formatAge, formatReset } from '../../fleet/formatReset';
 import { fillSentence } from '../docsText';
-import { artifactStop, type ArtifactAnswer } from './tier';
+import { artifactStop, type ArtifactAnswer, type ArtifactKnown } from './tier';
 
 /** How old the list the store holds may be before a list that mounts reads it again: ten seconds. */
 export const ARTIFACT_LIST_FRESH_MS = 10000;
@@ -36,6 +36,8 @@ export const ARTIFACT_LIST_TEXT = {
   windowsAllowed: 'Windows allowed',
   windowsClosed: 'Windows closed',
   hosts: 'Outside hosts: {n}',
+  /** The note of a link this console made that the list last read does not hold (it may never have been opened). */
+  unlisted: 'Made from this console; not in the list last read.',
   /** One sentence for a revoke the box did not take: the rows stay, and nothing else is claimed. */
   failed: 'The link was not revoked. Try again.',
   failedAll: 'The links were not revoked. Try again.',
@@ -46,10 +48,21 @@ export const ARTIFACT_LIST_TEXT = {
 /** The page a list is scoped to: a project's page by section and path. */
 export interface ArtifactListScope { readonly project: string; readonly section: DocSectionSlug; readonly path: string }
 
+const inScope = (r: ArtifactListScope, scope: ArtifactListScope | undefined): boolean =>
+  scope === undefined || (r.project === scope.project && r.section === scope.section && r.path === scope.path);
+
 /** The rows a list shows: every live row, or only the scope's page's when a scope is given. */
 export function artifactRowsFor(live: readonly ArtifactRow[], scope: ArtifactListScope | undefined): readonly ArtifactRow[] {
-  if (scope === undefined) return live;
-  return live.filter((r) => r.project === scope.project && r.section === scope.section && r.path === scope.path);
+  return live.filter((r) => inScope(r, scope));
+}
+
+/** The capabilities this console minted that a stale list does not hold: not in `live` by id, in the scope (every page's with none).
+ *  None is left out for its end: the box slides a capability's end forward with use, so the end the mint answered with is not its
+ *  real one, and a known capability stays listed until a good read settles it or a revoke of it ends. Drawn only while the list is stale. */
+export function artifactUnlisted(
+  known: readonly ArtifactKnown[], live: readonly ArtifactRow[], scope: ArtifactListScope | undefined,
+): readonly ArtifactKnown[] {
+  return known.filter((k) => inScope(k, scope) && !live.some((r) => r.id === k.id));
 }
 
 /** A row's page as the list names it: `section/path`. */

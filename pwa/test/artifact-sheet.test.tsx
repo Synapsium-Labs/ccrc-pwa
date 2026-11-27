@@ -11,11 +11,13 @@ import { DOCS_CLASS_CAP, type DocListPin, type DocPin, type DocsPageLocation, ty
 import type {
   ArtifactListOk, ArtifactMintAsk, ArtifactMintOk, ArtifactRefusal, ArtifactRevokeOk, ArtifactRow, ArtifactScopeOk,
 } from '../../shared/artifacts';
+import { ArtifactList } from '../src/docs/artifact/ArtifactList';
 import { ArtifactOffer } from '../src/docs/artifact/ArtifactOffer';
 import { ARTIFACT_REFUSAL_TEXT, ARTIFACT_TEXT } from '../src/docs/artifact/artifactWords';
 import { ARTIFACT_OPEN_REL, LaunchSheet } from '../src/docs/artifact/LaunchSheet';
+import { ARTIFACT_LIST_TEXT } from '../src/docs/artifact/listWords';
 import { aboveFolderCount, type ArtifactAnswer, type ArtifactCensusState, type ArtifactDoors } from '../src/docs/artifact/tier';
-import { ArtifactDoorsContext, resetArtifactsForTest } from '../src/docs/artifact/useArtifacts';
+import { ArtifactDoorsContext, resetArtifactsForTest, useArtifacts } from '../src/docs/artifact/useArtifacts';
 import { DocsLeaf } from '../src/docs/DocsLeaf';
 import { DocsAssetContext, type DocsAssetContextValue } from '../src/docs/DocImage';
 import { MockupView } from '../src/docs/MockupView';
@@ -111,7 +113,8 @@ function sheetOf(doors: ArtifactDoors, over: SheetOver = {}): ReactNode {
   return (
     <ArtifactDoorsContext value={doors}>
       <LaunchSheet
-        project="demo" pin={over.pin ?? PIN} census={over.census === undefined ? NO_CENSUS : over.census}
+        project="demo" pin={over.pin ?? PIN} page={{ section: 'specs', path: 'm.html' }}
+        census={over.census === undefined ? NO_CENSUS : over.census}
         wallsNote={over.wallsNote ?? null} retryTree={over.retryTree ?? (() => {})} onClose={over.onClose ?? (() => {})}
       />
     </ArtifactDoorsContext>
@@ -662,6 +665,237 @@ describe('sheet: what the sheet holds, and when it lets go', () => {
     await within(p.d).findByText(ARTIFACT_TEXT.othersOpen);
     expect(f.live.map((r) => r.id)).toEqual(['cap-1']);
   });
+});
+
+describe('sheet: a link minted while its own re-read fails is still listed, and Revoke reaches it (review 4134 F1)', () => {
+  const STALE = 'This list could not be read again; it shows what it last read.';
+  const PAGE_SCOPE = { project: 'demo', section: 'specs', path: 'm.html' } as const;
+  const twoOrigins = { origins: ['https://cdn.a.test', 'https://cdn.b.test'], above: 0 };
+
+  /** A consumer that reads again on a tap, and one that shows the store's list word. */
+  function Again(): ReactNode {
+    const a = useArtifacts();
+    const l = a.state.list;
+    return (
+      <>
+        <button type="button" onClick={() => void a.refresh()}>read again</button>
+        <output data-testid="store">{l.s === 'ok' && l.stale ? 'ok:stale' : l.s}</output>
+      </>
+    );
+  }
+  const storeWord = (): string => screen.getByTestId('store').textContent ?? '';
+  const pageList = (): HTMLElement => screen.getByTestId('page-list');
+  const indexList = (): HTMLElement => screen.getByTestId('index-list');
+
+  /** The box starts with no live row. The offer, the page's list and the index list are mounted together; the sheet is opened,
+   *  and from the tap on Prepare every list read fails (the box still holds what the mint made). */
+  async function sheetUp(over: { readonly revoke?: (id: string) => ArtifactAnswer<ArtifactRevokeOk>; readonly census?: ArtifactCensusState } = {}) {
+    const control = { failing: false, reads: 0 };
+    const f = fakeDoors({
+      // A capability that ends an hour from now (the shared `MINT` ends at 1, long past, which the list would leave out).
+      mint: () => ok({ ...MINT, expiresAt: Date.now() + 60 * 60000 }),
+      list: (rows) => {
+        control.reads += 1;
+        return control.failing ? { s: 'unreachable' } : ok({ ok: true, available: true, live: [...rows] });
+      },
+      ...(over.revoke === undefined ? {} : { revoke: over.revoke }),
+    });
+    const revokeAll = vi.fn(async (): Promise<ArtifactAnswer<ArtifactRevokeOk>> => {
+      const n = f.live.length;
+      f.live.splice(0);
+      return ok<ArtifactRevokeOk>({ ok: true, revoked: n });
+    });
+    const doors: ArtifactDoors = { ...f.doors, revokeAll };
+    const view = render(
+      <ArtifactDoorsContext value={doors}>
+        <Again />
+        <ArtifactOffer
+          project="demo" pin={PIN} page={{ section: 'specs', path: 'm.html', at: null }}
+          census={over.census === undefined ? NO_CENSUS : over.census} wallsNote={null} retryTree={() => {}}
+        />
+        <div data-testid="page-list"><ArtifactList scope={PAGE_SCOPE} /></div>
+        <div data-testid="index-list"><ArtifactList /></div>
+      </ArtifactDoorsContext>,
+    );
+    fireEvent.click(await screen.findByRole('button', { name: ARTIFACT_TEXT.open }));
+    const d = await dialogOf();
+    await within(d).findByText(/can read the/);
+    if (over.census !== undefined) fireEvent.click(checkboxes(d)[0]!);
+    control.failing = true;
+    fireEvent.click(prepareButton());
+    const link = await within(d).findByRole('link', { name: ARTIFACT_TEXT.openLink });
+    await waitFor(() => expect(storeWord()).toBe('ok:stale'));
+    const closeSheet = async (): Promise<void> => {
+      fireEvent.click(within(d).getByRole('button', { name: ARTIFACT_TEXT.cancel }));
+      await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+    };
+    return { ...f, doors, revokeAll, control, view, d, link, closeSheet };
+  }
+
+  const unlistedName = (named: boolean): string => (named ? 'Revoke specs/m.html in demo (cap-1)' : 'Revoke specs/m.html (cap-1)');
+
+  it('F1a: a link that was opened while its re-read failed leaves both lists saying so, and Revoke all ends it', async () => {
+    const s = await sheetUp();
+    fireEvent.click(s.link);
+    await s.closeSheet();
+    // The box holds X; the last good list never did, and no row of it is in scope.
+    expect(s.live.map((r) => r.id)).toEqual(['cap-1']);
+    await waitFor(() => expect(within(pageList()).getByText(STALE)).toBeInTheDocument());
+    expect(within(indexList()).getByText(STALE)).toBeInTheDocument();
+    // X is drawn in both lists as an unlisted row with its own Revoke.
+    expect(within(pageList()).getByRole('button', { name: unlistedName(false) })).toBeInTheDocument();
+    expect(within(indexList()).getByRole('button', { name: unlistedName(true) })).toBeInTheDocument();
+    expect(within(pageList()).getByRole('button', { name: ARTIFACT_LIST_TEXT.revokeAllLabel })).toBeInTheDocument();
+    expect(within(indexList()).getByRole('button', { name: ARTIFACT_LIST_TEXT.revokeAllLabel })).toBeInTheDocument();
+    // A good read settles it; Revoke all then ends X.
+    s.control.failing = false;
+    fireEvent.click(within(pageList()).getByRole('button', { name: ARTIFACT_LIST_TEXT.revokeAllLabel }));
+    await waitFor(() => expect(s.revokeAll).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(storeWord()).toBe('ok'));
+    expect(s.live).toEqual([]);
+    await waitFor(() => expect(screen.queryByText(STALE)).toBeNull());
+    expect(screen.queryAllByRole('listitem')).toHaveLength(0);
+  });
+
+  it('F1b-1: a pointer-down graze on Open spares a capability the list never held: both lists draw it, with its own Revoke, and Revoke ends it', async () => {
+    const s = await sheetUp();
+    fireEvent.pointerDown(s.link);
+    await s.closeSheet();
+    expect(s.revoke).not.toHaveBeenCalled();
+    await waitFor(() => expect(within(pageList()).getAllByRole('listitem')).toHaveLength(1));
+    expect(within(indexList()).getAllByRole('listitem')).toHaveLength(1);
+    expect(within(pageList()).getByRole('listitem').textContent).toContain('specs/m.html');
+    expect(within(pageList()).getByRole('listitem').textContent).toContain('Link cap-1');
+    expect(within(pageList()).getByRole('button', { name: unlistedName(false) })).toBeInTheDocument();
+    expect(within(indexList()).getByRole('button', { name: unlistedName(true) })).toBeInTheDocument();
+    fireEvent.click(within(pageList()).getByRole('button', { name: unlistedName(false) }));
+    await waitFor(() => expect(s.revoke).toHaveBeenCalledWith('cap-1'));
+    await waitFor(() => expect(screen.queryAllByRole('listitem')).toHaveLength(0));
+    expect(s.live).toEqual([]);
+  });
+
+  it('F1b-2: a tick change on an unopened capability whose revoke is refused leaves it listed, in both lists, with Revoke', async () => {
+    const s = await sheetUp({ revoke: () => ({ s: 'unreachable' }), census: twoOrigins });
+    const readsBefore = s.control.reads;
+    fireEvent.click(checkboxes(s.d)[1]!);
+    await waitFor(() => expect(s.revoke).toHaveBeenCalledWith('cap-1'));
+    await waitFor(() => expect(s.control.reads).toBeGreaterThan(readsBefore));
+    await s.closeSheet();
+    expect(s.live.map((r) => r.id)).toEqual(['cap-1']);
+    await waitFor(() => expect(within(pageList()).getAllByRole('listitem')).toHaveLength(1));
+    expect(within(indexList()).getAllByRole('listitem')).toHaveLength(1);
+    expect(within(pageList()).getByRole('button', { name: unlistedName(false) })).toBeInTheDocument();
+    expect(within(indexList()).getByRole('button', { name: unlistedName(true) })).toBeInTheDocument();
+  });
+
+  it('F1b-5: an unopened capability whose revoke ended (a tick change) is forgotten: no unlisted row stays beside the stale sentence', async () => {
+    const s = await sheetUp({ census: twoOrigins });
+    const readsBefore = s.control.reads;
+    fireEvent.click(checkboxes(s.d)[1]!);
+    await waitFor(() => expect(s.revoke).toHaveBeenCalledWith('cap-1'));
+    await waitFor(() => expect(s.control.reads).toBeGreaterThan(readsBefore));
+    await s.closeSheet();
+    expect(s.live).toEqual([]);
+    await waitFor(() => expect(within(pageList()).getByText(STALE)).toBeInTheDocument());
+    expect(screen.queryAllByRole('listitem')).toHaveLength(0);
+  });
+
+  it('F1b-3: a good read settles it: the unlisted row goes, and a later failed read does not bring it back', async () => {
+    const s = await sheetUp();
+    fireEvent.pointerDown(s.link);
+    await s.closeSheet();
+    await waitFor(() => expect(within(pageList()).getAllByRole('listitem')).toHaveLength(1));
+    // The box ended X meanwhile (it lapsed); the next good read says so, and that list is the truth.
+    s.live.splice(0);
+    s.control.failing = false;
+    fireEvent.click(screen.getByRole('button', { name: 'read again' }));
+    await waitFor(() => expect(storeWord()).toBe('ok'));
+    await waitFor(() => expect(screen.queryAllByRole('listitem')).toHaveLength(0));
+    expect(screen.queryByText(STALE)).toBeNull();
+    // A later failed read marks that list stale; the settled capability is not listed again.
+    s.control.failing = true;
+    fireEvent.click(screen.getByRole('button', { name: 'read again' }));
+    await waitFor(() => expect(storeWord()).toBe('ok:stale'));
+    expect(screen.queryAllByRole('listitem')).toHaveLength(0);
+    expect(within(pageList()).getByText(STALE)).toBeInTheDocument();
+  });
+
+  it('F1b-4: the unlisted row draws no URL: the minted link is nowhere in the lists, and Revoke all clears the known capability too', async () => {
+    const s = await sheetUp();
+    fireEvent.pointerDown(s.link);
+    await s.closeSheet();
+    await waitFor(() => expect(within(pageList()).getAllByRole('listitem')).toHaveLength(1));
+    const token = MINT_URL.slice(MINT_URL.lastIndexOf('/') + 1);
+    expect(s.view.container.innerHTML).not.toContain(MINT_URL);
+    expect(s.view.container.innerHTML).not.toContain(token);
+    expect(document.body.innerHTML).not.toContain(token);
+    expect(s.view.container.querySelectorAll('a')).toHaveLength(0);
+    // Revoke all that ended forgets it; the failed read after it does not bring the row back.
+    fireEvent.click(within(pageList()).getByRole('button', { name: ARTIFACT_LIST_TEXT.revokeAllLabel }));
+    await waitFor(() => expect(s.revokeAll).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(screen.queryAllByRole('listitem')).toHaveLength(0));
+  });
+
+  it.each([
+    ['the sheet moved on (a new pin)', 'pin'],
+    ['the offer narrowed (an origin left)', 'offer'],
+  ] as const)(
+    'F2: a list read that started before the mint and answers ok without it does not settle it, when %s and its revoke is refused',
+    async (_name, how) => {
+      const mintWaiting: ((a: ArtifactAnswer<ArtifactMintOk>) => void)[] = [];
+      const listWaiting: ((a: ArtifactAnswer<ArtifactListOk>) => void)[] = [];
+      const revokeWaiting: ((a: ArtifactAnswer<ArtifactRevokeOk>) => void)[] = [];
+      let lists = 0;
+      const base = fakeDoors();
+      const doors: ArtifactDoors = {
+        ...base.doors,
+        mint: () => new Promise((resolve) => { mintWaiting.push(resolve); }),
+        // The first read answers at once, the second is held by hand, and every later one fails.
+        list: () => {
+          lists += 1;
+          if (lists === 1) return Promise.resolve(ok<ArtifactListOk>({ ok: true, available: true, live: [] }));
+          if (lists === 2) return new Promise((resolve) => { listWaiting.push(resolve); });
+          return Promise.resolve<ArtifactAnswer<ArtifactListOk>>({ s: 'unreachable' });
+        },
+        revoke: () => new Promise((resolve) => { revokeWaiting.push(resolve); }),
+      };
+      const tree = (over: SheetOver): ReactNode => (
+        <ArtifactDoorsContext value={doors}>
+          <Again />
+          {sheetOf(doors, { census: twoOrigins, ...over })}
+          <div data-testid="index-list"><ArtifactList /></div>
+        </ArtifactDoorsContext>
+      );
+      const { rerender } = render(tree({}));
+      const d = await dialogOf();
+      await within(d).findByText(/can read the/);
+      await waitFor(() => expect(storeWord()).toBe('ok'));
+      fireEvent.click(checkboxes(d)[0]!);
+      fireEvent.click(prepareButton());
+      await waitFor(() => expect(mintWaiting).toHaveLength(1));
+      // A read starts while the mint is out, and is held.
+      fireEvent.click(screen.getByRole('button', { name: 'read again', hidden: true }));
+      await waitFor(() => expect(listWaiting).toHaveLength(1));
+      // The sheet moves on, so the mint answers stale (or its origin leaves the offer).
+      if (how === 'pin') {
+        rerender(tree({ pin: PIN_B }));
+        await waitFor(() => expect(base.scope).toHaveBeenCalledTimes(2));
+      } else {
+        rerender(tree({ census: { origins: ['https://cdn.b.test'], above: 0 } }));
+      }
+      // The mint answers: it is noted, and its own revoke is out (held), so no read newer than the held one starts.
+      await act(async () => { mintWaiting[0]!(ok(MINT)); });
+      await waitFor(() => expect(revokeWaiting).toHaveLength(1));
+      // The held read answers ok without it, as the newest read.
+      await act(async () => { listWaiting[0]!(ok({ ok: true, available: true, live: [] })); });
+      await waitFor(() => expect(storeWord()).toBe('ok'));
+      // The revoke is refused; the read after it fails. The box still holds the capability.
+      await act(async () => { revokeWaiting[0]!({ s: 'unreachable' }); });
+      await waitFor(() => expect(storeWord()).toBe('ok:stale'));
+      expect(within(indexList()).getByRole('button', { name: unlistedName(true), hidden: true })).toBeInTheDocument();
+      expect(within(indexList()).getAllByRole('listitem', { hidden: true })).toHaveLength(1);
+    },
+  );
 });
 
 // ---- Through the real views ------------------------------------------------------------------------------------------

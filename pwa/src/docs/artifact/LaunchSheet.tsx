@@ -14,6 +14,9 @@
 //     moved on (a newer pin, an unmount) is for a page this sheet no longer shows: it revokes its own id and touches nothing the
 //     sheet holds. So is one whose origins are no longer all in the CURRENT offer (the census changed while the mint was out): it
 //     is checked against the latest offer, revoked, and Prepare shows again with nothing held.
+//   - Every mint that answered ok is noted in the store (`noteMinted`: id and page, never the URL) before anything else touches
+//     its id, and forgotten when its revoke ends, so a list that could not be read again after the mint still lists a link that is
+//     live in a tab, with its Revoke, until a good read settles it.
 //   - `pin-moved`, from the scope read or the mint, is the one refusal with an action, "Reload and open again": each tap asks the
 //     leaf's re-list once, and it is enabled again when the leaf hands a new pin; the new pin reads the scope again with this
 //     sheet still open. A scope read that did not complete (the box could not list the files, a docs slot) shows Retry instead.
@@ -22,7 +25,7 @@
 import { useCallback, useContext, useEffect, useRef, useState, type ReactNode } from 'react';
 import { Button, QC_ACTIONS, Sheet, buttonVariants } from '@ccrc/ui';
 import type { ArtifactMintOk, ArtifactScopeOk } from '../../../../shared/artifacts';
-import { docListPinKey, type DocListPin } from '../../../../shared/docs';
+import { docListPinKey, type DocListPin, type DocSectionSlug } from '../../../../shared/docs';
 import { fillSentence } from '../docsText';
 import { ARTIFACT_TEXT } from './artifactWords';
 import { artifactStop, sheetOrigins, type ArtifactAnswer, type ArtifactCensusState, type ArtifactStop } from './tier';
@@ -36,6 +39,8 @@ export interface LaunchSheetProps {
   readonly project: string;
   /** The page's pin at this moment; a new one (by its key) reads the scope again, a new object of the same key re-enables Reload. */
   readonly pin: DocListPin;
+  /** The page the sheet mints for, so a capability it minted is noted (with its page) in the store beside the lists. */
+  readonly page: { readonly section: DocSectionSlug; readonly path: string };
   /** The pre-scan's census; null where the leaf's pre-scan did not run, 'pending' until it answers. */
   readonly census: ArtifactCensusState;
   /** The walls view's own refusal line for this page (budget, size or pre-scan), repeated under the Why line; null when it has none. */
@@ -60,9 +65,9 @@ type Mint =
 interface Asked { readonly origins: readonly string[]; readonly windows: boolean }
 
 export function LaunchSheet(p: LaunchSheetProps): ReactNode {
-  const { project, pin, census, wallsNote, retryTree, onClose } = p;
+  const { project, pin, page, census, wallsNote, retryTree, onClose } = p;
   const doors = useContext(ArtifactDoorsContext);
-  const { state, refresh } = useArtifacts();
+  const { state, refresh, noteMinted, forgetKnown } = useArtifacts();
   const [read, setRead] = useState<Read>({ s: 'reading' });
   const [readNo, setReadNo] = useState(0);
   const [mint, setMint] = useState<Mint>({ s: 'idle' });
@@ -88,9 +93,10 @@ export function LaunchSheet(p: LaunchSheetProps): ReactNode {
     } catch {
       // A defect: the list read below still shows what is live.
     }
-    if (!ended) setMine((ids) => ids.filter((i) => i !== id));
+    if (ended) forgetKnown(id);
+    else setMine((ids) => ids.filter((i) => i !== id));
     await refresh();
-  }, [doors, refresh]);
+  }, [doors, refresh, forgetKnown]);
 
   /** THE rule for letting go of the held capability (see the header): revoked unless its Open was tapped, then it lives on and is
    *  no longer this sheet's. */
@@ -196,6 +202,8 @@ export function LaunchSheet(p: LaunchSheetProps): ReactNode {
       if (mineNow === generation.current) setMint({ s: 'refused', ...artifactStop(answer) });
       return;
     }
+    // Live from here on: the store notes it first, so a list that cannot be read again still lists it with its Revoke.
+    noteMinted({ id: answer.value.id, project, section: page.section, path: page.path });
     // Stale: the sheet moved on while the mint was out. The capability is for a page this sheet no longer shows, so it ends its
     // own id and touches nothing the sheet holds.
     if (mineNow !== generation.current) {

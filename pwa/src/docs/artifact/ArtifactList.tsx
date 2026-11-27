@@ -8,17 +8,19 @@
 // on the box (also those another page's list shows); each then reads the list again, and a refused or failed revoke keeps the rows
 // and says one sentence in a status line that stays mounted, so a screen reader hears the change. When the store could not read the
 // list again (`stale`) the rows stay as last read, with their Revoke, and one plain sentence under the heading says so; it is not
-// the status line, so a revoke tap never clears it, and the next good read does. A tap while a revoke is under way
-// is ignored (a ref, set in the tap itself, since the disabled state only lands with the next render). After a revoke that ended, focus
+// the status line, so a revoke tap never clears it, and the next good read does. A stale list is drawn even with no row in scope
+// (the sentence and Revoke all stay), drops the "in all" count (it would be short), and lists, after the rows, every capability this
+// console minted that the list last read lacks (`artifactUnlisted`), by page and short id with its own Revoke and never its URL.
+// A tap while a revoke is under way is ignored (a ref, set in the tap itself, since the disabled state only lands with the next render). After a revoke that ended, focus
 // moves to the list's heading, which the dropped row's button no longer holds.
 import { useContext, useEffect, useId, useRef, useState, type ReactNode } from 'react';
 import { Button, useNow } from '@ccrc/ui';
 import type { ArtifactRow } from '../../../../shared/artifacts';
 import { fillSentence } from '../docsText';
-import type { ArtifactAnswer } from './tier';
+import type { ArtifactAnswer, ArtifactKnown } from './tier';
 import {
   ARTIFACT_LIST_FRESH_MS, ARTIFACT_LIST_TEXT, artifactNamesProject, artifactNotRevoked, artifactPageName, artifactRevokeLabel,
-  artifactRowsFor, artifactShortId, artifactWhen, type ArtifactListScope,
+  artifactRowsFor, artifactShortId, artifactUnlisted, artifactWhen, type ArtifactListScope,
 } from './listWords';
 import { ArtifactDoorsContext, useArtifacts } from './useArtifacts';
 
@@ -51,8 +53,26 @@ function RowView(p: {
   );
 }
 
+/** A capability this console minted that the stale list does not hold: its page, short id and a note, with its own Revoke. */
+function UnlistedView(p: {
+  readonly known: ArtifactKnown; readonly named: boolean; readonly busy: boolean; readonly onRevoke: () => void;
+}): ReactNode {
+  const { known } = p;
+  return (
+    <li className="grid gap-[var(--sp-1)]">
+      <span className="docs-row-name">{artifactPageName(known)}</span>
+      {p.named && <span className="docs-row-note">{known.project}</span>}
+      <span className="docs-row-note">{fillSentence(ARTIFACT_LIST_TEXT.id, { id: artifactShortId(known) })}</span>
+      <span className="docs-row-note">{ARTIFACT_LIST_TEXT.unlisted}</span>
+      <Button variant="ghost" size="fit" disabled={p.busy} onClick={p.onRevoke} aria-label={artifactRevokeLabel(known, p.named)}>
+        {ARTIFACT_LIST_TEXT.revoke}
+      </Button>
+    </li>
+  );
+}
+
 export function ArtifactList(p: { readonly scope?: ArtifactListScope }): ReactNode {
-  const { state, refresh, ensureFresh } = useArtifacts();
+  const { state, refresh, ensureFresh, forgetKnown, forgetAllKnown } = useArtifacts();
   const doors = useContext(ArtifactDoorsContext);
   const now = useNow(TICK_MS);
   const headingId = useId();
@@ -64,10 +84,13 @@ export function ArtifactList(p: { readonly scope?: ArtifactListScope }): ReactNo
   if (state.list.s !== 'ok') return null;
   const live = state.list.live;
   const rows = artifactRowsFor(live, p.scope);
-  if (rows.length === 0) return null;
+  const stale = state.list.stale;
+  if (rows.length === 0 && !stale) return null;
+  // While the list is stale it may lack a link this console minted: those are listed too, until a good read settles them.
+  const unlisted = stale ? artifactUnlisted(state.known, live, p.scope) : [];
 
   /** Runs one revoke door, then reads the list again; a failed answer keeps the rows and says its sentence. */
-  const run = async (door: () => Promise<ArtifactAnswer<unknown>>, plain: string): Promise<void> => {
+  const run = async (door: () => Promise<ArtifactAnswer<unknown>>, plain: string, ended: () => void): Promise<void> => {
     if (underWay.current) return;
     underWay.current = true;
     setBusy(true);
@@ -80,6 +103,7 @@ export function ArtifactList(p: { readonly scope?: ArtifactListScope }): ReactNo
     }
     try {
       if (answer !== null && answer.s === 'ok') {
+        ended();
         await refresh();
         heading.current?.focus();
       } else setSaid(artifactNotRevoked(answer, plain));
@@ -93,20 +117,26 @@ export function ArtifactList(p: { readonly scope?: ArtifactListScope }): ReactNo
   return (
     <section className="grid gap-[var(--sp-2)]" aria-labelledby={headingId}>
       <h2 id={headingId} ref={heading} tabIndex={-1} className="docs-note">{ARTIFACT_LIST_TEXT.heading}</h2>
-      {state.list.stale && <p className="docs-note">{ARTIFACT_LIST_TEXT.stale}</p>}
+      {stale && <p className="docs-note">{ARTIFACT_LIST_TEXT.stale}</p>}
       <ul className="docs-rows gap-[var(--sp-2)]">
         {rows.map((row) => (
           <RowView
             key={row.id} row={row} now={now} named={named} busy={busy}
-            onRevoke={() => void run(() => doors.revoke(row.id), ARTIFACT_LIST_TEXT.failed)}
+            onRevoke={() => void run(() => doors.revoke(row.id), ARTIFACT_LIST_TEXT.failed, () => forgetKnown(row.id))}
+          />
+        ))}
+        {unlisted.map((k) => (
+          <UnlistedView
+            key={k.id} known={k} named={named} busy={busy}
+            onRevoke={() => void run(() => doors.revoke(k.id), ARTIFACT_LIST_TEXT.failed, () => forgetKnown(k.id))}
           />
         ))}
       </ul>
       <p className="docs-note" role="status">{said ?? ''}</p>
-      <p className="docs-note">{fillSentence(ARTIFACT_LIST_TEXT.revokeAllNote, { n: live.length })}</p>
+      {!stale && <p className="docs-note">{fillSentence(ARTIFACT_LIST_TEXT.revokeAllNote, { n: live.length })}</p>}
       <Button
         variant="ghost" size="fit" disabled={busy} aria-label={ARTIFACT_LIST_TEXT.revokeAllLabel}
-        onClick={() => void run(() => doors.revokeAll(), ARTIFACT_LIST_TEXT.failedAll)}
+        onClick={() => void run(() => doors.revokeAll(), ARTIFACT_LIST_TEXT.failedAll, forgetAllKnown)}
       >
         {ARTIFACT_LIST_TEXT.revokeAll}
       </Button>
