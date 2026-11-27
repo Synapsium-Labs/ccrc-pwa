@@ -560,18 +560,13 @@ export function readerPlaceOf(rec: TabRecord): Place | null {
 /** What an exit that was not a pop does to history: `n` entries to step back over, and the record, unchanged. `n` is 0
  *  when no reader place counts (nothing to step). Otherwise it is one for the reader place plus the number of recorded
  *  places, of any kind, above it and at or below the entry last shown: live entries, never an index difference (`docsIdx`
- *  only grows, and a push drops the places it discards), plus one when the entry last shown is above every recorded place
- *  (an entry the record does not hold: X6 XR fix round 1). It does NOT mark the exit pending: the hook, and `leaveDead`
+ *  only grows, and a push drops the places it discards). It does NOT mark the exit pending: the hook, and `leaveDead`
  *  for a dead entry, are the only writers of that mark, and set it before they step (`withExitPending`). */
 export function readerStepBack(rec: TabRecord): { rec: TabRecord; n: number } {
   const counts = readerPlaceOf(rec);
   if (counts === null) return { rec, n: 0 };
   const above = rec.places.filter((p) => p.idx > counts.idx && p.idx <= rec.lastIdx).length;
-  // The entry the tab stands on may be one the record does not hold (a Forward onto a jump's entry that a new commit's visit did
-  // not carry): when it is above the topmost recorded place, it is one more live entry to step over.
-  const topRecorded = rec.places.reduce((m, p) => (p.idx <= rec.lastIdx ? Math.max(m, p.idx) : m), counts.idx);
-  const unrecorded = rec.lastIdx > topRecorded ? 1 : 0;
-  return { rec, n: 1 + above + unrecorded };
+  return { rec, n: 1 + above };
 }
 
 /** Whether a pop has already landed below the reader place: the record holds a reader place and the entry last shown is

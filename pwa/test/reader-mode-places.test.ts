@@ -8,7 +8,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   EMPTY_RECORD, IDX_KEY, PLACES_MAX, PLACE_KEY, afterPop, beginVisit, decidePop, endVisit, landedBelowReader, parseRecord,
-  pushPlace, readerPlaceFree, readerPlaceOf, readerStepBack, seedPage, stampVisitBase, standingOnDeadReader, visitKey, withExitPending,
+  pushPlace, readerPlaceFree, readerPlaceOf, readerStepBack, seedPage, stampVisitBase, standingOnDeadReader, withExitPending,
   type PopDecision, type Place, type PopTab, type TabRecord,
 } from '../src/lib/historyPlaces';
 import { onPop, readPlaces, resetPopstateForTests, setPlaceHost, setReaderPlaceHost } from '../src/lib/popstate';
@@ -795,29 +795,5 @@ describe('reader place: the record and its helpers', () => {
     expect(readPlaces().exitPending).toBe(true);
     markReaderExitPending(false);
     expect(readPlaces().exitPending).toBe(false);
-  });
-
-  it('reader place: an exit steps over the entry the tab stands on when no recorded place holds it (X6 XR fix round 1, item 4)', () => {
-    const address = '/docs/demo/specs/a.md';
-    // The visit starts on entry 1, reader mode pushes R at entry 2, a jump pushes J at entry 3.
-    let r = beginVisit(rec({ next: 0 }), visitKey(address, 'k1'), 'v1', { idx: 1 }).rec;
-    r = stampVisitBase({ rec: r, continued: false, stamp: null }, { idx: 1 });
-    r = pushPlace(r, { kind: 'reader' }, { idx: 1 }).rec;
-    r = pushPlace(r, { kind: 'jump', id: 'j' }, { idx: 2 }).rec;
-    expect(r).toMatchObject({ lastIdx: 3, top: 3, baseIdx: 1 });
-    // Back to R, then a new commit of the same document: the new visit carries only R across.
-    const toR = entry(2, { visit: 'v1', seq: 1, kind: 'reader' });
-    r = afterPop(r, toR, decidePop(toR, tabOf(r, true), true)).rec;
-    expect(r.lastIdx).toBe(2);
-    r = beginVisit(r, visitKey(address, 'k2'), 'v2', { idx: 2, place: { visit: 'v1', seq: 1, kind: 'reader' } }).rec;
-    expect(r.places.map((p) => p.kind), 'only the reader place was carried').toEqual(['reader']);
-    // Forward onto the jump's entry: a place of the old visit, the newest entry the tab holds, so the router's.
-    const toJ = entry(3, { visit: 'v1', seq: 2, kind: 'jump', id: 'j' });
-    const forward = decidePop(toJ, tabOf(r, true), false);
-    expect(forward, 'CONTROL: the router\'s, as the stale newest entry is').toEqual({ kind: 'router' });
-    r = afterPop(r, toJ, forward).rec;
-    expect(r.lastIdx).toBe(3);
-    // Exit: one step over R is not enough, the tab stands on an entry above it. Two land on entry 1, below the reader place.
-    expect(readerStepBack(r).n).toBe(2);
   });
 });
