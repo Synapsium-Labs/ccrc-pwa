@@ -618,7 +618,28 @@ export const CONTENT_HEADERS: Readonly<Record<string, string>> = Object.freeze({
   'accept-ranges': 'bytes',
   'permissions-policy':
     'camera=(), microphone=(), geolocation=(), usb=(), serial=(), hid=(), bluetooth=(), payment=(), display-capture=(), fullscreen=(self), clipboard-write=(self)',
+  // D-9145 (the coordinator's ruling of 2026-11-27): a browser's HTTP cache must never stand in for the service-worker fence. A
+  // response stored for a script tag or a fetch was asked with another `Sec-Fetch-Dest` and no `Service-Worker` header, so it never
+  // answers a worker's script request, which goes to the network and meets `fetchFence`.
+  vary: 'Sec-Fetch-Dest, Service-Worker',
 });
+
+/** Every JavaScript MIME type essence a browser accepts as a script (the MIME Sniffing standard's list), the one place the tier
+ *  names them: `cacheKind` reads it for every type the MIME table can answer, so a script extension added to the table later is
+ *  never stored either (D-9145). */
+const JAVASCRIPT_ESSENCES: ReadonlySet<string> = new Set([
+  'application/ecmascript', 'application/javascript', 'application/x-ecmascript', 'application/x-javascript',
+  'text/ecmascript', 'text/javascript', 'text/javascript1.0', 'text/javascript1.1', 'text/javascript1.2', 'text/javascript1.3',
+  'text/javascript1.4', 'text/javascript1.5', 'text/jscript', 'text/livescript', 'text/x-ecmascript', 'text/x-javascript',
+]);
+
+/** Which cache rule a served file takes, by its MIME type's essence (the type less any parameter, lower-cased): `html` for
+ *  `text/html`, `script` for a JavaScript type a browser runs as a script, `other` for everything else (D-9145). */
+export function cacheKind(mime: string): 'html' | 'script' | 'other' {
+  const essence = mime.split(';')[0]!.trim().toLowerCase();
+  if (essence === 'text/html') return 'html';
+  return JAVASCRIPT_ESSENCES.has(essence) ? 'script' : 'other';
+}
 
 /** The fetch-metadata fence (spec 4.3's table), decided before a byte is read. The first row that matches wins. The caller passes
  *  the header values lower-cased, as browsers send them. A client that is not a browser can send any header, so for such a client
@@ -641,10 +662,12 @@ export function fetchFence(
   return h.site === 'same-origin' ? 'ok' : 'refused';
 }
 
-/** The browser cache rule (spec 5, "Browser cache"): an HTML response is never cached, so a dead capability cannot start a page;
- *  any other file is cached for the seconds the capability may still live, at most an hour, because a pin's bytes never change. */
-export function cacheControl(kind: 'html' | 'other', secondsLeft: number): string {
-  if (kind === 'html') return 'no-store';
+/** The browser cache rule (spec 5, "Browser cache", amended by D-9145): an HTML response is never cached, so a dead capability
+ *  cannot start a page; a script is never cached either, so a worker's script fetch always reaches the network and the
+ *  service-worker fence, whatever a browser does with `Vary` (D-9145); any other file is cached for the seconds the capability
+ *  may still live, at most an hour, because a pin's bytes never change. `cacheKind` picks the kind from the MIME type. */
+export function cacheControl(kind: 'html' | 'script' | 'other', secondsLeft: number): string {
+  if (kind === 'html' || kind === 'script') return 'no-store';
   // A value that is not a number (a missing expiry) is 0, never a malformed `max-age=NaN`.
   const n = Number.isFinite(secondsLeft) ? Math.min(3600, Math.max(0, Math.floor(secondsLeft))) : 0;
   return `private, max-age=${n}, immutable`;

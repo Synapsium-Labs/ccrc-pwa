@@ -3,8 +3,9 @@
 // sections 4.3 and 5), never built from the source's own constants, so a drifted constant cannot make a wrong string pass.
 import { describe, expect, it } from 'vitest';
 import {
-  CONTENT_HEADERS, admitLoad, admitQueued, artifactContentType, cacheControl, contentCsp, fetchFence, parseRange,
+  CONTENT_HEADERS, admitLoad, admitQueued, artifactContentType, cacheControl, cacheKind, contentCsp, fetchFence, parseRange,
 } from '../src/artifacts/policy.js';
+import { ARTIFACT_MIME, artifactMime } from '../../shared/artifacts.js';
 
 const ART = 'https://art.artifacts.invalid';
 const CONTENT = 'https://content.artifacts.invalid';
@@ -53,9 +54,48 @@ describe('artifact page policy (X5 A3.2)', () => {
       'accept-ranges': 'bytes',
       'permissions-policy':
         'camera=(), microphone=(), geolocation=(), usb=(), serial=(), hid=(), bluetooth=(), payment=(), display-capture=(), fullscreen=(self), clipboard-write=(self)',
+      // D-9145 (the coordinator's ruling of 2026-11-27): a cache never stands in for the service-worker fence.
+      vary: 'Sec-Fetch-Dest, Service-Worker',
     });
     expect(Object.isFrozen(CONTENT_HEADERS)).toBe(true);
     expect(Object.keys(CONTENT_HEADERS).some((k) => k.startsWith('access-control-'))).toBe(false);
+  });
+
+  it('policy: content responses vary by Sec-Fetch-Dest and Service-Worker (D-9145)', () => {
+    // Written from the ruling: an entry stored for a script tag or a fetch never matches a worker's script request.
+    expect(CONTENT_HEADERS['vary']).toBe('Sec-Fetch-Dest, Service-Worker');
+    expect(CONTENT_HEADERS['vary']!.split(', ').sort()).toEqual(['Sec-Fetch-Dest', 'Service-Worker']);
+  });
+
+  it('policy: a script is never stored (D-9145)', () => {
+    // Every JavaScript MIME type essence a browser accepts as a script (the MIME Sniffing standard's list), written here.
+    const JS = [
+      'application/ecmascript', 'application/javascript', 'application/x-ecmascript', 'application/x-javascript',
+      'text/ecmascript', 'text/javascript', 'text/javascript1.0', 'text/javascript1.1', 'text/javascript1.2',
+      'text/javascript1.3', 'text/javascript1.4', 'text/javascript1.5', 'text/jscript', 'text/livescript',
+      'text/x-ecmascript', 'text/x-javascript',
+    ];
+    for (const m of JS) {
+      expect(cacheKind(m), m).toBe('script');
+      expect(cacheKind(`${m.toUpperCase()}; charset=utf-8`), m).toBe('script');
+    }
+    // The table's own script answers (the classic and module extensions) are scripts, and are never stored.
+    for (const name of ['a.js', 'a.mjs', 'A.JS']) {
+      expect(cacheKind(artifactMime(name).mime), name).toBe('script');
+      expect(cacheControl(cacheKind(artifactMime(name).mime), 7200), name).toBe('no-store');
+    }
+    // Every row of the table: a JavaScript type is a script, HTML is html, anything else keeps the bounded private form.
+    for (const [ext, mime] of Object.entries(ARTIFACT_MIME)) {
+      const want = JS.includes(mime) ? 'script' : mime === 'text/html' ? 'html' : 'other';
+      expect(cacheKind(mime), ext).toBe(want);
+    }
+    for (const m of ['application/wasm', 'model/gltf-binary', 'image/png', 'application/json', 'text/css', 'application/octet-stream']) {
+      expect(cacheKind(m), m).toBe('other');
+      expect(cacheControl(cacheKind(m), 7200), m).toBe('private, max-age=3600, immutable');
+    }
+    expect(cacheKind('text/html')).toBe('html');
+    expect(cacheControl('script', 0)).toBe('no-store');
+    expect(cacheControl('script', 90)).toBe('no-store');
   });
 
   describe('policy: contentCsp equals the spec text', () => {
