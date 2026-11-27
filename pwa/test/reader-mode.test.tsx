@@ -1137,4 +1137,41 @@ describe('wake lock: a refusal is remembered (X6 XR fix round 1, item 5)', () =>
     expect(wake.request, 'activity after the fresh entry\'s refusal asked again').toHaveBeenCalledTimes(3);
     expect(latest.state.on, 'a refused lock ended reader mode').toBe(true);
   });
+
+  /** A wake lock whose requests stay pending until the test settles them, one by one. */
+  function installPendingWakeLock(): { request: ReturnType<typeof vi.fn>; refuse(n: number): void } {
+    const pending: Array<{ rej(e: unknown): void }> = [];
+    const request = vi.fn(() => new Promise<unknown>((_res, rej) => { pending.push({ rej }); }));
+    defineOwn(navigator, 'wakeLock', { value: { request } });
+    return { request, refuse: (n) => pending[n]!.rej(new Error('NotAllowedError')) };
+  }
+
+  it('wake lock: a request that rejects late does not mark the new period refused (the page visible again meanwhile) (review M3)', async () => {
+    const wake = installPendingWakeLock();
+    const fire = installVisibility();
+    setup();
+    act(() => { latest.enter('button'); });
+    await settle();
+    expect(wake.request, 'entering asks once').toHaveBeenCalledTimes(1);
+    await act(async () => { fire('hidden'); });
+    await act(async () => { fire('visible'); });
+    await settle();
+    // The first request is still pending, so the visible page waits for it; it is refused late, after the period it asked in.
+    await act(async () => { wake.refuse(0); });
+    await settle();
+    expect(wake.request, 'the late refusal of the old period blocked the new one').toHaveBeenCalledTimes(2);
+  });
+
+  it('wake lock: a request that rejects late does not mark a fresh entry refused (exit and enter meanwhile) (review M3)', async () => {
+    const wake = installPendingWakeLock();
+    setup();
+    act(() => { latest.enter('button'); });
+    await settle();
+    act(() => { latest.exit('exit-tap'); });
+    act(() => { latest.enter('button'); });
+    await settle();
+    await act(async () => { wake.refuse(0); });
+    await settle();
+    expect(wake.request, 'the late refusal of the old entry blocked the new one').toHaveBeenCalledTimes(2);
+  });
 });

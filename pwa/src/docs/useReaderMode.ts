@@ -195,6 +195,9 @@ function createController(sink: Sink, initialTurn: ReaderTurn) {
   /** The browser refused the last request: remembered (`wakeLockWanted` reads it) until the next entry into reader mode or the page
    *  visible again, so activity never asks again meanwhile (X6 XR fix round 1). */
   let refused = false;
+  /** The generation of the wake-lock request in flight: each request takes the next one, and every clearing of `refused` takes
+   *  one too, so a request that settles after its period ended (the page visible again, a fresh entry) never marks the new one. */
+  let wakeGen = 0;
   let alive = true;
 
   // ── the wake lock (spec 6.3) ──
@@ -208,6 +211,8 @@ function createController(sink: Sink, initialTurn: ReaderTurn) {
     const api: WakeLock | undefined = navigator.wakeLock;
     if (api === undefined || typeof api.request !== 'function') return;
     requesting = true;
+    wakeGen += 1;
+    const gen = wakeGen;
     let pending: Promise<WakeLockSentinel>;
     try { pending = api.request('screen'); } catch { requesting = false; refused = true; return; }
     Promise.resolve(pending).then((s) => {
@@ -216,7 +221,13 @@ function createController(sink: Sink, initialTurn: ReaderTurn) {
       if (!alive || !wantedNow()) { releaseSentinel(s); return; }
       sentinel = s;
       s.addEventListener('release', () => { if (sentinel === s) sentinel = null; });
-    }, () => { requesting = false; refused = true; });
+    }, () => {
+      requesting = false;
+      // Only the request of the period now in force is a refusal of it. One that settles after its period ended says nothing of
+      // the new one, which was waiting on it: the lock is read again for the new period.
+      if (gen === wakeGen) refused = true;
+      else if (alive) syncWake();
+    });
   };
   const syncWake = (): void => {
     if (wantedNow()) {
@@ -327,7 +338,9 @@ function createController(sink: Sink, initialTurn: ReaderTurn) {
     state = answer.state;
     if (!before.on && answer.state.on) {
       lastActivity = Date.now();   // entering counts as activity
-      refused = false;             // a fresh entry asks the browser for the lock once more      // An entry during an exit's settle (by `enter` or by the frame's toggle): the old settle must not run into the new reading,
+      refused = false;             // a fresh entry asks the browser for the lock once more
+      wakeGen += 1;                // and no request still pending from before it may mark the new period refused
+      // An entry during an exit's settle (by `enter` or by the frame's toggle): the old settle must not run into the new reading,
       // it would step back its place.
       if (settleTimer !== null) {
         clearTimeout(settleTimer);
@@ -474,7 +487,7 @@ function createController(sink: Sink, initialTurn: ReaderTurn) {
     aa,
     setTurn,
     /** The page is visible again: a refusal of the lock is forgotten, so it is asked for once more. */
-    pageVisible: (): void => { refused = false; syncWake(); },
+    pageVisible: (): void => { refused = false; wakeGen += 1; syncWake(); },
     /** The browser drops the lock when the page is hidden: forget the sentinel, then re-read. */
     pageHidden: (): void => { sentinel = null; syncWake(); },
     /** Registers this hook's host with the pop dispatcher for its whole life, and returns the unregister. `exitReader` is the
