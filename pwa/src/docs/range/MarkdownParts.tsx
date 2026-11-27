@@ -26,6 +26,7 @@ import { utf8Bytes } from '../../../../shared/utf8';
 import { DOCS_PARSE_BUDGET_MS, DOCS_RENDER_GATE_BYTES } from '../../lib/markdownLimits';
 import type { ReaderRenderOutcome } from '../../lib/readerRenderJob';
 import { DOCS_RANGE_TEXT, fillSentence } from '../docsText';
+import { NoPrintSource, usePublishPrintSource, type PrintSource } from '../print/printSource';
 import { cutMarkdownText, partForFragment, partHolds, partText, splitMarkdownParts, type MdPart } from './mdParts';
 import { PartContext } from './partContext';
 import { PARTS_WORDS } from './partsWords';
@@ -99,6 +100,14 @@ export function MarkdownParts(p: {
   const overWhole = useMemo(() => actsOnPart(p.text), [p.text]);
   const [done, setDone] = useState(0);
   const [index, setIndex] = useState(() => heldCut(bodyKey, p.text)?.index ?? 0);
+  // What Print draws from (X2 P6.1 Step 1): every part as it mounts (held across a page turn, so turning prepares nothing again),
+  // whether the cut is whole, and the part on screen (`at`: what a document too long to print whole prints). The parts' own bodies
+  // publish nothing (`NoPrintSource` below), so this is the one writer for the document.
+  const printParts = useMemo(() => (parts === null ? null : parts.map((q) => partText(p.text, q))), [parts, p.text]);
+  const printAt = parts === null ? 0 : Math.min(index, parts.length - 1);
+  usePublishPrintSource(useMemo<PrintSource | null>(
+    () => (printParts === null ? null : { kind: 'markdown-parts', parts: printParts, complete, at: printAt }),
+    [printParts, complete, printAt]));
   const [note, setNote] = useState(false);
   // The fragment this page was opened with is placed once, at the first part whose ids hold it.
   const [placed, setPlaced] = useState<string | null>(null);
@@ -193,7 +202,9 @@ export function MarkdownParts(p: {
       {note && <p className="docs-note" role="status">{DOCS_RANGE_TEXT.fragmentUnknown}</p>}
       {part.continued && index > 0 && <p className="docs-note">{DOCS_RANGE_TEXT.partContinued}</p>}
       <PartContext.Provider value={{ whole: p.text, part }}>
-        {p.renderPart({ text: partText(p.text, part), index, fragment: placed !== null && placed === fragment ? fragment : null })}
+        <NoPrintSource>
+          {p.renderPart({ text: partText(p.text, part), index, fragment: placed !== null && placed === fragment ? fragment : null })}
+        </NoPrintSource>
       </PartContext.Provider>
     </div>
   );

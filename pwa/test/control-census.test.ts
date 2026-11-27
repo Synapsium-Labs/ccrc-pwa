@@ -523,6 +523,9 @@ const CONTROLS: Record<string, string> = {
   'docs/DocsHead.tsx <button> docs-action docs-export':
     "TOKEN. Export (spec 4.17), after Share on a leaf: a <button> wearing the header's link-action class, `.docs-action`, "
     + 'whose rule carries the floor.',
+  'docs/DocsHead.tsx <button> docs-action docs-print':
+    "TOKEN. Print (the parity spec 4.6), after Export on a leaf: a <button> wearing the header's link-action class, `.docs-action`, "
+    + 'whose rule carries the floor.',
   'docs/DocsHead.tsx <button> docs-action docs-reader-mode':
     "TOKEN. Reader mode (the reader-mode spec 3.1), the first action of the row: a <button> wearing the header's link-action "
     + 'class, `.docs-action`, whose rule carries the floor.',

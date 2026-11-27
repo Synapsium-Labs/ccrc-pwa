@@ -3,8 +3,9 @@
 // the read shows its progress and a Cancel, runs frame by frame (`readRange`), and hands the checked bytes to
 // `children` (Markdown in parts, or the image view); a class with no view above its cap gets a Download that reads the
 // file by range first. Cancel, leaving the page or opening another doc aborts the read and drops every frame held.
-import { useCallback, useContext, useEffect, useRef, useState, type ReactNode } from 'react';
+import { useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { DocsAssetContext } from '../DocImage';
+import { usePublishPrintSource, type PrintSource } from '../print/printSource';
 import { ASSET_FAILED } from '../export/exportAssets';
 import { Button } from '@ccrc/ui';
 import {
@@ -264,6 +265,8 @@ export function RangeImage(p: {
     if (onShown !== null && openedPin !== null) onShown(openedPin);
     return () => { hold?.release(); URL.revokeObjectURL(u); setUrl(null); };
   }, [p.bytes, declared, matches, verdict, assetKey, assets]);
+  // Print draws the very object URL the view shows (X2 P6.1 Step 1), once it is made.
+  usePublishPrintSource(useMemo<PrintSource | null>(() => (url === null ? null : { kind: 'image', src: url, name: p.name }), [url, p.name]));
   if (!matches) return <p className="docs-note" role="status">{DOCS_RANGE_TEXT.imageMismatch}</p>;
   if (dims === null) return <p className="docs-note" role="status">{DOCS_RANGE_TEXT.imageNoHeader}</p>;
   if (verdict === 'side') {

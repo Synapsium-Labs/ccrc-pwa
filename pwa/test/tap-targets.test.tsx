@@ -63,6 +63,7 @@ import { renderSettings } from './settingsHost';
 import { COMMIT_A, SERVED, draftOf, entry, failedAnswer, fakeLoaders, fileResponse, holder, okTree, pageAt, treeOk, type FakeLoaders } from './docsFixtures';
 import { ExportSheet } from '../src/docs/ExportSheet';
 import { EXPORT_TEXT } from '../src/docs/docsText';
+import { PRINT_ROW_TEXT } from '../src/docs/print/printWords';
 import type { ExportRequest } from '../src/docs/export/exportInput';
 
 const read = (...seg: string[]): string =>
@@ -1344,6 +1345,37 @@ describe('Export: .docs-export on .docs-action, and the export sheet’s Save an
     };
     render(<ExportSheet request={request} onClose={() => {}} load={() => Promise.reject(new TypeError('chunk'))} />);
     expect(await screen.findByRole('button', { name: EXPORT_TEXT.retry })).toHaveClass('min-h-tap');
+  });
+});
+
+// — native Docs reader X2 P6.1, Print: the header's Print row, a <button> wearing `.docs-action` as Export's does; its floor is that
+// rule's (the compact row's width floor is `.docs-compact-bar .docs-action`'s, below). Both halves. —
+describe('Print: .docs-print on .docs-action (docs X2 P6.1)', () => {
+  afterEach(() => {
+    history.replaceState(null, '', '/');
+    vi.unstubAllGlobals();
+  });
+
+  it('is at least one tap tall: .docs-action on the token, and no rule of its own that gives the floor back', () => {
+    expect(floorIn(docsCss, '.docs-action')).toBe('var(--tap-min)');
+    expect(declValue(ruleIn(docsCss, '.docs-compact-bar .docs-action'), 'min-width')).toBe('var(--tap-min)');
+    expect(docsCss).not.toMatch(/^\.docs-action\.docs-print\s*\{[^}]*(min-height|height)\s*:/m);
+  });
+
+  it('is the class the rendered control carries, in Page details; the desk row and the compact row\'s icons have none', async () => {
+    openDocs('/docs/demo/specs/a.md', markdownLeaf('# A\n'));
+    await screen.findByRole('button', { name: DOCS_HEAD_TEXT.export });
+    expect(screen.queryByRole('button', { name: PRINT_ROW_TEXT.print, hidden: true })).toBeNull();
+    cleanup();
+    vi.stubGlobal('matchMedia', (q: string) => ({
+      matches: q === DOCS_COMPACT_QUERY, media: q, onchange: null,
+      addEventListener() {}, removeEventListener() {}, addListener() {}, removeListener() {}, dispatchEvent: () => false,
+    }));
+    openDocs('/docs/demo/specs/a.md', markdownLeaf('# A\n'));
+    const inPanel = await screen.findByRole('button', { name: PRINT_ROW_TEXT.print, hidden: true });
+    expect(inPanel).toHaveClass('docs-action', 'docs-print');
+    expect(inPanel.closest('.docs-more-panel')).not.toBeNull();
+    expect(inPanel.closest('.docs-compact-bar')).toBeNull();
   });
 });
 

@@ -383,7 +383,7 @@
   font-variant-numeric: tabular-nums; /* after the shorthand, which resets it */
 }
 .docs-range-reading { display: grid; gap: var(--sp-2); justify-items: start; min-width: 0; }
-.docs-range-reading > progress { inline-size: 100%; block-size: var(--sp-2); accent-color: var(--accent); }
+.docs-range-reading > progress { inline-size: 100%; block-size: var(--sp-2); }
 .btn-ghost.docs-range-cancel, .btn-ghost.docs-range-download { width: auto; min-height: var(--tap-min); padding: 0 var(--sp-3); }
 
 .docs-fail {
@@ -751,6 +751,36 @@
 }
 .docs-mockup[data-frame='full'] .docs-mockup-canvas, .docs-mockup[data-frame='full'] .docs-mockup-frame { block-size: 100%; }
 .docs-mockup-bar { padding: var(--sp-1) var(--sp-2); }
+
+/* — Print (the parity spec 4.6, X2 P6.1 Step 1). The print view is `div.docs-print-root`, appended to `body` once by
+   `print/printMount.ts` and filled by a `beforeprint` listener from the trees prepared ahead (`print/usePrint.ts`); `afterprint`
+   empties it. On screen it is not rendered. Under print, while it holds a view, every other child of `body` is not rendered (the
+   console's bar, the rail, the reader frame and any sheet), and the root is: so the frame is not in the printed page, and a
+   page with no print view (a listing) prints as it is. The node carries `data-theme="light"`, so the tokens below are the light
+   palette's whatever the console shows; its rule sets its ink AND its own ground (contrast.test.ts measures that pair in every
+   palette, as for each rule here), and nothing inside sets a colour. The text is 11 pt; a figure, a table row and a preformatted
+   block are kept from breaking across pages; a part after the first starts a new page; a `details` prints open (the tree
+   carries `open`, and its closed content is made visible where the engine lets a rule do it). The row's button wears
+   `.docs-action.docs-print`; the view's own root is `.docs-print-root > .docs-print-view`, so the two never share a rule.
+   The console is hidden by two rules, never one selector list (an engine without `:has()` drops a whole list): `body` carries
+   `data-docs-printing` (and `data-theme="light"`, put there by `printMount.ts` while a view is mounted) and `:has()` sees the
+   view. The light palette reaches the page's ground through `html` (`color-scheme`; a selector of its own, since the contrast
+   gate keys a rule by its selector and `html` is base.css's) and `body` (its tokens, ink and ground). — */
+.docs-print-root { display: none; }
+@media print {
+  html:has(> body[data-docs-printing]) { color-scheme: light; }
+  body[data-docs-printing] { background: var(--bg-surface); color: var(--ink-primary); color-scheme: light; }
+  body[data-docs-printing] > :not(.docs-print-root) { display: none; }
+  body:has(> .docs-print-root > *) > :not(.docs-print-root) { display: none; }
+  .docs-print-root { display: block; background: var(--bg-surface); color: var(--ink-primary); font-size: 11pt; line-height: var(--leading-normal); }
+  .docs-print-root figure, .docs-print-root tr, .docs-print-root pre { break-inside: avoid; }
+  .docs-print-root pre { white-space: pre-wrap; overflow-wrap: anywhere; }
+  .docs-print-root img { max-inline-size: 100%; }
+  .docs-print-root .docs-print-part { break-before: page; }
+  .docs-print-root .docs-print-banner { margin: 0 0 var(--sp-3); padding: var(--sp-2); border: 1px solid currentColor; }
+  .docs-print-root .docs-print-note, .docs-print-root .docs-print-notice { margin: 0 0 var(--sp-2); }
+  .docs-print-root details::details-content { content-visibility: visible; }
+}
 
 /* — reduced motion (D-5501, D-5502): the door, the back chevron, a row, the chip and the bordered controls each
    declare a transition, so each is named here, after every rule it governs (motion-reduced.test.ts reads both

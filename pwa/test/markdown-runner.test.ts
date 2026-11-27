@@ -630,6 +630,23 @@ describe('W8a Task 4: a render job on the same runner', () => {
     expect(Object.keys(workers[0]!.posts[2]!).sort()).toEqual(['id', 'kind', 'src']);
   });
 
+  it('a render job with print: true posts exactly {id, kind: render, src, print: true}, and one without has no print key (X2 P6.1 Step 1)', () => {
+    const { runner, workers } = harness();
+    void runner.render('# T', { ...RENDER, print: true });
+    void runner.render('# U', RENDER);
+    void runner.render('# V', { ...RENDER, print: undefined });
+    void runner.render('# W', { ...RENDER, blocks: true });
+    expect(workers[0]!.posts[0]).toEqual({ id: expect.any(Number), kind: 'render', src: '# T', print: true });
+    expect(Object.keys(workers[0]!.posts[0]!).sort()).toEqual(['id', 'kind', 'print', 'src']);
+    workers[0]!.send({ id: workers[0]!.posts[0]!.id, outcome: NOT_RENDERED });
+    expect(Object.keys(workers[0]!.posts[1]!).sort()).toEqual(['id', 'kind', 'src']);
+    workers[0]!.send({ id: workers[0]!.posts[1]!.id, outcome: NOT_RENDERED });
+    expect(Object.keys(workers[0]!.posts[2]!).sort()).toEqual(['id', 'kind', 'src']);
+    workers[0]!.send({ id: workers[0]!.posts[2]!.id, outcome: NOT_RENDERED });
+    // A blocks job carries no print key either.
+    expect(Object.keys(workers[0]!.posts[3]!).sort()).toEqual(['blocks', 'id', 'kind', 'src']);
+  });
+
   it('a parse job still posts exactly {id, src, profile}', () => {
     const { runner, workers } = harness();
     void runner.parse('x', DOCS);

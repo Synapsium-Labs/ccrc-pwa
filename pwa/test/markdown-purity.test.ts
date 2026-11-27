@@ -35,7 +35,7 @@ const ROOTS: readonly string[] = [
   // Chat's marks (chat reading Task M, D-8060): the chat profile's plugin and the recogniser table it reads.
   'chatMarks.ts', 'remarkChatMarks.ts',
   // Print and the block-boundary cutter (X2 P6.1): the render job's HTML parse, which alone imports the parser.
-  'renderTree.ts',
+  'renderTree.ts', 'printAllow.ts',
 ];
 /**
  * The shared kernel files the closure reaches, relative to the package: the one UTF-8 byte counter, which

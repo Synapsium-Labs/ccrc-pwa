@@ -155,8 +155,8 @@ globalThis.self = { postMessage: (r) => replies.push(r) };
 const report = (o) => process.stdout.write(JSON.stringify(o) + '\\n');
 try {
   const m = await import(pathToFileURL(chunk).href);
-  if (mode === 'chunk' || mode === 'blocks') {
-    m.answerRenderJob({ id: 9, kind: 'render', src, ...(mode === 'blocks' ? { blocks: true } : {}) }, (r) => replies.push(r));
+  if (mode === 'chunk' || mode === 'blocks' || mode === 'print') {
+    m.answerRenderJob({ id: 9, kind: 'render', src, ...(mode === 'blocks' ? { blocks: true } : {}), ...(mode === 'print' ? { print: true } : {}) }, (r) => replies.push(r));
   } else {
     if (typeof self.onmessage !== 'function') { report({ load: 'no-onmessage' }); process.exit(0); }
     self.onmessage({ data: { id: 9, kind: 'render', src } });
@@ -177,7 +177,7 @@ describe('the built render job is its own lazily loaded worker chunk (W8a Task 4
   const assets = (): string => path.join(out, 'assets');
   const marker = (): string =>
     (JSON.parse(readFileSync(path.join(PWA, 'node_modules', 'markdown-it', 'package.json'), 'utf8')) as { name: string }).name;
-  const answer = (chunkFile: string, mode: 'chunk' | 'worker' | 'blocks') => {
+  const answer = (chunkFile: string, mode: 'chunk' | 'worker' | 'blocks' | 'print') => {
     const stdout = execFileSync(
       process.execPath,
       ['--input-type=module', '-e', RENDER_LOADER, path.join(assets(), chunkFile), mode, SRC],
@@ -188,6 +188,7 @@ describe('the built render job is its own lazily loaded worker chunk (W8a Task 4
       replies?: { id: number; outcome: {
         kind: string; images?: string[]; result?: { html: string; meta: { title: string | null } };
         blocks?: { from: number; to: number; kind: string }[];
+        printTree?: { nodes: { t: string; n?: string; a?: { id?: string } }[] };
       } }[];
     };
   };
@@ -210,6 +211,19 @@ describe('the built render job is its own lazily loaded worker chunk (W8a Task 4
     expect(result.replies).toHaveLength(1);
     expect(result.replies![0]!.outcome.kind).toBe('blocks');
     expect(result.replies![0]!.outcome.blocks?.map((b) => [b.from, b.to, b.kind])).toEqual([[0, 1, 'heading'], [2, 3, 'other'], [4, 5, 'other']]);
+  }, 90_000);
+
+  it('the render chunk answers a print job with a print tree whose first node is the heading, with no DOM (X2 P6.1 Step 1)', () => {
+    const chunk = readdirSync(assets()).find((n) => /^readerRenderJob-[\w-]+\.js$/.test(n));
+    expect(chunk).toBeDefined();
+    const result = answer(chunk!, 'print');
+    expect(result).toMatchObject({ load: 'ok', document: 'undefined', window: 'undefined' });
+    expect(result.replies).toHaveLength(1);
+    expect(result.replies![0]!.outcome.kind).toBe('rendered');
+    // The reader's own answer is there beside the tree, and the tree's heading id carries the print prefix.
+    expect(result.replies![0]!.outcome.result?.meta.title).toBe('T');
+    const nodes = result.replies![0]!.outcome.printTree?.nodes;
+    expect(nodes?.[0]).toMatchObject({ t: 'el', n: 'h1', a: { id: 'docs-print-t' } });
   }, 90_000);
 
   it('exactly one emitted chunk holds the renderer, it is not the worker entry, and the entry imports it lazily', () => {

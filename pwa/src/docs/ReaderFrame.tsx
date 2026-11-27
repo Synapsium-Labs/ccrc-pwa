@@ -87,6 +87,7 @@ import { ReaderBarContext, createReaderProgress, usePublishReaderBar, type Reade
 import { leafName } from './docsTree';
 import { copyText } from './share';
 import { READER_BODY, usePublishExportBody } from './exportBody';
+import { usePublishPrintSource } from './print/printSource';
 
 type LinkBase = Omit<DocLinkContextValue, 'urls'>;
 
@@ -104,7 +105,7 @@ const READER_HOLD_FRAMES = 2;
 
 /** What the leaf needs of the reader: the render job, the mount, and the page's images. A test injects all three. */
 export interface ReaderDeps {
-  render(src: string, o: { budgetMs: number; signal?: AbortSignal; blocks?: true }): Promise<ReaderRenderOutcome>;
+  render(src: string, o: { budgetMs: number; signal?: AbortSignal; blocks?: true; print?: true }): Promise<ReaderRenderOutcome>;
   mount(el: HTMLElement, input: ReaderMountInput): Promise<ReaderMount>;
   images: typeof loadReaderImages;
   /** The doc's commit list (B2's history loader). Absent, no commit list is read. */
@@ -227,6 +228,14 @@ function ReaderBody(p: ReaderFrameProps & { readonly text: string; readonly onSi
     readerBodyReducer, undefined, (): ReaderBodyState => (overGate ? { s: 'plain', why: 'over-gate' } : { s: 'rendering' }),
   );
   const [ask, setAsk] = useState<Ask | null>(null);
+  /** The `data:` URLs this body's images came to, by ref, for the print view (X2 P6.1 Step 1); `null` until its walk ends. */
+  const [printImages, setPrintImages] = useState<Readonly<Record<string, string>> | null>(null);
+  // What Print draws from (spec 4.6): this text, ready once the frame has reported `ready` (or when the body is not the frame: the
+  // plain view and its fallback, which the worker's print render answers for as for any text). Published while mounted.
+  const printReady = state.s === 'ready' || state.s === 'fallback' || state.s === 'plain';
+  usePublishPrintSource(useMemo(
+    () => ({ kind: 'markdown' as const, text, ready: printReady, ...(printImages === null ? {} : { images: printImages }) }),
+    [text, printReady, printImages]));
   /** The bar this body's frame publishes once ready; `null`: its frame is on its own bar, or not mounted yet. */
   const [bar, setBar] = useState<ReaderBar | null>(null);
   const barSlot = useContext(ReaderBarContext);
@@ -488,6 +497,7 @@ function ReaderBody(p: ReaderFrameProps & { readonly text: string; readonly onSi
       } else {
         watching = true;
       }
+      setPrintImages(images.urls);
       if (second.assets !== null && images.drafts !== 0) {
         counted = images.drafts;
         uncount = second.assets.onDraftAsset;

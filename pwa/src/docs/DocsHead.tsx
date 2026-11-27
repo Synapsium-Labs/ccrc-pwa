@@ -46,6 +46,8 @@ import { copyText, shareTargetFor, type ShareOpened } from './share';
 import { ShareSheet } from './ShareSheet';
 import { docMarkdownSource } from './DocMarkdown';
 import { ExportSheet } from './ExportSheet';
+import { PrintControlContext } from './print/usePrint';
+import { PRINT_ROW_TEXT, printPreparing } from './print/printWords';
 import type { ExportRequest, ExportSource } from './export/exportInput';
 import type { ExportWait } from './export/policy';
 import { showBytes } from './objectUrls';
@@ -757,6 +759,48 @@ function ExportAction(p: {
   );
 }
 
+/** Print (spec 2026-11-18 4.6) in PAGE DETAILS only (the plan's "a Print row in Page details"; the coordinator's ruling): a `<button>`
+ *  wearing `.docs-action`, with its word, in the compact row's panel (`CompactPanelTail`) and in the stacked actions the one bar's
+ *  panel draws (`ActionsRow`). The desk row has none (it is where a fifth action broke the head's layout), and neither has the
+ *  compact row's icon strip: the desk prints with Ctrl+P or the browser's menu, which mount from what is prepared (`usePrint`).
+ *  It reads the Docs screen's print control (`PrintControlContext`), so it is drawn only where a body has published something to
+ *  print, and never on a listing. "Print", or "Download to print" for a PDF or an HTML page (`printOffer`'s answer, which prints
+ *  from its downloaded file); while Print waits for the parts' trees it reads "Preparing part k of n…" and is disabled with that
+ *  reason as its name; a Download to print with no download reachable from the head is disabled with its reason too. A failed
+ *  download is said under the head's row (`PrintNote`). */
+function PrintAction(): ReactNode {
+  const control = useContext(PrintControlContext);
+  if (control === null) return null;
+  const progress = control.progress;
+  const words = progress !== null ? printPreparing(progress.k, progress.n)
+    : control.offer === 'download-to-print' ? PRINT_ROW_TEXT.downloadToPrint : PRINT_ROW_TEXT.print;
+  const why = control.disabledWhy;
+  const name = progress !== null ? words : why !== null ? `${words}: ${why}` : undefined;
+  return (
+    <button
+      type="button" className="docs-action docs-print" disabled={progress !== null || why !== null} onClick={control.press}
+      aria-label={name} title={why !== null ? name : undefined}
+    >
+      {words}
+    </button>
+  );
+}
+
+/** What Print says below the head's row, as the head's other notes are (never inside the bar or the actions' flex box, whose width it
+ *  would take): the head draws it after its row, beside "Updated to". A failed Download to print (`role="alert"`), and, for a document
+ *  too long to print whole, the sentence that Print prints the part on screen and how to print the rest. */
+function PrintNote(): ReactNode {
+  const control = useContext(PrintControlContext);
+  const note = control?.note ?? null;
+  const tooLong = control?.tooLong ?? null;
+  return (
+    <>
+      {note !== null && <p className="docs-note" role="alert">{note}</p>}
+      {tooLong !== null && <p className="docs-note" role="status">{tooLong}</p>}
+    </>
+  );
+}
+
 /** What an open share sheet is about (refinement (n)): the page, the commit its tree serves, and what the leaf opened.
  *  `ShareAction` is keyed by it, so a sheet left open closes when any of them changes, rather than name a page the
  *  screen no longer shows. */
@@ -860,6 +904,7 @@ function ActionsRow(p: ActionInputs & { readonly form: FullHeadForm; readonly he
           readAt={p.head.readAt} onPlainView={p.onPlainView} row={row}
         />
       )}
+      {page.kind === 'path' && !row && <PrintAction />}
       {committedHref !== null && (row
         ? (
           <DocsPageLink className="docs-action" href={committedHref} label={DOCS_HEAD_TEXT.openCommitted} title={DOCS_HEAD_TEXT.openCommitted}>
@@ -1059,6 +1104,7 @@ function ProjectHead(p: {
             {p.plainView === true && <PlainViewNote />}
           </>
         )}
+        <PrintNote />
         {visit.updatedTo !== null && (
           <p className="docs-updated" role="status">{fillSentence(DOCS_HEAD_TEXT.updatedTo, { short: shortCommit(visit.updatedTo) })}</p>
         )}
@@ -1074,6 +1120,7 @@ function ProjectHead(p: {
           {p.plainView === true && <PlainViewNote />}
         </>
       )}
+      <PrintNote />
       {visit.updatedTo !== null && (
         <p className="docs-updated" role="status">{fillSentence(DOCS_HEAD_TEXT.updatedTo, { short: shortCommit(visit.updatedTo) })}</p>
       )}
@@ -1378,6 +1425,7 @@ function PhoneHead(p: CompactProps & { readonly tree: DocsTreeOk; readonly bar: 
           )}
       </div>
       {bar === null && p.plainView && <PlainViewNote />}
+      <PrintNote />
       {visit.updatedTo !== null && (
         <p className="docs-updated" role="status">{fillSentence(DOCS_HEAD_TEXT.updatedTo, { short: shortCommit(visit.updatedTo) })}</p>
       )}
@@ -1429,15 +1477,17 @@ function CompactControls(p: CompactProps & {
 function CompactPanelTail(p: { readonly tree: DocsTreeOk; readonly head: HeadActions }): ReactNode {
   const { tree } = p;
   const { target, showsDraft, onVersion, share, exported, committedHref } = p.head;
+  const printed = useContext(PrintControlContext) !== null;
   const exportNote = exported.s === 'plain-view' ? DOCS_HEAD_TEXT.exportPlainHint
     : exported.s === 'updating' || exported.s === 'waiting' ? fillSentence(DOCS_HEAD_TEXT.exportBusy, { state: exportWords(exported) })
       : null;
   return (
     <>
-      {(target !== null || committedHref !== null) && (
+      {(target !== null || committedHref !== null || printed) && (
         <div className="docs-actions">
           {target !== null && <GithubAction tree={tree} target={target} showsDraft={showsDraft} onVersion={onVersion} />}
           {committedHref !== null && <DocsPageLink className="docs-action" href={committedHref}>{DOCS_HEAD_TEXT.openCommitted}</DocsPageLink>}
+          <PrintAction />
         </div>
       )}
       {share.s === 'updating' && <p className="docs-note">{fillSentence(DOCS_HEAD_TEXT.shareBusy, { state: shareWords(share) })}</p>}

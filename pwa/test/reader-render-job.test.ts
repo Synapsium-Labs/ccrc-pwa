@@ -6,7 +6,16 @@ import { render } from '@synapsium-labs/pinax-lib/render';
 import { describe, expect, it, vi } from 'vitest';
 import { DOCS_RENDER_GATE_BYTES, MD_MAX_DELIMITER_RUN } from '../src/lib/markdownLimits';
 import { READER_BLOCKS_HTML_MAX_BYTES, READER_BLOCKS_MAX_BYTES, READER_HTML_MAX_BYTES } from '../src/lib/readerLimits';
+import { printAllow } from '../src/lib/printAllow';
 import { answerRenderJob, type ReaderRenderReply } from '../src/lib/readerRenderJob';
+import { parseRendered } from '../src/lib/renderTree';
+
+/** When set, the html parse of the render output throws (the print job's one new failure). */
+let parseThrows = false;
+vi.mock('../src/lib/renderTree', async (importOriginal) => {
+  const lib = await importOriginal<typeof import('../src/lib/renderTree')>();
+  return { ...lib, parseRendered: ((html: string) => { if (parseThrows) throw new RangeError('x'); return lib.parseRendered(html); }) as typeof lib.parseRendered };
+});
 
 /** The options each `render()` call of the library received, in order (the library itself still renders). */
 const renderCalls: unknown[] = [];
@@ -154,6 +163,74 @@ describe('answerRenderJob', () => {
     for (const blocks of [false, 1, 'true', undefined, null]) {
       expect(posts({ id: 31, kind: 'render', src, blocks })).toEqual([{ id: 31, outcome: exact }]);
     }
+  });
+
+  it('render job: print answers the print tree from the same render', () => {
+    const src = '# T\n\ntext ![a](a.png) [x](https://other.example/y) [up](#t)\n\n```mermaid\nflowchart LR\n  A-->B\n```\n';
+    renderCalls.length = 0;
+    const plain = posts({ id: 40, kind: 'render', src })[0]!.outcome;
+    const plainCalls = [...renderCalls];
+    renderCalls.length = 0;
+    const out = posts({ id: 41, kind: 'render', src, print: true });
+    expect(out).toHaveLength(1);
+    expect(out[0]!.id).toBe(41);
+    const outcome = out[0]!.outcome;
+    if (outcome.kind !== 'rendered' || plain.kind !== 'rendered') throw new Error(`expected rendered, got ${outcome.kind}`);
+    // One render path: the same render call, and the answer is the reader's own answer with the tree beside it.
+    expect(renderCalls).toEqual(plainCalls);
+    expect(renderCalls).toHaveLength(1);
+    const { printTree, ...rest } = outcome;
+    expect(rest).toEqual(plain);
+    expect(printTree).toEqual(printAllow(parseRendered(outcome.result.html)));
+    const first = printTree!.nodes[0]!;
+    expect(first).toMatchObject({ t: 'el', n: 'h1', a: { id: 'docs-print-t' } });
+    // The tree is plain data: it survives a structured clone untouched.
+    expect(structuredClone(printTree)).toEqual(printTree);
+  });
+
+  it('render job: a refusal or a render that did not render answers as for any job, with no print tree', () => {
+    const bad = `${'*'.repeat(MD_MAX_DELIMITER_RUN + 1)}x`;
+    expect(posts({ id: 42, kind: 'render', src: bad, print: true })[0]!.outcome).toMatchObject({ kind: 'refused', why: 'delimiter-run' });
+    expect(posts({ id: 43, kind: 'render', src: 'a'.repeat(DOCS_RENDER_GATE_BYTES + 1), print: true }))
+      .toEqual([{ id: 43, outcome: { kind: 'not-rendered', why: 'over-limit' } }]);
+    expect(posts({ id: 44, kind: 'render', src: 'x', print: true })[0]!.outcome.kind).toBe('rendered');
+  });
+
+  it('render job: a print parse that throws answers threw, as any throw does', () => {
+    parseThrows = true;
+    try {
+      expect(posts({ id: 45, kind: 'render', src: '# T', print: true })).toEqual([{ id: 45, outcome: { kind: 'threw', error: 'RangeError' } }]);
+    } finally {
+      parseThrows = false;
+    }
+  });
+
+  it('render job: a job without print is answered as before', () => {
+    const src = '# T\n\ntext ![a](a.png)\n';
+    const exact = {
+      kind: 'rendered',
+      result: {
+        outcome: 'rendered',
+        html: '<h1 id="t" data-line="1-1">T</h1>\n<p data-line="3-3">text <img src="a.png" alt="a" /></p>\n',
+        meta: { title: 'T', frontList: null, headings: [{ level: 1, id: 't', text: 'T' }], figures: 0, mermaidKinds: [], readingMinutes: expect.any(Number) },
+      },
+      mermaid: expect.anything(),
+      images: ['a.png'],
+      imagesTruncated: false,
+    };
+    renderCalls.length = 0;
+    const first = posts({ id: 46, kind: 'render', src })[0]!.outcome;
+    expect(first).toEqual(exact);
+    expect(Object.keys(first)).not.toContain('printTree');
+    // Only `true` asks for the tree.
+    for (const print of [false, 1, 'true', undefined, null]) {
+      const o = posts({ id: 47, kind: 'render', src, print })[0]!.outcome;
+      expect(o).toEqual(exact);
+      expect(Object.keys(o)).not.toContain('printTree');
+    }
+    expect(renderCalls.every((c) => JSON.stringify(c) === JSON.stringify({ maxBytes: DOCS_RENDER_GATE_BYTES, maxHtmlBytes: READER_HTML_MAX_BYTES }))).toBe(true);
+    // A blocks job is a blocks job, print or not.
+    expect(posts({ id: 48, kind: 'render', src, blocks: true, print: true })[0]!.outcome.kind).toBe('blocks');
   });
 
   it('a post that throws is answered once more with threw', () => {
