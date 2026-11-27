@@ -158,7 +158,35 @@ Every door the plan lists as "not on `main` yet" is on `main`. Each card is draw
 Each case was red with the mutant in place and green with it restored. The counts are measured; the commands ran one file at a time
 through `ccrc test`.
 
-MUTATION_ROWS_PLACEHOLDER
+- **The plan's three:**
+  - **Task 8, the console asks the step-up for an `opus` save:** red in `settings-overlord` ("opus lands in one tap"), 1 of 25.
+  - **Task 8, `not-found` before an answer (absent read as none):** red in `overlord-settings-words`, 3 of 41 (the gate's absent
+    case, its absent-is-not-none case, and the status line's absent case), and in `settings-overlord`'s absent case, 1 of 25.
+  - **Task 9, an absent `fableBilling` read as `credits`:** red in `overlord-settings-words` (1 of 41) and in
+    `settings-account-facts` (1 of 11).
+- **One per carried item:**
+  - **4a, Pause's sign-in sentence put back:** red in `overlord-refusal-words`, 1 of 6.
+  - **4b, the label read by `document.querySelector`, the old measure:** red in the place's browser file, 40 of 128 (every
+    `bound` and `restartable` case in both skins, which read the Fleet's one-line form). This was measured as the "before" of
+    the fix.
+  - **4c, the strip says the table's sentence again:** red in `overlord-portfolio-strip`, 1 of 21.
+  - **4d, a read at the door's own call number trusted (`>=`):** red in `overlord-words` (3 of 32), `overlord-ladder-part` (2 of
+    26) and `overlord-readiness-part` (2 of 23).
+- **The forced rebind's pair:**
+  - **No compare before the step-up:** red in `overlord-rebind-route`, 3 of 49, hold 2's among them.
+  - **No compare on the serialiser:** red, 2 of 49, the serialiser race among them.
+  - **The compare on the session only:** red in `overlord-rebind` (1 of 36) and `overlord-rebind-route` (2 of 49).
+  - **The stop takes the sent session (hold 4):** red only in the source scan of `rebind()`, 1 of 49. Under the compare the two are
+    equal, so the behaviour cases cannot see it, which is why the scan exists.
+- **The rest:**
+  - **Clear's in-flight guard removed:** at first it SURVIVED, because the button turns disabled after the first tap. The cases
+    now tap twice inside one render, where only the guard holds, and are red in `item-account-hold` and
+    `settings-account-facts`, 1 of each.
+  - **Clear drawn for a closed hold item:** red in `item-account-hold` (1 of 6) and `overlord-settings-words` (1 of 41).
+  - **The older node's sentence dropped, and the roster not read again after a fact's answer, both in:** red in
+    `settings-account-facts`, 4 of 11.
+  - **The facts row widened to 520 px:** red in `settings-overlord`'s browser file, 24 of 40 (155 to 225 px sideways at the phone
+    widths).
 
 ## What a merge arms
 

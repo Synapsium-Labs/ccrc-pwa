@@ -33,8 +33,8 @@ describe('the hold item draws the Clear for the lane it names', () => {
     const history = screen.getByRole('heading', { name: 'History' });
     expect(history.compareDocumentPosition(button) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(button.closest('[aria-label="Your move"]')).not.toBeNull();
-    fireEvent.click(button);
-    fireEvent.click(button);
+    // A double tap inside one render: the button is not yet disabled for the second, so only the in-flight guard holds it.
+    act(() => { button.click(); button.click(); });
     expect(clear).toHaveBeenCalledTimes(1);
     expect(clear).toHaveBeenCalledWith('lane-a');
     await act(async () => { resolve({ ok: true, lane: 'lane-a' }); });

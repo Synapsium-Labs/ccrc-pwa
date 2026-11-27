@@ -129,8 +129,8 @@ describe('the account-hold Clear', () => {
     expect(row('lane-a').querySelector('[data-hold-clear]')).toBeNull();
     expect(within(row('lane-b')).getByText('Held: launch profile unmet')).toBeTruthy();
     const button = row('lane-b').querySelector<HTMLButtonElement>('[data-hold-clear="lane-b"]')!;
-    fireEvent.click(button);
-    fireEvent.click(button);
+    // A double tap inside one render: the button is not yet disabled for the second, so only the in-flight guard holds it.
+    act(() => { button.click(); button.click(); });
     expect(clear).toHaveBeenCalledTimes(1);
     expect(clear).toHaveBeenCalledWith('lane-b');
     expect(client.stepUpStart).not.toHaveBeenCalled();
