@@ -567,11 +567,13 @@ describe('the forbidden program\'s cost on quote-dense payloads naming worktree 
   const standInPrograms = rowPrograms((b) => `the vendored ${b} program`, 'the hook\'s program');
   const STAND_IN = { original: 'the vendored original program', gate: 'the vendored gate program', hook: 'the hook\'s program' } as const;
   /** A recording timing function. Its answer is derived from the text it is given (1, 2 or 3 million for the original,
-   * the gate's program and the hook's; 9 million for any other), plus the size times 1000, plus the call's place. */
+   * the gate's program and the hook's; 9 million for any other), plus the size times 1000, plus 100 less the call's
+   * place: a later sample of the same program reads faster, so a reading that keeps an earlier sample over the faster
+   * one reds. */
   const recordingTime = (calls: Array<[string, At]>): Time => (text, at) => {
     calls.push([text, { ...at }]);
     const code = text === STAND_IN.original ? 1 : text === STAND_IN.gate ? 2 : text === STAND_IN.hook ? 3 : 9;
-    return code * 1_000_000 + at.kb * 1000 + calls.length;
+    return code * 1_000_000 + at.kb * 1000 + 100 - calls.length;
   };
   it('the cost baseline is the hook\'s forbidden program at 06aed21ff7, held by its hash, and is not the original (D-9141)', () => {
     const cost = readVendored('gate');
@@ -638,7 +640,7 @@ describe('the forbidden program\'s cost on quote-dense payloads naming worktree 
       expect(calls, `${row}: what it ran, where, in which order, how often`)
         .toEqual([[STAND_IN.gate, at], [STAND_IN.hook, at], [STAND_IN.gate, at], [STAND_IN.hook, at]]);
       expect({ referenceMs: r.referenceMs, currentMs: r.currentMs }, `${row}: each cell the faster of its own program's two`)
-        .toEqual({ referenceMs: 2_064_001, currentMs: 3_064_002 });
+        .toEqual({ referenceMs: 2_064_097, currentMs: 3_064_096 });
     }
   });
   it('a cost row\'s bound is 1.5x its baseline, or its baseline plus its mode\'s floor where that is more: 25 ms deny, 100 ms class (costReading)', () => {
@@ -658,6 +660,7 @@ describe('the forbidden program\'s cost on quote-dense payloads naming worktree 
       'quotes/deny': [32, 64], 'quotes/class': [64, 128], 'dqsub/deny': [64, 128], 'dqsub/class': [64, 128],
     };
     const first = ['original', 'current', 'original', 'current'] as const;
+    expect(LINEARITY_ROUNDS, 'one expected order per round').toBe(first.length);
     const text = { original: STAND_IN.original, current: STAND_IN.hook } as const;
     for (const shape of SHAPE_NAMES) for (const mode of MODES) {
       const row = `${shape}/${mode} linearity`;
@@ -672,7 +675,7 @@ describe('the forbidden program\'s cost on quote-dense payloads naming worktree 
           const cell: Record<'original' | 'current', number> = { original: 0, current: 0 };
           for (const p of order) {
             wantCalls.push([text[p], { shape, mode, kb }]);
-            cell[p] = (p === 'original' ? 1 : 3) * 1_000_000 + kb * 1000 + wantCalls.length;
+            cell[p] = (p === 'original' ? 1 : 3) * 1_000_000 + kb * 1000 + 100 - wantCalls.length;
           }
           round.push(cell.original, cell.current);
         }
@@ -680,7 +683,11 @@ describe('the forbidden program\'s cost on quote-dense payloads naming worktree 
       }
       expect(calls, `${row}: what it ran, where, in which order, how often`).toEqual(wantCalls);
       expect(r.rounds, `${row}: each round [original small, current small, original large, current large]`).toEqual(wantRounds);
-      expect(r.verdict, `${row}: the verdict is linearityVerdict's on those rounds`).toEqual(linearityVerdict(wantRounds as unknown as Round[]));
+      const v = linearityVerdict(wantRounds as unknown as Round[]);
+      expect(r.verdict, `${row}: the verdict is linearityVerdict's on those rounds`).toEqual(v);
+      const fastest = [0, 1, 2, 3].map((c) => Math.min(...wantRounds.map((w) => w[c]!)));
+      expect(r.measured, `${row}: the printed line, each cell the fastest of its four`).toBe(`${shape}/${mode}: original ${v.referenceRatio}x, `
+        + `current ${v.currentRatio}x, bound ${v.bound}x; cpu ms ${fastest.join(', ')}; per-round differences ${v.differences.map((d) => d.toFixed(3)).join(', ')}`);
     }
   });
   // review 4016 F1, narrowed by review 4024 M1: a scan of this file's own code, for what a case that runs the wiring
@@ -727,7 +734,7 @@ describe('the forbidden program\'s cost on quote-dense payloads naming worktree 
     for (const [split, n] of Object.entries(uses)) {
       const name = unsplit(split);
       expect(code.match(new RegExp(`\\b${name}\\b`, 'g'))?.length ?? 0,
-        `${name} is written this many times: one more is a second binding (a shadow) or a new use; a new use that goes through the table updates this count`)
+        `${name} is written this many times, test titles included: one more is a second binding (a shadow), a new use or a retitled case; a new use that goes through the table, or a retitle, updates this count`)
         .toBe(n);
     }
   });

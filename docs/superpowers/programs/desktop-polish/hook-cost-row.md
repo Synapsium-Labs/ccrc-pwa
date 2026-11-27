@@ -17,7 +17,7 @@ not in the tree, and the tables below are copied from them.
   about 0.2 s plus c·n², the n² term about 98% of the fitted cost at 32 KB, so their 64/32 ratio sits near 3.9
   whatever is added in n² (§4). The linearity rows catch growth faster than n². The 64 KB deny cost rows catch a cost
   of any shape on the deny path once it is about half the path's cost (the factor 1.5); the class cost rows catch one
-  only once it is dearer than the 100 ms floor (§8).
+  only once it is dearer than the 100 ms floor, at their baselines of under 200 ms (§8).
 - **What made the reds:** one change of CPU contention inside a round. CPU time is not contention-proof on a shared
   core, and the current program's 64 KB sample was always the last of a round (§5).
 - **The repair (D-9118):** the four linearity rows measure four rounds, reverse which program runs first on alternate
@@ -45,7 +45,7 @@ not in the tree, and the tables below are copied from them.
   `vendoredReader` on the real file read. Cases that burn no CPU run each of them on recording stand-ins and pin, for
   all eight rows, which program each reading came from, its cell, the order and the count of calls. The scan shrinks
   to what only text can hold: each measuring case's body is that one call on the real `programsOf` and `timed`, and no
-  name it reaches is bound twice. Every mutant review 4024 built, and six of this wave's, reads red by case name; two
+  name it reaches is bound twice. Every mutant review 4024 built, and eight of this wave's, reads red by case name; two
   crossings still pass every case and are named (§9).
 - **The class floor is 100 ms** (the hook owner's call 1643, after review 4009 showed 250 ms let a class path 5.5 times
   dearer through). Hosted, every class reading less its baseline was within 2 ms on baff80048a's four readings, and
@@ -386,12 +386,14 @@ What holds the wiring, case by case and by reading:
     reds a quadratic one from about +37 ms; on the quotes shape, and for a fixed or linear step on either shape, a step
     dearer by less than the floor is seen by no row.
 - **On the deny path, the measured bracket** (review 4009's runs of quadratic steps on its loaded box, worked out by
-  review 4016). Each step was (n/k)² added to the deny path, and a step's size scales as 1/k², from review 4009's own
-  reading of (n/7.6)² at +94% of the gated cost on its box. This note's own reading of that step is +80% (the table
-  above); on that base every size below is 0.85 times as large.
-  - Red: (n/7.6)², +94%, the sure-red edge ("near +90%"); (n/8.6)², +73%; (n/10.5)², +49%; (n/14)², +28%.
+  review 4016, its F2). Each step was (n/k)² added to the deny path, with the k values those two reviews record; a
+  step's size here is scaled by 1/k² from review 4009's own reading of (n/7.6)², +94% of the gated cost on its box,
+  not read run by run. This note's own reading of (n/7.6)² is +80% (the table above); on that base each size is 0.85
+  times the one given (in order below: +80%, +62%, +42%, +24%; +38%, +32%).
+  - Red: (n/7.6)², +94%; (n/8.6)², +73%; (n/10.5)², +49%; (n/14)², +28%. "Sure red near +90%" names the step red in
+    every run, (n/7.6)²; the lighter ones read red in the runs made, but a lighter step is decided by the noise below.
   - Green: (n/11)², +45%, and (n/12)², +38%, in the runs where the baseline sample read 10.6 s against 6.9 to 8.2 s in
-    the others.
+    the others (review 4009's figures).
   - So between about +28% and +50% a step is decided by the baseline sample's own spread: one program's 64 KB samples
     ran from 6.9 to 10.6 s across review 4009's runs, the high end 54% above the low, about ±21% about their midpoint.
   - Hosted, where the two samples agree to under 1% (0.3% in baff80048a's full run, 0.7% at fix round 1's head, 0.3% on
@@ -472,7 +474,7 @@ was put back and compared byte for byte. "Red" is the case named; where two read
 | P2 | the pairing function shadowed in the name loop (review 4024) | the scan | pairCells is written this many times …: expected 6 to be 4 |
 | X1 | the cost case's destructure crossed (review 4024) | `costReading`'s case; the bound case | quotes/deny cost: what it ran, where, in which order, how often; deny, baseline 40: expected 32 to be 65 |
 | X2 | the cost case's pair order crossed (review 4024) | `costReading`'s case; the bound case | the same two |
-| X3 | the cost case's indices crossed (review 4024) | `costReading`'s case; the bound case | quotes/deny cost: each cell the faster of its own program's two: expected { referenceMs: 3064002, … } |
+| X3 | the cost case's indices crossed (review 4024) | `costReading`'s case; the bound case | quotes/deny cost: each cell the faster of its own program's two: expected { referenceMs: 3064096, … } |
 | X4 | the cost pair times the gate against itself (review 4024) | `costReading`'s case; the bound case | quotes/deny cost: what it ran …; the measured line reads current 52 for 63 |
 | R1 | the reader returns the hook's text for the gate (review 4024 a10) | the reader's case; the scan | expected 'def WS: …' to be 'the bytes of g.jq' |
 | R2 | the reader skips its hash check (review 4024 R2) | the reader's case | a wrong hash refuses: expected [Function] to throw an error |
@@ -485,6 +487,8 @@ was put back and compared byte for byte. "Red" is the case named; where two read
 | N4 | this wave's: the class rows take the deny floor | the bound case | class, baseline 40: expected 65 to be 140 |
 | N5 | this wave's: `timed` composed on a runner that swaps in the hook's program | the scan | composed once, on the real one: const timed = timedBy(childCpu);: expected +0 to be 1 |
 | N6 | this wave's: the two shapes' units crossed | `timedBy`'s case | quotes/deny 32 KB: the payload |
+| N7 | this wave's: a cost cell keeps the first pair's sample, not the faster of two | `costReading`'s case | quotes/deny cost: each cell the faster of its own program's two: expected { referenceMs: 2064099, … } |
+| N8 | this wave's: the printed minima read the first round only | `linearityReading`'s case | quotes/deny linearity: the printed line, each cell the fastest of its four |
 | H1 | harmless: the cost call reflowed over three lines | none: 15 passed | - |
 
 The two mutants review 4024 measured hiding a real slowdown are among them: O3 (`timedBy` ignoring its program) and the
