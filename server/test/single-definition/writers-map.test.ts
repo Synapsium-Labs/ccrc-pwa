@@ -438,8 +438,9 @@ describe(TABLES_PIN, () => {
       // nothing deletes a receipt; the boot's record.
       // Responses B adds the Waiting on you rows' insert (in the reach's move), the digest lines' (in the digest's claim), the
       // lane's one seal, the handled door's one mark, and the deleter by time, which also removes receipts and older boots.
-      operator_responses: ['deleteResponsesThroughInTx', 'insertDigestResponsesInTx', 'insertPushResponseInTx', 'insertWaitingResponseInTx',
-        'landPushVerdictInTx', 'markResponseHandled', 'sealResponse'].map((f) => `server/src/coord/responsesStore.ts#${f}`),
+      // The chat's PR B adds a reply's row (the report door's reply arm, after the reply's record commits, and the reply boot arm).
+      operator_responses: ['deleteResponsesThroughInTx', 'insertDigestResponsesInTx', 'insertPushResponseInTx', 'insertReplyResponse',
+        'insertWaitingResponseInTx', 'landPushVerdictInTx', 'markResponseHandled', 'sealResponse'].map((f) => `server/src/coord/responsesStore.ts#${f}`),
       response_receipts: ['deleteResponsesThroughInTx', 'insertReceipt'].map((f) => `server/src/coord/responsesStore.ts#${f}`),
       response_boots: ['deleteResponsesThroughInTx', 'recordResponseBoot'].map((f) => `server/src/coord/responsesStore.ts#${f}`),
       // The retention setting (responses B): its seed row, and the retention door's one writer.
@@ -834,7 +835,7 @@ describe(CAPS_PIN, () => {
 // one owner, `OperatorModelStore`: `recordMessage` is the one INSERT of a message, `moveMessage` the one writer of its state and
 // stamps (by the message moves table), and `recordRead` the one writer of the read ledger; `replacePrivateNames` is the one
 // writer of the uploaded name list's two tables (Overlord W2, private names B). MAY ONLY SHRINK.
-const PRIVATE_TABLES = ['operator_messages', 'read_ledger', 'private_name_list', 'private_name_entries'] as const;
+const PRIVATE_TABLES = ['operator_messages', 'read_ledger', 'private_name_list', 'private_name_entries', 'overlord_replies'] as const;
 describe('the private store\'s tables: every SQL write is an OperatorModelStore method, by name, may only shrink', () => {
   it('CONTROL: a second UPDATE of operator_messages in another function is named, beside the store\'s own', async () => {
     const { mkdtempSync, writeFileSync, rmSync } = await import('node:fs');
@@ -851,7 +852,7 @@ describe('the private store\'s tables: every SQL write is an OperatorModelStore 
       ].join('\n'));
       const w = tableWriters([f], PRIVATE_TABLES);
       expect(Object.fromEntries(Object.entries(w).map(([t, ws]) => [t, ws.map((s) => s.replace(/^.*#/, ''))])))
-        .toEqual({ operator_messages: ['OperatorModelStore.moveMessage', 'sneak'], read_ledger: [], private_name_list: [], private_name_entries: [] });
+        .toEqual({ operator_messages: ['OperatorModelStore.moveMessage', 'sneak'], read_ledger: [], private_name_list: [], private_name_entries: [], overlord_replies: [] });
     } finally { rmSync(d, { recursive: true, force: true }); }
   });
 
@@ -863,6 +864,7 @@ describe('the private store\'s tables: every SQL write is an OperatorModelStore 
       read_ledger: [`${S}recordRead`],
       private_name_list: [`${S}replacePrivateNames`],
       private_name_entries: [`${S}replacePrivateNames`],
+      overlord_replies: [`${S}recordReply`],
     });
   });
 });

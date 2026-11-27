@@ -64,6 +64,25 @@ export const OPERATOR_MODEL_MIGRATIONS: readonly string[] = [
   // under it is still recorded and answered, but no feed learns from it. A row written before the column reads 0, which is right:
   // no toggle existed. One writer, `recordMessage`'s insert (`single-definition/writers-map.test.ts`).
   'ALTER TABLE operator_messages ADD COLUMN offRecord INTEGER NOT NULL DEFAULT 0 CHECK (offRecord IN (0, 1));',
+  // Migration 4 (Overlord W1, the chat, PR B, Task 5; operator item 327): the Overlord's replies, one row a main-thread turn of the
+  // designated session that ended with text, recorded when the turn ends. A table of its own, never among the operator's
+  // messages (slug `replies-are-their-own-table`). Ids are issued above the privacy journal's highest reply id, never by SQLite.
+  // One key a turn: the session and its last assistant entry, so a resent report is a replay. One writer, `recordReply`.
+  `CREATE TABLE overlord_replies (
+    id         INTEGER PRIMARY KEY,
+    at         INTEGER NOT NULL,
+    turnAt     INTEGER NOT NULL,
+    sessionId  TEXT NOT NULL,
+    term       INTEGER NOT NULL,
+    entryUuid  TEXT NOT NULL,
+    sha256     TEXT NOT NULL,
+    text       TEXT NOT NULL,
+    cut        INTEGER NOT NULL CHECK (cut IN (0, 1)),
+    inReplyTo  INTEGER,
+    offRecord  INTEGER NOT NULL CHECK (offRecord IN (0, 1))
+  );
+  CREATE UNIQUE INDEX overlord_replies_entry ON overlord_replies (sessionId, entryUuid);
+  CREATE INDEX overlord_replies_at ON overlord_replies (at);`,
 ];
 
 /** Derived, never hand-edited beside the array. */

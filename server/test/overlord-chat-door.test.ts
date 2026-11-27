@@ -47,6 +47,13 @@ import {
 import { seedRoster } from './helpers.js';
 import { fakeTime, FAKE_T0 } from './fakeTime.js';
 import { mkTmp, removeTmpFixtures } from './tmpHelpers.js';
+import { insertReplyResponse } from '../src/coord/responsesStore.js';
+import { chatThreadPath } from '../../shared/overlordChat.js';
+import { attributionIdentity } from '../src/auth/attributionIdentity.js';
+import { gateActorOf } from '../src/accounts/audit.js';
+
+const ACTOR = attributionIdentity({ attribute: async () => ({ ok: true }), incarnation: async () => ({ kind: 'unmeasured', reason: 'absent' }) })
+  .operator(gateActorOf('Fixture browser', 'abcdef0123456789'));
 
 vi.setConfig({ testTimeout: 90_000 });
 
@@ -192,7 +199,8 @@ const parsed = (body: unknown): ChatThread => {
 };
 /** The thread's entries as short tags: `mN` a message, `sN:word` its server line, `dT.N` a divider (`*` current, `+` new term). */
 const shape = (entries: readonly ChatEntry[]): string[] => entries.map((e) =>
-  e.kind === 'message' ? `m${e.row.id}` : e.kind === 'server-line' ? `s${e.messageId}:${e.word}` : `d${e.gen.term}.${e.gen.n}${e.current ? '*' : ''}${e.newTerm ? '+' : ''}`);
+  e.kind === 'message' ? `m${e.row.id}` : e.kind === 'server-line' ? `s${e.messageId}:${e.word}` : e.kind === 'reply' ? `r${e.row.id}`
+    : `d${e.gen.term}.${e.gen.n}${e.current ? '*' : ''}${e.newTerm ? '+' : ''}`);
 const messageEntries = (t: ChatThread) => t.entries.filter((e): e is Extract<ChatEntry, { kind: 'message' }> => e.kind === 'message');
 
 const T = FAKE_T0;
@@ -493,5 +501,69 @@ describe('GET /api/overlord/chat: the server\'s answer mask (MASKED_GET_ROUTES)'
       expect(res.body).toContain('the key is');
       for (const text of FIXTURE_A_TEXTS) expect(res.body).toContain(text);
     } finally { mdb.close(); }
+  });
+});
+
+// ── the replies (PR B; plan `w1-chat.md` Task 5; the coordinator's rulings on paging and on the one id sequence) ─────────────
+
+describe('GET /api/overlord/chat: the Overlord\'s replies, their response rows and the older pages', () => {
+  const STAMP = { boot: { kind: 'measured', epoch: 1 }, restore: { kind: 'measured', n: 0 } } as const;
+  const uuidOf = (n: number): string => `0f1e2d3c-4b5a-4968-8776-${String(n).padStart(12, '0')}`;
+  /** A reply through the store's one writer (its id from the one issued-id sequence), with or without its response row. */
+  function seedReply(r: Rig, n: number, at: number, withRow: boolean): number {
+    const w = r.store.recordReply({ at, turnAt: at, sessionId: LANE_A, term: 1, entryUuid: uuidOf(n), text: `fixture reply ${n}` });
+    if (!w.ok) throw new Error(`seed reply ${n}: ${w.error} ${w.detail}`);
+    if (withRow) insertReplyResponse(r.coord.db, w.value.id, STAMP, at);
+    return w.value.id;
+  }
+  const tags = (t: ChatThread): string[] => t.entries.flatMap((e) => (e.kind === 'message' ? [`m${e.row.id}`] : e.kind === 'reply' ? [`r${e.row.id}:${e.response.kind}`] : []));
+
+  it('replies sit by time among the messages; handled reads row only for a reply with a response row, with that row\'s id; the line counts both', async () => {
+    const r = await rig();
+    seedReadiness(r, 'ready', T - 9_000);
+    seedMessage(r, { id: 1, at: T - 4_000, text: 'fixture message one' });
+    const withRow = seedReply(r, 1, T - 3_500, true);
+    const noRow = seedReply(r, 2, T - 3_000, false);
+    const res = await get(r, THREAD);
+    expect(res.statusCode, res.body).toBe(200);
+    const t = parsed(res.json());
+    expect(tags(t)).toEqual(['m1', `r${withRow}:row`, `r${noRow}:no-row`]);
+    const rowEntry = t.entries.find((e) => e.kind === 'reply' && e.row.id === withRow);
+    expect(rowEntry?.kind === 'reply' && rowEntry.response).toEqual({ kind: 'row', id: 1, handledAt: null });
+    expect([t.replies, t.older]).toEqual([{ kind: 'read', value: { more: false } }, null]);
+    expect(ledger(r)).toMatchObject([{ door: 'chat', caller: 'operator', count: 3, outcome: 'rows' }]);
+  });
+
+  it('an unreadable reply page is its own unmeasured part: the messages still show, and no older page is offered', async () => {
+    const r = await rig();
+    seedReadiness(r, 'ready', T - 9_000);
+    seedMessage(r, { id: 1, at: T - 4_000, text: 'fixture message one' });
+    vi.spyOn(r.store, 'repliesPage').mockReturnValue({ kind: 'unmeasured', why: 'fixture: the replies could not be read' });
+    const t = parsed((await get(r, THREAD)).json());
+    expect([tags(t), t.replies, t.older]).toEqual([['m1'], { kind: 'unmeasured', why: 'fixture: the replies could not be read' }, null]);
+  });
+
+  it('ids are not dense, and the two cursors page both lists by time: no row twice, none lost, every reply beside its messages', async () => {
+    const r = await rig();
+    seedReadiness(r, 'ready', T - 1_000_000);
+    // 105 messages, one each 1 000 ms, and a reply after every tenth message: the reply's ids fall between the messages'.
+    const want: string[] = [];
+    for (let i = 0; i < 105; i += 1) {
+      const at = T - 200_000 + i * 1_000;
+      const w = r.store.recordMessage({ at, sessionId: LANE_A, term: 1, actor: ACTOR, text: `fixture message ${i}`, mark: false, composedKey: null, offRecord: false });
+      if (!w.ok) throw new Error('seed message');
+      want.push(`m${w.value.id}`);
+      if (i % 10 === 9) want.push(`r${seedReply(r, i, at + 500, true)}:row`);
+    }
+    const first = parsed((await get(r, THREAD)).json());
+    expect(first.older).not.toBeNull();
+    const second = parsed((await get(r, chatThreadPath(first.older))).json());
+    // Each page is oldest first; the older page goes before the newer.
+    const seen = [...tags(second), ...tags(first)];
+    expect(seen).toEqual(want);
+    expect(second.older).toBeNull();
+    // A message id and a reply id never repeat: one issued-id sequence over both tables.
+    const ids = seen.map((s) => Number(s.slice(1).split(':')[0]));
+    expect(new Set(ids).size).toBe(ids.length);
   });
 });

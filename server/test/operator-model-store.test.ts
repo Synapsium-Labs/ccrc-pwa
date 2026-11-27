@@ -56,14 +56,15 @@ const rawRow = (f: Fixture, id: number): Record<string, unknown> =>
 const rowCount = (f: Fixture): number => (f.db.prepare('SELECT count(*) AS c FROM operator_messages').get() as { c: number }).c;
 
 describe('operator-model.db: the shared opener at 0600', () => {
-  it('a fresh open migrates to schema 3 (the chat\'s off-the-record column) and creates the file at 0600 under a 0o022 umask, and its -wal and -shm too', () => {
+  it('a fresh open migrates to schema 4 (the chat\'s off-the-record column, then its PR B replies) and creates the file at 0600 under a 0o022 umask, and its -wal and -shm too', () => {
     const p = defaultOperatorModelDbPath(mkTmp('ccrc-opmodel-'));
     const old = process.umask(0o022);
     let db: DatabaseSync;
     try { db = openOperatorModelDb(p); } finally { process.umask(old); }
     opened.push(db);
-    expect(OPERATOR_MODEL_SCHEMA_VERSION).toBe(3);
-    expect((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(3);
+    expect(OPERATOR_MODEL_SCHEMA_VERSION).toBe(4);
+    expect((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(4);
+    expect(db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'overlord_replies'").all()).toHaveLength(1);
     db.prepare("INSERT INTO read_ledger (at, door, caller, scope, count, outcome, generationRead) VALUES (1, 'board', 'operator', 's', 0, 'ok', 'not-a-session')").run();
     for (const f of [p, `${p}-wal`, `${p}-shm`]) expect(statSync(f).mode & 0o777, f).toBe(0o600);
     expect(path.basename(p)).toBe('operator-model.db');
@@ -77,7 +78,7 @@ describe('operator-model.db: the shared opener at 0600', () => {
     expect(statSync(p).size).toBe(0);
   });
 
-  it('a file at schema 2 with a row in it migrates to 3: the column is added and that row reads offRecord false', () => {
+  it('a file at schema 2 with a row in it migrates to 4: the column is added, that row reads offRecord false, and the replies table is created', () => {
     const p = defaultOperatorModelDbPath(mkTmp('ccrc-opmodel-'));
     mkdirSync(path.dirname(p), { recursive: true });
     const old = new DatabaseSync(p);
@@ -88,8 +89,9 @@ describe('operator-model.db: the shared opener at 0600', () => {
     old.close();
     const db = openOperatorModelDb(p);
     opened.push(db);
-    expect((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(3);
+    expect((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(4);
     expect(db.prepare("SELECT name FROM pragma_table_info('operator_messages') WHERE name = 'offRecord'").all()).toHaveLength(1);
+    expect(db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'overlord_replies'").all()).toHaveLength(1);
     const store = new OperatorModelStore(db, issuerDouble());
     expect(store.messageById(7)).toMatchObject({ kind: 'measured', value: { id: 7, text: 'old words', offRecord: false } });
     expect(() => db.prepare("UPDATE operator_messages SET offRecord = 2 WHERE id = 7").run()).toThrow();
@@ -114,15 +116,15 @@ describe('operator-model.db: the shared opener at 0600', () => {
   it('a higher user_version opens with no migration and one warning', () => {
     const p = defaultOperatorModelDbPath(mkTmp('ccrc-opmodel-'));
     const a = openOperatorModelDb(p);
-    a.exec('PRAGMA user_version = 4');
+    a.exec('PRAGMA user_version = 5');
     a.close();
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     try {
       const b = openOperatorModelDb(p);
       opened.push(b);
-      expect((b.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(4);
+      expect((b.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(5);
       expect(warn).toHaveBeenCalledTimes(1);
-      expect(String(warn.mock.calls[0]![0])).toMatch(/^ccrc-server: operator-model\.db is at schema 4, this build knows 3/);
+      expect(String(warn.mock.calls[0]![0])).toMatch(/^ccrc-server: operator-model\.db is at schema 5, this build knows 4/);
     } finally { warn.mockRestore(); }
   });
 });

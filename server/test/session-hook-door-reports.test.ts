@@ -14,6 +14,7 @@ import { spawnSyncGroup } from './spawnGroup.js';
 import { mkTmp } from './tmpHelpers.js';
 import { renderOperatorMessageNudge } from '../src/coord/envelope.js';
 import { REPORT_TIMEOUT_S, DOOR_TOOL_PREFIX, AGENT_ID_RE } from '../../shared/continuity-reports.js';
+import { REPLY_READ_MAX_BYTES, REPLY_REPORT_MAX_BYTES, REPLY_SPOOL_MAX } from '../../shared/operatorMessages.js';
 import { witnessKeyOf } from '../../ccd/door-process.mjs';
 
 const HOOK = path.resolve(__dirname, '../../ccd/session-hook.sh');
@@ -35,7 +36,11 @@ function client(): void {
     '[ "$1 $2" = "sessions report" ] || exit 3',
     'printf "%s\\n" "$*" >> "$HOME/report-args"',
     'cat >> "$HOME/reports.log"',
+    `[ -f "$HOME/purge-on-send" ] && rm -f "$HOME/.cc-sessions/${ID}.generation"`,
     '[ -f "$HOME/hang" ] && exec sleep 30',
+    // The real client: the body on stdout, and `http <code>` last on stderr (the code is the stub's `status` file, 200 by default).
+    'printf "{\\"ok\\":true}\\n"',
+    'printf "http %s\\n" "$(cat "$HOME/status" 2>/dev/null || echo 200)" >&2',
     'exit 0',
   ].join('\n') + '\n', { mode: 0o755 });
 }
@@ -312,5 +317,323 @@ describe('hookstate: a report is a pure side send', () => {
     const withDoor = stateAfter(events, true);
     expect(reports().length, 'the door run did send').toBeGreaterThan(0);
     expect(withDoor).toEqual(without);
+  });
+});
+
+// ── THE REPLY REPORT (Overlord W1 chat, PR B; plan w1-chat.md Task 5, slugs a-reply-is-a-turns-text and reply-report-spools) ──
+// At a MAIN-thread Stop of a session with a door the hook reports the turn's reply, read from the transcript's tail. It is the ONE
+// report that spools: a send not answered 200 is kept in `$REG/<id>.replyspool` (0600, one body a line, at most REPLY_SPOOL_MAX) and
+// resent oldest first at the next Stop, before that Stop's own; 401, 404, 408, 429, a 5xx, no answer and a timeout keep a body, and any
+// other 4xx (403 not-the-overlord, 400, 409) drops it. One REPORT_TIMEOUT_S deadline bounds the whole arm.
+describe('the reply report: sent at a main Stop, spooled and resent (the one report that is)', () => {
+  const TU = (n: number): string => `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`;
+  const spoolPath = (): string => reg(`${ID}.replyspool`);
+  const spoolLines = (): Array<Record<string, unknown>> =>
+    fs.existsSync(spoolPath()) ? fs.readFileSync(spoolPath(), 'utf8').split('\n').filter((l) => l !== '').map((l) => JSON.parse(l) as Record<string, unknown>) : [];
+  const rawReports = (): string[] => {
+    const f = path.join(home, 'reports.log');
+    return fs.existsSync(f) ? fs.readFileSync(f, 'utf8').split('\n').filter((l) => l !== '') : [];
+  };
+  /** A transcript whose last turn is a prompt and one assistant row `TU(n)` of `text` (null: a thinking block only); its path. */
+  const transcript = (n: number, text: string | null): string => {
+    const dir = path.join(home, 'transcripts');
+    fs.mkdirSync(dir, { recursive: true });
+    const f = path.join(dir, `t${n}.jsonl`);
+    const content = text === null ? [{ type: 'thinking', thinking: 'hmm' }] : [{ type: 'text', text }];
+    fs.writeFileSync(f, [
+      { type: 'user', uuid: TU(1000 + n), message: { role: 'user', content: `go ${n}` } },
+      { type: 'assistant', uuid: TU(n), message: { role: 'assistant', stop_reason: 'end_turn', content } },
+    ].map((r) => JSON.stringify(r)).join('\n') + '\n');
+    return f;
+  };
+  const stopFor = (n: number, text: string | null = `reply ${n}`, extra: object = {}): object => stop({ transcript_path: transcript(n, text), ...extra });
+  const setStatus = (code: number | null): void => {
+    const f = path.join(home, 'status');
+    if (code === null) fs.rmSync(f, { force: true }); else fs.writeFileSync(f, String(code));
+  };
+  /** A `tail` ahead of the hook's on PATH that records its arguments and runs the real one: it proves whether a transcript was read. */
+  const shimTail = (): string => {
+    const real = spawnSync('sh', ['-c', 'command -v tail'], { encoding: 'utf8' }).stdout.trim();
+    fs.writeFileSync(path.join(home, 'bin', 'tail'), `#!/bin/sh\nprintf '%s\\n' "$*" >> "$HOME/tail-calls"\nexec ${real} "$@"\n`, { mode: 0o755 });
+    return path.join(home, 'tail-calls');
+  };
+  const tailReads = (log: string, file: string): string[] =>
+    (fs.existsSync(log) ? fs.readFileSync(log, 'utf8').split('\n') : []).filter((l) => l.includes(file));
+
+  it('a main Stop of a session with a door sends one reply report with the right body, through the one sender', () => {
+    const t0 = Date.now();
+    const { out } = run(stopFor(7, 'the answer\n\nwith two paragraphs'));
+    const t1 = Date.now();
+    expect(out, 'the arm prints nothing').toBe('');
+    const rs = reports();
+    expect(rs).toHaveLength(1);
+    expect(Object.keys(rs[0]!)).toEqual(['kind', 'entryUuid', 'turnAt', 'text', 'truncated', 'fromId', 'fromUuid', 'at']);
+    expect(rs[0]).toMatchObject({ kind: 'reply', entryUuid: TU(7), text: 'the answer\n\nwith two paragraphs', truncated: false, fromId: ID, fromUuid: UUID });
+    for (const k of ['turnAt', 'at']) {
+      expect(Number.isInteger(rs[0]![k]), k).toBe(true);
+      expect(rs[0]![k] as number, k).toBeGreaterThanOrEqual(t0 - 1000);
+      expect(rs[0]![k] as number, k).toBeLessThanOrEqual(t1 + 1000);
+    }
+    expect(rs[0]!['turnAt'] as number).toBeLessThanOrEqual(rs[0]!['at'] as number);
+    expect(fs.readFileSync(path.join(home, 'report-args'), 'utf8').trim()).toBe(`sessions report ${ID} --json -`);
+    expect(fs.existsSync(spoolPath()), 'an answered 200 spools nothing').toBe(false);
+    expect(rs[0], 'no droppedBefore unless the spool dropped').not.toHaveProperty('droppedBefore');
+  });
+
+  it('a quiet Stop sends its readers-clear and then the reply', () => {
+    run(stopFor(8, 'x', { background_tasks: [] }));
+    expect(kinds()).toEqual(['readers-clear', 'reply']);
+  });
+
+  it('a SubagentStop, and a Stop carrying a reader\'s agent id, send no reply and read no transcript', () => {
+    const log = shimTail();
+    const file = transcript(9, 'SUBAGENT TEXT');
+    run({ ...common, hook_event_name: 'SubagentStop', agent_id: AGENT, agent_type: 'Explore', transcript_path: file });
+    run({ ...stop({ transcript_path: file }), agent_id: AGENT, agent_type: 'Explore' });
+    expect(kinds().filter((k) => k === 'reply')).toEqual([]);
+    expect(tailReads(log, file), 'the transcript was not read').toEqual([]);
+  });
+
+  it('only a Stop reports a reply: the other events of a session with a door do not, whatever transcript they name', () => {
+    const file = transcript(10, 'not at a Stop');
+    run(pre(toolName('read'), {}, { transcript_path: file }));
+    run({ ...prompt('go'), transcript_path: file });
+    run({ ...common, hook_event_name: 'PostToolUse', tool_name: 'Bash', tool_input: {}, tool_response: {}, transcript_path: file });
+    expect(kinds().filter((k) => k === 'reply')).toEqual([]);
+  });
+
+  it('a session without a door sends no reply AND reads no transcript: the gate comes before the read', () => {
+    const log = shimTail();
+    const file = transcript(11, 'no door, no read');
+    for (const door of [false, 'not-a-hash', HASH.toUpperCase(), HASH.slice(1), '']) run(stop({ transcript_path: file }), door);
+    expect(reports()).toEqual([]);
+    expect(tailReads(log, file), 'no `tail` ever named the transcript').toEqual([]);
+    expect(fs.existsSync(spoolPath())).toBe(false);
+    // The shim does see a read when the gate opens, so the empty list above is the gate, not a blind probe.
+    run(stop({ transcript_path: file }));
+    expect(tailReads(log, file)).toHaveLength(1);
+    expect(tailReads(log, file)[0]).toContain(`-c ${REPLY_READ_MAX_BYTES}`);
+  });
+
+  it('a child session, and a registry row that is gone, send no reply and read no transcript', () => {
+    const log = shimTail();
+    const file = transcript(12, 'child');
+    fs.writeFileSync(reg(`${ID}.child`), '7');
+    run(stop({ transcript_path: file }));
+    fs.rmSync(reg(`${ID}.child`));
+    fs.rmSync(reg(`${ID}.generation`));
+    run(stop({ transcript_path: file }));
+    expect(reports()).toEqual([]);
+    expect(tailReads(log, file)).toEqual([]);
+  });
+
+  it('a Stop whose turn has no text, or whose transcript is missing, relative or empty, sends nothing and spools nothing', () => {
+    run(stopFor(13, null));
+    run(stop({ transcript_path: path.join(home, 'transcripts', 'absent.jsonl') }));
+    run(stop({ transcript_path: 'transcripts/t13.jsonl' }));
+    run(stop());   // the shared fixture path, which does not exist
+    const empty = path.join(home, 'transcripts', 'empty.jsonl');
+    fs.writeFileSync(empty, '');
+    run(stop({ transcript_path: empty }));
+    run({ ...common, hook_event_name: 'Stop', transcript_path: 7 });
+    expect(reports()).toEqual([]);
+    expect(fs.existsSync(spoolPath())).toBe(false);
+  });
+
+  it('a text past the cap is cut at a code point, never mid-character, with truncated: true; one exactly at the cap is whole', () => {
+    expect(REPLY_REPORT_MAX_BYTES).toBeGreaterThan(1000);
+    for (const [ch, want] of [['€', 3], ['é', 2], ['😀', 4]] as const) {
+      fs.rmSync(path.join(home, 'reports.log'), { force: true });
+      const head = 'a'.repeat(REPLY_REPORT_MAX_BYTES - want + 1);   // the character ends one byte past the cap
+      run(stopFor(20, `${head}${ch}tail`));
+      const [r] = reports();
+      expect(r!['truncated'], ch).toBe(true);
+      expect(r!['text'], ch).toBe(head);
+      expect(Buffer.byteLength(r!['text'] as string), ch).toBeLessThanOrEqual(REPLY_REPORT_MAX_BYTES);
+    }
+    fs.rmSync(path.join(home, 'reports.log'), { force: true });
+    const exact = `${'b'.repeat(REPLY_REPORT_MAX_BYTES - 3)}€`;
+    run(stopFor(21, exact));
+    expect(reports()[0]).toMatchObject({ text: exact, truncated: false });
+    fs.rmSync(path.join(home, 'reports.log'), { force: true });
+    run(stopFor(22, `${exact}x`));
+    expect(reports()[0]).toMatchObject({ text: exact, truncated: true });
+  });
+
+  describe('the spool', () => {
+    it('a stub answering 502 spools the body, in a file only its owner reads; the next Stop resends it before its own, with the same entryUuid', () => {
+      setStatus(502);
+      expect(run(stopFor(30)).out).toBe('');
+      const sent = rawReports();
+      expect(sent).toHaveLength(1);
+      expect(fs.readFileSync(spoolPath(), 'utf8'), 'one body a line, the very body that was sent').toBe(`${sent[0]}\n`);
+      expect(fs.statSync(spoolPath()).mode & 0o777, 'the spool is 0600').toBe(0o600);
+      setStatus(null);
+      fs.rmSync(path.join(home, 'reports.log'));
+      expect(run(stopFor(31)).out).toBe('');
+      const got = reports();
+      expect(got.map((r) => r['entryUuid']), 'oldest first, then this Stop\'s own').toEqual([TU(30), TU(31)]);
+      expect(rawReports()[0], 'a resend is the same bytes').toBe(sent[0]);
+      expect(fs.existsSync(spoolPath()), 'a 200 removes it').toBe(false);
+    });
+
+    it('a still-failing stub keeps the body and the Stop\'s own behind it, in order, mode 0600 each time', () => {
+      setStatus(503);
+      run(stopFor(40));
+      run(stopFor(41));
+      run(stopFor(42));
+      expect(spoolLines().map((r) => r['entryUuid'])).toEqual([TU(40), TU(41), TU(42)]);
+      expect(fs.statSync(spoolPath()).mode & 0o777).toBe(0o600);
+      expect(fs.readdirSync(reg()).filter((f) => f.startsWith(`${ID}.replyspool`) && f !== `${ID}.replyspool`), 'no temp file is left').toEqual([]);
+    });
+
+    it('the first failure stops the resend pass: one resend, then this Stop\'s own, and the rest stay', () => {
+      setStatus(502);
+      run(stopFor(50)); run(stopFor(51));
+      expect(spoolLines()).toHaveLength(2);
+      fs.rmSync(path.join(home, 'reports.log'));
+      run(stopFor(52));
+      // The head is tried (502) and stops the pass; the Stop's own is sent once too. Neither of 51 is tried a second time.
+      expect(reports().map((r) => r['entryUuid'])).toEqual([TU(50), TU(52)]);
+      expect(spoolLines().map((r) => r['entryUuid'])).toEqual([TU(50), TU(51), TU(52)]);
+    });
+
+    it('a stub answering 403 (not-the-overlord) does not spool: the refusal is for good, and a resend would only repeat it', () => {
+      setStatus(403);
+      run(stopFor(55));
+      expect(reports().map((r) => r['entryUuid']), 'sent once').toEqual([TU(55)]);
+      expect(fs.existsSync(spoolPath())).toBe(false);
+      run(stopFor(56));
+      expect(reports().map((r) => r['entryUuid']), 'the next Stop resends nothing').toEqual([TU(55), TU(56)]);
+      expect(fs.existsSync(spoolPath())).toBe(false);
+    });
+
+    it('keeps a body for 401, 404, 408, 429 and a 5xx, and drops it for any other 4xx (403, 400, 409, 413, 422)', () => {
+      for (const code of [401, 404, 408, 429, 500, 502, 503, 504]) {
+        fs.rmSync(spoolPath(), { force: true });
+        setStatus(code);
+        run(stopFor(60));
+        expect(spoolLines().map((r) => r['entryUuid']), String(code)).toEqual([TU(60)]);
+      }
+      for (const code of [400, 403, 409, 413, 422]) {
+        fs.rmSync(spoolPath(), { force: true });
+        setStatus(code);
+        expect(run(stopFor(61)).out).toBe('');
+        expect(fs.existsSync(spoolPath()), `${code} is refused for good: nothing is spooled`).toBe(false);
+      }
+    });
+
+    it('a spooled body the server now refuses for good is dropped and the pass goes on to the next and to the Stop\'s own', () => {
+      setStatus(502);
+      run(stopFor(70)); run(stopFor(71));
+      setStatus(403);
+      fs.rmSync(path.join(home, 'reports.log'));
+      run(stopFor(72));
+      expect(reports().map((r) => r['entryUuid']), 'each was tried once').toEqual([TU(70), TU(71), TU(72)]);
+      expect(fs.existsSync(spoolPath()), 'all refused for good: nothing stays').toBe(false);
+    });
+
+    it('a Stop with no reply of its own still resends the spool', () => {
+      setStatus(502);
+      run(stopFor(80));
+      setStatus(null);
+      fs.rmSync(path.join(home, 'reports.log'));
+      run(stopFor(81, null));
+      expect(reports().map((r) => r['entryUuid'])).toEqual([TU(80)]);
+      expect(fs.existsSync(spoolPath())).toBe(false);
+    });
+
+    it('a ninth spooled body drops the oldest, and the count rides the body that now stands oldest as droppedBefore: 1', () => {
+      setStatus(502);
+      for (let n = 1; n <= REPLY_SPOOL_MAX; n += 1) run(stopFor(100 + n));
+      expect(spoolLines()).toHaveLength(REPLY_SPOOL_MAX);
+      expect(spoolLines().some((r) => 'droppedBefore' in r), 'nothing dropped yet').toBe(false);
+      run(stopFor(100 + REPLY_SPOOL_MAX + 1));
+      const kept = spoolLines();
+      expect(kept).toHaveLength(REPLY_SPOOL_MAX);
+      expect(kept.map((r) => r['entryUuid']), 'the oldest is gone').toEqual([102, 103, 104, 105, 106, 107, 108, 109].map(TU));
+      expect(kept.map((r) => r['droppedBefore'])).toEqual([1, undefined, undefined, undefined, undefined, undefined, undefined, undefined]);
+      // A tenth drops the one that carried the count: the count moves on, and grows by one.
+      run(stopFor(110));
+      expect(spoolLines().map((r) => r['droppedBefore'])[0], 'a count is never lost').toBe(2);
+      expect(spoolLines().map((r) => r['entryUuid'])[0]).toBe(TU(103));
+      // The server answers at last: every body goes, oldest first, the count on the first only.
+      setStatus(null);
+      fs.rmSync(path.join(home, 'reports.log'));
+      run(stopFor(111));
+      const got = reports();
+      expect(got.map((r) => r['entryUuid'])).toEqual([103, 104, 105, 106, 107, 108, 109, 110, 111].map(TU));
+      expect(got.map((r) => r['droppedBefore'])).toEqual([2, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined]);
+      expect(fs.existsSync(spoolPath())).toBe(false);
+    });
+
+    it('a purge during the arm (the row\'s generation goes) leaves no spool behind', () => {
+      setStatus(502);
+      fs.writeFileSync(path.join(home, 'purge-on-send'), '');
+      run(stopFor(120));
+      expect(fs.existsSync(reg(`${ID}.generation`)), 'the stub removed the row, as a purge does').toBe(false);
+      expect(fs.readdirSync(reg()).filter((f) => f.includes('replyspool'))).toEqual([]);
+    });
+
+    it('a symlink where the spool should be is not followed', () => {
+      const target = path.join(home, 'elsewhere');
+      fs.writeFileSync(target, '{"kind":"reply","entryUuid":"x"}\n');
+      fs.symlinkSync(target, spoolPath());
+      setStatus(502);
+      run(stopFor(130));
+      expect(reports().map((r) => r['entryUuid']), 'the link\'s content was not resent').toEqual([TU(130)]);
+      expect(fs.readFileSync(target, 'utf8'), 'and not written through').toBe('{"kind":"reply","entryUuid":"x"}\n');
+      expect(fs.lstatSync(spoolPath()).isFile(), 'the spool is a regular file again').toBe(true);
+      expect(spoolLines().map((r) => r['entryUuid'])).toEqual([TU(130)]);
+    });
+  });
+
+  describe('bounded, silent, fail open', () => {
+    it('a client that hangs is cut at the bound; the Stop goes on and exits 0 with nothing printed; the body is spooled', () => {
+      fs.writeFileSync(path.join(home, 'hang'), '');
+      const { out, ms } = run(stopFor(140));
+      expect(out).toBe('');
+      expect(reports(), 'the stub read the body before it hung').toHaveLength(1);
+      expect(spoolLines().map((r) => r['entryUuid'])).toEqual([TU(140)]);
+      expect(ms, 'it waited for the bound').toBeGreaterThanOrEqual(REPORT_TIMEOUT_S * 1000 - 1500);
+      expect(ms, 'and no longer').toBeLessThan(REPORT_TIMEOUT_S * 1000 + 5000);
+    });
+
+    it('once one send has run out its bound no later send is made in the invocation: the spooled head is tried, the Stop\'s own is kept unsent', () => {
+      setStatus(502);
+      run(stopFor(150));
+      setStatus(null);
+      fs.writeFileSync(path.join(home, 'hang'), '');
+      fs.rmSync(path.join(home, 'reports.log'));
+      const { ms } = run(stopFor(151));
+      expect(reports().map((r) => r['entryUuid']), 'the head was tried and hung; the own report was never sent').toEqual([TU(150)]);
+      expect(spoolLines().map((r) => r['entryUuid'])).toEqual([TU(150), TU(151)]);
+      expect(ms, 'one bound, not two').toBeLessThan(REPORT_TIMEOUT_S * 1000 + 5000);
+    });
+
+    it('a client that is missing, or exits without an answer, spools the body and prints nothing', () => {
+      fs.rmSync(path.join(home, '.local', 'bin', 'ccrc-api'));
+      expect(run(stopFor(160)).out).toBe('');
+      expect(spoolLines().map((r) => r['entryUuid'])).toEqual([TU(160)]);
+      fs.writeFileSync(path.join(home, '.local', 'bin', 'ccrc-api'), '#!/bin/sh\nexit 3\n', { mode: 0o755 });
+      expect(run(stopFor(161)).out).toBe('');
+      expect(spoolLines().map((r) => r['entryUuid'])).toEqual([TU(160), TU(161)]);
+    });
+
+    it('prints nothing on stdout on any path: answered, spooled, refused for good, no reply', () => {
+      for (const code of [200, 502, 403]) {
+        setStatus(code);
+        expect(run(stopFor(170)).out, String(code)).toBe('');
+      }
+      expect(run(stopFor(171, null)).out).toBe('');
+    });
+  });
+
+  it('the hook\'s three bounds are the L0 ones', () => {
+    const text = fs.readFileSync(HOOK, 'utf8');
+    const own = (name: string): string | undefined => new RegExp(`^${name}=(\\d+)$`, 'm').exec(text)?.[1];
+    expect(own('REPLY_READ_MAX_BYTES')).toBe(String(REPLY_READ_MAX_BYTES));
+    expect(own('REPLY_REPORT_MAX_BYTES')).toBe(String(REPLY_REPORT_MAX_BYTES));
+    expect(own('REPLY_SPOOL_MAX')).toBe(String(REPLY_SPOOL_MAX));
   });
 });

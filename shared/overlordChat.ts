@@ -11,7 +11,7 @@
 //
 // THE RECORD IS THE ONLY SOURCE OF THE OPERATOR'S WORDS (H7). A `message` entry is a row of `operator_messages`; nothing in this
 // file turns transcript text into one.
-import type { MessageState, OperatorMessageRow, SettledBy } from './operatorMessages.js';
+import type { MessageState, OperatorMessageRow, OverlordReplyRow, SettledBy } from './operatorMessages.js';
 import { isMessageState, isSettledBy } from './operatorMessages.js';
 import { isReadinessWord, type ReadinessWord } from './overlord-readiness.js';
 import { readOverlordHistoryAnswer, type OverlordHistoryAnswer } from './overlordHistory.js';
@@ -94,7 +94,7 @@ export type ServerLineWord = ReadinessWord | typeof NOT_ON_RECORD;
 /** A generation by its key (question 12): `n` restarts with each term, so `(term, n)` names one generation of the identity. */
 export interface GenerationKey { readonly term: number; readonly n: number }
 
-const ENTRY_KIND_MAP = { message: true, 'server-line': true, divider: true } as const;
+const ENTRY_KIND_MAP = { message: true, 'server-line': true, divider: true, reply: true } as const;
 export type ChatEntryKind = keyof typeof ENTRY_KIND_MAP;
 export const CHAT_ENTRY_KINDS = Object.keys(ENTRY_KIND_MAP) as ChatEntryKind[];
 /** The thread door's page of messages: the newest this many. One bound for the door that reads them and the console that says
@@ -105,14 +105,33 @@ const EARLIER_MAP = { readable: 'its earlier pages can be read', 'not-pageable':
 export type EarlierWord = keyof typeof EARLIER_MAP;
 export const EARLIER_WORDS = Object.keys(EARLIER_MAP) as EarlierWord[];
 
+/** A recorded reply's response row (Overlord W1 chat, PR B; C67, C69): `row` with the row's id, which the handled door takes, and
+ *  when it was marked handled; `no-row` when none stands yet (a crash between the two commits, before the boot arm); `unmeasured`
+ *  when the rows could not be read. The chat draws "I handled this elsewhere" on `row` only. */
+export type ReplyResponse =
+  | { readonly kind: 'row'; readonly id: number; readonly handledAt: number | null }
+  | { readonly kind: 'no-row' }
+  | { readonly kind: 'unmeasured' };
+
 export type ChatEntry =
   | { readonly kind: 'message'; readonly row: OperatorMessageRow; readonly ticks: ChatTicks }
   | { readonly kind: 'server-line'; readonly messageId: number; readonly text: string; readonly word: ServerLineWord }
   | { readonly kind: 'divider'; readonly gen: GenerationKey; readonly at: number; readonly current: boolean;
-      readonly newTerm: boolean; readonly earlier: EarlierWord };
+      readonly newTerm: boolean; readonly earlier: EarlierWord }
+  /** The Overlord's reply, from the record (PR B). Its words are untrusted data: the console draws them as text, never as a
+   *  control (the Overlord narrates and never originates). */
+  | { readonly kind: 'reply'; readonly row: OverlordReplyRow; readonly response: ReplyResponse };
 
 /** One part of the thread: read, or why it could not be. An unreadable part is never an empty one. */
 export type ChatPart<T> = { readonly kind: 'read'; readonly value: T } | { readonly kind: 'unmeasured'; readonly why: string };
+
+/** Where the next older page starts, one cursor a list (Overlord W1 chat, PR B; the coordinator's ruling on paging): the messages
+ *  below a message id, and the replies below a reply id, each `end` when that list has nothing older. The door reads both lists
+ *  below their cursors and cuts the page at one time floor, so a page never shows one list's older rows without the other's. */
+export interface ChatOlder {
+  readonly before: number | 'end';
+  readonly replyBefore: number | 'end';
+}
 
 export interface ChatThread {
   readonly v: 1;
@@ -126,6 +145,11 @@ export interface ChatThread {
   readonly messages: ChatPart<{ readonly more: boolean }>;
   readonly generations: ChatPart<{ readonly count: number }>;
   readonly readiness: ChatPart<{ readonly oldest: number | null }>;
+  /** The Overlord's replies on this page (PR B), or `null` from a server below PR B, which records none: never folded into an
+   *  empty part. */
+  readonly replies: ChatPart<{ readonly more: boolean }> | null;
+  /** The next older page's cursor, or null when nothing older is on record. */
+  readonly older: ChatOlder | null;
 }
 
 const isObj = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
@@ -150,6 +174,27 @@ function messageRowOf(v: unknown): OperatorMessageRow | null {
   };
 }
 
+/** One reply row off the wire, or null (PR B). */
+function replyRowOf(v: unknown): OverlordReplyRow | null {
+  if (!isObj(v)) return null;
+  const { id, at, turnAt, term, entryUuid, text, cut, sha256, inReplyTo, offRecord } = v;
+  if (!isPositive(id) || !isCount(at) || !isCount(turnAt) || !isCount(term) || typeof entryUuid !== 'string' || typeof text !== 'string') return null;
+  if (typeof cut !== 'boolean' || typeof sha256 !== 'string' || typeof offRecord !== 'boolean') return null;
+  if (inReplyTo !== null && !isPositive(inReplyTo)) return null;
+  return { id, at, turnAt, term, entryUuid, text, cut, sha256, inReplyTo, offRecord };
+}
+
+/** A reply's response off the wire, or null. A kind this build does not know reads `unmeasured`, never `no-row`. */
+function replyResponseOf(v: unknown): ReplyResponse | null {
+  if (!isObj(v) || typeof v.kind !== 'string') return null;
+  if (v.kind === 'row') return isPositive(v.id) && stampOrNull(v.handledAt) ? { kind: 'row', id: v.id, handledAt: v.handledAt } : null;
+  if (v.kind === 'no-row') return { kind: 'no-row' };
+  return { kind: 'unmeasured' };
+}
+
+/** One list's cursor off the wire: a positive id or `end`; anything else is null. */
+const cursorOf = (v: unknown): number | 'end' | null => (v === 'end' ? 'end' : isPositive(v) ? v : null);
+
 function genKeyOf(v: unknown): GenerationKey | null {
   return isObj(v) && isPositive(v.term) && isPositive(v.n) ? { term: v.term, n: v.n } : null;
 }
@@ -167,6 +212,11 @@ function entryOf(v: unknown): ChatEntry | 'skip' | string {
     if (!isPositive(v.messageId) || typeof v.text !== 'string' || typeof v.word !== 'string') return 'a server line is malformed';
     if (v.word !== NOT_ON_RECORD && !isReadinessWord(v.word)) return 'skip';
     return { kind: 'server-line', messageId: v.messageId, text: v.text, word: v.word as ServerLineWord };
+  }
+  if (v.kind === 'reply') {
+    const row = replyRowOf(v.row);
+    const response = replyResponseOf(v.response);
+    return row === null || response === null ? 'a reply entry is malformed' : { kind: 'reply', row, response };
   }
   const gen = genKeyOf(v.gen);
   if (gen === null || !isCount(v.at) || typeof v.current !== 'boolean' || typeof v.newTerm !== 'boolean') return 'a divider is malformed';
@@ -200,6 +250,10 @@ export function readChatThread(raw: unknown): { ok: true; thread: ChatThread; sk
   if (messages === null) return no('messages: not a part');
   if (generations === null) return no('generations: not a part');
   if (readiness === null) return no('readiness: not a part');
+  // PR B's two fields. Absent `replies` is a server below PR B, which records no reply: `null`, its own value. Absent `older` is
+  // the same server, whose only older page is the messages' (`before` the oldest message shown, when it said `more`).
+  const replies = raw.replies === undefined ? null : partOf(raw.replies, (x) => (typeof x.more === 'boolean' ? { more: x.more } : null));
+  if (replies === null && raw.replies !== undefined) return no('replies: not a part');
   if (!Array.isArray(raw.entries)) return no('entries: not a list');
   const entries: ChatEntry[] = [];
   let skipped = 0;
@@ -209,9 +263,22 @@ export function readChatThread(raw: unknown): { ok: true; thread: ChatThread; sk
     if (typeof r === 'string') return no(r);
     entries.push(r);
   }
+  let older: ChatOlder | null;
+  if (raw.older === undefined) {
+    const oldest = entries.find((e): e is Extract<ChatEntry, { kind: 'message' }> => e.kind === 'message');
+    older = messages.kind === 'read' && messages.value.more && oldest !== undefined ? { before: oldest.row.id, replyBefore: 'end' } : null;
+  } else if (raw.older === null) older = null;
+  else {
+    const o = isObj(raw.older) ? { before: cursorOf(raw.older.before), replyBefore: cursorOf(raw.older.replyBefore) } : null;
+    if (o === null || o.before === null || o.replyBefore === null) return no('older: not a cursor');
+    older = { before: o.before, replyBefore: o.replyBefore };
+  }
   return {
     ok: true, skipped,
-    thread: { v: 1, designation, sessionId: designation === 'designated' ? (sessionId as string) : null, term: designation === 'designated' ? (term as number) : null, entries, messages, generations, readiness },
+    thread: {
+      v: 1, designation, sessionId: designation === 'designated' ? (sessionId as string) : null, term: designation === 'designated' ? (term as number) : null,
+      entries, messages, generations, readiness, replies, older,
+    },
   };
 }
 
@@ -228,15 +295,29 @@ const positiveOf = (v: unknown): number | null => {
 const onlyKeys = (q: Record<string, unknown>, keys: readonly string[]): string | null =>
   Object.keys(q).find((k) => !keys.includes(k)) ?? null;
 
-/** The thread door's query: `before`, a message id, or absent for the newest page. Any other key is refused. */
-export function readChatThreadQuery(q: unknown): { ok: true; before: number | null } | { ok: false; detail: string } {
-  if (q === undefined || q === null) return { ok: true, before: null };
+/** One list's cursor in a query: absent is the newest (null), `end` reads nothing of that list, a positive id reads below it. */
+type QueryCursor = number | 'end' | null;
+const queryCursorOf = (v: unknown): QueryCursor | undefined => (v === undefined ? null : v === 'end' ? 'end' : positiveOf(v) ?? undefined);
+
+/** The thread door's query: `before` (the messages' cursor) and `replyBefore` (the replies', PR B), each absent for the newest
+ *  page, `end` for a list with nothing older, or a positive id in plain digits. Any other key is refused. */
+export function readChatThreadQuery(q: unknown):
+  { ok: true; before: QueryCursor; replyBefore: QueryCursor } | { ok: false; detail: string } {
+  if (q === undefined || q === null) return { ok: true, before: null, replyBefore: null };
   if (!isObj(q)) return { ok: false, detail: 'the query is not a set of fields' };
-  const extra = onlyKeys(q, ['before']);
+  const extra = onlyKeys(q, ['before', 'replyBefore']);
   if (extra !== null) return { ok: false, detail: 'the query names a field the door does not read' };
-  if (q.before === undefined) return { ok: true, before: null };
-  const before = positiveOf(q.before);
-  return before === null ? { ok: false, detail: 'before: not a positive whole number in plain digits' } : { ok: true, before };
+  const before = queryCursorOf(q.before);
+  if (before === undefined) return { ok: false, detail: 'before: not a positive whole number in plain digits, or end' };
+  const replyBefore = queryCursorOf(q.replyBefore);
+  if (replyBefore === undefined) return { ok: false, detail: 'replyBefore: not a positive whole number in plain digits, or end' };
+  return { ok: true, before, replyBefore };
+}
+
+/** The thread door's path for a page: the newest with no cursor, else the older page the cursor names (the client's one builder). */
+export function chatThreadPath(older: ChatOlder | null): string {
+  if (older === null) return '/api/overlord/chat';
+  return `/api/overlord/chat?before=${String(older.before)}&replyBefore=${String(older.replyBefore)}`;
 }
 
 /** One page of an earlier generation: which generation, and the entry an older page is read around (null for the first). It has

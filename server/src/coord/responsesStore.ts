@@ -9,6 +9,8 @@
 //   - a boot: `recordResponseBoot`, once a boot, from `index.ts`;
 //   - a Waiting on you row's insert: `insertWaitingResponseInTx`, inside the move that stamps the reach (PR B);
 //   - a digest line's insert: `insertDigestResponsesInTx`, inside the digest's claim (PR B);
+//   - a chat reply's insert: `insertReplyResponse`, the report door's reply arm's after the reply's record commits in the
+//     private store, and the boot arm's for a recorded reply that has none (Overlord W1 chat, PR B);
 //   - the seal (`shownAt`, `openedAt`, `actedAt`, `outcome`, `how`, `why`, `sealedAt`): `sealResponse`, the lane's (PR B);
 //   - `handledAt`: `markResponseHandled`, the handled door's (PR B);
 //   - the retention setting: `setResponseRetention`, the retention door's (PR B);
@@ -22,7 +24,7 @@ import type { DatabaseSync, StatementSync } from 'node:sqlite';
 import {
   PUSH_RESPONSE_DELIVERY, PUSH_WINDOW_MS, RECEIPT_KINDS, RECEIPT_SOURCES, RESPONSE_KINDS,
   RESPONSE_OUTCOMES, RESPONSE_RETENTION_MAX_DAYS, RESPONSE_RETENTION_MIN_DAYS, RESPONSE_ROW_STATES,
-  WAITING_WINDOW_MS, digestLineKey,
+  REPLY_WINDOW_MS, WAITING_WINDOW_MS, digestLineKey,
   type ReceiptDrop, type ReceiptIn, type ReceiptKind, type ReceiptSource, type ResponseKind, type ResponseRef, type ResponseRowState,
   type ResponseRowBrief, type ResponseStamp,
 } from '../../../shared/responses.js';
@@ -264,6 +266,51 @@ export function insertDigestResponsesInTx(db: DatabaseSync, d: {
     inserted += Number(res.changes);
   }
   return { inserted };
+}
+
+/** A chat reply's row (Table 4.3a, "A chat reply of the Overlord"; Overlord W1 chat, PR B), inserted AFTER the reply's record
+ *  commits in the private store: the two files share no transaction (index question 31). `at` is the reply's own record time, so
+ *  the door's insert and the boot arm's give the same row. It is `delivered` at once, its window `REPLY_WINDOW_MS` on, its label
+ *  `reply`. By `INSERT … ON CONFLICT(refId) WHERE kind = 'reply' DO NOTHING` (the partial unique index
+ *  `operator_responses_one_reply`), so a replay or a second boot changes nothing and a broken row throws. */
+export function insertReplyResponse(db: DatabaseSync, replyId: number, stamp: ResponseStamp, at: number): { readonly inserted: boolean } {
+  const res = stmt(db, 'INSERT INTO operator_responses (kind, label, refId, delivery, state, bootMeasured, bootEpoch, restoreMeasured, '
+    + "restoreGeneration, insertedAt, admittedAt, deliveredAt, windowCapAt) VALUES ('reply', 'reply', ?, ?, 'delivered', ?, ?, ?, ?, ?, ?, ?, ?) "
+    + "ON CONFLICT(refId) WHERE kind = 'reply' DO NOTHING")
+    .run(replyId, PUSH_RESPONSE_DELIVERY, ...stampCols(stamp), at, at, at, at + REPLY_WINDOW_MS);
+  return { inserted: Number(res.changes) > 0 };
+}
+
+/** The response rows of these replies, by reply id: each row's id and `handledAt` (the chat draws "I handled this elsewhere"
+ *  only on a reply with a row, and calls the handled door with that row's id). Ids and times only, never a text. A failed read
+ *  is `ok: false`, never "no rows". At most 500 ids a read. */
+export function replyResponsesFor(db: DatabaseSync, replyIds: readonly number[]):
+  { readonly ok: true; readonly rows: ReadonlyMap<number, { readonly id: number; readonly handledAt: number | null }> } | { readonly ok: false; readonly detail: string } {
+  try {
+    if (replyIds.length > 500) throw new Error('more than 500 reply ids');
+    const rows = new Map<number, { readonly id: number; readonly handledAt: number | null }>();
+    if (replyIds.length === 0) return { ok: true, rows };
+    const raw = db.prepare(`SELECT id, refId, handledAt FROM operator_responses WHERE kind = 'reply' AND refId IN (${replyIds.map(() => '?').join(', ')})`)
+      .all(...replyIds) as { id: number; refId: number; handledAt: number | null }[];
+    for (const r of raw) rows.set(Number(r.refId), { id: Number(r.id), handledAt: numOrNull(r.handledAt) });
+    return { ok: true, rows };
+  } catch (e) {
+    const detail = `operator_responses read failed: ${message(e)}`;
+    console.warn(`ccrc-server: ${detail}`);
+    return { ok: false, detail };
+  }
+}
+
+/** The reply ids among these that have NO response row: the boot arm's read (I8 across the two files). Ids only. */
+export function repliesWithoutResponse(db: DatabaseSync, replyIds: readonly number[]): readonly number[] {
+  if (replyIds.length === 0) return [];
+  const standing = new Set<number>();
+  for (let i = 0; i < replyIds.length; i += 500) {
+    const chunk = replyIds.slice(i, i + 500);
+    for (const r of db.prepare(`SELECT refId FROM operator_responses WHERE kind = 'reply' AND refId IN (${chunk.map(() => '?').join(', ')})`)
+      .all(...chunk) as { refId: number }[]) standing.add(Number(r.refId));
+  }
+  return replyIds.filter((id) => !standing.has(id));
 }
 
 /** One response write inside the move it rides, under its own SAVEPOINT (review 2260 F5). A failure SQLite undid at the

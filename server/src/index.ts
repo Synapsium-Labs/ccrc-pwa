@@ -43,6 +43,7 @@ import { gateRowsOver, generationReaderOver, tokenSyncLinkOver } from './token/l
 import { coordinationRestoreRefusal, openCoordDb } from './coord/db.js';
 import { openOperatorModelStore, operatorModelBootLines, type WitnessedMessageIds } from './operatorModel/store.js';
 import { bootPassSummary, runOperatorModelBootPass, w1Citations } from './operatorModel/bootPass.js';
+import { replyBootSummary, runReplyResponseBoot } from './operatorModel/replyBoot.js';
 import { readPrivateNameList } from './operatorModel/nameListRead.js';
 import { COORDINATION_RESTORE_MARKER_FILE } from './coord/delegation-checkpoint.js';
 import { CoordStore } from './coord/store.js';
@@ -599,6 +600,9 @@ deps.invariantMonitor = invariantMonitorOver({
 });
 deps.overlordReadiness = readinessLaneOver({ db: coordDb, coord, deps, operatorModel: operatorModel.store, limits: () => watcher.currentLimits() });   // the readiness word (§6.4)
 deps.responseStamp = () => responseStampNow(responseBoot, overlordRestore.restoreGeneration());
+// The reply arm of I8 (Overlord W1 chat, PR B): a recorded reply a crash left with no response row gets one, once the stamp exists.
+{ const rb = runReplyResponseBoot({ store: operatorModel.store, coordDb, stamp: deps.responseStamp, now: () => time.clock.wall() });
+  console.warn(`ccrc-server: ${replyBootSummary(rb.counts)}`); for (const line of rb.lines) console.warn(`ccrc-server: ${line}`); }
 const app = await buildServer(deps, bus, watcher);
 watcher.start();
 perf.start();

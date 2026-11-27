@@ -225,3 +225,50 @@ export interface OperatorMessageRow {
    *  written before the column reads false. */
   readonly offRecord: boolean;
 }
+
+// ── The Overlord's replies (Overlord W1 chat, PR B; plan `w1-chat.md` Task 5, operator item 327) ───────────────────────────
+// A reply is the text of one main-thread turn of the designated session, recorded in the private store when the turn ends (slug
+// `a-reply-is-a-turns-text`). It lives in its own table, `overlord_replies`, never among the operator's messages, so no reader of
+// the operator's words reads a reply as theirs (slug `replies-are-their-own-table`). A reply is the Overlord's words about the
+// operator's affairs: no log line, error detail, refusal answer or ledger line names its text.
+
+/** The hook's transcript tail read for one turn's reply, in bytes (the session hook carries a copy, held equal by its test). */
+export const REPLY_READ_MAX_BYTES = 4 * 1024 * 1024;
+/** A reply report's text bound, in UTF-8 bytes: the hook cuts at a code point and says `truncated`; the door refuses past it. The
+ *  store then keeps at most `MESSAGE_TEXT_MAX_BYTES`, cut with the one mark (`capMessageText`). */
+export const REPLY_REPORT_MAX_BYTES = 65_536;
+/** How many unsent reply reports the hook's spool keeps; past it the oldest is dropped and counted (`droppedBefore`). */
+export const REPLY_SPOOL_MAX = 8;
+
+/** One recorded reply as the chat reads it. `entryUuid` is the turn's last assistant entry, the key the live transcript merges on. */
+export interface OverlordReplyRow {
+  readonly id: number;
+  /** The server's clock at the record. */
+  readonly at: number;
+  /** The hook's clock at the turn's end. */
+  readonly turnAt: number;
+  readonly term: number;
+  readonly entryUuid: string;
+  /** Masked on the way in, then cut with the mark. */
+  readonly text: string;
+  readonly cut: boolean;
+  readonly sha256: string;
+  /** The newest operator message the turn answered (picked up since the previous reply), or null. */
+  readonly inReplyTo: number | null;
+  /** True when any message the turn answered was sent off the record (§9.4 rule 9): the reply is off the record too. */
+  readonly offRecord: boolean;
+}
+
+/** What a reply links to, from the operator messages this session picked up since its previous reply and at or before this one
+ *  (total, pure): `inReplyTo` the newest of their ids, or null for none; `offRecord` true when any of them was sent off the
+ *  record, because a reply to a message sent off the record is off the record too. */
+export function replyLinks(answered: readonly { readonly id: number; readonly offRecord: boolean }[]):
+  { readonly inReplyTo: number | null; readonly offRecord: boolean } {
+  let inReplyTo: number | null = null;
+  let offRecord = false;
+  for (const m of answered) {
+    if (inReplyTo === null || m.id > inReplyTo) inReplyTo = m.id;
+    if (m.offRecord) offRecord = true;
+  }
+  return { inReplyTo, offRecord };
+}

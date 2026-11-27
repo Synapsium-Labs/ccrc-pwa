@@ -14,6 +14,14 @@ import { OperatorModelStore as RealOperatorModelStore, type PrivacyIssuer } from
 import { defaultOperatorModelDbPath, openOperatorModelDb } from '../src/operatorModel/db.js';
 import { attributionIdentity } from '../src/auth/attributionIdentity.js';
 import { gateActorOf } from '../src/accounts/audit.js';
+import type { DatabaseSync } from 'node:sqlite';
+import path from 'node:path';
+import { SecretMasker } from '../src/accounts/mask.js';
+import { openCoordDb } from '../src/coord/db.js';
+import type { DesignationRead } from '../../shared/overlord-designation.js';
+import type { ResponseStamp } from '../../shared/responses.js';
+
+const STAMP: ResponseStamp = { boot: { kind: 'measured', epoch: 1 }, restore: { kind: 'measured', n: 0 } };
 
 const ID = 'lane-a-project-a';
 const UUID = '11111111-2222-3333-4444-555555555555';
@@ -222,5 +230,109 @@ describe('POST /api/sessions/:id/report: picked-up moves the operator message', 
     const res = await report(app, { kind: 'picked-up', messageId: 7 });
     expect([res.statusCode, err(res)]).toEqual([502, 'unmeasured']);
     expect((await report(app, { kind: 'readers-clear' })).statusCode).toBe(200);
+  });
+});
+
+// ── the reply report (Overlord W1 chat, PR B; plan `w1-chat.md` Task 5 step 2) ───────────────────────────────────────────────
+
+describe('POST /api/sessions/:id/report: a reply is recorded in the private store, then its response row', () => {
+  const ENTRY = '0f1e2d3c-4b5a-4968-8776-a5b4c3d2e1f0';
+  const TEXT = 'Done: project-a is green.';
+  const VIEW = {} as never;
+  const designated = (sessionId: string, term: number): DesignationRead => ({ kind: 'designated', sessionId, term, row: VIEW });
+  const body = (over: Record<string, unknown> = {}) => ({ kind: 'reply', entryUuid: ENTRY, turnAt: 900, text: TEXT, truncated: false, ...over });
+  let pmDb: DatabaseSync | undefined;
+  afterEach(() => { if (pmDb?.isOpen) pmDb.close(); pmDb = undefined; });
+
+  /** A real private store with a counting issuer, a server over it, and the designation the coordination store answers. */
+  async function replyRig(o: { designation?: DesignationRead; masker?: SecretMasker; responseStamp?: (() => ResponseStamp) | null } = {}) {
+    pmDb = openOperatorModelDb(defaultOperatorModelDbPath(mkTmp('ccrc-report-route-reply-')));
+    let issued = 0;
+    const journal: PrivacyIssuer = { kind: 'ready', issue: (highest) => { issued = Math.max(highest ?? 0, issued) + 1; return { ok: true, id: issued }; } };
+    const store = new RealOperatorModelStore(pmDb, journal);
+    const stamp = o.responseStamp === undefined ? () => STAMP : o.responseStamp;
+    const r = await appFor(home, recorder().run, { operatorModel: store, ...(o.masker === undefined ? {} : { masker: o.masker }),
+      ...(stamp === null ? {} : { responseStamp: stamp }) });
+    app = r.app; coord = r.coord;
+    vi.spyOn(r.coord, 'designationRead').mockReturnValue(o.designation ?? designated(ID, 3));
+    await app.ready();
+    return { store, db: pmDb };
+  }
+  const replyRows = (db: DatabaseSync) => db.prepare('SELECT id, sessionId, term, entryUuid, text, turnAt FROM overlord_replies ORDER BY id').all().map((x) => ({ ...x }));
+  const responseRows = () => coord!.db.prepare("SELECT refId, insertedAt FROM operator_responses WHERE kind = 'reply' ORDER BY refId").all().map((x) => ({ ...x }));
+
+  it('the designated session\'s reply records once at the current term, with its response row; a second report of the entry is a replay', async () => {
+    const { db } = await replyRig();
+    const first = await report(app!, body());
+    expect([first.statusCode, first.json()]).toEqual([200, { ok: true, replyId: 1, replay: false }]);
+    expect(replyRows(db)).toEqual([{ id: 1, sessionId: ID, term: 3, entryUuid: ENTRY, text: TEXT, turnAt: 900 }]);
+    expect(responseRows()).toHaveLength(1);
+    const again = await report(app!, body({ at: 2_000 }));
+    expect([again.statusCode, again.json()]).toEqual([200, { ok: true, replyId: 1, replay: true }]);
+    expect([replyRows(db).length, responseRows().length]).toEqual([1, 1]);
+    expect(rows(), 'a reply is never a hook report row in coord.db').toEqual([]);
+  });
+
+  it('a session that is not the designated one, or designated at no term now, answers 403 not-the-overlord and records nothing', async () => {
+    for (const designation of [designated('lane-b-project-a', 3), { kind: 'not-designated', row: null } as DesignationRead]) {
+      const { db } = await replyRig({ designation });
+      const res = await report(app!, body());
+      expect([res.statusCode, err(res)], JSON.stringify(designation)).toEqual([403, 'not-the-overlord']);
+      expect([replyRows(db), responseRows()]).toEqual([[], []]);
+      await app!.close(); app = undefined; coord?.db.close(); coord = undefined;
+    }
+  });
+
+  it('an unreadable designation answers 502 unmeasured and records nothing', async () => {
+    const { db } = await replyRig({ designation: { kind: 'unmeasured', why: 'fixture' } });
+    const res = await report(app!, body());
+    expect([res.statusCode, err(res)]).toEqual([502, 'unmeasured']);
+    expect(replyRows(db)).toEqual([]);
+  });
+
+  it('a text carrying a secret the masker knows is stored masked; the rest of the text rides', async () => {
+    const SECRET = 'Zq7'.repeat(12);
+    const mdb = openCoordDb(path.join(mkTmp('ccrc-report-route-mask-'), 'coord.db'));
+    const masker = new SecretMasker({ db: mdb, token: () => ID_GATE_TOKEN, log: () => {} });
+    try {
+      expect(masker.ingestSecret('lane-a', SECRET)).toBe('masked');
+      const { db } = await replyRig({ masker });
+      expect((await report(app!, body({ text: `the key is ${SECRET} for now` }))).statusCode).toBe(200);
+      const [row] = replyRows(db) as Array<{ text: string }>;
+      expect(row!.text).not.toContain(SECRET);
+      expect(row!.text).toContain('the key is');
+    } finally { mdb.close(); }
+  });
+
+  it('a response row that cannot be written still answers 200: the record holds, and the log names no text', async () => {
+    const { db } = await replyRig({ responseStamp: () => { throw new Error('fixture stamp failure'); } });
+    const res = await report(app!, body());
+    expect([res.statusCode, res.json()]).toEqual([200, { ok: true, replyId: 1, replay: false }]);
+    expect([replyRows(db).length, responseRows()]).toEqual([1, []]);
+    expect(warns.some((w) => w.includes('response row was not written'))).toBe(true);
+  });
+
+  it('no line the reply arm or the door logs, and no refusal it answers, names the reply\'s text', async () => {
+    const SPOKEN = 'fixture words about the operator';
+    const { db } = await replyRig();
+    await report(app!, body({ text: SPOKEN }));
+    const reused = await report(app!, body({ text: `${SPOKEN} again` }));   // the same entry, other text
+    expect([reused.statusCode, err(reused)]).toEqual([409, 'conflict']);
+    const bad = await report(app!, body({ text: `${SPOKEN}`, entryUuid: 'not-a-uuid' }));
+    expect(bad.statusCode).toBe(400);
+    db.close();
+    const closed = await report(app!, body({ entryUuid: '0f1e2d3c-4b5a-4968-8776-000000000002', text: SPOKEN }));
+    expect(closed.statusCode).toBe(409);   // not-open
+    for (const res of [reused, bad, closed]) expect(res.body).not.toContain(SPOKEN);
+    expect(warns.join('\n')).not.toContain(SPOKEN);
+  });
+
+  it('a server without the private store answers 409 not-open for a reply, and every other kind is the table\'s', async () => {
+    const r = await appFor(home, recorder().run);
+    app = r.app; coord = r.coord;
+    vi.spyOn(r.coord, 'designationRead').mockReturnValue(designated(ID, 3));
+    await app.ready();
+    const res = await report(app, body());
+    expect([res.statusCode, err(res)]).toEqual([409, 'not-open']);
   });
 });

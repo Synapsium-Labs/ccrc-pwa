@@ -60,7 +60,8 @@ import type { FleetIO } from '../io.js';
 import { composeChat } from './overlordChat.js';
 import {
   CHAT_EARLIER_PAGEABLE, CHAT_PAGE_ROWS, chatDesignation, chatThreadComposed, earlierComposed, earlierStep, generationsFact, messagesFact,
-  readinessFact, type GenerationsRead, type MessagesPageRead, type ReadinessChangesRead,
+  pageByCursor, readinessFact, repliesFact, responsesFact, type GenerationsRead, type MessagesPageRead, type ReadinessChangesRead,
+  type RepliesPageRead, type ReplyResponsesRead,
 } from './overlordChatDoor.js';
 import { historyAgentFor, historyDoorAnswer, type HistoryLink } from './overlordHistory.js';
 import type { runOverlordRead } from './overlordRead.js';
@@ -140,12 +141,17 @@ export interface OverlordRouteDeps {
   /** The chat's two reads (Overlord W1 chat, Tasks 2 and 3): the one read runner, in its operator mode; the private store's page of
    *  messages (the store itself, so the words are read in the door's handler: `operator-message-readers`), absent without a store;
    *  one identity's generations; the readiness changes; and the history door's agent links and port. Absent (a test server, a
-   *  script): both doors answer 503 `unavailable` after the gate and the designation. */
+   *  script): both doors answer 503 `unavailable` after the gate and the designation. PR B adds the replies' page (the same store)
+   *  and the replies' response rows (text-free, over the coordination database). */
   readonly chat?: {
     readonly readRunner: ReturnType<typeof runOverlordRead>;
-    readonly messages: { messagesPage(beforeId: number | null, limit: number): MessagesPageRead } | undefined;
+    readonly messages: {
+      messagesPage(beforeId: number | null, limit: number): MessagesPageRead;
+      repliesPage(beforeId: number | null, limit: number): RepliesPageRead;
+    } | undefined;
     readonly generationsOf: (identity: string) => GenerationsRead;
     readonly readinessChanges: (sinceMs: number, untilMs: number) => ReadinessChangesRead;
+    readonly replyResponses: (replyIds: readonly number[]) => ReplyResponsesRead;
     readonly links: () => readonly HistoryLink[];
     readonly io: Pick<FleetIO, 'overlordHistory'>;
   };
@@ -653,13 +659,21 @@ export function registerOverlordRoutes(app: FastifyInstance, deps: OverlordRoute
     if (chat === undefined) return refuseRoute(reply, 'unavailable', { detail: 'the chat reads are not wired on this server' });
     return chat.readRunner(req, reply, {
       door: 'chat', caller: 'operator',
-      compose: () => chatThreadComposed(composeChat({
-        designation: { kind: 'designated', sessionId: d.sessionId, term: d.term },
-        messages: messagesFact(chat.messages?.messagesPage(q.before, CHAT_PAGE_ROWS) ?? { kind: 'unmeasured', why: 'no private store' }),
-        generations: generationsFact(chat.generationsOf(d.identity)),
-        readiness: readinessFact(chat.readinessChanges(0, Number.MAX_SAFE_INTEGER)),
-        pageable: CHAT_EARLIER_PAGEABLE,
-      })),
+      compose: () => {
+        const noStore = { kind: 'unmeasured', why: 'no private store' } as const;
+        const empty = { kind: 'measured', value: { rows: [], more: false } } as const;
+        const store = chat.messages;
+        const replies = repliesFact(pageByCursor(q.replyBefore, (b) => store?.repliesPage(b, CHAT_PAGE_ROWS) ?? noStore, empty));
+        return chatThreadComposed(composeChat({
+          designation: { kind: 'designated', sessionId: d.sessionId, term: d.term },
+          messages: messagesFact(pageByCursor(q.before, (b) => store?.messagesPage(b, CHAT_PAGE_ROWS) ?? noStore, empty)),
+          replies,
+          responses: responsesFact(chat.replyResponses(replies.kind === 'rows' ? replies.rows.map((r) => r.id) : [])),
+          generations: generationsFact(chat.generationsOf(d.identity)),
+          readiness: readinessFact(chat.readinessChanges(0, Number.MAX_SAFE_INTEGER)),
+          pageable: CHAT_EARLIER_PAGEABLE,
+        }));
+      },
     });
   });
 

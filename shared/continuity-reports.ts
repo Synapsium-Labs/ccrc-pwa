@@ -7,7 +7,9 @@
  *  a quiet turn's end clearing the readers, a model switch (door process B2 sends it), and "picked up", the id of an operator
  *  message whose nudge line the prompt carried. Each report fails open on the hook's side: one it cannot send is lost, never
  *  retried, so nothing graded from the hook's side alone may claim more than the reports prove (closed-book reads the
- *  server's read ledger instead, ruled F10). The witness key's header is `continuity-door.ts#WITNESS_KEY_HEADER`. */
+ *  server's read ledger instead, ruled F10). The witness key's header is `continuity-door.ts#WITNESS_KEY_HEADER`. The one
+ *  exception (Overlord W1 chat, PR B) is `reply`, the Overlord's reply at a main-turn Stop: nothing later heals a lost reply,
+ *  so the hook spools it and resends it at the next Stop, and the private store's key makes a resend a replay. */
 
 /** The report kinds, each with what it says. Every body names one. */
 const HOOK_REPORT_KIND_MAP = {
@@ -17,6 +19,7 @@ const HOOK_REPORT_KIND_MAP = {
   'readers-clear': 'a main-thread turn ended with no background work: no reader runs',
   'model-switch': "the session's model changed inside a generation (door process B2's events)",
   'picked-up': "the prompt carried an operator message's nudge line: that message was picked up",
+  reply: "a main-thread turn of the designated session ended with text: the Overlord's reply, recorded in the private store",
 } as const;
 export type HookReportKind = keyof typeof HOOK_REPORT_KIND_MAP;
 export const HOOK_REPORT_KINDS = Object.keys(HOOK_REPORT_KIND_MAP) as HookReportKind[];
@@ -44,7 +47,12 @@ export type HookReport =
   | { readonly kind: 'reader-stop'; readonly agentId: string; readonly at: number }
   | { readonly kind: 'readers-clear'; readonly at: number }
   | { readonly kind: 'model-switch'; readonly how: ModelSwitchHow; readonly from: string | null; readonly to: string | null; readonly at: number }
-  | { readonly kind: 'picked-up'; readonly messageId: number; readonly at: number };
+  | { readonly kind: 'picked-up'; readonly messageId: number; readonly at: number }
+  /** The one report that spools on the hook's side (slug `reply-report-spools`): `droppedBefore` counts the spooled bodies the
+   *  hook dropped before this one, or null for none. `text` names nothing of the harness that wrote it: everything behind the door
+   *  reads the body alone, so another harness's adapter can send the same report. */
+  | { readonly kind: 'reply'; readonly entryUuid: string; readonly turnAt: number; readonly text: string; readonly truncated: boolean;
+      readonly droppedBefore: number | null; readonly at: number };
 
 /** The witness key (plan question 6, slug `witness-key-is-the-call-digest`): the sha256, as 64 lowercase hex, of the tool's full
  *  name (`mcp__door__<name>`), one newline, and the tool input printed by `jq -cS` with its trailing newline removed (`{}` for

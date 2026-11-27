@@ -58,7 +58,8 @@ import { NONCE_SHA256_SHAPE, claimWhyText } from '../../../shared/continuity-doo
 import { actKeyClaimVerdict } from './actKey.js';
 import { actKeyByNonce, issueActKey, noteRefusedClaim } from './actKeyStore.js';
 import type { GateClaim, GateRun } from '../coord/overlordGateRun.js';
-import type { StoreRead, StoreWrite } from '../operatorModel/store.js';
+import type { ReplyRecordInput, ReplyRecorded, StoreRead, StoreWrite } from '../operatorModel/store.js';
+import { replyTargetVerdict } from '../operatorModel/replies.js';
 import type { MessageState } from '../../../shared/operatorMessages.js';
 import { hookReportOf } from './hookReports.js';
 import { insertHookReport } from './hookReportStore.js';
@@ -70,6 +71,17 @@ export interface MessagePickUp {
   sessionOf(id: number): StoreRead<{ readonly sessionId: string } | 'absent'>;
   stateOf(id: number): StoreRead<MessageState | 'absent'>;
   pickUp(id: number, at: number): StoreWrite<{ readonly changed: boolean }>;
+}
+
+/** The report door's `reply` port into the private store (C11; Overlord W1 chat, PR B), declared by its consumer: the composition
+ *  root builds it from the designation's read, the egress masker, the store's `recordReply` and the responses store's
+ *  `insertReplyResponse` over `coord.db`. `respond` runs only after `record` committed (the two files share no transaction); a
+ *  throw from it is the arm's to catch, and the boot arm inserts the row a failure left out. */
+export interface ReplyRecord {
+  designation(): DesignationRead;
+  mask(text: string): string;
+  record(r: ReplyRecordInput): StoreWrite<ReplyRecorded>;
+  respond(replyId: number, at: number): { readonly inserted: boolean };
 }
 
 /** The settle step's port into the designation (C5; W1 sandbox PR B, Task 9), declared by its consumer. The composition root
@@ -132,6 +144,9 @@ export interface ContinuityRouteDeps {
   /** The report door's `picked-up` port. Absent (a server built without the private store, a test of another door): that kind
    *  answers `unavailable`; every other kind is the table's. */
   pickUp?: MessagePickUp;
+  /** The report door's `reply` port (Overlord W1 chat, PR B). Absent (a server built without the private store, a test of another
+   *  door): that kind answers `unavailable`. */
+  replies?: ReplyRecord;
   /** The timer read's sender check: `attributionVerdict` over the registry, on the query's `byUuid`. */
   attributeReader: (id: string, uuid: string) => Promise<AttributionRead>;
   /** THE ONE GATE (Overlord W1 gates B, §11.2; `coord/overlordGateRun.ts`): the six start doors and the card's recording page
@@ -447,9 +462,13 @@ export function registerContinuityRoutes(app: FastifyInstance, deps: ContinuityR
    * the token first, then the path's session is the sender (`not-owner`), then `fromUuid`'s shape and `hookReportOf` (400
    * `bad-request`, the field in `detail`), then the registry's attribution of `fromUuid`. A `picked-up` report asks the port
    * who owns the message (`absent` 404 `unknown-message`, another session's 403 `not-owner`, unmeasured 502) and then moves it,
-   * answering 200 `{ ok, changed }`: a message already past picked up is `changed: false`, never a refusal. Every other kind is
+   * answering 200 `{ ok, changed }`: a message already past picked up is `changed: false`, never a refusal. A `reply` report
+   * (Overlord W1 chat, PR B) is the designated session's at its current term only (403 `not-the-overlord`, an unreadable
+   * designation 502 `unmeasured`), masked, recorded once by `recordReply` (a resend is `replay: true`; the same entry with other
+   * text 409 `conflict`; a store refusal its own word), then its response row; 200 `{ ok, replyId, replay }`, even when the
+   * response row could not be written (the boot pass inserts it). Every other kind is
    * one `insertHookReport` row, 200 `{ ok, id }`. A failed write is 502 `unmeasured`. The witness key is a call digest of a
-   * tool's input, so no line this door logs names one.
+   * tool's input, so no line this door logs names one, and a reply is the Overlord's words, so no line names its text.
    */
   app.post('/api/sessions/:id/report', {
     onRequest: async (req: FastifyRequest, reply: FastifyReply) => {
@@ -486,6 +505,25 @@ export function registerContinuityRoutes(app: FastifyInstance, deps: ContinuityR
         return refuseRoute(reply, 'unmeasured', { detail: 'the message could not be moved to picked up' });
       }
       return reply.code(200).send({ ok: true, changed: moved.value.changed });
+    }
+    if (report.kind === 'reply') {
+      // The Overlord's reply (Overlord W1 chat, PR B; slug `a-reply-is-a-turns-text`): the designated session at the current
+      // term only (`replyTargetVerdict`), masked on the way in (§9.4 rule 4), recorded by the private store's one reply writer,
+      // then its response row in coord.db after that commit. No answer, detail or log line here names the text.
+      const port = deps.replies;
+      if (port === undefined) return refuseRoute(reply, 'unavailable');
+      const target = replyTargetVerdict(port.designation(), id);
+      if (target.kind === 'refuse') return refuseRoute(reply, target.word, { detail: target.detail });
+      const recorded = port.record({ at: deps.wall(), turnAt: report.turnAt, sessionId: id, term: target.term, entryUuid: report.entryUuid,
+        text: port.mask(report.text) });
+      if (!recorded.ok) {
+        console.warn(`ccrc-server: reply report: ${id}'s reply was not recorded (${recorded.error})`);
+        return refuseRoute(reply, recorded.error === 'refused' ? 'conflict' : recorded.error, { detail: 'the reply could not be recorded' });
+      }
+      try { port.respond(recorded.value.id, recorded.value.at); } catch (e) {
+        console.warn(`ccrc-server: reply report: reply ${recorded.value.id}'s response row was not written (${e instanceof Error ? e.message : String(e)}); the boot pass inserts it`);
+      }
+      return reply.code(200).send({ ok: true, replyId: recorded.value.id, replay: recorded.value.replay });
     }
     const coord = deps.coord;
     if (coord === undefined) return refuseRoute(reply, 'unavailable');

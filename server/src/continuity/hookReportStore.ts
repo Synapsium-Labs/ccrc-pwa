@@ -28,13 +28,17 @@ function columnsOf(r: HookReport): readonly [string | null, string | null, strin
     case 'readers-clear': return [null, null, null];
     case 'model-switch': return [null, null, JSON.stringify({ how: r.how, from: r.from, to: r.to })];
     case 'picked-up': return null;
+    // The Overlord's reply (the chat's PR B) is recorded in the private store, never here: its text must not reach coord.db.
+    case 'reply': return null;
   }
 }
 
-/** THE TABLE'S ONE WRITER (the report door). Inserts one row (never a `picked-up`) and, in the same transaction, deletes the rows past their keep. */
+/** THE TABLE'S ONE WRITER (the report door). Inserts one row (never a `picked-up` or a `reply`) and, in the same transaction, deletes the rows past their keep. */
 export function insertHookReport(db: DatabaseSync, sessionId: string, report: HookReport, receivedAt: number): HookStoreWrite<{ id: number }> {
   const cols = columnsOf(report);
-  if (cols === null) return { ok: false, error: 'write-failed', detail: 'a picked-up report is a move of the message, never a row' };
+  if (cols === null) {
+    return { ok: false, error: 'write-failed', detail: report.kind === 'reply' ? 'a reply report is recorded in the private store, never a row' : 'a picked-up report is a move of the message, never a row' };
+  }
   const [key, agentId, detail] = cols;
   try {
     db.exec('BEGIN IMMEDIATE');

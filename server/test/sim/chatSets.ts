@@ -7,7 +7,7 @@
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { expect } from 'vitest';
-import type { OperatorMessageRow } from '../../../shared/operatorMessages.js';
+import type { OperatorMessageRow, OverlordReplyRow } from '../../../shared/operatorMessages.js';
 import type { ChatEntry, ChatSendAnswer } from '../../../shared/overlordChat.js';
 import type { GenerationFact } from '../../src/coord/overlordChat.js';
 import type { MutantSet, SuiteCase } from './mutate.js';
@@ -29,14 +29,16 @@ type LiveItem =
   | { kind: 'mail-prompt'; key: string; event: { kind: 'user'; uuid: string; ts: string; text: string } }
   | { kind: 'divider'; key: string; label: string };
 type Row = { kind: string; key: string; entry?: ChatEntry; id?: number; name?: string; text?: string; item?: LiveItem };
+type ReplyEntry = Extract<ChatEntry, { kind: 'reply' }>;
 export interface ChatWordsModule {
   draftAfterSend(a: ChatSendAnswer): 'clear' | 'keep';
   turnOrigin(text: string): { kind: 'nudge'; id: number } | { kind: 'ccrc'; name: string } | { kind: 'pane' };
-  mergeLive(thread: readonly ChatEntry[], live: readonly LiveItem[]): readonly Row[];
-  historyItemsToChat(items: readonly Readonly<Record<string, unknown>>[]): readonly Row[];
+  mergeLive(thread: readonly ChatEntry[], live: readonly LiveItem[], drawnReplies?: ReadonlySet<number>): readonly Row[];
+  historyItemsToChat(items: readonly Readonly<Record<string, unknown>>[], replies?: readonly ReplyEntry[]): readonly Row[];
   chatReadTrigger(msg: StreamFrame, was: 'idle' | 'busy' | null): boolean;
   nextReadAt(lastReadAt: number | null, now: number, notBefore: number, every?: number): number;
   pickUpReadEvery(thread: { readonly entries: readonly ChatEntry[] }, now: number): number | null;
+  ceilingNotBefore(now: number, retryAfterS: number | undefined): number;
 }
 /** The stream frames the refresh's allow-list reads (`shared/api.ts#SessionStreamMsg`'s, structurally). */
 type StreamFrame =
@@ -53,6 +55,11 @@ const msg = (id: number, at: number, over: Partial<OperatorMessageRow> = {}): Op
 });
 const gen = (term: number, n: number, startReportedAt: number, over: Partial<GenerationFact> = {}): GenerationFact => ({
   term, n, startReportedAt, sessionId: 'lane-a-overlord', live: false, conversation: 'c1c1c1c1-1111-4111-8111-111111111111', ...over,
+});
+/** A recorded reply (PR B): a fixture text, keyed by a fixture entry uuid built from its id. */
+const reply = (id: number, at: number, over: Partial<OverlordReplyRow> = {}): OverlordReplyRow => ({
+  id, at, turnAt: at, term: 1, entryUuid: `e0e0e0e0-0000-4000-8000-${String(id).padStart(12, '0')}`, text: `fixture reply ${id}`, cut: false,
+  sha256: 'b'.repeat(64), inReplyTo: null, offRecord: false, ...over,
 });
 /** The nudge line, spelled out: the mail nudge's head, then the body (the renderer's own round trip is in the vocab test). */
 const nudge = (id: number): string => `ccrc-mail: you have new mail. Operator message ${id}: read it with your messages door.`;
@@ -115,8 +122,30 @@ export function readChatThreadCases(m: ChatVocabModule): Record<string, SuiteCas
       expect(r.ok && r.thread.entries[0]).toMatchObject({ kind: 'message', row: { offRecord: false, state: 'unknown' } });
     },
     'skips and counts an unknown kind and an unknown server-line word; ignores an unknown key': () => {
-      const r = m.readChatThread(thread({ extra: 1, entries: [{ kind: 'reply', id: 3 }, { kind: 'server-line', messageId: 7, text: 'x', word: 'newer-word' }, { kind: 'message', row: msg(7, 1) }] }));
+      // `reply` was this case's unknown kind until the chat's PR B made it known; a later wave's kind stands in for it now.
+      const r = m.readChatThread(thread({ extra: 1, entries: [{ kind: 'request', id: 3 }, { kind: 'server-line', messageId: 7, text: 'x', word: 'newer-word' }, { kind: 'message', row: msg(7, 1) }] }));
       expect(r.ok && [r.skipped, r.thread.entries.length]).toEqual([2, 1]);
+    },
+    // PR B: the reply entry, the replies part and the older cursor.
+    'reads a reply entry with its response; a response kind this build does not know reads unmeasured, never no-row': () => {
+      const r = m.readChatThread(thread({ entries: [{ kind: 'reply', row: reply(8, 1_100), response: { kind: 'row', id: 80, handledAt: null } },
+        { kind: 'reply', row: reply(9, 1_200), response: { kind: 'later-word' } }], replies: { kind: 'read', value: { more: false } }, older: null }));
+      expect(r.ok && r.thread.entries).toEqual([{ kind: 'reply', row: reply(8, 1_100), response: { kind: 'row', id: 80, handledAt: null } },
+        { kind: 'reply', row: reply(9, 1_200), response: { kind: 'unmeasured' } }]);
+      expect(m.readChatThread(thread({ entries: [{ kind: 'reply', row: { id: 8 }, response: { kind: 'no-row' } }] })).ok).toBe(false);
+    },
+    'a server below PR B: no replies part reads null, its own value, and its older page is the messages\' alone': () => {
+      const r = m.readChatThread(thread({ messages: { kind: 'read', value: { more: true } } }));
+      expect(r.ok && [r.thread.replies, r.thread.older]).toEqual([null, { before: 7, replyBefore: 'end' }]);
+      const none = m.readChatThread(thread());
+      expect(none.ok && [none.thread.replies, none.thread.older]).toEqual([null, null]);
+    },
+    'reads an older cursor of ids or end; refuses any other cursor': () => {
+      const r = m.readChatThread(thread({ replies: { kind: 'read', value: { more: true } }, older: { before: 'end', replyBefore: 12 } }));
+      expect(r.ok && r.thread.older).toEqual({ before: 'end', replyBefore: 12 });
+      for (const older of [{ before: 0, replyBefore: 'end' }, { before: 'end' }, { before: '3', replyBefore: 'end' }, 'end']) {
+        expect(m.readChatThread(thread({ replies: { kind: 'read', value: { more: false } }, older })).ok, JSON.stringify(older)).toBe(false);
+      }
     },
     'refuses a missing v, a part of neither kind, a malformed known entry, and a designated thread with no term': () => {
       const { v: _v, ...noV } = thread();
@@ -206,11 +235,43 @@ export function composeChatCases(m: ChatL1Module): Record<string, SuiteCase> {
   type Facts = Parameters<ChatL1Module['composeChat']>[0];
   const facts = (over: Partial<Facts> = {}): Facts => ({
     designation: { kind: 'designated', sessionId: 'lane-a-overlord', term: 1 }, messages: { kind: 'rows', rows: [], more: false },
+    replies: { kind: 'rows', rows: [], more: false }, responses: { kind: 'rows', byReply: new Map() },
     generations: { kind: 'rows', rows: [] }, readiness: { kind: 'rows', rows: [{ at: 0, word: 'ready' }], oldest: 0 }, pageable: false, ...over,
   });
   const shape = (f: Facts): string[] => m.composeChat(f).entries.map((e) =>
-    e.kind === 'message' ? `m${e.row.id}` : e.kind === 'server-line' ? `s${e.messageId}:${e.word}` : `d${e.gen.term}.${e.gen.n}${e.current ? '*' : ''}${e.newTerm ? '+' : ''}`);
+    e.kind === 'message' ? `m${e.row.id}` : e.kind === 'server-line' ? `s${e.messageId}:${e.word}` : e.kind === 'reply' ? `r${e.row.id}:${e.response.kind}`
+      : `d${e.gen.term}.${e.gen.n}${e.current ? '*' : ''}${e.newTerm ? '+' : ''}`);
   return {
+    // PR B: the replies, placed by time among the messages and read with their response rows.
+    'a reply sits by its time among the messages, after a message at the same millisecond, with its response row or none': () => {
+      expect(shape(facts({ messages: { kind: 'rows', rows: [msg(2, 200), msg(5, 400)], more: false },
+        replies: { kind: 'rows', rows: [reply(3, 200), reply(4, 300), reply(1, 100)], more: false },
+        responses: { kind: 'rows', byReply: new Map([[3, { id: 30, handledAt: null }], [1, { id: 10, handledAt: 5 }]]) } })))
+        .toEqual(['r1:row', 'm2', 'r3:row', 'r4:no-row', 'm5']);
+      const t = m.composeChat(facts({ replies: { kind: 'rows', rows: [reply(1, 100)], more: false },
+        responses: { kind: 'rows', byReply: new Map([[1, { id: 10, handledAt: 5 }]]) } }));
+      expect(t.entries).toEqual([{ kind: 'reply', row: reply(1, 100), response: { kind: 'row', id: 10, handledAt: 5 } }]);
+    },
+    'unreadable replies are their own unmeasured part, never an empty one; unreadable response rows read unmeasured on each reply': () => {
+      const t = m.composeChat(facts({ messages: { kind: 'rows', rows: [msg(1, 100)], more: false }, replies: { kind: 'unmeasured', why: 'closed' } }));
+      expect([shape(facts({ messages: { kind: 'rows', rows: [msg(1, 100)], more: false }, replies: { kind: 'unmeasured', why: 'closed' } })), t.replies])
+        .toEqual([['m1'], { kind: 'unmeasured', why: 'closed' }]);
+      expect(shape(facts({ replies: { kind: 'rows', rows: [reply(1, 100)], more: false }, responses: { kind: 'unmeasured', why: 'x' } }))).toEqual(['r1:unmeasured']);
+    },
+    'ids are not dense: a reply id between two message ids, and each table keeps its own cursor': () => {
+      // One issued-id sequence over both tables (call 1888): messages 1 and 3, reply 2.
+      const t = m.composeChat(facts({ messages: { kind: 'rows', rows: [msg(1, 100), msg(3, 300)], more: true },
+        replies: { kind: 'rows', rows: [reply(2, 200)], more: false } }));
+      expect(shape(facts({ messages: { kind: 'rows', rows: [msg(1, 100), msg(3, 300)], more: true },
+        replies: { kind: 'rows', rows: [reply(2, 200)], more: false } }))).toEqual(['m1', 'r2:no-row', 'm3']);
+      expect(t.older).toEqual({ before: 1, replyBefore: 'end' });
+    },
+    'an older divider never sits over nothing: with an older page, a divider below the oldest row shown waits for that page': () => {
+      const gens: Facts['generations'] = { kind: 'rows', rows: [gen(1, 1, 50), gen(1, 2, 150, { live: true })] };
+      expect(shape(facts({ generations: gens, messages: { kind: 'rows', rows: [msg(7, 100), msg(9, 200)], more: true } }))).toEqual(['m7', 'd1.2*', 'm9']);
+      expect(shape(facts({ generations: gens, messages: { kind: 'rows', rows: [msg(7, 100), msg(9, 200)], more: false } }))).toEqual(['d1.1', 'm7', 'd1.2*', 'm9']);
+      expect(shape(facts({ generations: gens }))).toEqual(['d1.1', 'd1.2*']);
+    },
     'messages oldest first, a server line after each one whose word was not ready, none after a ready one': () => {
       expect(shape(facts({ messages: { kind: 'rows', rows: [msg(3, 350), msg(1, 150), msg(2, 250)], more: false },
         readiness: { kind: 'rows', rows: [{ at: 100, word: 'renewing' }, { at: 200, word: 'ready' }, { at: 300, word: 'dead' }], oldest: 100 } })))
@@ -251,6 +312,39 @@ export function composeChatCases(m: ChatL1Module): Record<string, SuiteCase> {
   };
 }
 
+/** `chatPageCut` (PR B, the coordinator's ruling on paging): the two lists cut at one time floor, and the next page's cursors. */
+export function chatPageCutCases(m: ChatL1Module): Record<string, SuiteCase> {
+  const ids = (r: { readonly messages: readonly { id: number }[]; readonly replies: readonly { id: number }[] }) =>
+    [r.messages.map((x) => x.id), r.replies.map((x) => x.id)];
+  return {
+    'neither list says more: every row kept, no floor, no older page': () => {
+      const r = m.chatPageCut({ rows: [msg(1, 100), msg(3, 300)], more: false }, { rows: [reply(2, 200)], more: false });
+      expect([ids(r), r.floor, r.older, r.messagesMore, r.repliesMore]).toEqual([[[1, 3], [2]], null, null, false, false]);
+    },
+    'the messages say more: replies older than the oldest message wait for the next page, which reads them again': () => {
+      const r = m.chatPageCut({ rows: [msg(5, 500), msg(7, 700)], more: true }, { rows: [reply(2, 200), reply(6, 600)], more: false });
+      expect([ids(r), r.floor, r.messagesMore, r.repliesMore]).toEqual([[[5, 7], [6]], 500, true, true]);
+      expect(r.older).toEqual({ before: 5, replyBefore: 6 });
+    },
+    'both say more: the floor is the later of their oldest times; the list that set it keeps all of its rows': () => {
+      const r = m.chatPageCut({ rows: [msg(4, 400), msg(9, 900)], more: true }, { rows: [reply(6, 600), reply(8, 800)], more: true });
+      expect([ids(r), r.floor, r.older]).toEqual([[[9], [6, 8]], 600, { before: 9, replyBefore: 6 }]);
+    },
+    'a list the floor kept none of resumes one past its newest row read, so its rows are read again': () => {
+      const r = m.chatPageCut({ rows: [msg(1, 100), msg(2, 200)], more: false }, { rows: [reply(10, 500), reply(11, 600)], more: true });
+      expect([ids(r), r.older]).toEqual([[[], [10, 11]], { before: 3, replyBefore: 10 }]);
+    },
+    'a row at the floor is kept, on either list': () => {
+      const r = m.chatPageCut({ rows: [msg(5, 500)], more: true }, { rows: [reply(4, 500), reply(3, 499)], more: false });
+      expect(ids(r)).toEqual([[5], [4]]);
+    },
+    'a list that could not be read offers no older page, whatever the other says': () => {
+      expect(m.chatPageCut(null, { rows: [reply(2, 200)], more: true }).older).toBeNull();
+      expect(m.chatPageCut({ rows: [msg(2, 200)], more: true }, null).older).toBeNull();
+    },
+  };
+}
+
 export function earlierPagePlanCases(m: ChatL1Module): Record<string, SuiteCase> {
   const U = 'a1a1a1a1-0000-4000-8000-000000000006';
   return {
@@ -275,10 +369,14 @@ export function earlierPagePlanCases(m: ChatL1Module): Record<string, SuiteCase>
 
 const iso = (s: number): string => new Date(T0 + s * 1000).toISOString();
 const userTurn = (uuid: string, s: number, text: string): LiveItem => ({ kind: 'message', key: uuid, event: { kind: 'user', uuid, ts: iso(s), text }, streaming: false });
-const reply = (uuid: string, s: number): LiveItem => ({ kind: 'message', key: uuid, event: { kind: 'assistant', uuid, ts: iso(s), text: `answer ${uuid}` }, streaming: false });
+const liveReply = (uuid: string, s: number): LiveItem => ({ kind: 'message', key: uuid, event: { kind: 'assistant', uuid, ts: iso(s), text: `answer ${uuid}` }, streaming: false });
 const entry = (r: OperatorMessageRow): ChatEntry => ({ kind: 'message', row: r, ticks: { lit: { recorded: true, delivery: true, 'picked-up': false, settled: false }, delivery: 'queued', settledBy: null, unknown: false } });
+/** A recorded reply as the thread carries it (PR B): the live assistant row it is drawn in the place of is the one whose event uuid is
+ *  its `entryUuid`, so a case names that uuid in `over`. `reply` above is the server's row helper; `liveReply` is the live row. */
+const replyEntry = (id: number, at: number, over: Partial<OverlordReplyRow> = {}): ReplyEntry => ({ kind: 'reply', row: reply(id, at, over), response: { kind: 'no-row' } });
 const rowShape = (rows: readonly Row[]): string[] => rows.map((r) =>
-  r.kind === 'entry' ? (r.entry!.kind === 'message' ? `m${r.entry!.row.id}` : r.entry!.kind) : r.kind === 'live' ? `live:${r.item!.kind}` : r.kind === 'message-link' ? `link${r.id}` : r.kind);
+  r.kind === 'entry' ? (r.entry!.kind === 'message' ? `m${r.entry!.row.id}` : r.entry!.kind === 'reply' ? `r${r.entry!.row.id}` : r.entry!.kind)
+    : r.kind === 'live' ? `live:${r.item!.kind}` : r.kind === 'message-link' ? `link${r.id}` : r.kind);
 
 export function draftAfterSendCases(m: ChatWordsModule): Record<string, SuiteCase> {
   return {
@@ -318,11 +416,11 @@ export function mergeLiveCases(m: ChatWordsModule): Record<string, SuiteCase> {
   return {
     'a message whose nudge is live sits at the nudge\'s place; the nudge itself is never drawn': () => {
       const thread: ChatEntry[] = [{ kind: 'divider', gen: { term: 1, n: 1 }, at: T0, current: true, newTerm: false, earlier: 'not-pageable' }, entry(msg(5, T0 + 10_000))];
-      expect(rowShape(m.mergeLive(thread, [reply('a1', 5), userTurn('u1', 30, nudge(5)), reply('a2', 31)]))).toEqual(['divider', 'live:message', 'm5', 'live:message']);
+      expect(rowShape(m.mergeLive(thread, [liveReply('a1', 5), userTurn('u1', 30, nudge(5)), liveReply('a2', 31)]))).toEqual(['divider', 'live:message', 'm5', 'live:message']);
     },
     'a message with no live nudge sits by time, or before every row': () => {
       const thread = [entry(msg(5, T0 + 3_000)), entry(msg(6, T0 + 20_000))];
-      expect(rowShape(m.mergeLive(thread, [reply('a1', 5), reply('a2', 10), reply('a3', 40)]))).toEqual(['m5', 'live:message', 'live:message', 'm6', 'live:message']);
+      expect(rowShape(m.mergeLive(thread, [liveReply('a1', 5), liveReply('a2', 10), liveReply('a3', 40)]))).toEqual(['m5', 'live:message', 'live:message', 'm6', 'live:message']);
     },
     'no id twice; an id outside the page is a link row': () => {
       expect(rowShape(m.mergeLive([entry(msg(5, T0))], [userTurn('u1', 10, nudge(5)), userTurn('u2', 20, nudge(5)), userTurn('u3', 21, nudge(99))]))).toEqual(['m5', 'link99']);
@@ -331,6 +429,25 @@ export function mergeLiveCases(m: ChatWordsModule): Record<string, SuiteCase> {
       const rows = m.mergeLive([], [userTurn('u1', 10, '/clear'), userTurn('u2', 11, 'do the thing'), { kind: 'mail-prompt', key: 'u3', event: { kind: 'user', uuid: 'u3', ts: iso(12), text: nudge(8) } }]);
       expect(rowShape(rows)).toEqual(['ccrc-line', 'pane-turn', 'link8']);
       expect(rows[1]).toMatchObject({ kind: 'pane-turn', text: 'do the thing' });
+    },
+    // PR B: a recorded reply is drawn once, in its live row's place (the coordinator's ruling).
+    'a reply whose entry is live takes that row\'s place; its live copy and the record\'s other live blocks are not drawn': () => {
+      const thread: ChatEntry[] = [{ kind: 'divider', gen: { term: 1, n: 1 }, at: T0, current: true, newTerm: false, earlier: 'not-pageable' }, replyEntry(8, T0 + 31_000, { entryUuid: 'a2' })];
+      const rows = m.mergeLive(thread, [liveReply('a1', 5), liveReply('a2', 31), liveReply('a2', 31), liveReply('a3', 40)]);
+      // a1 is the same turn's earlier text (no user turn before it): dropped with the other blocks, the reply being the whole turn's text.
+      expect(rowShape(rows)).toEqual(['divider', 'r8', 'live:message']);
+    },
+    'the reply is the whole turn\'s text: the turn\'s earlier live assistant text rows are dropped, its tool row and the earlier turn stay': () => {
+      const tool: LiveItem = { kind: 'tool', key: 'k1', use: { uuid: 'k1', ts: iso(12), toolId: 't1', name: 'Bash', input: '{}' } } as never;
+      const live = [liveReply('old', 1), userTurn('u1', 10, 'typed'), liveReply('a1', 11), tool, liveReply('a2', 13), liveReply('a3', 15)];
+      expect(rowShape(m.mergeLive([replyEntry(8, T0 + 15_000, { entryUuid: 'a3' })], live))).toEqual(['live:message', 'pane-turn', 'live:tool', 'r8']);
+      expect(rowShape(m.mergeLive([replyEntry(8, T0 + 15_000, { entryUuid: 'a3' })], [liveReply('a1', 1), liveReply('a3', 15)]))).toEqual(['r8']);
+    },
+    'a reply with no live row sits by time; a reply id is drawn once; one an earlier page drew is not drawn': () => {
+      const thread: ChatEntry[] = [replyEntry(9, T0 + 2_000, { entryUuid: 'gone' }), replyEntry(8, T0 + 20_000, { entryUuid: 'gone-too' }), replyEntry(8, T0 + 20_000, { entryUuid: 'gone-too' })];
+      const live = [liveReply('a1', 5), liveReply('a2', 10), liveReply('a3', 40)];
+      expect(rowShape(m.mergeLive(thread, live))).toEqual(['r9', 'live:message', 'live:message', 'r8', 'live:message']);
+      expect(rowShape(m.mergeLive(thread, live, new Set([9])))).toEqual(['live:message', 'live:message', 'r8', 'live:message']);
     },
   };
 }
@@ -399,6 +516,35 @@ export function historyItemsCases(m: ChatWordsModule): Record<string, SuiteCase>
       expect(rows.map((r) => r.kind)).toEqual(['history-text', 'message-link', 'pane-turn', 'untrusted-block']);
       expect([rows[1]!.id, rows[2]!.text]).toEqual([4, 'typed in the pane']);
     },
+    // PR B: the same rule on an earlier page.
+    'an assistant item that is a recorded reply\'s entry is that reply, once; a user item never is': () => {
+      const e = replyEntry(8, T0, { entryUuid: 'e2' });
+      const rows = m.historyItemsToChat([
+        { uuid: 'e0', role: 'assistant', text: 'plain answer', trust: 'untrusted' },
+        { uuid: 'e1', role: 'user', text: 'typed in the pane', trust: 'untrusted' },
+        { uuid: 'e1b', role: 'assistant', text: 'an earlier block of the turn', trust: 'untrusted' },
+        { uuid: 'e2', role: 'assistant', text: 'the recorded one', trust: 'untrusted' },
+        { uuid: 'e2', role: 'assistant', text: 'its second block', trust: 'untrusted' },
+      ], [e]);
+      expect(rowShape(rows)).toEqual(['history-text', 'pane-turn', 'r8']);
+      expect(m.historyItemsToChat([{ uuid: 'e2', role: 'user', text: 'typed in the pane', trust: 'untrusted' }], [e]).map((r) => r.kind)).toEqual(['pane-turn']);
+    },
+  };
+}
+
+/** The read ceiling's wait (review ruling 8): bounded at the ceiling's window, a stated default when the refusal names no time. */
+export function ceilingNotBeforeCases(m: ChatWordsModule): Record<string, SuiteCase> {
+  return {
+    'a stated wait is honoured: now plus retryAfterS': () => {
+      expect([m.ceilingNotBefore(T0, 60), m.ceilingNotBefore(T0, 0)]).toEqual([T0 + 60_000, T0]);
+    },
+    'the wait is capped at one hour, the ceiling\'s own window, however large the server\'s time is': () => {
+      expect([m.ceilingNotBefore(T0, 3_600), m.ceilingNotBefore(T0, 3_601), m.ceilingNotBefore(T0, 2 ** 31), m.ceilingNotBefore(T0, Number.MAX_SAFE_INTEGER)])
+        .toEqual([T0 + 3_600_000, T0 + 3_600_000, T0 + 3_600_000, T0 + 3_600_000]);
+    },
+    'a refusal with no retry time, or one that is no wait, waits the default minute, never none': () => {
+      for (const s of [undefined, Number.NaN, -5, Infinity]) expect(m.ceilingNotBefore(T0, s), String(s)).toBe(T0 + 60_000);
+    },
   };
 }
 
@@ -421,6 +567,10 @@ export const CHAT_MUTANT_SETS: Record<string, MutantSet<never>> = {
     { id: 'R3 a part of any kind reads', old: "  if (v.kind !== 'read' || !isObj(v.value)) return null;", new: '  if (!isObj(v.value)) return null;' },
     { id: 'R4 a missing offRecord reads true', old: 'offRecord: offRecord === true,', new: 'offRecord: offRecord !== false,' },
     { id: 'R5 a designated thread needs no term', old: " || !isCount(term))) return no('designated: no session or term');", new: ")) return no('designated: no session or term');" },
+    // PR B.
+    { id: 'R6 absent replies read as an empty part', old: 'const replies = raw.replies === undefined ? null :', new: "const replies = raw.replies === undefined ? { kind: 'read' as const, value: { more: false } } :" },
+    { id: 'R7 an unknown response kind reads no-row', old: "  if (v.kind === 'no-row') return { kind: 'no-row' };\n  return { kind: 'unmeasured' };", new: "  return { kind: 'no-row' };" },
+    { id: 'R8 an older server\'s older page dropped', old: "older = messages.kind === 'read' && messages.value.more && oldest !== undefined ? { before: oldest.row.id, replyBefore: 'end' } : null;", new: 'older = null;' },
   ]),
   'shared/overlordChat.ts#readChatSendAnswer': set<ChatVocabModule>(VOCAB, readChatSendAnswerCases, [
     { id: 'S1 a 200 with no messageId is recorded', old: "if (body.ok !== true || !isPositive(body.messageId)) return { kind: 'off-shape' };", new: "if (body.ok !== true) return { kind: 'off-shape' };" },
@@ -450,6 +600,20 @@ export const CHAT_MUTANT_SETS: Record<string, MutantSet<never>> = {
     { id: 'C5 unreadable messages read as an empty page', old: ": { kind: 'unmeasured', why: f.messages.why },", new: ": { kind: 'read', value: { more: false } }," },
     { id: 'C6 pageable ignored', old: "earlier: f.pageable && !g.live ? 'readable' : 'not-pageable',", new: "earlier: !g.live ? 'readable' : 'not-pageable'," },
     { id: 'C7 the live generation not current', old: 'current: g.live,', new: 'current: false,' },
+    // PR B: the replies and the page.
+    { id: 'C8 unreadable replies read as an empty page', old: ": { kind: 'unmeasured', why: f.replies.why },", new: ": { kind: 'read', value: { more: false } }," },
+    { id: 'C9 unreadable response rows read as no row', old: "f.responses.kind === 'unmeasured' ? { kind: 'unmeasured' }", new: "false ? { kind: 'unmeasured' }" },
+    { id: 'C10 the divider floor ignored', old: '      if (g.startReportedAt < dividerFloor) return;\n', new: '' },
+    { id: 'C11 a reply before a message at the same millisecond', old: 'timed.push({ at: row.at, order: 2,', new: 'timed.push({ at: row.at, order: 0,' },
+  ]),
+  'server/src/coord/overlordChat.ts#chatPageCut': set<ChatL1Module>(L1, chatPageCutCases, [
+    { id: 'P1 the floor ignored', old: 'const floor = lows.length === 0 ? null : Math.max(...lows);', new: 'const floor = null as number | null;' },
+    { id: 'P2 the floor the earlier time', old: 'const floor = lows.length === 0 ? null : Math.max(...lows);', new: 'const floor = lows.length === 0 ? null : Math.min(...lows);' },
+    { id: 'P3 rows the floor left out not counted as more', old: '(messages.more || keptM.length < ms.length)', new: '(messages.more)' },
+    { id: 'P4 the next cursor from the newest kept row', old: 'kept.length > 0 ? kept[0]!.id :', new: 'kept.length > 0 ? kept[kept.length - 1]!.id :' },
+    { id: 'P5 a list with none kept skips its rows', old: 'read[read.length - 1]!.id + 1', new: 'read[0]!.id' },
+    { id: 'P6 an older page with a list unreadable', old: 'messages === null || replies === null || (!messagesMore', new: '(!messagesMore' },
+    { id: 'P7 a row at the floor dropped', old: 'ms.filter((m) => m.at >= floor)', new: 'ms.filter((m) => m.at > floor)' },
   ]),
   'server/src/coord/overlordChat.ts#earlierPagePlan': set<ChatL1Module>(L1, earlierPagePlanCases, [
     { id: 'E1 the live generation read', old: "  if (gen.live) return { kind: 'refuse', why: 'current' };\n", new: '' },
@@ -470,6 +634,15 @@ export const CHAT_MUTANT_SETS: Record<string, MutantSet<never>> = {
     { id: 'M2 pane text passed through as a live user row', old: "rows.push({ kind: 'pane-turn', key: `pane-${t.key}`, text: t.text });", new: "rows.push({ kind: 'live', key: t.key, item });" },
     { id: 'M3 an early message drawn at the end', old: '    if (slot === -1) before.push(...u.rows);', new: '    if (slot === -1) slot = out.length - 1;\n    if (slot === -1) before.push(...u.rows);' },
     { id: 'M4 a nudge outside the page dropped', old: "rows.push({ kind: 'message-link', key: `link-${o.id}`, id: o.id }); continue;", new: 'continue;' },
+    // PR B: the recorded replies.
+    { id: 'M5 a recorded reply drawn beside its live row', old: 'const recorded = uuid === null ? undefined : byEntry.get(uuid);', new: 'const recorded = undefined as Unit | undefined;' },
+    { id: 'M6 the record\'s other live blocks drawn too', old: '        if (!placed.has(recorded)) { placed.add(recorded); out.push({ at: liveAt(item), rows: recorded.rows }); }', new: '        placed.add(recorded); out.push({ at: liveAt(item), rows: recorded.rows });' },
+    { id: 'M7 a repeated reply id drawn twice', old: '      if (skip.has(e.row.id) || replies.has(e.row.id)) continue;', new: '      if (skip.has(e.row.id)) continue;' },
+    { id: 'M8 a reply an earlier page drew drawn again', old: '      if (skip.has(e.row.id) || replies.has(e.row.id)) continue;', new: '      if (replies.has(e.row.id)) continue;' },
+    { id: 'M10 the turn\'s earlier text rows drawn beside the reply', old: 'if (assistantUuidOf(live[i]!) !== null) dropped.add(i);', new: 'if (false) dropped.add(i);' },
+    { id: 'M11 the turn\'s start ignored: an earlier turn\'s text dropped too', old: 'i >= 0 && userTurnsOf(live[i]!) === null; i -= 1', new: 'i >= 0; i -= 1' },
+    { id: 'M12 the turn\'s tool row dropped too', old: 'if (assistantUuidOf(live[i]!) !== null) dropped.add(i);', new: 'if (userTurnsOf(live[i]!) === null) dropped.add(i);' },
+    { id: 'M9 a reply with no live row placed at the end', old: 'units.push({ at: e.row.at, id: null, rows: [row], reply: e });', new: 'units.push({ at: Number.NaN, id: null, rows: [row], reply: e });' },
   ]),
   'pwa/src/overlord/chatWords.ts#chatReadTrigger': set<ChatWordsModule>(WORDS, chatReadTriggerCases, [
     { id: 'RT1 any events frame asks', old: "if (msg.type === 'events') return msg.events.some((e) => e.kind === 'user');", new: "if (msg.type === 'events') return true;" },
@@ -491,7 +664,16 @@ export const CHAT_MUTANT_SETS: Record<string, MutantSet<never>> = {
     { id: 'P7 a stamp in the future skipped', old: '    if (age >= PICK_UP_WAIT_MS) continue;\n', new: '    if (age >= PICK_UP_WAIT_MS || age < 0) continue;\n' },
   ]),
   'pwa/src/overlord/chatWords.ts#historyItemsToChat': set<ChatWordsModule>(WORDS, historyItemsCases, [
-    { id: 'H1 a user item drawn as the Overlord\'s text', old: "if (typeof text === 'string' && role === 'assistant') return", new: "if (typeof text === 'string') return" },
-    { id: 'H2 an unreadable item drawn as text', old: "return { kind: 'untrusted-block', key, text: block };", new: "return { kind: 'history-text', key, text: block };" },
+    { id: 'H1 a user item drawn as the Overlord\'s text', old: "if (typeof text === 'string' && role === 'assistant') {", new: "if (typeof text === 'string') {" },
+    { id: 'H2 an unreadable item drawn as text', old: "return [{ kind: 'untrusted-block', key, text: block }];", new: "return [{ kind: 'history-text', key, text: block }];" },
+    // PR B.
+    { id: 'H3 a recorded reply drawn as its history text', old: "const recorded = typeof it['uuid'] === 'string' ? byEntry.get(it['uuid']) : undefined;", new: 'const recorded = undefined as ReplyEntry | undefined;' },
+    { id: 'H4 a recorded reply drawn once per block', old: '      if (drawn.has(recorded.row.id)) return [];\n', new: '' },
+  ]),
+  'pwa/src/overlord/chatWords.ts#ceilingNotBefore': set<ChatWordsModule>(WORDS, ceilingNotBeforeCases, [
+    { id: 'CB1 the wait not capped', old: 'Math.min(retryAfterS * 1000, CEILING_WAIT_MAX_MS)', new: 'retryAfterS * 1000' },
+    { id: 'CB2 no default wait', old: ': CEILING_WAIT_DEFAULT_MS);', new: ': 0);' },
+    { id: 'CB3 a negative time is a wait', old: ' && retryAfterS >= 0;', new: ';' },
+    { id: 'CB4 an infinite time is a wait', old: 'Number.isFinite(retryAfterS) && ', new: '' },
   ]),
 };

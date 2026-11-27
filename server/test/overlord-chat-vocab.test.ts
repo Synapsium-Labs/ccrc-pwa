@@ -7,7 +7,8 @@ import { READINESS_WORDS } from '../../shared/overlord-readiness.js';
 import { renderInboxWakeLine } from '../../shared/overlordInbox.js';
 import {
   CHAT_ENTRY_KINDS, CHAT_SERVER_LINE_MAP, CHAT_SERVER_LINE_UNMEASURED, EARLIER_WORDS, MESSAGE_TICK_MAP, NOT_ON_RECORD, TICK_STAGES,
-  chatTicksOf, readChatEarlierAnswer, readChatEarlierQuery, readChatSendAnswer, readChatThread, readChatThreadAnswer, readChatThreadQuery,
+  chatThreadPath, chatTicksOf, readChatEarlierAnswer, readChatEarlierQuery, readChatSendAnswer, readChatThread, readChatThreadAnswer,
+  readChatThreadQuery,
 } from '../../shared/overlordChat.js';
 import { renderMailNudge, renderOperatorMessageNudge } from '../src/coord/envelope.js';
 import * as vocabModule from '../../shared/overlordChat.js';
@@ -24,7 +25,7 @@ const row = (over: Partial<OperatorMessageRow> = {}): OperatorMessageRow => ({
 describe('the lists are their maps', () => {
   it('each list, written out', () => {
     expect(TICK_STAGES).toEqual(['recorded', 'delivery', 'picked-up', 'settled']);
-    expect(CHAT_ENTRY_KINDS).toEqual(['message', 'server-line', 'divider']);
+    expect(CHAT_ENTRY_KINDS).toEqual(['message', 'server-line', 'divider', 'reply']);
     expect(EARLIER_WORDS).toEqual(['readable', 'not-pageable']);
   });
 
@@ -73,11 +74,17 @@ describe('readChatThread (sim/chatSets.ts)', () => run(readChatThreadCases(vocab
 
 describe('the two doors\' queries', () => {
   it('readChatThreadQuery: before absent or a positive whole number; any other key refused', () => {
-    expect(readChatThreadQuery(undefined)).toEqual({ ok: true, before: null });
-    expect(readChatThreadQuery({})).toEqual({ ok: true, before: null });
-    expect(readChatThreadQuery({ before: '42' })).toEqual({ ok: true, before: 42 });
-    for (const before of ['0', '-1', '1.5', '01', '', 'x', '9007199254740993']) expect(readChatThreadQuery({ before }).ok, before).toBe(false);
+    expect(readChatThreadQuery(undefined)).toEqual({ ok: true, before: null, replyBefore: null });
+    expect(readChatThreadQuery({})).toEqual({ ok: true, before: null, replyBefore: null });
+    expect(readChatThreadQuery({ before: '42' })).toEqual({ ok: true, before: 42, replyBefore: null });
+    for (const before of ['0', '-1', '1.5', '01', '', 'x', '9007199254740993', 'END']) expect(readChatThreadQuery({ before }).ok, before).toBe(false);
     expect(readChatThreadQuery({ before: '1', limit: '5' }).ok).toBe(false);
+    // PR B: the replies' cursor, and `end` for a list with nothing older; the client's one path builder round-trips through it.
+    expect(readChatThreadQuery({ before: 'end', replyBefore: '7' })).toEqual({ ok: true, before: 'end', replyBefore: 7 });
+    for (const replyBefore of ['0', 'x', '01', 'End']) expect(readChatThreadQuery({ replyBefore }).ok, replyBefore).toBe(false);
+    expect(chatThreadPath(null)).toBe('/api/overlord/chat');
+    const path = chatThreadPath({ before: 'end', replyBefore: 7 });
+    expect(readChatThreadQuery(Object.fromEntries(new URL(path, 'http://x').searchParams))).toEqual({ ok: true, before: 'end', replyBefore: 7 });
   });
 
 });
