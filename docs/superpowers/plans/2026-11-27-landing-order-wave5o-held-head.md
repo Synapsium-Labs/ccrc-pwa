@@ -2,14 +2,14 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking. This plan dispatches nothing itself: the wave is built by a worker the coordinator dispatches.
 
-**Status:** drafted on 2026-11-27 for run 4081 (programme `landing-order`, the run's wave 35) from the brief's seven decisions. One build wave and one pull request; section 3 says why it is not split and where the seam would be.
+**Status:** drafted on 2026-11-27 for run 4081 (programme `landing-order`, the run's wave 35) from the brief's seven decisions. Revised the same day after the coordinator's addendum (call 1758): the conflict send-back covers this run's own pinned entry wherever it stands in the order, and the plan says how such an entry is measured, what the send-back costs, and what the radar already knows. One build wave and one pull request; section 3 says why it is not split and where the seam would be.
 
-**Goal:** When the head of a project's landing line is held for a reason only that entry's own coordinator can clear, that coordinator is told once, by the next-to-land cue's own decider and transaction. The coordinator's text gives it the one move the line's vocabulary already has for a head that conflicts before it is queued: the ejection of kind `conflict`. The worker's skill knows that mail's first line.
+**Goal:** When the head of a project's landing line is held for a reason only that entry's own coordinator can clear, that coordinator is told once, by the next-to-land cue's own decider and transaction. The coordinator's text gives it the one move the line's vocabulary already has for a pinned entry that conflicts before it is queued: the ejection of kind `conflict`, for its own entry at the head or behind it. The worker's skill knows that mail's first line.
 
 **Architecture:** Two repairs, one per gap of issue #3577.
 
 1. **The notice (D-9159).** `server/src/coord/landingNext.ts#nextLandingNoticeOf` (L1, C5) gains a third answer, `held`. It is given only on a held binding whose reason is `composition-not-clean` with a measured `conflict` for the pinned head, or `head-mismatch` with the PR open at another head. Its recipient comes from the cue's own rule, now one private helper that both answers call. The probe's one head for a PR is read by one exported function in `server/src/coord/landingLine.ts` (L1, C4), which the binding and the notice share. `server/src/coord/landingControlTx.ts#applyLandingControlTx` (L3, C5) queues the answer in the cue's own transaction, through the same two notice bodies. The run arm dedupes on its observation row and the run-less arm on its subject.
-2. **The text (D-9160).** The coordinator's step 6 (`ccd/coordinator-skill/references/wave-steps.md`) names a third ejection case. The landing-line paragraph (`wave-lifecycle-5b-landing.md`) names the notice and the one held binding that is no stop. The worker's skill (`ccd/worker-skill/SKILL.md`) reads `ejected: conflict:#<pr>` beside the two first lines it knows.
+2. **The text (D-9160).** The coordinator's step 6 (`ccd/coordinator-skill/references/wave-steps.md`) names a third ejection case. The landing-line paragraph (`wave-lifecycle-5b-landing.md`) names the notice, the one held binding that is no stop (this run's own entry at the head), and the same send-back for this run's own entry behind the head, with when to measure it and what it costs. The worker's skill (`ccd/worker-skill/SKILL.md`) reads `ejected: conflict:#<pr>` beside the two first lines it knows.
 
 What does not change: the binding still reads only the head, and the server ejects nothing and chooses no successor. There is no new table, route, migration, `ccd` verb, capability word, wire field, binding reason or ejection kind.
 
@@ -52,6 +52,19 @@ Each fact comes with the command that measured it. Every command ran on 2026-11-
   - `shared/landingLine.ts` line 33 is `LANDING_EJECTION_KINDS = ['dequeued', 'new-head', 'conflict'] as const`. `git log --format='%h %ad %s' --date=short -S"'new-head', 'conflict'" $R -- shared/landingLine.ts` answers `4fc83e57bd 2026-10-31` (#2020, wave 5e). Every server since wave 5e has had the word.
   - `server/src/coord/advance.ts#advanceRequest` accepts any `isLandingEjectionKind` on a retreat to `working`. The store refuses an ejection on a run not at `merging` (`ejection-not-merging`).
   - `pwa/src/fleet/landingWords.ts#EJECTION_TEXT` words `conflict` as "it conflicts with main".
+- **The ejection door does not ask where the entry stands.** `advance.ts#advanceRequest` only shapes the ejection: a retreat to `working`, a 40-hex `base`, a known `kind`. `landingEntry.ts#decideLandingWrite` ejects the run's own entry on any retreat from `merging` whose episode head equals the entry's `pinnedSha`. The store refuses only a run not at `merging` (`ejection-not-merging`). The coordinator reports the case live: on 2026-11-27 a second coordinator sent its own entry, then fourth in the order, back with kind `conflict` after its own probe against `main` exited 1 on a draft PR that was never queued. The advance answered `ok`, and the entry reads `ejected` with that base and `ejections` 1 (call 1758).
+- **A send-back costs the entry its place.**
+  - `CoordStore.advanceLanding`'s re-pin arm (`server/src/coord/store.ts`, the `decision.act === 'repin'` branch) runs `UPDATE landing_entries SET pinnedSha = ?, handoffCommit = ?, runId = ?, state = ?, baseSha = NULL, ejectionKind = NULL, quarantineKind = NULL, detail = NULL, pinnedAt = ? WHERE id = ?` with `Date.now()`. `afterIds`, `fixesMain` and `ejections` are not in it, so they are kept.
+  - `landingLine.ts#landingOrder` orders the line by `byKey`: `fixesMain` first, then the earlier `pinnedAt`, then the lower PR number; after edges hold an entry behind an outstanding target.
+  - So an entry that comes back to `merging` re-enters behind every entry already in the line, unless `fixesMain` or an order edge places it otherwise.
+  - While it is `ejected` it is not in the line but is outstanding (`landingOrder`'s `outstanding` set), so an entry with an after edge to it waits.
+- **Nothing in the coordinator's text sets a timer while a run waits at `merging`.** `grep -n -i timer ccd/coordinator-skill/references/wave-steps.md` answers nothing. In `wave-lifecycle-5b-landing.md` the one timer is the 20-minute re-read on a held head that is another run's train-closed PR (line 537). `references/api.md`'s **Timers** paragraph says how a timer is bound to a run or a programme, not when to set one. The coordinator's waits at `merging` are woken by mail: the advance's own answer, a next-to-land cue, a `checks:`, `dequeued:` or `merged:` mail, and any mail that names the run.
+- **The radar already measures every open PR, not only the head.**
+  - `ccd/ccd-land-probe` writes one `heads` element per open PR on the base (up to its cut, `headsCut`), each with `base`, its composition with that base sha (`merge_answer`).
+  - The server reads that document in two places:
+    - the radar lane (`server/src/watch.ts`, the pass that calls `readRadarPass`) hands it to `applyLandingControl` as `control.probe`, where only the selected head's element is read (`landingBindingOf`);
+    - `radar.ts#sessionLandingsOf` derives `FleetSession.landing` for each fleet session whose current PR the probe lists, with `base` among its fields. That is the console's predicted-conflict chip (wave 4b).
+  - So a pinned entry behind the head that conflicts with `main` is already measured, every radar pass, by the producer the notice reads. Section "What this does not claim" says what the decider would need to use it.
 - **The coordinator's text names two ejections only.** `wave-steps.md` lines 159 to 192, inside step 6's **Send back:** bullet, read: "**An ejection** is sent in two cases only: the new-head route … and a dequeue (§5) whose cause is a conflict you measured". The mail's first line is "`ejected: new-head:#<pr>` or `ejected: dequeued:#<pr>`", and the advance's `kind` is "`new-head` or `dequeued`".
 - **The landing-line paragraph gives every held binding one answer.** `wave-lifecycle-5b-landing.md` line 519: "a `held` binding … means stop and report what you read to the operator; never choose a successor". Line 544: "A `held` binding, `opt-in-unknown` included, stops."
 - **The worker's skill names two ejection first lines.** `grep -n 'ejected: ' ccd/worker-skill/SKILL.md` answers lines 387 to 391: `ejected: dequeued:#<pr>` and `ejected: new-head:#<pr>`.
@@ -94,8 +107,8 @@ Each fact comes with the command that measured it. Every command ran on 2026-11-
   - run 4073, another programme's, is changing the console's landing block under `pwa/`. This plan edits nothing under `pwa/` or `ui/`.
 - **`CLAUDE.md` says nothing about the cue.** `grep -n -i 'next-to-land\|held-head' CLAUDE.md` answers nothing. It gains no line (section 8).
 - **The text below was applied and checked before it was written here.** A scratch script applied every old and new block of sections 7 and 8 to copies of the four files at the baseline. It checked that each old text occurs once and each new one once after the change, and that `STEP6_AFTER` still occurs once. It measured the sizes:
-  - `wave-steps.md` 21328 to 21821 bytes;
-  - `wave-lifecycle-5b-landing.md` 46964 to 48416 bytes;
+  - `wave-steps.md` 21328 to 21838 bytes;
+  - `wave-lifecycle-5b-landing.md` 46964 to 49427 bytes;
   - `ccd/worker-skill/SKILL.md` 35535 to 35522 bytes (−13);
   - `README.md` +325 bytes.
 
@@ -119,15 +132,18 @@ The brief's seven decisions, as this plan keeps them.
    - Every other reason is the operator's or time's and gets no notice.
    - **When the reason clears and returns:** on the same base, pin and recipient there is no second mail, as with the cue's A→B→A rule. On a new base (`main` moved), a new pin (the run went back and came again) or a new head read, one new mail.
 3. **The server ejects nothing and chooses no successor.** The binding still reads only the head. The notice is a cue to read the line, and the entry's coordinator decides.
-4. **The third ejection form, in the text (D-9160).** Section 7 gives every old and new text word for word, each old text checked to occur once.
-   - **Step 6:** an ejection is sent in three cases. The third is a conflict this coordinator measured on this run's own entry at the head of a held line, before the PR was queued. Its first line is `ejected: conflict:#<pr>` and its three lines are those of a dequeue. It differs from a dequeue in two places only: the probe reads the entry's `pinnedSha`, and there is nothing to disarm because the PR was never queued and is already a draft under D-9115. The advance's `kind` takes `conflict`.
-   - **The landing-line paragraph:** it names the notice, and takes one exception to "a `held` binding means stop and report". The exception holds when all of these do:
+4. **The third ejection form, in the text (D-9160; amended by the coordinator's call 1758).** It is for this run's own pinned entry wherever it stands in the order, on a conflict this coordinator measured itself. Section 7 gives every old and new text word for word, each old text checked to occur once.
+   - **Step 6:** an ejection is sent in three cases. The third is a conflict this coordinator measured on this run's own pinned entry before the PR was queued, at the head of the line or behind it. Its first line is `ejected: conflict:#<pr>` and its three lines are those of a dequeue, the same in both positions. It differs from a dequeue in two places only: the probe reads the entry's `pinnedSha`, and there is nothing to disarm because the PR was never queued and is already a draft under D-9115. The advance's `kind` takes `conflict`.
+   - **The landing-line paragraph, at the head:** it names the notice, and takes one exception to "a `held` binding means stop and report". The exception holds when all of these do:
      - the binding is held with reason `composition-not-clean`;
      - its `entryId` names this run's own entry, `pinned` at the head you bind;
      - the PR is a draft;
      - this coordinator's own probe exits 1.
-
-     A closing sentence says nothing else licenses that send-back: no other run's entry, no other reason (`head-mismatch` by name), no ready or queued PR, and no probe that answers clean or unmeasured. "Every other `held` binding … stops" ends the paragraph's held rule.
+   - **Behind the head:** there is no binding to read, because the binding reads only the head. The trigger is the measured conflict alone: this run's own entry, `pinned` at the head you bind, not the entry `binding.entryId` names, a draft PR, and the same probe exiting 1. It is allowed because such an entry cannot land, so waiting only moves the hold to the moment it reaches the head.
+   - **When to measure behind the head, with no polling.** Only on a read of the line the coordinator makes for this run for another reason, once on that read, and never on a loop or a timer of its own. The reads are named: the one after the advance to `merging`, a next-to-land or `head-held:` mail, a mail that names this run, and the 20-minute re-read.
+     - **This departs from the words the addendum proposed.** The proposal was "or on the one timer it already sets while a run waits at `merging`", and no such timer exists ("What was measured": the only timer in the landing text is the 20-minute re-read on another run's train-closed head). The text names that timer among the reads, and adds none.
+   - **What it costs:** the advance that brings the run back re-pins the entry with a new `pinnedAt` (the store's re-pin arm), so it re-enters behind every entry already in the line unless `fixesMain` or an order edge places it otherwise. Both are kept.
+   - **The closing sentence:** nothing else licenses the send-back. Not another run's entry, not an entry whose conflict this session did not measure with that probe, not another reason (`head-mismatch` by name), not a ready or queued PR, and not a probe that answers clean or unmeasured. "Every other `held` binding … stops" ends the paragraph's held rule.
    - **The worker's skill:** it takes the third first line beside the two it names. The whole bullet stays at or under its size, because two redundant phrases go (section 7.3).
    - No numbered clause of either `SKILL.md` changes. The coordinator's clause 15 already speaks of "an ejection naming the base sha the landing line recorded", and the worker's clause 16 of "a `fix-round` mail from the coordinator names this PR ejected from the landing line with a base sha". Both are true of the third kind as written.
 5. **One pull request** (section 3). The landing-line paragraph names the notice, so the text documents the server change. A seam exists and is given.
@@ -153,6 +169,8 @@ Each word of `shared/landingLine.ts#LandingBindingReason`. "Told today" means wh
 | `composition-not-clean`, `conflict` | the radar measured the pinned head conflicting with the base | the entry's coordinator: the ejection of kind `conflict` (D-9160) | **no** (issue #3577) | **yes** |
 | `composition-not-clean`, `unmeasured` | the radar could not measure the composition | time | no | no |
 | `main-red` | main is red and the head does not fix it | whoever fixes main; time | no | no |
+
+**An entry behind the head** has no binding reason at all: the binding reads only the head, whatever stands behind it. A pinned entry there that conflicts with `main` holds nothing yet, but cannot land, and it will hold the line with `composition-not-clean` the moment it reaches the head. Its own coordinator clears it with the same send-back (decision 4). Nothing tells that coordinator today, and this wave's notice does not either (decision 1 stays head-only; "What this does not claim" says what the radar already knows).
 
 ## 3. One pull request, and the seam if it is split
 
@@ -365,18 +383,18 @@ New:
      cause you measured decides which of two forms it takes. **An ejection** is
      sent in three cases only: the new-head route for a red that is `main`'s
      own (`references/wave-lifecycle.md` §5b), a dequeue (§5) whose cause is a
-     conflict you measured, and a conflict you measured on this run's own entry
-     at the head of a held landing line before it was queued (§5b, **The
-     landing line**; D-9160): for a dequeue, after one `git fetch origin`, `git
-     merge-tree --write-tree --name-only --no-messages origin/main
-     <handoffCommit>` exits 1 with a tree id on its first line, then the
-     conflicted paths, and for the held line the same probe of the entry's
+     conflict you measured, and a conflict you measured on this run's own
+     pinned entry before it was queued, at the head of the landing line or
+     behind it (§5b, **The landing line**; D-9160): for a dequeue, after one
+     `git fetch origin`, `git merge-tree --write-tree --name-only --no-messages
+     origin/main <handoffCommit>` exits 1 with a tree id on its first line,
+     then the conflicted paths, and for a pinned entry the same probe of its
      `pinnedSha` in place of `<handoffCommit>` does. Its body holds three
      entries, one to a line, and nothing else: `ejected: new-head:#<pr>`,
      `ejected: dequeued:#<pr>` or `ejected: conflict:#<pr>`, then `base:
      <sha>`, the `origin/main` sha you read after one `git fetch origin`, then
      `checks: <required names that are red>` for the new-head route or `paths:
-     <the conflicted paths>` for a dequeue or a held line. Every ejection is
+     <the conflicted paths>` for a dequeue or a pinned entry. Every ejection is
      clause 15's ejection, its base recorded on the
 ```
 
@@ -391,7 +409,7 @@ New:
 New (the next physical line, which begins "`red:` round's advance", is `STEP6_AFTER`'s first and stays as it is):
 
 ```
-     `artifacts`. A held line's ejection has nothing to disarm: its PR was
+     `artifacts`. A pinned entry's ejection has nothing to disarm: its PR was
      never queued and is already a draft (D-9115), on which the `--undo`
      changes nothing. Every `ejected:` round's advance carries `ejection`, an
      object of two fields: `base`, the sha on the mail's `base:` line, and
@@ -412,7 +430,7 @@ New:
 
 ```
 PR that is not this run's, an answer you cannot read, or no entry for this PR
-means stop and report what you read to the operator, but for the one conflict
+means stop and report what you read to the operator, but for the conflict
 send-back below; never choose a successor.
 ```
 
@@ -445,15 +463,28 @@ fetch origin` your own `git merge-tree --write-tree --name-only --no-messages
 origin/main <pinnedSha>` exits 1 with a tree id on its first line, send the
 run back from `merging` with SKILL.md step 6's report-less round in its
 `ejected: conflict:#<pr>` form, its `base:` the `origin/main` sha you read and
-its `paths:` the conflicted paths (D-9160). Nothing else licenses that
-send-back: not another run's entry, not any other `reason`, `head-mismatch`
-included, not a ready or queued PR, and not a probe that exits 0 or answers
-anything else; each stays a stop for the operator, and the server ejects
-nothing and chooses no successor.
+its `paths:` the conflicted paths (D-9160). Behind the head there is no
+binding to read, because the binding reads only the head: when this run's own
+entry reads `pinned` with a `pinnedSha` equal to the head you bind but is not
+the entry `binding.entryId` names, the PR is still a draft, and the same probe
+exits 1, send the run back the same way, because such an entry cannot land and
+waiting only moves the hold to the moment it reaches the head. Run that probe
+only on a read of the line you make for this run for another reason (the read
+after the advance to `merging`, a next-to-land or `head-held:` mail, a mail
+that names this run, or the 20-minute re-read above), once on that read; never
+on a loop or a timer of your own for it. The send-back costs the entry its
+place: the advance that brings the run back to `merging` re-pins it with a new
+`pinnedAt`, so it re-enters behind every entry already in the line unless
+`fixesMain` or an order edge places it otherwise, and both are kept. Nothing
+else licenses that send-back: not another run's entry, not an entry whose
+conflict you did not measure with that probe, not any other `reason`,
+`head-mismatch` included, not a ready or queued PR, and not a probe that exits
+0 or answers anything else; each stays a stop for the operator, and the server
+ejects nothing and chooses no successor.
 Every other `held` binding, `opt-in-unknown` included, stops. A missing `binding` (a server older than wave 5i) is the only fallback to the checks
 ```
 
-**The stop paragraph is not edited.** It says a stop "changes nothing, with two exceptions". The conflict send-back is not a stop: the new text says so ("One held binding is no stop"), so that paragraph and its two pins stay true and unchanged. "A next-to-land mail restarts this read and check from the top …" stays as it is; the new sentence already says what the notice is.
+**The stop paragraph is not edited.** It says a stop "changes nothing, with two exceptions". The conflict send-back is not a stop, in either position: at the head the new text says so ("One held binding is no stop"), and behind the head there is no held binding to stop on. So that paragraph and its two pins stay true and unchanged. "A next-to-land mail restarts this read and check from the top …" stays as it is; the new sentence already says what the notice is.
 
 ### 7.3 The worker's fix-round bullet (`ccd/worker-skill/SKILL.md`)
 
@@ -504,11 +535,11 @@ The flattened sentences (whitespace runs replaced by one space), as the script m
 **`coordinator-skill.test.ts`, the report-less pins.** In `REPORT_LESS` and in the 5f whole pin, which repeats it, make these changes:
 
 - Element 2 becomes:
-  > **An ejection** is sent in three cases only: the new-head route for a red that is `main`'s own (`references/wave-lifecycle.md` §5b), a dequeue (§5) whose cause is a conflict you measured, and a conflict you measured on this run's own entry at the head of a held landing line before it was queued (§5b, **The landing line**; D-9160): for a dequeue, after one `git fetch origin`, `git merge-tree --write-tree --name-only --no-messages origin/main <handoffCommit>` exits 1 with a tree id on its first line, then the conflicted paths, and for the held line the same probe of the entry's `pinnedSha` in place of `<handoffCommit>` does.
+  > **An ejection** is sent in three cases only: the new-head route for a red that is `main`'s own (`references/wave-lifecycle.md` §5b), a dequeue (§5) whose cause is a conflict you measured, and a conflict you measured on this run's own pinned entry before it was queued, at the head of the landing line or behind it (§5b, **The landing line**; D-9160): for a dequeue, after one `git fetch origin`, `git merge-tree --write-tree --name-only --no-messages origin/main <handoffCommit>` exits 1 with a tree id on its first line, then the conflicted paths, and for a pinned entry the same probe of its `pinnedSha` in place of `<handoffCommit>` does.
 - Element 3 becomes:
-  > Its body holds three entries, one to a line, and nothing else: `ejected: new-head:#<pr>`, `ejected: dequeued:#<pr>` or `ejected: conflict:#<pr>`, then `base: <sha>`, the `origin/main` sha you read after one `git fetch origin`, then `checks: <required names that are red>` for the new-head route or `paths: <the conflicted paths>` for a dequeue or a held line.
+  > Its body holds three entries, one to a line, and nothing else: `ejected: new-head:#<pr>`, `ejected: dequeued:#<pr>` or `ejected: conflict:#<pr>`, then `base: <sha>`, the `origin/main` sha you read after one `git fetch origin`, then `checks: <required names that are red>` for the new-head route or `paths: <the conflicted paths>` for a dequeue or a pinned entry.
 - A new element goes after "For either form, on route Q disarm first …":
-  > A held line's ejection has nothing to disarm: its PR was never queued and is already a draft (D-9115), on which the `--undo` changes nothing.
+  > A pinned entry's ejection has nothing to disarm: its PR was never queued and is already a draft (D-9115), on which the `--undo` changes nothing.
 - The element "Every `ejected:` round's advance carries `ejection` …" reads "… and `kind`, `new-head`, `dequeued` or `conflict` as the mail's first line names it; a `red:` round's advance, and any other retreat, carries none."
 
 The other report-less cases:
@@ -516,29 +547,38 @@ The other report-less cases:
 - "names the report-less first lines the worker skill reads …" loops over `` '`ejected: conflict:#<pr>`' `` too.
 - "no report-less sentence holds a double quote":
   - its opener `'**An ejection** is sent in two cases only'` becomes `'**An ejection** is sent in three cases only'`;
-  - it gains `'A held line\'s ejection has nothing to disarm'`.
+  - it gains `'A pinned entry\'s ejection has nothing to disarm'`.
 - "records the base on the ejecting advance …" loops over `['new-head', 'dequeued', 'conflict']`.
 - `STEP6_BEFORE` and `STEP6_AFTER` are untouched, and that case stays green as the proof that the physical lines it pins did not move.
 
 **`coordinator-skill.test.ts`, the line pin.** In `LINE`:
 
 - The element "On a project that is positively opted in, a `held` binding …" becomes:
-  > On a project that is positively opted in, a `held` binding, a `binding` naming a PR that is not this run's, an answer you cannot read, or no entry for this PR means stop and report what you read to the operator, but for the one conflict send-back below; never choose a successor.
-- Three new elements go after the element "The reader marks such an entry by itself …":
+  > On a project that is positively opted in, a `held` binding, a `binding` naming a PR that is not this run's, an answer you cannot read, or no entry for this PR means stop and report what you read to the operator, but for the conflict send-back below; never choose a successor.
+- Six new elements go after the element "The reader marks such an entry by itself …":
   > When the binding is held on this run's own entry for `composition-not-clean`, a conflict the radar measured between the pinned head and the base, or for `head-mismatch` with the PR open at another head than the pin, the server mails this session one `head-held:#<pr>:<digest>` notice for that entry, pinned head, base, reason and head read (D-9159); it is a cue to read the line again and measure, never an instruction to eject, and it licenses nothing by itself.
 
   > One held binding is no stop: when the read's `binding` is `held` with `reason` `composition-not-clean` and its `entryId` names this run's own entry, that entry reads `pinned` with a `pinnedSha` equal to the head you bind, the PR is still a draft (`gh pr view <pr> --json isDraft`), and after one `git fetch origin` your own `git merge-tree --write-tree --name-only --no-messages origin/main <pinnedSha>` exits 1 with a tree id on its first line, send the run back from `merging` with SKILL.md step 6's report-less round in its `ejected: conflict:#<pr>` form, its `base:` the `origin/main` sha you read and its `paths:` the conflicted paths (D-9160).
 
-  > Nothing else licenses that send-back: not another run's entry, not any other `reason`, `head-mismatch` included, not a ready or queued PR, and not a probe that exits 0 or answers anything else; each stays a stop for the operator, and the server ejects nothing and chooses no successor.
+  > Behind the head there is no binding to read, because the binding reads only the head: when this run's own entry reads `pinned` with a `pinnedSha` equal to the head you bind but is not the entry `binding.entryId` names, the PR is still a draft, and the same probe exits 1, send the run back the same way, because such an entry cannot land and waiting only moves the hold to the moment it reaches the head.
+
+  > Run that probe only on a read of the line you make for this run for another reason (the read after the advance to `merging`, a next-to-land or `head-held:` mail, a mail that names this run, or the 20-minute re-read above), once on that read; never on a loop or a timer of your own for it.
+
+  > The send-back costs the entry its place: the advance that brings the run back to `merging` re-pins it with a new `pinnedAt`, so it re-enters behind every entry already in the line unless `fixesMain` or an order edge places it otherwise, and both are kept.
+
+  > Nothing else licenses that send-back: not another run's entry, not an entry whose conflict you did not measure with that probe, not any other `reason`, `head-mismatch` included, not a ready or queued PR, and not a probe that exits 0 or answers anything else; each stays a stop for the operator, and the server ejects nothing and chooses no successor.
 - The element that begins "A `held` binding, `opt-in-unknown` included, stops. A missing `binding` …" begins "Every other `held` binding, `opt-in-unknown` included, stops. A missing `binding` …", the rest unchanged.
 
-"no 5e sentence holds a double quote" gains the openers `'When the binding is held on this run'`, `'One held binding is no stop'`, `'Nothing else licenses that send-back'` and `'Every other `held` binding'`.
+"no 5e sentence holds a double quote" gains the openers `'When the binding is held on this run'`, `'One held binding is no stop'`, `'Behind the head there is no binding to read'`, `'Run that probe only on a read of the line'`, `'The send-back costs the entry its place'`, `'Nothing else licenses that send-back'` and `'Every other `held` binding'`.
 
-**`coordinator-skill.test.ts`, one new case** in the 5e describe: `the conflict send-back is this run's own entry on composition-not-clean only, and the notice licenses nothing (D-9159, D-9160)`. Over the flattened §5b prose, it asserts:
+**`coordinator-skill.test.ts`, one new case** in the 5e describe: `the conflict send-back is this run's own measured entry, at the head on composition-not-clean or behind it, and the notice licenses nothing (D-9159, D-9160)`. Over the flattened §5b prose, it asserts:
 
 - `` '`ejected: conflict:#<pr>`' `` occurs exactly once;
 - the sentence that holds it begins `One held binding is no stop:` and contains `` '`reason` `composition-not-clean`' ``, `"names this run's own entry"`, `'the PR is still a draft'` and `'exits 1 with a tree id on its first line'`;
-- the sentence after it begins `Nothing else licenses that send-back: not another run's entry, not any other` and contains `` '`head-mismatch` included' ``;
+- the sentence beginning `Behind the head there is no binding to read` contains `"this run's own entry reads `pinned`"`, `` 'is not the entry `binding.entryId` names' ``, `'the PR is still a draft'`, `'the same probe exits 1'` and `'such an entry cannot land'`;
+- the sentence beginning `Run that probe only on a read of the line` contains `'for this run for another reason'` and `'never on a loop or a timer of your own for it'`;
+- the sentence beginning `The send-back costs the entry its place` contains `` 're-pins it with a new `pinnedAt`' ``;
+- the sentence beginning `Nothing else licenses that send-back` contains `"not another run's entry"`, `'not an entry whose conflict you did not measure with that probe'` and `` '`head-mismatch` included' ``;
 - the prose contains `'never an instruction to eject, and it licenses nothing by itself'`.
 
 The line pin already holds these; this case names each condition, so a mutant that removes one reds a case named for it.
@@ -668,7 +708,10 @@ The cases:
 1. **A notice where there should be none.** An `unmeasured` composition, a PR the probe does not list, any other reason over a conflicting head, another run's coordinator, or a run not at `merging` (H2, H4 to H6, S6; rows M2, M5, M6, M10, M11).
 2. **No notice, or two, where there should be one.** The measured conflict and the moved head, the duplicate after delivery and after restart, the new base, and the run-less arm (H1, H3, H7, S1 to S5; rows M1, M4, M7 to M9, M20).
 3. **The cue unchanged.** A ready binding still sends `next-to-land:` with its identity and body byte for byte, and the move of `probedHeadOf` and `episodeOf` changes no existing case (H8, S7, the existing suite; rows M12, M13).
-4. **The text's exception is narrow.** This run's own entry, `composition-not-clean`, a draft, its own probe exiting 1; never another run's entry, another reason or a ready or queued PR (section 7.2, the new case; rows M14 to M16).
+4. **The text's send-back is narrow in both positions.**
+   - At the head: this run's own entry, `composition-not-clean`, a draft, its own probe exiting 1.
+   - Behind it: the same, with the measured conflict alone as the trigger, measured only on a read made for another reason.
+   - Never another run's entry, an unmeasured conflict, another reason, or a ready or queued PR (section 7.2, the new case; rows M14 to M16, M21 to M23).
 5. **The mail forms agree.** Step 6, the advance's `kind`, the worker's first lines and `LANDING_EJECTION_KINDS` all name `conflict`, and the worker's skill does not grow (section 7; rows M17 to M19).
 
 ## What this does not claim
@@ -678,6 +721,11 @@ The cases:
 - **A moved head gets a notice but no new move.** On `head-mismatch` with the PR open at another head, the text still says the binding lands nothing and is reported to the operator. A send-back that re-pins it is not licensed here (section 11, question 1).
 - **A PR whose base is not the probe's** reads `head-mismatch` with the PR not listed, gets no notice, and holds the line until the operator withdraws its entry. A run's PR always targets the repository's default branch, so this is a stated edge.
 - **An unmeasured composition gets no notice,** however long it lasts. That is the radar's to answer, and its own warnings say so.
+- **An entry behind the head that conflicts is not noticed.** The notice stays head-only (decision 1), and the coordinator measures such an entry only on a read of the line it makes for another reason.
+  - **The radar already measures it**: `ProbeDoc.heads` carries every open PR's `base` composition each pass, and both the radar lane (`control.probe`, as the decider's input) and `radar.ts#sessionLandingsOf` (the console's chip) read it.
+  - **The decider could take it as an input without a second prober or poller.** The probe is already `control.probe`, and `probedHeadOf` would find each pinned entry's head in it.
+  - **But it is not one more case in the same decider as it stands.** `nextLandingNoticeOf` answers at most one notice per project per pass, for the selected head, and the transaction queues at most one mail. Covering the entries behind the head would make the answer a list and the transaction a loop over it, each with its own recipient and identity.
+  - Not built; section 11, question 5, puts it to the coordinator.
 - **A conflict found while the PR is in the queue** is not this form's. The queue's own dequeue and its `ejected: dequeued:#<pr>` still answer it, and the exception requires a draft.
 - **A no-run entry's notice reaches its creator,** who has no run to send back. That entry is changed only through the operator's withdrawal, as today.
 - **The issue's six-entry wait is quoted, not re-measured.** The order of events comes from issue #3577; this plan re-measured the code that let it happen.
@@ -807,6 +855,10 @@ Each row is one change to the built code, measured red by the named case, then r
 | M18 | `conflict` removed from step 6's `kind` list | `REPORT_LESS`; the 5f whole pin |
 | M19 | `'conflict'` removed from `LANDING_EJECTION_KINDS` in a scratch copy | "records the base on the ejecting advance …" |
 | M20 | `episodeOf`'s no-run arm takes `entry.setBy` (the later order setter) | H7; the cue's existing no-run case |
+| M21 | section 7.2's behind-the-head sentence names "an entry" in place of "this run's own entry" (the early form for another run's entry) | the line pin; the new case |
+| M22 | section 7.2's behind-the-head sentence loses "and the same probe exits 1" (the early form for an entry whose conflict nobody measured) | the line pin; the new case |
+| M23 | section 7.2's closing sentence loses "not an entry whose conflict you did not measure with that probe," | the line pin; the new case |
+| M24 | section 7.2's measuring sentence loses "never on a loop or a timer of your own for it" | the line pin; the new case |
 
 Rows M10, M11 and M20 were green before this wave through the cue's own cases. They are listed because the helper is now shared, and each must red a held case too.
 
@@ -815,7 +867,9 @@ Rows M10, M11 and M20 were green before this wave through the cue's own cases. T
 1. **`head-mismatch` with the PR open at another head** is in the notice (decision 2), and the text keeps that binding a stop reported to the operator. Should the text also license a plain send-back that re-pins it? This plan does not, because the brief licenses one new send-back only.
 2. **The identity carries the reason and the head read** (decision 1), so a head that moves after a conflict notice on the same base is one new mail. The brief named the entry, the pinned head and the base.
 3. **The worker's bullet loses two redundant phrases** (section 7.3) to stay within its size under rule R5, rather than this wave asking for a cap raise. Raising a cap needs a new clause, and a clause change is the brief's "ask me".
-4. **The exception requires a draft PR** (section 7.2). It is the measurable form of "before it is queued": on route Q a ready PR can be queued, and a queued one is the dequeue's.
+4. **The exception requires a draft PR** (section 7.2), in both positions. It is the measurable form of "before it is queued": on route Q a ready PR can be queued, and a queued one is the dequeue's.
+5. **A notice for an entry behind the head** ("What this does not claim"). The radar already measures it and the decider already receives that probe, but the answer would become a list of notices per pass. Build it in a later wave, or leave the coordinator's own measurement as the only trigger?
+6. **The measuring words differ from the addendum's.** It proposed "or on the one timer it already sets while a run waits at `merging`". No such timer is in the coordinator's text, so the sentence names the 20-minute re-read among the reads it already makes and adds no timer (decision 4).
 
 ## Deviations found
 
@@ -830,10 +884,12 @@ Two numbers are defined below, both issued on 2026-11-27 for this plan.
   - Why: a head that conflicted with `main` before it was queued held the line for about half an hour, and no mail told its coordinator (issue #3577). The checks lane had left at the draft, and nothing was queued to be dequeued.
   - No second decider, lane, table or wire field. The server ejects nothing and chooses no successor. Every other held reason, and an unmeasured composition, sends nothing.
   - It extends spec §5.5's "Next to land" paragraph, which speaks of the ready head only. The coordinator adds section 8's dated line to §5.5 on the ledger pull request.
-- **D-9160 (2026-11-27)** — `conflict-ejection-in-the-text`: the coordinator's step 6 names the line's third ejection kind, `conflict`, which every server since wave 5e accepts. The landing-line paragraph licenses it in one case.
-  - The case: for this run's own pinned entry at the head of a held binding with reason `composition-not-clean`, on a draft PR, after this coordinator's own `git merge-tree` of the entry's `pinnedSha` against `origin/main` exits 1.
-  - The send-back is the report-less round's `ejected: conflict:#<pr>` form, with `base:` and `paths:`, and nothing to disarm.
-  - Never for another run's entry, another reason, or a ready or queued PR. Every other held binding stops.
+- **D-9160 (2026-11-27)** — `conflict-ejection-in-the-text`: the coordinator's step 6 names the line's third ejection kind, `conflict`, which every server since wave 5e accepts. The landing-line paragraph licenses it for this run's own pinned entry wherever it stands in the order (the coordinator's call 1758).
+  - At the head: a held binding with reason `composition-not-clean`, on a draft PR, after this coordinator's own `git merge-tree` of the entry's `pinnedSha` against `origin/main` exits 1.
+  - Behind the head: the same draft PR and the same probe, with no binding to read. It is measured only on a read of the line made for this run for another reason, never on a loop or a timer of its own, because such an entry cannot land and waiting only moves the hold.
+  - The cost is stated: the re-pin at the next advance to `merging` sets a new `pinnedAt`, so the entry re-enters behind every entry already in the line unless `fixesMain` or an order edge places it otherwise.
+  - The send-back is the report-less round's `ejected: conflict:#<pr>` form, with `base:` and `paths:`, the same in both positions, and nothing to disarm.
+  - Never for another run's entry, an unmeasured conflict, another reason, or a ready or queued PR. Every other held binding stops.
   - The worker's skill reads the third first line, within its size.
   - Why: the text named two ejections, so the coordinator of #3577's entry had to read the code's vocabulary to send its own run back, and its worker had no form for the mail.
   - No numbered clause of either `SKILL.md` changes, and no spec line is needed: §5.5's step 5 already sends a conflict back with its base.
