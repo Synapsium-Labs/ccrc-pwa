@@ -12,6 +12,7 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { SERVER_CAPS } from '../../../shared/api.js';
 import { RUNGS, RUNG_WORDS_NOT_YET_SHIPPED, rungNeeds } from '../../../shared/overlord-ladder.js';
+import { OVERLORD_ACT_KIND_LIST } from '../../../shared/overlord.js';
 import { ALL, ccrcRoot, rel } from './helpers.js';
 
 const SPEC = path.join(ccrcRoot, 'docs/superpowers/specs/2026-11-09-overlord-design.md');
@@ -102,5 +103,37 @@ describe('one home for the rung words and the rung cells (F15)', () => {
     // The cells moved: the catalogue's map is their one home, and the ladder's old names are gone everywhere, no alias left.
     expect(holders(/\bconst OVERLORD_ACT_KIND_MAP\b/)).toEqual([CATALOGUE_HOME]);
     expect(holders(/\bRUNG_CELL_MAP\b|\bRUNG_CELLS\b|\bLadderActKind\b|\bLADDER_ACT_KINDS\b/)).toEqual([]);
+  });
+});
+
+// The act catalogue's one home (W2 act catalogue A3, plan §8 "One home"): no other file under the source roots defines a cell
+// map, a list of act kinds or a map from class words to covers.
+const CELL = String.raw`['"](?:allow|refuse|proposal|armed|by-grant)['"]`;
+const CELL_MAP = new RegExp(String.raw`\{\s*chat:\s*${CELL}\s*,\s*advise:\s*${CELL}\s*,\s*full:\s*${CELL}\s*,?\s*\}`);
+const CLASS_COVERS_MAP = /\bO[1-6]\s*:\s*\[\s*(?:\]|['"](?:grant|command|operator-request|stated-entry)['"])/;
+/** The catalogue's kinds that are not plain words, so a list of three of them is a list of act kinds. */
+const DISTINCT_KINDS = new Set(OVERLORD_ACT_KIND_LIST.filter((k) => k.includes('-')));
+const hasKindList = (text: string): boolean =>
+  [...text.matchAll(literalList(','))].some(([list]) =>
+    new Set([...list.matchAll(/(['"])(.*?)\1/g)].map((m) => m[2]).filter((w) => DISTINCT_KINDS.has(w!))).size >= 3);
+
+describe('one home for the act catalogue (W2 act catalogue A3)', () => {
+  it('CONTROL: the scans see the catalogue, and a spelled-out copy would be found', () => {
+    expect(ALL.map(rel)).toContain(CATALOGUE_HOME);
+    expect(DISTINCT_KINDS.size).toBeGreaterThan(10);
+    expect(CELL_MAP.test(`const x = { chat: 'refuse', advise: 'proposal', full: 'allow' };`)).toBe(true);
+    expect(CELL_MAP.test(`const x = { chat: 'a', advise: 'b', full: 'c' };`)).toBe(false);
+    expect(CLASS_COVERS_MAP.test(`const m = { O3: ['grant'], O1: [] };`)).toBe(true);
+    expect(hasKindList(`export const K = ['drop-request', 'close-request', 'answer-item'];`)).toBe(true);
+    expect(hasKindList(`const K = ['drop-request', 'read', 'acknowledge'];`)).toBe(false);
+  });
+  it('only the catalogue spells a cell map at chat, advise and full', () => {
+    expect(holders(CELL_MAP)).toEqual([CATALOGUE_HOME]);
+  });
+  it('only the catalogue maps class words to covers', () => {
+    expect(holders(CLASS_COVERS_MAP)).toEqual([CATALOGUE_HOME]);
+  });
+  it('no file spells a list of act kinds (the catalogue derives its list from its map)', () => {
+    expect(ALL.filter((f) => hasKindList(code(f))).map(rel).sort()).toEqual([]);
   });
 });
