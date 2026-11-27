@@ -6019,8 +6019,10 @@ drawn, as not read again (D-9109). Pause and resume are one tap; a withdrawal is
 shows, and then names who was told and who could not be.
 
 The main-red hold has one writer: a fresh, same-base `main-health` measurement applied through the radar lane. A next-to-land mail
-is sent once per exact episode, base and recipient; it tells a coordinator to re-read the line and is not merge permission. The
-landed reader retires bounded damaged rows on fresh terminal evidence. One trap: a project that opts out (its `lander` removed)
+is sent once per exact episode, base and recipient; it tells a coordinator to re-read the line and is not merge permission. A
+held-head mail (D-9159) is sent once per entry, pin, episode, base and recipient when the binding holds on the head entry's own
+conflict with the base, as the radar measured it; it tells that entry's coordinator to re-read the line and measure; the server
+ejects nothing. The landed reader retires bounded damaged rows on fresh terminal evidence. One trap: a project that opts out (its `lander` removed)
 while main is red keeps the stored `mainRedHold` set, and the read keeps showing it (an absent marker is no evidence, so the recomputation
 keeps the stored value, and `order.paused` stays set for main-red while the `binding` reads `inert`), until it opts back in and a green
 measurement clears it.

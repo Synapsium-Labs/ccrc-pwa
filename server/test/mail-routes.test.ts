@@ -767,6 +767,8 @@ describe('the rejection table is total, in both directions', () => {
       'landing-next',       // coord/landingNext.ts: the control document kind / cue tuple tag (landing order wave 5i), a tag on a stored value, not a mail or run refusal code
       'landing-withdrawn',  // coord/landingWrites.ts: the withdrawal notice's identity tuple and subject tag (landing order wave 5j), a tag on a stored value, not a mail or run refusal code
       'landing-held',       // coord/landingWrites.ts: the dependant's notice's identity tuple and subject tag (landing order wave 5j), a tag on a stored value, not a mail or run refusal code
+      'landing-head-held',// coord/landingNext.ts: the held-head notice's identity tuple tag (landing order wave 5o, D-9159), a tag on a stored value, not a mail or run refusal code
+      'held-queued',      // coord/landingNext.ts#LandingControlApplyResult: the held-head notice's queued kind (landing order wave 5o, D-9159), a pure-decider discriminant, not a mail or run refusal code
       'creation-unrecorded',// coord/landingNext.ts: a no-send reason (landing order wave 5i), a pure-decider discriminant, not a mail or run refusal code
       'recipient-missing',  // coord/landingNext.ts: a no-send reason (landing order wave 5i), a pure-decider discriminant, not a mail or run refusal code
       'episode-unreadable', // coord/landingNext.ts: a no-send reason (landing order wave 5i), a pure-decider discriminant, not a mail or run refusal code
