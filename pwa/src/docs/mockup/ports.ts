@@ -3,7 +3,9 @@
 // captured context; the loader (`load.ts`) reads admitted pins through `MockupAssetReader`, which the consumer declares
 // here and the screen's adapter implements over the existing Docs loaders and per-screen queue. No transport adapter
 // receives admission authority: it reads the pins it is given and nothing else.
-import type { DocPin, DocRefResolution, DocSectionSlug, DocsEntry, DocsPageLocation, DocsTreeOk } from '../../../../shared/docs';
+import type {
+  DocPin, DocRefResolution, DocSectionSlug, DocsEntry, DocsPageLocation, DocsRangePin, DocsTreeOk,
+} from '../../../../shared/docs';
 import type { ImagePin } from '../docsLinks';
 import type { MockupAssetKind } from './policy';
 
@@ -30,7 +32,22 @@ export interface MockupRef {
   readonly basePath: MockupBase;
   readonly kind: MockupAssetKind;
   readonly depth: number;
+  /** X2 P6.2: a module specifier (`import`, a static import or re-export) or an import map entry's value (`map`). Either may
+   *  name only a sibling or an `https` URL: a `data:`, `blob:`, `javascript:` or `http:` one is `refused:'scheme'`.
+   *  Absent on every reference the page names as an element's URL. */
+  readonly spec?: 'import' | 'map';
+  /** X2 P6.2: an import map entry's own key (the specifier it maps), on a `map` reference. */
+  readonly mapKey?: string;
+  /** X2 P6.2: a reference the scan found but cannot follow, decided `unsupported` with this word before anything else. */
+  readonly unread?: MockupUnread;
 }
+
+/** Why the in-walls loader does not follow what a script names (X2 P6.2, spec 4.8): a dynamic `import()` whose argument is not
+ *  a literal `https` URL (`dynamic`), a specifier holding an escape the scan does not decode (`unreadable`), a bare name no
+ *  import map entry names (`bare`), what lies past the scan's bound (`scan-limit`), and an import in an inline script whose
+ *  text holds the HTML comment opener, which is left as written (`html-comment`, fix round 1 of review 4066, A7). Each is
+ *  "not loaded", never guessed. */
+export type MockupUnread = 'dynamic' | 'unreadable' | 'bare' | 'scan-limit' | 'html-comment';
 
 /** Why the planner refuses a reference: `resolveDocRef`'s refused reasons, `repo` for a file outside the Docs sections, and
  *  `scheme` for a non-web scheme (`scheme` is also one of `resolveDocRef`'s own). Derived from `resolveDocRef`'s answer, so the
@@ -40,12 +57,16 @@ export type MockupRefusedWhy = 'repo' | Extract<DocRefResolution, { kind: 'refus
 /** Base spec 5.6.3's verdict union, every reason kept distinct. `inline.size` is the admission reservation (the row's
  *  `MockupSize.bytes`), not a measurement of the bytes. */
 export type MockupRefVerdict =
-  | { readonly v: 'inline'; readonly pin: DocPin; readonly kind: MockupAssetKind; readonly mime: string; readonly size: number; readonly draft: boolean }
+  | {
+    readonly v: 'inline'; readonly pin: DocPin; readonly kind: MockupAssetKind; readonly mime: string; readonly size: number; readonly draft: boolean;
+    /** X2 P6.2: a fetched sibling above its class cap, read through the range seam (spec 4.3) and reserved in full. */
+    readonly range?: DocsRangePin;
+  }
   | { readonly v: 'kept'; readonly why: 'fragment' | 'self-contained' }
   | { readonly v: 'external'; readonly origin: string; readonly via: 'src' | 'script-text' }
   | { readonly v: 'refused'; readonly why: MockupRefusedWhy }
   | { readonly v: 'missing'; readonly why: 'absent-at-commit' | Exclude<Extract<ImagePin, { ok: false }>['why'], 'absent'> }
-  | { readonly v: 'unsupported'; readonly why: 'kind' | 'element' | 'css-depth' }
+  | { readonly v: 'unsupported'; readonly why: 'kind' | 'element' | 'css-depth' | 'module-depth' | 'cycle' | MockupUnread }
   | { readonly v: 'skipped'; readonly why: 'too-large' | 'over-budget' }
   | { readonly v: 'failed'; readonly failure: string };
 
@@ -88,6 +109,10 @@ export interface MockupAssetPlan {
   readonly admitted: ReadonlyMap<string, number>;
   readonly rows: readonly MockupAssetRow[];
   readonly reservedBytes: number;
+  /** X2 P6.2 (D-9152): the page's import map was readable but an entry's verdict was neither `inline` nor an `https` offer,
+   *  so the map is refused whole and these rows are the page's extracted with it refused. Every later extraction of the
+   *  page for this plan (the build's, Export's) passes it on, so its keys are the plan's. */
+  readonly importMapRefused?: true;
 }
 
 /** What one read answered: the bytes of the pin, or the failure word the Docs loaders gave (a 401's own word, a moved
@@ -96,9 +121,17 @@ export type MockupReadAnswer =
   | { readonly kind: 'ok'; readonly bytes: Uint8Array<ArrayBuffer> }
   | { readonly kind: 'failed'; readonly failure: string };
 
-/** THE port the loader reads through. It reads exactly the pin it is given; it never relists, retries or replans. */
+/** THE port the loader reads through. It reads exactly the pin it is given; it never relists, retries or replans. With
+ *  `range` (X2 P6.2) it reads that pin's bytes through the range seam, `range.pin` checked by ccd and `range.size` the
+ *  listed size the prepare must equal. */
 export interface MockupAssetReader {
-  read(pin: DocPin, signal: AbortSignal): Promise<MockupReadAnswer>;
+  read(pin: DocPin, signal: AbortSignal, range?: MockupRangeRead): Promise<MockupReadAnswer>;
+}
+
+/** What a range read of an admitted sibling names (X2 P6.2): the range pin and the listed size. */
+export interface MockupRangeRead {
+  readonly pin: DocsRangePin;
+  readonly size: number;
 }
 
 /** What loading an attempt's plan came to. `plan` keeps every failure as a `failed` row (its reservation kept);

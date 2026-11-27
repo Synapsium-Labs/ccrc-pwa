@@ -5,12 +5,13 @@
 // extension fits its kind, whether its reservation fits the attempt's budget, and which duplicate it shares with an
 // admitted reference. The loader reads exactly the pins this plan admits; no adapter receives admission authority.
 import {
-  DOCS_CLASS_CAP, contentClass, docsApi, resolveDocRef,
-  type DocContentClass, type DocPin, type DocSectionSlug, type DocsEntry, type DocsPageLocation, type DocsTreeOk,
+  DOCS_CLASS_CAP, DOCS_RANGE_MAX_BYTES, contentClass, docsApi, resolveDocRef,
+  type DocContentClass, type DocPin, type DocSectionSlug, type DocsEntry, type DocsPageLocation, type DocsRangePin, type DocsTreeOk,
 } from '../../../../shared/docs';
 import { imagePinFor, pageOpensDraft } from '../docsLinks';
+import { rangePinOf } from '../range/rangePolicy';
 import {
-  MOCKUP_MAX_ASSET_BYTES, MOCKUP_MAX_ASSETS, MOCKUP_MAX_CSS_DEPTH, mockupMimeRow,
+  MOCKUP_MAX_ASSET_BYTES, MOCKUP_MAX_ASSETS, MOCKUP_MAX_CSS_DEPTH, MOCKUP_MODULE_MAX_DEPTH, mockupFetchMime, mockupMimeRow,
 } from './policy';
 import type {
   MockupAssetPlan, MockupAssetRow, MockupContext, MockupPlanBasis, MockupRef, MockupRefVerdict, MockupSize,
@@ -71,10 +72,16 @@ export function mockupSizeBasis(
   return { kind: 'class-cap', bytes: DOCS_CLASS_CAP[cls] };
 }
 
-/** What a reference came to before the budget is asked: a verdict that needs no bytes, or a pin to admit. */
+/** What a reference came to before the budget is asked: a verdict that needs no bytes, or a pin to admit. `entry` is the
+ *  listing's row of the file, which the range pin of a fetched sibling above its class cap is read from (X2 P6.2). */
 type Derived =
   | { readonly final: MockupRefVerdict }
-  | { readonly pin: DocPin; readonly mime: string; readonly size: MockupSize };
+  | { readonly pin: DocPin; readonly mime: string; readonly size: MockupSize; readonly entry: DocsEntry | undefined };
+
+/** The deepest a reference of `kind` may sit: a module graph and the fetch names found in it have their own bound (X2 P6.2);
+ *  every other kind keeps the stylesheet bound. */
+const depthLimit = (ref: MockupRef): number => (ref.kind === 'module' && ref.spec !== undefined) || ref.kind === 'fetch'
+  ? MOCKUP_MODULE_MAX_DEPTH : MOCKUP_MAX_CSS_DEPTH;
 
 /** The context's derivation, built ONCE per plan (fix round 1, F1): the page (checked against the context's own pin up
  *  front, so a mismatched context throws whatever its references are), whether it opens a draft, and the listing
@@ -93,10 +100,18 @@ function basisFor(ctx: MockupContext): MockupPlanBasis {
  *  A function of the reference, the context and its basis alone. Each reference is derived exactly once, when it is
  *  first decided; a prior row is never derived again (F1). */
 function derive(ctx: MockupContext, basis: MockupPlanBasis, ref: MockupRef): Derived {
-  if (ref.depth > MOCKUP_MAX_CSS_DEPTH) return { final: { v: 'unsupported', why: 'css-depth' } };
+  if (ref.unread !== undefined) return { final: { v: 'unsupported', why: ref.unread } };
+  if (ref.depth > depthLimit(ref)) {
+    return { final: { v: 'unsupported', why: depthLimit(ref) === MOCKUP_MAX_CSS_DEPTH ? 'css-depth' : 'module-depth' } };
+  }
   const slash = ref.basePath.indexOf('/');
   const from = { section: ref.basePath.slice(0, slash) as DocSectionSlug, path: ref.basePath.slice(slash + 1) };
   const r = resolveDocRef(from, ref.raw);
+  // A specifier or an import map value names only a sibling or an https URL (spec 4.8): never a scheme that carries its own
+  // bytes, a script URL or plain http, whatever an element's URL may do.
+  if (ref.spec !== undefined && (r.kind === 'self-contained' || r.kind === 'fragment' || (r.kind === 'external' && r.scheme !== 'https'))) {
+    return { final: { v: 'refused', why: 'scheme' } };
+  }
   switch (r.kind) {
     case 'fragment':
       return { final: { v: 'kept', why: 'fragment' } };
@@ -111,14 +126,31 @@ function derive(ctx: MockupContext, basis: MockupPlanBasis, ref: MockupRef): Der
     case 'doc':
       break;
   }
-  const row = mockupMimeRow(r.path);
-  if (row === null || !row.kinds.includes(ref.kind)) return { final: { v: 'unsupported', why: 'kind' } };
+  let mime: string;
+  if (ref.kind === 'fetch') {
+    const m = mockupFetchMime(r.path);
+    if (m === null) return { final: { v: 'unsupported', why: 'kind' } };
+    mime = m;
+  } else {
+    const row = mockupMimeRow(r.path);
+    if (row === null || !row.kinds.includes(ref.kind)) return { final: { v: 'unsupported', why: 'kind' } };
+    mime = row.mime;
+  }
   const e = basis.index.get(`${r.section}\u0000${r.path}`);
   const ip = imagePinFor(e, ctx.tree, basis.page, basis.pageDraft);
   if (!ip.ok) {
     return { final: { v: 'missing', why: ip.why === 'absent' ? 'absent-at-commit' : ip.why } };
   }
-  return { pin: ip.pin, mime: row.mime, size: mockupSizeBasis(e, ctx.tree, ip.pin, contentClass(r.path)) };
+  return { pin: ip.pin, mime, size: mockupSizeBasis(e, ctx.tree, ip.pin, contentClass(r.path)), entry: e };
+}
+
+/** The range pin a fetched sibling above its class cap is read by (X2 P6.2, spec 4.8: "A sibling above 2 MiB is read by
+ *  range and still counts in full against the 5 MiB budget"), or null: any other kind, a size the listing does not hold for
+ *  this pin, or a pin the entry cannot name. Only a fetched sibling: an image, a stylesheet or a script above its cap keeps
+ *  `skipped:'too-large'`, as before this loader. */
+function rangeOf(ref: MockupRef, d: Extract<Derived, { pin: DocPin }>): DocsRangePin | null {
+  if (ref.kind !== 'fetch' || d.size.kind !== 'listed' || d.entry === undefined || d.size.bytes > DOCS_RANGE_MAX_BYTES) return null;
+  return rangePinOf(d.pin, d.entry);
 }
 
 /** THE decision, shared by both entry points: `plan`'s rows stay as they are and in order, `refs` are decided in the
@@ -140,7 +172,8 @@ function decide(plan: MockupAssetPlan, refs: readonly MockupRef[]): MockupAssetP
       continue;
     }
     const cap = DOCS_CLASS_CAP[contentClass(d.pin.path)];
-    if (d.size.kind === 'listed' && d.size.bytes > cap) {
+    const range = d.size.kind === 'listed' && d.size.bytes > cap ? rangeOf(ref, d) : null;
+    if (d.size.kind === 'listed' && d.size.bytes > cap && range === null) {
       rows.push({ ref, verdict: { v: 'skipped', why: 'too-large' }, size: null });
       continue;
     }
@@ -161,12 +194,23 @@ function decide(plan: MockupAssetPlan, refs: readonly MockupRef[]): MockupAssetP
     }
     const verdict: MockupRefVerdict = {
       v: 'inline', pin: d.pin, kind: ref.kind, mime: d.mime, size: d.size.bytes, draft: d.pin.kind === 'draft',
+      ...(range === null ? {} : { range }),
     };
     admitted.set(id, rows.length);
     reserved += d.size.bytes;
     rows.push({ ref, verdict, size: d.size });
   }
-  return { context, basis, admitted, rows, reservedBytes: reserved };
+  return { context, basis, admitted, rows, reservedBytes: reserved, ...(plan.importMapRefused === true ? { importMapRefused: true } : {}) };
+}
+
+/** Whether a plan's rows refuse the page's import map whole (X2 P6.2, D-9152; spec 4.8, "A map naming anything else is
+ *  refused as now"): some entry of it (a `map` row) is neither `inline` nor an `https` offer (`external`) nor one of the two
+ *  budget skips. A root-relative value, a climb out of the root or out of the Docs sections, a backslash form, a missing
+ *  sibling and a kind the table refuses all refuse the map, as an unreadable one is refused. An entry over the asset budget
+ *  or over its class cap (`skipped`) keeps its own row, so the over-budget answer stands for it (the coordinator's ruling in
+ *  fix round 1 of review 4066); the build leaves it out of the map it writes. */
+export function importMapRefusedBy(rows: readonly MockupAssetRow[]): boolean {
+  return rows.some((r) => r.ref.spec === 'map' && r.verdict.v !== 'inline' && r.verdict.v !== 'external' && r.verdict.v !== 'skipped');
 }
 
 /** The plan of one attempt's first references (the page's own), decided from `ctx` alone. Throws
