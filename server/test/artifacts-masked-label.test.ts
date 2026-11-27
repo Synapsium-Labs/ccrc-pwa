@@ -8,6 +8,7 @@ import { randomBytes } from 'node:crypto';
 import path from 'node:path';
 import { artifactConfig, type ArtifactConfig } from '../src/artifacts/policy.js';
 import { SHAPE_ONLY_MASKER } from '../src/accounts/mask.js';
+import { matchesShape } from '../src/accounts/shapes.js';
 import { loadConfig } from '../src/config.js';
 import { mkTmp } from './tmpHelpers.js';
 import { seedRoster } from './helpers.js';
@@ -27,9 +28,13 @@ function off(c: ArtifactConfig): Extract<ArtifactConfig, { state: 'off' }> {
 }
 
 describe('config: a name the answer mask would alter turns the tier off (D-9161)', () => {
-  it('CONTROL: the shape-only mask alters the shaped label and leaves the near miss alone', () => {
-    expect(masks(`https://${shapedLabel()}.art.invalid`)).toBe(true);
-    expect(masks(`https://${nearMissLabel()}.art.invalid`)).toBe(false);
+  it('CONTROL: the shape-only mask alters the shaped label and leaves the near miss alone, as the shape half loadConfig asks does', () => {
+    const shaped = `https://${shapedLabel()}.art.invalid`;
+    const near = `https://${nearMissLabel()}.art.invalid`;
+    expect(masks(shaped)).toBe(true);
+    expect(masks(near)).toBe(false);
+    expect(matchesShape(shaped)).toBe(true);
+    expect(matchesShape(near)).toBe(false);
   });
 
   it('config: an artifact origin the mask would alter is off/invalid, naming the key and never echoing the value', () => {
