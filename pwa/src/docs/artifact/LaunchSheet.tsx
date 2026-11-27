@@ -44,7 +44,7 @@ export interface LaunchSheetProps {
 type Read =
   | { readonly s: 'reading' }
   | { readonly s: 'ok'; readonly scope: ArtifactScopeOk }
-  | ({ readonly s: 'stopped' } & ArtifactStop);
+  | ({ readonly s: 'halted' } & ArtifactStop);
 
 type Mint =
   | { readonly s: 'idle' }
@@ -143,7 +143,7 @@ export function LaunchSheet(p: LaunchSheetProps): ReactNode {
         answer = { s: 'unreachable' };
       }
       if (ctl.signal.aborted) return;
-      setRead(answer.s === 'ok' ? { s: 'ok', scope: answer.value } : { s: 'stopped', ...artifactStop(answer) });
+      setRead(answer.s === 'ok' ? { s: 'ok', scope: answer.value } : { s: 'halted', ...artifactStop(answer) });
     })();
     return () => ctl.abort();
   }, [doors, project, pinKey, readNo, release]);
@@ -202,9 +202,9 @@ export function LaunchSheet(p: LaunchSheetProps): ReactNode {
   };
 
   const minted = mint.s === 'minted' ? mint.mint : null;
-  const stoppedMoved = read.s === 'stopped' && read.pinMoved;
+  const haltedMoved = read.s === 'halted' && read.pinMoved;
   const refusedMoved = mint.s === 'refused' && mint.pinMoved;
-  const pinMoved = stoppedMoved || refusedMoved;
+  const pinMoved = haltedMoved || refusedMoved;
   const busy = mint.s === 'minting';
   const shown = minted ?? (read.s === 'ok' ? read.scope : null);
   const others = state.list.s === 'ok' && state.list.live.some((r) => !mine.includes(r.id));
@@ -212,7 +212,7 @@ export function LaunchSheet(p: LaunchSheetProps): ReactNode {
   let body: ReactNode;
   if (read.s === 'reading') {
     body = <p className="docs-loading">{ARTIFACT_TEXT.reading}</p>;
-  } else if (read.s === 'stopped') {
+  } else if (read.s === 'halted') {
     body = <p className="docs-note" role="alert">{read.sentence}</p>;
   } else {
     body = (
@@ -265,7 +265,7 @@ export function LaunchSheet(p: LaunchSheetProps): ReactNode {
         {ARTIFACT_TEXT.openLink}
       </a>
     );
-  } else if (read.s === 'stopped' && read.retry) {
+  } else if (read.s === 'halted' && read.retry) {
     main = <Button variant="primary" onClick={() => setReadNo((n) => n + 1)}>{ARTIFACT_TEXT.retry}</Button>;
   } else if (read.s === 'ok') {
     main = <Button variant="primary" disabled={busy || pending} onClick={() => { void prepare(); }}>{ARTIFACT_TEXT.prepare}</Button>;

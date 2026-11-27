@@ -15,7 +15,7 @@ export const ARTIFACT_TEXT = {
   why: 'The view above runs this page within ccrc\'s walls, where dialogs, windows, downloads, WebAssembly, workers and large files may not work. '
     + 'As an artifact it runs in full, in a new tab.',
   sheetTitle: 'Open as artifact',
-  whatRuns: 'This page\'s own code runs in a new tab on {host}, a separate site with no ccrc session. '
+  whatRuns: 'This page\'s own code runs in a new tab on {host}, a separate site where ccrc holds no session. '
     + 'It can read the {n} files beside it at this version ({m} uncommitted). It cannot reach ccrc.',
   originNote: 'loads from this host can carry what the page shows to it, and may see this link',
   above: '{n} references point above this page\'s folder and will not load',

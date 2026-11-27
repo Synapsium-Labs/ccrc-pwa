@@ -426,7 +426,7 @@ flowchart TD
 |---|---|
 | Title | "Open as artifact" |
 | Why | "The view above runs this page within ccrc's walls, where dialogs, windows, downloads, WebAssembly, workers and large files may not work. As an artifact it runs in full, in a new tab." Any refusal X2 P6 reported for this page (its budget lines) is repeated under it |
-| What runs | "This page's own code runs in a new tab on `<artifact-host>`, a separate site with no ccrc session. It can read the N files beside it at this version (M uncommitted). It cannot reach ccrc." N and M come from the scope read, before anything is minted |
+| What runs | "This page's own code runs in a new tab on `<artifact-host>`, a separate site where ccrc holds no session. It can read the N files beside it at this version (M uncommitted). It cannot reach ccrc." N and M come from the scope read, before anything is minted |
 | Outside hosts | One unticked checkbox per origin the pre-scan found (the census `origins.ts` already makes), each saying "loads from this host can carry what the page shows to it, and may see this link". At most 8. An origin on the console's, artifact or content host is never offered |
 | Above the folder | "N references point above this page's folder and will not load", from the pre-scan |
 | Unmeasured files | "N files beside it could not be measured and will not load", when the scope read's `unsized` is above 0 |

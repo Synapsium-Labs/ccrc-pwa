@@ -1166,6 +1166,7 @@ The scope answer names the two hosts (D-9162); its case `scope: the answer names
 - I committed the first items and D-9161 before their Opus review; the review ran on the committed diff, and its findings landed in `284c8de44d`.
 - Implementers wrote code before its new tests in three rounds (A5.1's fix round, A5.3's list fix round, and part of the golden's first build); in each, the red side is the mutation rows above, each the guard removed.
 - One implementer ran `sed -i` once on `pwa/test/artifact-sheet.test.tsx` to add two imports; every later change used the file tools, and the file was reviewed after.
+- My gate before the push ran only the server guard files the wave touched. Three whole-tree text guards that read `pwa/src` went red in the PR's fast run (run 46029278950: `hibernate-census`, `single-definition/offered-commands`, `single-definition/switches-history`). Fix round 1, below, mends them. **For the gate from here on** (the coordinator's ruling): the server's whole-tree text guards read the console's files too, and a pull request's run selects them only by its traced map, so a wave that adds console text runs every `single-definition` and census file before its push.
 
 #### Measured after the last commit
 
@@ -1174,3 +1175,17 @@ The scope answer names the two hosts (D-9162); its case `scope: the answer names
 - **Browser:** `artifact-isolation` (10) and 28 more files that reach the Docs leaf, the mockup view or the reader, one per run, all green (listed in the task note; `docs-review`, `docs-headers`, `phone-bar`, `chat-links`, `instrument-bar` and `pdf-labs` green on a second run after a first that the test slice's memory cap stopped before any test).
 
 **Not measured:** `pdf-frame` and `settings-integrations`, whose runs the test slice's memory cap stopped at the build, before any test, three times each (the slice held 5 of its 6 GiB for other sessions); neither file nor anything it imports changed in this wave; the hosted full run arbitrates them. Firefox, Safari and phones (acceptance's ART rows); the browser files that import the harness only for `resolveChrome` (its change is additive); the whole server and agent suites.
+
+#### Fix round 1: the fast run's three guards (the coordinator's yes, 2026-11-27)
+
+The PR's fast run on `c15c456ef8` (run 46029278950) was red in `server 8/12` and `server 12/12`: three whole-tree text guards read the new console files. Each fix changes no behaviour.
+
+| Guard | What it read | Fix |
+|---|---|---|
+| `hibernate-census`, the derived reader list | `stopped-compare` hits in `LaunchSheet.tsx` (3): the sheet's own read state was `s: 'stopped'` | The sheet's state word is `'halted'`; it was never a session's stop, so it takes no census row (an `other-meaning` row would also pass; the rename ends the collision instead) |
+| `single-definition/offered-commands` | `artifactWords.ts`: "with no ccrc session", read as a `ccrc` verb the CLI lacks | The sentence reads "a separate site where ccrc holds no session" (`holds` is a plain word); design 6.2's What runs cell carries the same words |
+| `single-definition/switches-history`, `expiresAt` read in one file | `listWords.ts`: the quoted key in `Pick<ArtifactRow, … 'expiresAt'>` | `artifactWhen` takes the row type whole |
+
+Red first: the three guards were red in the fast run on the old head (above); each was green on the fixed tree.
+
+Measured on the fixed tree, through `ccrc test`, one command each: the three guards (189); every `single-definition` file (50 files, 1,631 tests); every census file (45 files, 1,089 passed and 1 skipped; `landing-entry-census` timed out once at 21 s in its landing-line writer case under load and passed alone, 40); the pwa files that reach the changed code (`artifact-sheet`, `artifact-tier`, `artifact-offer-view`, `artifact-list`, `control-census`: 127); the pwa typecheck, clean; `deviation-refs`, `anchors`, `citations`, `private-names`, `topology-clean`, `growth-check` (220, 3 skipped).

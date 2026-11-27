@@ -56,7 +56,7 @@ export const artifactPageName = (row: Pick<ArtifactRow, 'section' | 'path'>): st
 /** A row's lines in words, from `nowMs`: when it was opened, its last request (a capability never requested has `lastAt` equal to
  *  `mintedAt`) and its end. */
 export function artifactWhen(
-  row: Pick<ArtifactRow, 'mintedAt' | 'lastAt' | 'expiresAt'>, nowMs: number,
+  row: ArtifactRow, nowMs: number,
 ): { readonly minted: string; readonly last: string; readonly expires: string } {
   const ago = (at: number): string => formatAge((nowMs - at) / 1000);
   const left = formatReset(row.expiresAt / 1000, nowMs / 1000);
