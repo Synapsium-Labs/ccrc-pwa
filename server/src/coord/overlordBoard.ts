@@ -174,9 +174,12 @@ export function composeBoard(i: BoardInputs): OverlordBoard {
   };
 }
 
-/** The board's own words, for the coordination kebab census: its closed unmeasured reasons, its text sources, the ratified trust
- *  and the listing's `not-listed`. Each rides a 200's part, never a refusal or a reject code. Derived from the wire's lists. */
-const BOARD_WORDS: ReadonlySet<string> = new Set<string>([...BOARD_UNMEASURED, ...BOARD_TEXT_SOURCES, 'operator-ratified', 'not-listed']);
+/** The board's own words, for the coordination kebab census: its closed unmeasured reasons, its text sources, the ratified trust,
+ *  the listing's `not-listed`, and the switchboard's settings and file row names it keys the brakes' rows by (board B3). Each rides
+ *  a 200's part, never a refusal or a reject code. Derived from the wire's and the switchboard's lists. */
+const BOARD_WORDS: ReadonlySet<string> = new Set<string>([
+  ...BOARD_UNMEASURED, ...BOARD_TEXT_SOURCES, 'operator-ratified', 'not-listed', ...settingSwitchNames, ...ccrcFileSwitchNames,
+]);
 export const isBoardKebab = (word: string): boolean => BOARD_WORDS.has(word);
 
 /** The ledger line's count: the programmes the board names, or 0 when the programmes read failed. */

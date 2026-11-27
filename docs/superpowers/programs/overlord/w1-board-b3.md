@@ -130,6 +130,18 @@ headroom), so the bound did not move. The brakes' new rows are fleet-wide, not p
 
 Each file alone, through the fleet test wrapper, at most two workers. See the wave-done mail for the list and its answers.
 
+Two whole-tree guards were red in local runs before the first push, each fixed then: the wire's totality census wanted a runtime
+list for the `stored` words (`BOARD_SETTING_STORED`, the board's map-and-derived-list form), and the one-home census of the
+`absent | unreadable` pair caught the gatherer's generic constraint spelling it (now `string`).
+
+## The fast run's red
+
+The pull request's first run (head `ea2f9b0a1e`) was red in one server shard, on one guard over the whole tree, a real defect of
+this wave: the coordination kebab census (`mail-routes.test.ts`, "every quoted kebab token in server/src/coord that looks like a
+code is declared") read the gatherer's reader table keys, the switchboard's settings row names, as undeclared codes. The board now
+declares them as its words (`isBoardKebab`), derived from `settingSwitchNames` and `ccrcFileSwitchNames`, so no second list. Red at
+`ea2f9b0a1e` in CI; green after, with the board suite and the board's floors key.
+
 ## Known limits
 
 - An entry under the projects root that is a link to a plain file, or a dangling link, is named as unreadable: the type probe reads
