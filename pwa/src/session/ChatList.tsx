@@ -9,8 +9,6 @@ import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useStat
 import type { ReactNode } from 'react';
 import { Virtuoso, type VirtuosoHandle } from 'react-virtuoso';
 import type { ChatEvent } from '../../../shared/api';
-import { splitClipPaths } from '../../../shared/api';
-import { isPastePointerLine } from '../../../shared/pastePointer';
 import { OlderEdge, OlderGap, TaskCard, ToolCard, askCardLines } from '@ccrc/ui';
 import { RenderBoundary } from '../components/RenderBoundary';
 import { MsgPlain } from '../lib/markdown';
@@ -28,6 +26,9 @@ import {
   type HeightBucket, type Measures, type MeasuredRow, type RowRecord, type RowShape,
 } from './itemHeight';
 import { PendingBubble } from './PendingBubble';
+import {
+  PASTED_CHIP_LINES, pendingTurnParts, pricedParts, userTurnView, type PricedTurn,
+} from './pastedTurn';
 import { sameRowProps } from './sameRow';
 import { renderToolWell } from './ToolWellText';
 import { TAP_SETTLE_MS, footLeft, heightMove, holdShift, prependShift } from './footFollow';
@@ -335,17 +336,15 @@ function thumbRows(clips: number): number {
   return clips <= 0 ? 0 : clips === 1 ? 1 : Math.ceil(clips / 2);
 }
 
-/** A user turn's text as priced: each pasted-text pointer line is drawn as one chip row (desktop-polish wave 194,
- *  `PastedTextChip`), one line high; the rest is the turn's text. The list knows no session here, so a pointer is
- *  recognised by its own path's folder (`isPastePointerLine`): a price, never what is drawn. */
-function pointerRows(text: string): { text: string; chips: number } {
-  const lines = text.split('\n');
-  const chips = lines.filter(isPastePointerLine).length;
-  return chips === 0 ? { text, chips } : { text: lines.filter((l) => !isPastePointerLine(l)).join('\n'), chips };
-}
+/** A user turn's lines as priced (desktop-polish wave 194): its text parts, and each pasted-text pointer of THIS session
+ *  as the chip `PastedTextChip` draws in its place, `PASTED_CHIP_LINES` high. The pointers are read by the bubbles' own
+ *  reader (`pastedTurn.ts`), so a line is priced as a chip exactly where it is drawn as one; a look-alike, or another
+ *  session's pointer, is text in both. */
+const turnLines = (priced: PricedTurn, measure: number): number =>
+  plainLines(priced.text, measure) + priced.chips * PASTED_CHIP_LINES;
 
-/** A message row, by the form `MessageBubble` draws it in. */
-function messageShape(event: MessageEvent, m: Measures): RowShape {
+/** A message row, by the form `MessageBubble` draws it in, in session `session`. */
+function messageShape(event: MessageEvent, m: Measures, session: string): RowShape {
   if (foldsAway(event)) return { bucket: 'folded', lines: 0 };
   switch (event.kind) {
     case 'system':
@@ -354,9 +353,9 @@ function messageShape(event: MessageEvent, m: Measures): RowShape {
     case 'user': {
       // `pre-wrap` prose with the clip paths taken out — they are drawn as a
       // grid of thumbnails above the bubble, not as lines of text.
-      const priced = pointerRows(event.text);
-      const { paths, rest } = splitClipPaths(priced.text);
-      return { bucket: 'user', lines: plainLines(rest, m.bubble) + priced.chips, attach: thumbRows(paths.length) };
+      // (`userTurnView` takes them out of the text parts, as the bubble does.)
+      const { paths, parts } = userTurnView(event.text, session);
+      return { bucket: 'user', lines: turnLines(pricedParts(parts), m.bubble), attach: thumbRows(paths.length) };
     }
     case 'assistant':
       return { bucket: 'assistant', lines: nominalLines(event.text, m.prose) };
@@ -395,7 +394,9 @@ function messageShape(event: MessageEvent, m: Measures): RowShape {
  * list's memo), so a mail card is priced open or closed as it is drawn (`openOf`), and a closed tool stretch with the
  * cards it draws under its row (`underRow`, the row's own function). With no choice, every row in its default form.
  */
-export function shapeOf(item: TranscriptItem, m: Measures = NOMINAL_MEASURES, choice: Choice = NO_CHOICE): RowShape {
+export function shapeOf(
+  item: TranscriptItem, m: Measures = NOMINAL_MEASURES, choice: Choice = NO_CHOICE, session = '',
+): RowShape {
   switch (item.kind) {
     case 'divider': return { bucket: 'divider', lines: 1 };
     // One collapsed line, however many calls it folds (D-5475); open, it is never sampled (`inOpeningForm`).
@@ -405,11 +406,11 @@ export function shapeOf(item: TranscriptItem, m: Measures = NOMINAL_MEASURES, ch
     // A live wait's line is one line more.
     case 'tool-activity': {
       const first = item.attention[0];
-      const card = first === undefined ? 0 : shapeOf(first.entry, m).lines;
-      const mail = underRow(item.mail, choice).reduce((n, card) => n + shapeOf(card, m, choice).lines, 0);
+      const card = first === undefined ? 0 : shapeOf(first.entry, m, NO_CHOICE, session).lines;
+      const mail = underRow(item.mail, choice).reduce((n, card) => n + shapeOf(card, m, choice, session).lines, 0);
       return { bucket: 'activity', lines: 1 + (item.waiting ? 1 : 0) + card + mail };
     }
-    case 'message': return messageShape(item.event, m);
+    case 'message': return messageShape(item.event, m, session);
     case 'tool': {
       const ask = askCardLines(item.use, item.result);
       return { bucket: 'tool', lines: ask === null ? 1 : ask.reduce((n, row) => n + plainLines(row, m.prose), 0) };
@@ -428,10 +429,9 @@ export function shapeOf(item: TranscriptItem, m: Measures = NOMINAL_MEASURES, ch
       // The summary row, and the "n more" toggle when there are details — closed.
       return { bucket: 'task', lines: item.notification.fields.length > 0 ? 2 : 1 };
     case 'pending': {
-      const priced = pointerRows(item.send.text);
       return {
         bucket: 'pending',
-        lines: plainLines(priced.text, m.bubble) + priced.chips,
+        lines: turnLines(pricedParts(pendingTurnParts(item.send.text, session)), m.bubble),
         attach: thumbRows(item.send.attachments?.length ?? 0),
       };
     }
@@ -513,14 +513,14 @@ interface Opening {
   seed: { ranges: { startIndex: number; endIndex: number; size: number }[]; scrollTop: number } | null;
 }
 
-function openWith(items: readonly TranscriptItem[], m: Measures): Opening {
+function openWith(items: readonly TranscriptItem[], m: Measures, session: string): Opening {
   const record = rememberedRows();
   const models = modelsOf(record);
   // EVERY ROW GETS ITS OWN ESTIMATE, from what it shows. It can: the screen
   // gates this list behind `loading`, so the backlog has already arrived when
   // we first render. A kind this browser has not measured enough of takes the
   // fallback, substituted here and never stored.
-  const shapes = items.map((item) => shapeOf(item, m));
+  const shapes = items.map((item) => shapeOf(item, m, NO_CHOICE, session));
   const px = rowHeights(shapes, models, FALLBACK_ITEM_HEIGHT);
   // WHY SEED AT ALL, when `defaultItemHeight` already exists. That prop is ONE
   // number for every row virtuoso has not measured, so it can be right when
@@ -629,7 +629,7 @@ class RowMeter {
     // A row that is not laid out — the screen hidden behind another — measures
     // 0, which is a measurement of nothing.
     if (!(px > 0) || !inOpeningForm(el)) return;
-    const shape = shapeOf(item, this.measures(), this.choice);
+    const shape = shapeOf(item, this.measures(), this.choice, session);
     const thumbs = shape.attach ?? 0;
     // The thumbnails are their own term: the bubble's sample is the row
     // without them, and the grid's height is a sample of `attach`.
@@ -962,7 +962,7 @@ function ChatScroller({
   // here and on no later render. Virtuoso takes `defaultItemHeight` and the
   // snapshot when it initialises; handing it different numbers later changes
   // nothing it reads. The NEXT visit gets the benefit of this one.
-  const [opened] = useState(() => openWith(items, column.measures()));
+  const [opened] = useState(() => openWith(items, column.measures(), id));
   const [meter] = useState(() => new RowMeter(() => column.measures(), (k) => expansion.choice(k)));
   // The pill's band, read once per mount: no skin or palette moves either token.
   const [band] = useState(() => column.pillBand());

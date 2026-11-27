@@ -3,15 +3,40 @@
 // against the pointer text; the list prices a pointer as one chip row; and the coordinator's hostile names (condition
 // 7) are text, or links that stay inside this session's clips with the name encoded. An assistant turn and a system
 // line holding a perfect pointer draw no chip.
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { cleanup, render } from '@testing-library/react';
-import { MessageBubble, type MessageEvent } from '../src/session/MessageBubble';
+import { cleanup, fireEvent, render } from '@testing-library/react';
+import { linkify, MessageBubble, type MessageEvent } from '../src/session/MessageBubble';
 import { PendingBubble } from '../src/session/PendingBubble';
-import { shapeOf } from '../src/session/ChatList';
+import { ChatList, shapeOf } from '../src/session/ChatList';
+import { ChatRefsContext } from '../src/session/chatRefsContext';
+import type { ChatRefContext } from '../src/lib/chatRefs';
+import { plainLines } from '../src/session/itemHeight';
+import { PASTED_CHIP_LINES } from '../src/session/pastedTurn';
+import { SkinSetProvider } from '../src/skins/frame';
+import { REFINED_SET } from '../src/skins/refined/parts';
 import type { TranscriptItem } from '../src/session/toolActivity';
 import { createSessionStore, type PendingSend } from '../src/stores/session';
+import { splitClipPaths, type ChatEvent } from '../../shared/api';
 import { pastePointer } from '../../shared/pastePointer';
 import { pastedTextLabel } from '../src/session/longPasteWords';
+
+// The list draws every row at once here (as `transcript-rows.test.tsx` does): jsdom lays nothing out, so the real
+// virtuoso would draw none.
+vi.mock('react-virtuoso', async () => {
+  const React = await import('react');
+  return {
+    Virtuoso: React.forwardRef((props: Record<string, unknown>, ref: React.Ref<unknown>) => {
+      React.useImperativeHandle(ref, () => ({ scrollToIndex: () => undefined }));
+      const count = props.totalCount as number;
+      const key = props.computeItemKey as (i: number) => string | number;
+      const content = props.itemContent as (i: number) => React.ReactNode;
+      return React.createElement('div', null,
+        Array.from({ length: count }, (_, i) => React.createElement('div', { key: key(i) }, content(i))));
+    }),
+  };
+});
 
 const SID = 'lane-a-project-a';
 const STORE = `/home/user-a/.cc-clips/${SID}`;
@@ -100,6 +125,46 @@ describe('the hostile names of condition 7', () => {
     });
   }
 
+  const brokenName = [
+    ['a right-to-left override', 'clip-20261127-153012-1a2b‮3c4d-paste.txt'],
+    ['a newline', 'clip-20261127-153012-1a2b\n3c4d-paste.txt'],
+    ['a carriage return', 'clip-20261127-153012-1a2b\r3c4d-paste.txt'],
+  ] as const;
+  for (const [what, name] of brokenName) {
+    it(`${what} in the file name is text`, () => {
+      const c = bubble(user(pastePointer(at(name), 3)));
+      expect(c.querySelector('a.msg-paste')).toBeNull();
+      expect(c.querySelector('.msg-user')!.textContent).toContain('The pasted text (3 lines) is in');
+    });
+  }
+
+  it('a bidi character in the path\'s prefix is accepted, and the link holds no part of the prefix', () => {
+    const c = bubble(user(pastePointer(`/home/user-a‮⁦/.cc-clips/${SID}/${NAME}`, 3)));
+    const a = c.querySelector('a.msg-paste') as HTMLAnchorElement;
+    expect(a.href).toBe(clipHref(NAME));
+    expect(a.textContent).toBe(`≡${pastedTextLabel(3)}`);
+    expect(a.getAttribute('aria-label')).toBe('Open the pasted text, 3 lines, in a new tab');
+    for (const s of [a.href, decodeURIComponent(a.href), a.outerHTML]) {
+      expect(s).not.toMatch(/[‮⁦]|user-a/);
+    }
+  });
+
+  it('a perfect pointer inside a tool result is drawn as the result\'s text, never a chip', () => {
+    const use = { kind: 'tool_use', uuid: 't1', ts: TS, toolId: 'tool-1', name: 'Bash', input: '{"command":"cat x"}' };
+    const result = { kind: 'tool_result', ts: TS, toolId: 'tool-1', text: pastePointer(PATH, 3), isError: false };
+    const { container } = render(
+      <SkinSetProvider set={{ ...REFINED_SET, toolActivity: 'none' }}>
+        <ChatList id={SID} events={[use, result] as ChatEvent[]} pending={[]} onRetry={() => {}} onDiscard={() => {}} />
+      </SkinSetProvider>,
+    );
+    // Open every disclosure, the ones an opened row reveals too, until the result itself is drawn.
+    for (let round = 0; round < 4; round += 1) {
+      for (const b of container.querySelectorAll<HTMLElement>('[aria-expanded="false"]')) fireEvent.click(b);
+    }
+    expect(container.textContent).toContain('The pasted text (3 lines) is in');
+    expect(container.querySelector('a.msg-paste')).toBeNull();
+  });
+
   it('an assistant turn and a system line holding a perfect pointer draw no chip', () => {
     const line = pastePointer(PATH, 3);
     const a = bubble({ kind: 'assistant', uuid: 'a1', ts: TS, text: line });
@@ -142,14 +207,94 @@ describe('the echo', () => {
   });
 });
 
-describe('the list prices a pointer as one chip row', () => {
-  const lines = (item: TranscriptItem): number => shapeOf(item).lines;
+describe('the list prices a pointer as the chip it draws', () => {
+  const lines = (item: TranscriptItem, session = SID): number => shapeOf(item, undefined, undefined, session).lines;
+  const turn = (text: string): TranscriptItem => ({ kind: 'message', event: user(text) }) as TranscriptItem;
+  const send = (text: string): TranscriptItem =>
+    ({ kind: 'pending', send: { key: 'k', text, state: 'sending', sentAt: 0 } as PendingSend }) as TranscriptItem;
+
+  it('the chip costs its tap floor and its two margins over one line of the bubble: 52 over 22.5, about 2.3 lines', () => {
+    expect(PASTED_CHIP_LINES).toBeCloseTo(52 / 22.5, 10);
+  });
+
+  it('those four numbers are the ones the token sheet and the chat sheet draw the chip and the bubble with', () => {
+    const read = (p: string): string => readFileSync(fileURLToPath(new URL(p, import.meta.url)), 'utf8');
+    const tokens = read('../../ui/src/styles/tokens.css');
+    const chat = read('../src/session/chat.css');
+    const token = (name: string): string => new RegExp(`--${name}:\\s*([^;]+);`).exec(tokens)![1]!.trim();
+    expect([token('tap-min'), token('sp-1'), token('fs-base'), token('lh-normal')]).toEqual(['44px', '4px', '15px', '1.5']);
+    const rule = (sel: string): string => {
+      const at = chat.indexOf(`${sel} {`);
+      return chat.slice(at, chat.indexOf('}', at));
+    };
+    expect(rule('.msg-user .msg-paste')).toContain('min-height: var(--tap-min);');
+    expect(rule('.msg-user .msg-paste')).toContain('margin: var(--sp-1) 0;');
+    expect(rule('\n.msg-user')).toContain('font-size: var(--fs-base);');
+    expect(rule('\n.msg-user')).toContain('line-height: var(--lh-normal);');
+  });
+
   it('for a confirmed turn and for a pending one', () => {
-    const plain = lines({ kind: 'message', event: user('a\nb') } as TranscriptItem);
-    expect(lines({ kind: 'message', event: user(`a\n${pastePointer(PATH, 214)}\nb`) } as TranscriptItem)).toBe(plain + 1);
-    const send = { key: 'k', text: 'a\nb', state: 'sending', sentAt: 0 } as PendingSend;
-    const pend = lines({ kind: 'pending', send } as TranscriptItem);
-    expect(lines({ kind: 'pending', send: { ...send, text: `a\n${pastePointer(PATH, 214)}\nb` } } as TranscriptItem))
-      .toBe(pend + 1);
+    const chip = `a\n${pastePointer(PATH, 214)}\nb`;
+    expect(lines(turn(chip))).toBeCloseTo(lines(turn('a\nb')) + PASTED_CHIP_LINES, 10);
+    expect(lines(send(chip))).toBeCloseTo(lines(send('a\nb')) + PASTED_CHIP_LINES, 10);
+  });
+
+  // A line that is no pointer here is drawn as today's text: the confirmed bubble takes its clip path out as an
+  // attachment (`splitClipPaths`) and the pending bubble draws it as typed. The price is that drawing, with no chip.
+  const asText = (text: string) => {
+    const { paths, rest } = splitClipPaths(text);
+    return { bucket: 'user', lines: plainLines(rest), attach: paths.length };
+  };
+
+  it('a look-alike is priced as the text it is drawn as', () => {
+    const near = `a\n${pastePointer(PATH, 214).replace('214 lines', '214 line')}\nb`;
+    expect(shapeOf(turn(near), undefined, undefined, SID)).toEqual(asText(near));
+    expect(lines(send(near))).toBe(plainLines(near));
+    expect(bubble(user(near)).querySelector('a.msg-paste')).toBeNull();
+  });
+
+  it('only a pointer of this session is a chip, as the bubble draws it: another session\'s is text here', () => {
+    const other = `/home/user-a/.cc-clips/lane-b/${NAME}`;
+    const text = `a\n${pastePointer(other, 214)}\nb`;
+    expect(shapeOf(turn(text), undefined, undefined, SID)).toEqual(asText(text));
+    expect(lines(send(text))).toBe(plainLines(text));
+    expect(lines(turn(text), 'lane-b')).toBeCloseTo(lines(turn('a\nb'), 'lane-b') + PASTED_CHIP_LINES, 10);
+    expect(bubble(user(text)).querySelector('a.msg-paste')).toBeNull();
+  });
+});
+
+describe('a turn\'s repository evidence is the whole turn\'s (review 4119 F4)', () => {
+  const CROSS: ChatRefContext = {
+    repo: 'owner-a/repo-a', project: 'project-a', branch: 'ws/one', knownRuns: new Set(), knownItems: new Set(),
+    runsElsewhere: true,
+  };
+  const links = (text: string): string[][] => {
+    const { container } = render(
+      <ChatRefsContext value={CROSS}><MessageBubble id={SID} event={user(text)} /></ChatRefsContext>,
+    );
+    const out = Array.from(container.querySelectorAll('.msg-user a:not(.msg-paste)'))
+      .map((a) => [a.textContent ?? '', a.getAttribute('href') ?? '']);
+    cleanup();
+    return out;
+  };
+
+  it('a repository named before a chip still qualifies a bare reference after it', () => {
+    const want = [
+      ['owner-b/repo-b#12', 'https://github.com/owner-b/repo-b/issues/12'],
+      ['#12', 'https://github.com/owner-b/repo-b/issues/12'],
+    ];
+    expect(links(`owner-b/repo-b#12 merged\nsee #12 again`)).toEqual(want);
+    expect(links(`owner-b/repo-b#12 merged\n${pastePointer(PATH, 3)}\nsee #12 again`)).toEqual(want);
+  });
+
+  it('a turn with no pointer links exactly as the bubble always did', () => {
+    const text = '#512 is green; owner-b/repo-b#12 merged.';
+    const { container } = render(
+      <ChatRefsContext value={CROSS}><MessageBubble id={SID} event={user(text)} /></ChatRefsContext>,
+    );
+    const body = container.querySelector('.msg-user')!;
+    const ref = document.createElement('div');
+    render(<>{linkify(text, CROSS)}</>, { container: ref });
+    expect(body.innerHTML).toBe(ref.innerHTML);
   });
 });

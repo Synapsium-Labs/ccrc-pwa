@@ -14,6 +14,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { chromium, type Browser, type Page } from 'playwright-core';
 import { INSTRUMENT, PHOSPHOR, REFINED } from '@ccrc/ui';
 import { pastePointer } from '../../shared/pastePointer';
+import { PASTED_CHIP_LINES } from '../src/session/pastedTurn';
 import { resolveChrome } from './harness';
 import { openApp, serveDist, sharedDist, type AppFixture, type AppView, type DistServer } from './app';
 
@@ -96,15 +97,16 @@ const contrastOf = (el: Element): number => {
 const noSidewaysScroll = (page: Page): Promise<boolean> =>
   page.evaluate(() => document.scrollingElement!.scrollWidth <= document.scrollingElement!.clientWidth);
 
-/** The session screen with the upload and prompt routes recorded; `failFirst` refuses the first upload with 502. */
-const openComposer = async (view: AppView, failFirst = false) => {
+/** The session screen with the upload and prompt routes recorded; `failFirst` refuses the first upload with 502, and
+ *  `holdMs` is how long each upload takes. With `before`, run it before the paste (to stage a document first). */
+const openComposer = async (view: AppView, failFirst = false, holdMs = 600, before?: (page: Page) => Promise<void>) => {
   const opened = await openApp(browser!, view, FIXTURE);
   await opened.ctx.grantPermissions(['clipboard-read', 'clipboard-write'], { origin: server!.origin });
   const uploads: Buffer[] = [];
   const prompts: unknown[] = [];
   await opened.page.route('**/api/sessions/*/upload', async (route) => {
     uploads.push(route.request().postDataBuffer() ?? Buffer.alloc(0));
-    await new Promise((r) => setTimeout(r, 600)); // long enough to see Send held
+    await new Promise((r) => setTimeout(r, holdMs)); // long enough to see Send held
     if (failFirst && uploads.length === 1) {
       await route.fulfill({ status: 502, contentType: 'application/json', body: '{"ok":false,"error":"agent-down"}' });
       return;
@@ -128,6 +130,7 @@ const openComposer = async (view: AppView, failFirst = false) => {
   await opened.page.goto(`${server!.origin}/s/${SID}`);
   const field = opened.page.getByRole('textbox', { name: 'Message' });
   await field.waitFor({ timeout: 20_000 });
+  await before?.(opened.page);
   await opened.page.evaluate((text) => navigator.clipboard.writeText(text), LONG);
   await field.focus();
   await opened.page.keyboard.press('Control+V');
@@ -192,6 +195,92 @@ describe('a failed save sends nothing, says why at 4.5:1, and Retry sends', () =
         expect(s.errors).toEqual([]);
       } finally {
         await s.ctx.close();
+      }
+    });
+  }
+});
+
+describe('while a send saves, the tray is held and a dropped file is cancelled; the draft stays (review 4119 F1, F7)', () => {
+  for (const view of VIEWS) {
+    it(named(view), async () => {
+      const stage = async (page: Page): Promise<void> => {
+        await page.locator('input.attach-input').setInputFiles({ name: 'notes.md', mimeType: 'text/markdown', buffer: Buffer.from('x') });
+        await page.getByRole('button', { name: 'Remove notes.md' }).waitFor({ timeout: 10_000 });
+        await expect.poll(() => page.getByRole('button', { name: 'Send' }).isEnabled(), { timeout: 10_000 }).toBe(true);
+      };
+      const s = await openComposer(view, false, 3_000, stage);
+      try {
+        const url = s.page.url();
+        const remove = s.page.getByRole('button', { name: 'Remove notes.md' });
+        expect(await remove.isEnabled()).toBe(true);
+        await s.page.getByRole('button', { name: 'Send' }).click();
+        await s.page.getByText('Saving pasted text…').waitFor({ timeout: 5_000 });
+        // Held, and read so: a real click at its place does nothing.
+        expect(await remove.isDisabled()).toBe(true);
+        await remove.click({ force: true, timeout: 2_000 });
+        expect(await remove.count()).toBe(1);
+        // A file dropped meanwhile: the drag-over and the drop are both cancelled, which is what keeps Chrome from opening
+        // the file in place of the page (a dispatched drop never runs that default itself, so the cancel is the pin).
+        const cancelled = await s.page.locator('.composer').evaluate((el) => {
+          const dt = new DataTransfer();
+          dt.items.add(new File(['y'], 'late.md', { type: 'text/markdown' }));
+          const over = new DragEvent('dragover', { bubbles: true, cancelable: true, dataTransfer: dt });
+          const drop = new DragEvent('drop', { bubbles: true, cancelable: true, dataTransfer: dt });
+          el.dispatchEvent(over);
+          el.dispatchEvent(drop);
+          return [over.defaultPrevented, drop.defaultPrevented, el.getAttribute('data-drop')];
+        });
+        expect(cancelled).toEqual([true, true, null]);
+        expect(s.page.url()).toBe(url);
+        expect(await s.page.locator('.paste-chip').count()).toBe(1);
+        expect(await s.page.locator('.attach-chip').count()).toBe(1);
+        // The send that goes is the tap's: the attachment in front, then the pointer.
+        await expect.poll(() => s.prompts.length, { timeout: 15_000 }).toBe(1);
+        expect(s.prompts).toEqual([{ text: POINTER, attachments: [CLIP_PATH] }]);
+        expect(s.errors).toEqual([]);
+      } finally {
+        await s.ctx.close();
+      }
+    });
+  }
+});
+
+describe('the list prices a chip as it is drawn, and the turn holds still when its row renders (review 4119 F6)', () => {
+  for (const view of VIEWS) {
+    it(named(view), async () => {
+      const opened = await openApp(browser!, view, FIXTURE);
+      const { ctx, page, errors } = opened;
+      try {
+        const turn = (uuid: string, text: string): object => ({ kind: 'user', uuid, ts: '2026-11-27T10:00:00.000Z', text });
+        await ctx.routeWebSocket(/\/ws\/session\//, (ws) => {
+          ws.send(JSON.stringify({
+            type: 'backlog', uuid: 'u-1', offset: 1, file: '/w/t.jsonl', missing: false, searchComplete: true, fileMeasured: true,
+            events: [
+              turn('e2', 'look at this\nand fix it'),
+              turn('e3', 'look at this\nx\nand fix it'),
+              turn('e1', `look at this\n${POINTER}\nand fix it`),
+            ],
+          }));
+        });
+        await page.goto(`${server!.origin}/s/${SID}`);
+        const chip = page.locator('.msg-user a.msg-paste');
+        await chip.waitFor({ timeout: 20_000 });
+        const top0 = (await chip.boundingBox())!.y;
+        await page.waitForTimeout(600);
+        // Held still once drawn: the row did not move under the reader as the list measured it.
+        expect(Math.abs((await chip.boundingBox())!.y - top0)).toBeLessThanOrEqual(1);
+        const heights = await page.locator('.msg-user').evaluateAll((els) => els.map((e) => e.getBoundingClientRect().height));
+        expect(heights).toHaveLength(3);
+        const [two, three, withChip] = heights as [number, number, number];
+        const line = three - two;
+        const drawn = withChip - two;
+        const priced = PASTED_CHIP_LINES * line;
+        // Within half a line of the bubble: the price is the drawing, give or take a rounding of the chip's box.
+        expect(Math.abs(drawn - priced), `drawn ${drawn.toFixed(1)}px, priced ${priced.toFixed(1)}px, line ${line.toFixed(1)}px`)
+          .toBeLessThanOrEqual(line / 2);
+        expect(errors).toEqual([]);
+      } finally {
+        await ctx.close();
       }
     });
   }

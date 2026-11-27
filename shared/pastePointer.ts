@@ -36,8 +36,10 @@ const PASTE_NAME_TAIL = '-paste.txt';
 const HEAD = 'The pasted text (';
 const TAIL = '; read that file as part of this message.';
 
-/** "1 line", "214 lines". */
-const linesWord = (lines: number): string => `${String(lines)} ${lines === 1 ? 'line' : 'lines'}`;
+/** "1 line", "214 lines": the one spelling of a line count, defined here once because the pointer's grammar holds it
+ *  (`readPastePointer` checks the word against the count). The composer's chip label and row and the chat's chip read
+ *  this one (`pasteChips.ts` re-exports it). */
+export const linesWord = (lines: number): string => `${String(lines)} ${lines === 1 ? 'line' : 'lines'}`;
 
 /** The pointer line for a pasted text of `lines` lines saved at `path` (the path the upload answered, as it is). */
 export function pastePointer(path: string, lines: number): string {
@@ -74,13 +76,6 @@ export function readPastePointer(line: string, sessionId: string): PastePointer 
   if (segs[segs.length - 2] !== sessionId) return null;
   if (!name.endsWith(PASTE_NAME_TAIL)) return null;
   return { path, name, lines };
-}
-
-/** Whether `line` is a pointer of the session its own path names. For the chat list's row PRICING only, which knows
- *  no session: it never decides what is drawn or linked, which `readPastePointer` with the real session id does. */
-export function isPastePointerLine(line: string): boolean {
-  const folder = POINTER_RE.exec(line)?.[3]?.split('/').at(-2);
-  return folder !== undefined && readPastePointer(line, folder) !== null;
 }
 
 /** One part of a user turn, in order: its text, or a pointer the chat draws as a chip in that place. */

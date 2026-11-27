@@ -85,6 +85,18 @@ describe('reading a pointer', () => {
     expect(readPastePointer(`${pastePointer(PATH, 3)}\nmore`, SID)).toBeNull();
   });
 
+  it('reads nothing for a bidi character, a newline or a carriage return in the file name', () => {
+    for (const odd of ['‮', '⁦', '\n', '\r']) {
+      const name = `clip-20261127-153012-1a2b${odd}3c4d-paste.txt`;
+      expect(readPastePointer(pastePointer(`/home/user-a/.cc-clips/${SID}/${name}`, 3), SID), JSON.stringify(odd)).toBeNull();
+    }
+  });
+
+  it('accepts a bidi character in the path\'s prefix, and the name it answers holds none of the prefix', () => {
+    const read = readPastePointer(pastePointer(`/home/user-a‮/.cc-clips/${SID}/${NAME}`, 3), SID);
+    expect(read?.name).toBe(NAME);
+  });
+
   it('reads nothing for an empty or unsafe session id', () => {
     expect(readPastePointer(pastePointer(PATH, 3), '')).toBeNull();
     expect(readPastePointer(pastePointer(`/home/user-a/.cc-clips/../${NAME}`, 3), '..')).toBeNull();
