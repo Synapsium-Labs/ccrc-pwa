@@ -596,6 +596,7 @@ describe('the compact row draws Reader mode (X6 XR1.5)', () => {
     expect(buttons.at(-1)).toBe(more());
     const control = buttons.at(-2)!;
     expect(control.getAttribute('aria-label')).toBe(READER_MODE_TEXT.enter);
+    expect(control.getAttribute('title'), 'the compact row\'s icon has its tooltip').toBe(READER_MODE_TEXT.enter);
     expect(control.textContent, 'icon only: no visible word').toBe('');
     expect(control.querySelector('svg[aria-hidden="true"]'), 'its icon').not.toBeNull();
     expect(control).toHaveClass('docs-action', 'docs-reader-mode');
