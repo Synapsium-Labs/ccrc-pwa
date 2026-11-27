@@ -47,6 +47,9 @@ type FirstReadyTrace = {
   admittedAt?: number;
   fallbackAt?: number;
   hookAt?: number;
+  /** The frame's hook only: whether its `postMessage` patch was in place before any script element of the frame's document
+   *  (`document.scripts.length` 0 as the patch lands), so before the library's bootstrap ran (AP3_OPENS). */
+  hookBeforeScripts?: boolean;
   sent?: { at: number; rootPresent: boolean; seedAppearance: boolean | null; messageAppearance: boolean };
 };
 
@@ -109,6 +112,9 @@ async function open(skin: string, theme: string, device: 'light' | 'dark', stale
       }
       Reflect.apply(original, this, transfer === undefined ? [message] : [message, transfer]);
     };
+    // The patch is in place from here: before the frame's own scripts only if no script element has been parsed yet, since the
+    // library's bootstrap keeps the method it finds as it starts (AP3_OPENS).
+    if (trace && !isHost) trace.hookBeforeScripts = document.scripts.length === 0;
   }, { colours: APPEARANCE_SLOTS.colour, firstReady: stale !== undefined });
   if (stale !== undefined) await app.ctx.addInitScript(([key, value]) => {
     if (window === window.top) localStorage.setItem(key, value);
@@ -561,25 +567,48 @@ describe('Docs hosted appearance', () => {
     }
   }, 600_000);
 
+  // THE ROW MEASURES ONLY WITH ITS HOOK IN TIME (issue #3553). Read: the library's frame bootstrap keeps
+  // `MessagePort.prototype.postMessage` as it starts and sends `ready` through that copy, so the frame-side patch above sees the
+  // first `ready` only when it lands before the frame's scripts (its head is all inline scripts, the guard first). Measured on this
+  // box: the reader frame is an out-of-process frame (an `iframe` target of its own, so its init scripts wait on Playwright's
+  // attach to it), and in six opens the hook landed 34 to 98 ms after the console saw the iframe, the frame's document still
+  // loading with no script element and no root, about 160 to 500 ms before the first `ready`. Inferred, not seen here: the
+  // issue's trace had the hook 544 ms after the iframe, at most 65 ms before the host's admission, and no `sent`, so a hook inside
+  // a document already running, whose bootstrap had kept the method before the patch. Such an open measured nothing at `ready`:
+  // the row's other checks still run on it, its trace is logged, and it is opened again, AP3_OPENS times in all at most. A hook in
+  // time that saw no `ready`, a hook never installed, or a late hook on every open still fails, and the appearance assertion is
+  // unchanged.
+  const AP3_OPENS = 3;
   it.each([['light', 'dark'], ['phosphor', 'light']] as const)('AP-3: %s host ignores stale %s reader theme', async (theme, stale) => {
-    const app = await open(SKINS[0]!.id, theme, 'light', stale);
-    try {
-      const { scheme, colour } = await hostAppearanceValues(app.page);
-      const { atReady, frameTrace } = await (await frameOf(app.page)).evaluate(() => {
-        const w = window as Window & { __appearanceAtReady?: unknown; __firstReadyTrace?: FirstReadyTrace };
-        return { atReady: w.__appearanceAtReady, frameTrace: w.__firstReadyTrace };
-      });
-      const hostTrace = await firstReadyHostTrace(app.page);
-      const { mountedAt } = hostTrace;
-      const fromMount = (at: number | undefined) => at === undefined || mountedAt === undefined ? null : at - mountedAt;
-      const trace = { hostTrace, frameTrace: frameTrace ?? null, sentAfterMountMs: fromMount(frameTrace?.sent?.at),
-        admittedAfterMountMs: fromMount(hostTrace.admittedAt), fallbackAfterMountMs: fromMount(hostTrace.fallbackAt) };
-      expect(atReady, `the frame sent ready with the console appearance already applied; first-ready trace: ${JSON.stringify(trace)}`)
-        .toEqual({ scheme, colour });
-      await assertAppearance(app.page);
-      expect(app.errors).toEqual([]);
-    } finally { await app.ctx.close(); }
-  }, 120_000);
+    for (let opened = 1; ; opened += 1) {
+      const app = await open(SKINS[0]!.id, theme, 'light', stale);
+      try {
+        const { scheme, colour } = await hostAppearanceValues(app.page);
+        const { atReady, frameTrace } = await (await frameOf(app.page)).evaluate(() => {
+          const w = window as Window & { __appearanceAtReady?: unknown; __firstReadyTrace?: FirstReadyTrace };
+          return { atReady: w.__appearanceAtReady, frameTrace: w.__firstReadyTrace };
+        });
+        const hostTrace = await firstReadyHostTrace(app.page);
+        const { mountedAt } = hostTrace;
+        const fromMount = (at: number | undefined) => at === undefined || mountedAt === undefined ? null : at - mountedAt;
+        const trace = { opened, hostTrace, frameTrace: frameTrace ?? null, sentAfterMountMs: fromMount(frameTrace?.sent?.at),
+          admittedAfterMountMs: fromMount(hostTrace.admittedAt), fallbackAfterMountMs: fromMount(hostTrace.fallbackAt) };
+        if (frameTrace?.hookBeforeScripts === false && opened < AP3_OPENS) {
+          await assertAppearance(app.page);
+          expect(app.errors).toEqual([]);
+          console.warn(`AP-3 open ${opened} of at most ${AP3_OPENS}: the frame's trace hook landed after its scripts, so it is opened again; first-ready trace: ${JSON.stringify(trace)}`);
+          continue;
+        }
+        expect(frameTrace?.hookBeforeScripts, `the frame's trace hook was in place before the frame's scripts ran (open ${opened} of at most ${AP3_OPENS}); first-ready trace: ${JSON.stringify(trace)}`)
+          .toBe(true);
+        expect(atReady, `the frame sent ready with the console appearance already applied; first-ready trace: ${JSON.stringify(trace)}`)
+          .toEqual({ scheme, colour });
+        await assertAppearance(app.page);
+        expect(app.errors).toEqual([]);
+        return;
+      } finally { await app.ctx.close(); }
+    }
+  }, 300_000);
 
   it('AP-4: a held bridge chunk seeds the latest palette and skin', async () => {
     expect(SKINS.length).toBeGreaterThanOrEqual(2);
