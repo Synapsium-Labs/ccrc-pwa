@@ -153,6 +153,8 @@ step-up without state, and neither had a multiline form. The coordinator ruled t
   held row whose mode is `off` draws its hold sentence and no Resume.
 - `one-refusal-act-for-a-rows-moves`: the plan's ceiling door and the row moves share the act `decision-row`; their words do not
   differ.
+- `row-refusal-named-by-its-row-and-reason`: a refused row is recognised by its row index and a reason from the door's closed list,
+  which only the upload's row refusal carries, not by comparing the word to a literal (the refusal-branch ratchet stays at 32).
 - `list-controls-wait-for-the-status`: the list's box and Upload are drawn once the status is read, as every card with its own read.
 - `textarea-in-the-control-census`: the secret field's text area joins the control census (TOKEN, `.acct-secret-text`, two floors
   tall) and the tap-target suite, by packets their holders accepted. The section's other new controls are `@ccrc/ui`'s.

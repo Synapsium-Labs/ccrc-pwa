@@ -106,7 +106,9 @@ export function nameListRowsOf(text: string): NameListText {
  *  `overlordSettingsRefusalText` for `name-list`). The answer's row and reason are read; nothing of the text is. */
 export function nameListRefusalText(err: unknown, lines: readonly number[], otherwise: (err: unknown) => string): string {
   const body = err instanceof ApiError && isObj(err.body) ? err.body : null;
-  if (body !== null && body.error === 'bad-request' && isCount(body.row) && isOneOf(NAME_LIST_ROW_REFUSALS, body.reason)) {
+  // Only the upload's row refusal carries a row index and a reason from the door's closed list, so those two name it; the word is
+  // not compared as a literal (the refusal-branch ratchet).
+  if (body !== null && isCount(body.row) && isOneOf(NAME_LIST_ROW_REFUSALS, body.reason)) {
     const line = lines[body.row];
     if (line !== undefined) return NAME_LIST_WORDS.rowRefused(line, body.reason);
   }
