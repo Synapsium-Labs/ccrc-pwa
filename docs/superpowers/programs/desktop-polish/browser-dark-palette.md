@@ -69,11 +69,11 @@ The stamped-theme assertion goes red when a file is put back. Measured: programm
 
 **The tree scan** (`pwa/test/browser-theme-ids.test.ts`) parses every TypeScript source under `pwa/browser`,
 subdirectories included as the browser leg collects them, with the repository's one parser (`server/test/scan/parse.ts`,
-D-8288). After fix round 1 it reads seven shapes (`SHAPES`):
+D-8288). What it reads is a closed list of seven shapes (`SHAPES`, after fix round 1):
 
 | shape | what it reads |
 |---|---|
-| theme property | `{ theme: 'x' }`, through a spread object or a conditional; `{ theme }` or `{ theme: X }` when the name is a `const` of the same file holding a literal |
+| theme property | `{ theme: 'x' }`, through a spread object or a conditional; `{ theme }` or `{ theme: X }` when the name is a `const` holding a literal, declared once in the file (fix round 2) |
 | themes list | a list bound to a name or a property matching `/themes\|palettes/i` |
 | theme loop | `for (const theme of [...])` |
 | tuple loop | `for (const [theme, width] of [[...], ...])`: the cell in theme's position of each row |
@@ -83,20 +83,49 @@ D-8288). After fix round 1 it reads seven shapes (`SHAPES`):
 
 *Table 3. The shapes the scan reads.*
 
-**What it does not read**, each named in the scan's header and pinned as reading nothing by its own case: a string built
-by concatenation, or a template with a substitution; a value or a list imported from another module; a value computed at
-run time (a call, an element or member read, a reassigned `let`); a spread argument list; a list mapped by a callback
-whose parameter has another name (`(t) => ({ theme: t })`), or a list that is not a literal. `openApp` refuses all of
-those at run time, before any context opens, but that runs only in the merge queue's browser leg, never in a pull
-request's fast run. Review 4015 measured the gaps that fix round 1 closed: the mapped list (20 sites in 19 files), the
-shorthand fed by a file constant, and the tuple loop (live at delegation-rows' theme and width loop).
+**Anything else is unread, and is the opener's to refuse** (fix round 2, review 4025, the coordinator's ruling). A static
+scan cannot list everything it does not read, so the header names what the scan reads, as the closed list above, and
+gives the unread shapes as examples, not as a complete list. Each example has its own read-nothing pin:
+- a string built by concatenation, or a template with a substitution;
+- a value or a list imported from another module;
+- a call, or an element or member read;
+- the default value of a `theme` parameter. This is live today in phone-bar's file: its `open` defaults `theme` to
+  `'light'`, and three of its calls leave the argument out;
+- the right side of a `??` or `||` fallback;
+- a `let` or a `var`, reassigned or not;
+- a name declared more than once in the file;
+- a tagged-template each table;
+- a method call (`h.open(skin, 'x')`);
+- a callback that binds `theme` as a later parameter (`.reduce((acc, theme) => …)`);
+- a list that is not a literal;
+- a spread argument list;
+- a callback whose parameter has another name (`(t) => ({ theme: t })`).
+
+`openApp` refuses each of these at run time, before any context opens, but that runs only in the merge queue's browser
+leg, never in a pull request's fast run.
+
+- **A narrowing, accepted as a trade.** Round 0 read any declaration with a string literal initializer as a file
+  constant, `let` and `var` included. Fix round 1 reads only a `const`, so a `let` or a `var`, reassigned or not, is no
+  longer read. This narrows the scan. The coordinator accepts it as a trade: a reassigned binding judged by its first
+  value gives false reds and false passes both.
+- **A name declared more than once is not resolved** (fix round 2, review 4025 F1). File constants are one map by name
+  with no scopes. Before this round, two same-named bindings judged one against the other's value. Measured by review
+  4025: two functions each with its own `const theme`, `'dark'` and `'light'`, passed silently; an outer constant
+  shadowed by an inner one, and a file constant beside a parameter of the same name, each went red on a value the app
+  never received. Now a name declared more than once, as a variable, a parameter, a function or a class, anywhere in
+  the file, reads nothing. A name declared once still resolves, before or after its use. No real file's count moved:
+  the scan reads 151 literals in 104 of 142 files on the head and 152 in 105 of 143 on the merge with `main`, the
+  same as before this round.
+- **Counting the mapped list.** Round 1's "20 sites in 19 files" was a count by a search of call sites. The scan's
+  mapped-list shape finds 20 literals in 16 files.
 
 - Exceptions: named files only, each with the GitHub issue that owns its fix, never a pattern. None today. A test
   holds each named exception to a file that still needs one.
-- **Floors (fix round 1, review 4015 F5).** Measured on the head merged with `main` `6df8f8bb63`: **152 literals in 105
-  of 143 files**. By shape: theme property 60, themes list 48, mapped list 20, theme loop 8, theme argument 7, tuple loop
-  5, each table 4. Each shape must find at least one literal in the real tree, so a shape the visitor stops reading is red
-  whatever the total is. The totals' floors are 120 literals and 80 files, about four fifths of the measure, rounded
+- **Floors (fix round 1, review 4015 F5; re-measured in fix round 2).** Measured on the head merged with `main`
+  `a45831a795`, the same as on `6df8f8bb63`: **152 literals in 105 of 143 files**. By shape: theme property 60, themes
+  list 48, mapped list 20, theme loop 8, theme argument 7, tuple loop 5, each table 4. Each shape's floor is in
+  `SHAPE_FLOORS`, 1 each, so a shape the visitor stops reading is red whatever the total is. Its red message says that a
+  shape which leaves the tree on purpose lowers its own floor in the same commit, with the reason (fix round 2). The totals' floors are 120 literals and 80 files, about four fifths of the measure, rounded
   down to ten. **Correction:** round 0's note and PR body said 131 literals in 90 files. The 131 was counted over
   `main`'s seven files, whose `'dark'` and `'light'` literals count where the head has the `PHOSPHOR` identifier. The
   head itself had 122 literals in 90 files, as review 4015 measured.
@@ -135,8 +164,11 @@ contexts opened; `light`, `PHOSPHOR` and `SYSTEM` each open one.
 | G8 | the each-table branch disabled | killed: its case and the per-shape floor |
 | G9 | tuple rows disabled | killed: the tuple and mapped-list cases and the per-shape floor |
 | G10 | the shorthand branch disabled | killed: the shorthand case |
-| G11 | a `let` counted as a file constant | killed: the not-read case |
+| G11 | a `let` counted as a file constant | killed: the not-read case (the narrowing above) |
 | G12 | the listing not recursive | killed: the subdirectory case (it survived before that case was added: no subdirectory exists today) |
+| R2 | fix round 2: the refusal to resolve a name declared more than once removed | killed: the declared-more-than-once case |
+| R3a | fix round 2: chat-colour's mapped list to `'dark'`, to read the red message | killed; the line ends `if that list is not themes, rename the callback's parameter, or take the named-file exception route (EXCEPTIONS, with its issue)` |
+| R3b | fix round 2: the each-table floor raised past the tree, to read the red message | killed: `each table literals found (if this shape left the tree on purpose, lower its floor in SHAPE_FLOORS in the same commit, with the reason)` |
 
 *Table 4. The mutants and what killed them.*
 
@@ -145,6 +177,11 @@ contexts opened; `light`, `PHOSPHOR` and `SYSTEM` each open one.
 "dark" is not one the app keeps (an id of @ccrc/ui's THEMES, or SYSTEM); the app would draw "system" in its place`.
 
 ## 5. Follow-ups (not in this wave, on the coordinator's ruling)
+
+- **browser-theme-scan-carries** (a ticket of its own, the coordinator's ruling on review 4025):
+  - reading a `theme` parameter's default value, and the right side of a `??` or `||` fallback;
+  - pinning the tree scan's own listing call site, so a flat listing there goes red (review 4025 F6);
+  - one stand-in browser in the opener's suite, `browser-dist.test.ts`, in place of the two near copies (F8).
 
 - **One stamped-theme check for every file through the opener.** Measured: 118 browser files open the app through
   `openApp`. 94 of them assert that the page-error list is empty and 24 do not, most of the 24 being reader and docs
@@ -160,7 +197,9 @@ Round 0: every browser file once on the head (base `aba5845760`): 125 of 128 fil
 green alone. Then on a local merge with `fabd9d399d`: the seven files and the two browser files `main` had changed,
 522/522. Fix round 1 changes no browser file's cases (only the helper's header comment), so the seven were not re-run.
 Its evidence is the two suites above on the head and on the head merged with `main`, the mutants in Table 4, and the pwa
-typecheck. The PR body and the wave-done name the runs.
+typecheck. Fix round 2 changes only the scan and this note. Its evidence is the same two suites on the head and on a
+local merge with `a45831a795`, the counts above, the R2 and R3 rows of Table 4, and the pwa compile check. The PR body and
+the wave-done name the runs.
 
 ## 7. The judge's size reason
 

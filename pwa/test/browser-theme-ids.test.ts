@@ -8,10 +8,10 @@
 //
 // The browser files run in no pull request's fast run, so this scan is the guard every pull request sees. It parses every
 // file under pwa/browser, subdirectories included, with the repository's one parser (`server/test/scan/parse.ts`,
-// D-8288), and holds each string literal it finds reaching the app as a theme to `resolveTheme(t) === t`. The ids come
-// from @ccrc/ui, never from a second list here. It reads these shapes (`SHAPES`):
+// D-8288), and holds each string literal it reads reaching the app as a theme to `resolveTheme(t) === t`. The ids come
+// from @ccrc/ui, never from a second list here. What it reads is this closed list of seven shapes (`SHAPES`):
 //   - theme property: `{ theme: 'x' }`, a spread object or a conditional included, and `{ theme }` or `{ theme: X }`
-//     where the name is a constant of the same file holding a literal;
+//     where the name is a `const` holding a literal, declared once in the file;
 //   - themes list: a list bound to a name or a property matching /themes|palettes/i;
 //   - theme loop and tuple loop: `for (const theme of [...])`, and `for (const [theme, width] of [[...], ...])` (the cell
 //     in theme's position of each row);
@@ -20,12 +20,15 @@
 //     `[PHOSPHOR, 'light'].flatMap((theme) => …)`;
 //   - each table: `it.each(table)(title, (…, theme, …) => …)`, the cell in theme's parameter position of each row.
 //
-// It does NOT read (measured by review 4015 and this wave's mutants): a string built by concatenation (`'da' + 'rk'`) or
-// a template with a substitution; a value or a list imported from another module; a value computed at run time (a call,
-// an element or member read, a `let` reassigned); a spread argument list (`open(...[skin, 'dark'])`); and a list mapped
-// by a callback whose parameter has another name (`[...].map((t) => ({ theme: t }))`) or by a list that is not a literal.
-// `openApp` refuses every one of those at run time, before any context opens (pinned in browser-dist.test.ts), but that
-// runs only in the merge queue's browser leg, never in a pull request's fast run.
+// Anything else is unread, and is the opener's to refuse: `openApp` refuses a theme the app does not keep at run time,
+// before any context opens (pinned in browser-dist.test.ts), but that runs only in the merge queue's browser leg, never in
+// a pull request's fast run. A static scan cannot list everything it does not read; examples, each pinned as reading
+// nothing below: concatenation and templates with a substitution; a value or a list imported from another module; a call
+// or a member read; the default value of a `theme` parameter (live in phone-bar's file, whose `open` defaults theme to
+// 'light' and three of its calls leave the argument out); the right side of a `??` or `||` fallback; a `let` or a `var`,
+// reassigned or not; a name declared more than once in the file, whatever its scopes; a tagged-template each table; a
+// method call (`h.open(skin, 'x')`); a callback that binds `theme` as a later parameter; a list that is not a literal; a
+// spread argument list; and a callback whose parameter has another name.
 import { describe, expect, it } from 'vitest';
 import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -46,10 +49,15 @@ interface ThemeLiteral {
   readonly shape: Shape;
 }
 
-/** Every shape the scan reads. The floor holds each to at least one literal in the real tree, so a shape the visitor
- *  stops reading is red whatever the total is. */
+/** Every shape the scan reads: the closed list the header names. */
 const SHAPES = ['theme property', 'themes list', 'theme loop', 'tuple loop', 'theme argument', 'mapped list', 'each table'] as const;
 type Shape = typeof SHAPES[number];
+
+/** Each shape's floor in the real tree: at least one literal, so a shape the visitor stops reading is red whatever the
+ *  total is. A shape that leaves the tree on purpose lowers its own floor here in the same commit, with the reason. */
+const SHAPE_FLOORS: Readonly<Record<Shape, number>> = {
+  'theme property': 1, 'themes list': 1, 'theme loop': 1, 'tuple loop': 1, 'theme argument': 1, 'mapped list': 1, 'each table': 1,
+};
 
 const THEME_NAME = /^theme$/i;
 const LIST_NAME = /themes|palettes/i;
@@ -72,11 +80,21 @@ function themeLiterals(fileName: string, source: string): ThemeLiteral[] {
     fileName.endsWith('.tsx') ? ts.ScriptKind.TSX : ts.ScriptKind.TS);
   const found: ThemeLiteral[] = [];
 
-  // Pass 1: the file's own string constants (`const DARK = 'dark'`; a `let` can be reassigned, so it is not one) and its
-  // own functions' theme parameter positions.
+  // Pass 1: the file's own string constants (`const DARK = 'dark'`), its own functions' theme parameter positions, and how
+  // often each name is declared. A `let` or a `var` is never a constant (a binding judged by its first value would give
+  // false reds and false passes both), and nor is a name declared more than once: constants are one map by name with no
+  // scopes, so two same-named bindings would judge one against the other's value.
   const constants = new Map<string, ts.StringLiteralLike>();
   const themeParam = new Map<string, number>();
+  const declared = new Map<string, number>();
+  const declare = (name: ts.BindingName | undefined): void => {
+    if (name === undefined) return;
+    if (ts.isIdentifier(name)) declared.set(name.text, (declared.get(name.text) ?? 0) + 1);
+    else for (const el of name.elements) if (ts.isBindingElement(el)) declare(el.name);
+  };
   const visitDecls = (node: ts.Node): void => {
+    if (ts.isVariableDeclaration(node) || ts.isParameter(node)) declare(node.name);
+    if ((ts.isFunctionDeclaration(node) || ts.isClassDeclaration(node)) && node.name !== undefined) declare(node.name);
     if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name) && node.initializer !== undefined) {
       const init = unwrap(node.initializer);
       const isConst = ts.isVariableDeclarationList(node.parent) && (node.parent.flags & ts.NodeFlags.Const) !== 0;
@@ -101,7 +119,8 @@ function themeLiterals(fileName: string, source: string): ThemeLiteral[] {
       take(e.whenFalse, shape);
       return;
     }
-    const lit = ts.isStringLiteralLike(e) ? e : ts.isIdentifier(e) ? constants.get(e.text) : undefined;
+    const lit = ts.isStringLiteralLike(e) ? e
+      : ts.isIdentifier(e) && declared.get(e.text) === 1 ? constants.get(e.text) : undefined;
     if (lit === undefined) return;
     found.push({ line: sf.getLineAndCharacterOfPosition(lit.getStart(sf)).line + 1, text: lit.text, shape });
   };
@@ -138,7 +157,7 @@ function themeLiterals(fileName: string, source: string): ThemeLiteral[] {
       if (THEME_NAME.test(key)) take(node.initializer, 'theme property');
       else if (LIST_NAME.test(key)) takeList(node.initializer, 'themes list');
     }
-    // `{ skin, theme, width }`: judged when `theme` is a constant of this file holding a literal.
+    // `{ skin, theme, width }`: judged when `theme` is a `const` holding a literal, declared once in the file.
     if (ts.isShorthandPropertyAssignment(node) && THEME_NAME.test(node.name.text)) take(node.name, 'theme property');
     if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name) && LIST_NAME.test(node.name.text) && node.initializer !== undefined) {
       takeList(node.initializer, 'themes list');
@@ -185,7 +204,7 @@ function themeLiterals(fileName: string, source: string): ThemeLiteral[] {
 
 const kept = (t: string): boolean => resolveTheme(t) === t;
 
-describe('the scan reads the shapes it names (SHAPES), and only those', () => {
+describe('the scan reads its seven shapes (SHAPES), a closed list; anything else is the opener\'s', () => {
   const texts = (src: string) => themeLiterals('x.browser.test.ts', src).map((l) => `${l.shape}:${l.text}`);
 
   it('a theme property, directly, through a conditional, a file constant or a spread object', () => {
@@ -234,13 +253,33 @@ describe('the scan reads the shapes it names (SHAPES), and only those', () => {
     expect(texts("it.each(['light', 'dark'])('%s', async (device) => {});")).toEqual([]);
   });
 
-  it('what it does not read, it leaves to the opener (each named in the header)', () => {
+  it('a name declared more than once in the file is not resolved; a name declared once is, before or after its use', () => {
+    // Two functions, each with its own `const theme`: judging both by one map passed the 'dark' one silently.
+    expect(texts("function a() { const theme = 'dark'; return openApp(b, { skin, theme }, F); }\n"
+      + "function c() { const theme = 'light'; return openApp(b, { skin, theme }, F); }")).toEqual([]);
+    // An outer constant shadowed by an inner one, and a file constant beside a parameter of the same name: both went red
+    // on a value the app never received.
+    expect(texts("const SHADE = 'dark';\nfunction f() { const SHADE = PHOSPHOR; return openApp(b, { theme: SHADE }, F); }")).toEqual([]);
+    expect(texts("const theme = 'oops';\nfunction f(theme: string) { return openApp(b, { skin, theme }, F); }")).toEqual([]);
+    expect(texts("openApp(b, { theme: LATE }, F);\nconst LATE = 'dark';")).toEqual(['theme property:dark']);
+  });
+
+  it('examples of what it does not read (not a complete list): each is the opener\'s to refuse', () => {
     expect(texts("openApp(b, { theme: 'da' + 'rk' }, F);")).toEqual([]);
     expect(texts("openApp(b, { theme: `${'da'}rk` }, F);")).toEqual([]);
     expect(texts("import { DUSK } from './elsewhere';\nopenApp(b, { theme: DUSK }, F);")).toEqual([]);
     expect(texts("import { MODES } from '../test/modes';\nfor (const theme of MODES) {}")).toEqual([]);
     expect(texts("openApp(b, { theme: pick() }, F);\nopenApp(b, { theme: M.dark }, F);")).toEqual([]);
+    expect(texts("async function openIt(skin: string, theme = 'dark') { return openApp(b, { skin, theme }, F); }\nopenIt(REFINED);"))
+      .toEqual([]);
+    expect(texts("openApp(b, { theme: pick ?? 'dark' }, F);\nopenApp(b, { theme: (pick as string) || 'dark' }, F);")).toEqual([]);
+    expect(texts("let DUSK = 'dark';\nopenApp(b, { theme: DUSK }, F);")).toEqual([]);
+    expect(texts("var DUSK = 'dark';\nopenApp(b, { theme: DUSK }, F);")).toEqual([]);
     expect(texts("let theme = 'light';\ntheme = 'dark';\nopenApp(b, { theme }, F);")).toEqual([]);
+    expect(texts("it.each`theme\n${'dark'}`('%s', async ({ theme }) => {});")).toEqual([]);
+    expect(texts("const h = { open: (skin: string, theme: string) => {} };\nh.open(REFINED, 'dark');")).toEqual([]);
+    expect(texts("['dark'].reduce((acc, theme) => acc, '');")).toEqual([]);
+    expect(texts("const MODES = ['dark'];\nMODES.map((theme) => ({ theme }));")).toEqual([]);
     expect(texts("async function open(skin: string, theme: string) {}\nopen(...['r', 'dark']);")).toEqual([]);
     expect(texts("['dark'].map((t) => ({ theme: t }));")).toEqual([]);
   });
@@ -285,13 +324,15 @@ describe('no browser file hands the app a theme the app does not keep', () => {
     expect(kept('dark'), "'dark' is not an id").toBe(false);
   });
 
-  // Measured on this wave's head merged with main 6df8f8bb63 (the note, section 4): 152 literals in 105 of 143 files, every
-  // shape at least 4. The totals' floors are about four fifths of that, rounded down to ten; each shape must find at least one literal in the real tree, so a shape the visitor
-  // stops reading is red whatever the total is.
+  // Measured on this wave's head merged with main a45831a795 (the note, section 4): 152 literals in 105 of 143 files. The
+  // totals' floors are about four fifths of that, rounded down to ten; each shape's floor is in SHAPE_FLOORS.
   it('finds theme literals at all, in every shape it reads (a scan that finds nothing proves nothing)', () => {
     const literals = scanned.flatMap((s) => s.literals);
     const withAny = scanned.filter((s) => s.literals.length > 0);
-    for (const shape of SHAPES) expect(literals.filter((l) => l.shape === shape).length, `${shape} literals found`).toBeGreaterThanOrEqual(1);
+    for (const shape of SHAPES) {
+      expect(literals.filter((l) => l.shape === shape).length, `${shape} literals found (if this shape left the tree on `
+        + 'purpose, lower its floor in SHAPE_FLOORS in the same commit, with the reason)').toBeGreaterThanOrEqual(SHAPE_FLOORS[shape]);
+    }
     expect(literals.length, 'theme literals found').toBeGreaterThanOrEqual(TOTAL_FLOOR);
     expect(withAny.length, 'browser files with a theme literal').toBeGreaterThanOrEqual(FILES_FLOOR);
   });
@@ -299,7 +340,9 @@ describe('no browser file hands the app a theme the app does not keep', () => {
   it('every theme literal is a catalogue id or SYSTEM', () => {
     const bad = scanned.flatMap(({ file, literals }) => literals
       .filter((l) => !kept(l.text))
-      .map((l) => `${file}:${l.line} ${l.shape} '${l.text}' (the app would draw ${resolveTheme(l.text)})`));
+      .map((l) => `${file}:${l.line} ${l.shape} '${l.text}' (the app would draw ${resolveTheme(l.text)})`
+        + (l.shape === 'mapped list' ? "; if that list is not themes, rename the callback's parameter, or take the named-file "
+          + 'exception route (EXCEPTIONS, with its issue)' : '')));
     const unexcused = bad.filter((b) => !(b.split(':')[0]! in EXCEPTIONS));
     expect(unexcused).toEqual([]);
   });
