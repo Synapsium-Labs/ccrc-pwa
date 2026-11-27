@@ -36,6 +36,9 @@ describe('the spawn fence\'s rule (pure, every platform)', () => {
     vi.stubEnv('PATH', `${SYS32};${MSYS}`);
     try {
       expect(() => fence('spawnSync', ['bash', [], { env: noPath }])).toThrow(/spawnSync refused.*the WSL launcher/);
+      // a PATH key whose value is undefined: node leaves it out of the child's block, so it is the same lookup (F7)
+      expect(() => fence('spawnSync', ['bash', [], { env: { ...noPath, PATH: undefined } }]), 'PATH: undefined')
+        .toThrow(/spawnSync refused.*the WSL launcher/);
     } finally { vi.unstubAllEnvs(); }
     vi.stubEnv('PATH', `${MSYS};${SYS32}`);
     try {

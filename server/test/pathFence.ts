@@ -199,9 +199,12 @@ export function fenceSpawnArgs(name: typeof SPAWNERS[number], a: unknown[], msys
   }
   const opts = args[i] as { env?: NodeJS.ProcessEnv; shell?: unknown };
   const env = fenceEnv(opts.env ?? process.env);
-  // A child env with no PATH key: node looks a bare command up on this process's PATH (measured), so that is the one
-  // judged. Judged only: the child gets its env as given.
-  const bad = pathBad(keyOf(env, 'PATH') ? env : { ...env, PATH: process.env['PATH'] }, REAL_HOME, REAL_TMP, msys, hasBash);
+  // A child env with no PATH value (no key, or a key whose value is undefined, which node leaves out of the child's
+  // block): node looks a bare command up on this process's PATH (measured), so that is the one judged, as
+  // `env.PATH ?? process.env.PATH` reads it. Judged only: the child gets its env as given.
+  const pk = keyOf(env, 'PATH');
+  const judged = pk !== undefined && env[pk] !== undefined ? env : { ...env, [pk ?? 'PATH']: process.env['PATH'] };
+  const bad = pathBad(judged, REAL_HOME, REAL_TMP, msys, hasBash);
   for (const f of [name === 'exec' || name === 'execSync' ? undefined : args[0], opts.shell]) {
     const why = commandBad(f, msys);
     if (why !== null) bad.push(why);
