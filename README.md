@@ -1535,7 +1535,7 @@ step 10 of
      named here, derived from `gate.ts`'s own EXEMPT reasons (D-1233/D-1234). -->
 
 What is gated, and what is not: **everything except** `/health` (deploy's own
-liveness gate reads the shipped sha out of it), the one hundred and eight machine lanes the
+liveness gate reads the shipped sha out of it), the one hundred and nine machine lanes the
 fleet host reaches (thirty-nine box-token-consulting coordination routes plus
 the Linear proxy's routes under `/api/linear/proxy/`, which a session's `ccrc-api linear`
 verbs call and which refuse any call without the token whatever `CCRC_AUTH` says,
@@ -1563,7 +1563,8 @@ history door (`POST /api/overlord/history`, a read whose search words ride the b
 since board B2, so a read is attributed to the Overlord, not proven its own), the
 Overlord's cursor read of the sequence (`GET /api/overlord/sequence`, server words and ids only, behind the same gate, its row not
 fenced), the Overlord's board (`GET /api/overlord/board`, one composed read of the fleet, ids, counts and marked one-liners, behind
-the same gate, its row not fenced),
+the same gate, its row not fenced), the test box's frames read (`GET /api/testbox/frames`, a session or the token, reduced
+frames only; its route is in a file of its own and its box-token check is composed in the coordination routes),
 `/api/notify`, which refuses an absent token like every lane,
 `/api/pools/epoch` and `/api/updates/intent/:nodeId` — the callers are `curl` inside a
 Claude Code session, `ccd-pool-sync.timer` and, from update-management W4, `ccd-update-sync.timer`, none with a cookie jar, though the
