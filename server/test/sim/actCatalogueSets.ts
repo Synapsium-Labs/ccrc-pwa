@@ -102,7 +102,9 @@ const groupOfKind = (k: string): string | null => Object.entries(TABLE_5).find((
 
 /** §5's rule, written from the plan's text and not from the decider: the needed counts (the act's group if counted, the
  *  effect's if asked and counted), any not asked or unmeasured is unavailable, then each needed group in all, then for the
- *  programme. Answers the word, the group and the scope, or pass. */
+ *  programme. Answers the word, the group and the scope, or pass. Where the plan and the coordinator part, it follows the
+ *  coordinator's item 8 (call 1874): a needed count not asked refuses, never passes, so the act's count not asked refuses
+ *  where the plan's question 10 had the door's call leave it unasked; the door asks both counts instead. */
 function ceilingOracle(act: string, effect: string | null, c: Counts): string {
   const needed: [string, Count][] = [];
   const a = groupOfKind(act);
@@ -162,6 +164,17 @@ export function actCeilingStepCases(m: CeilingModule, kinds: readonly string[]):
       const over = { kind: 'counted', programme: 0, all: 99 } as const;
       expect(said(m.actCeilingStep('relay', 'widen-scope', { act: over, effect: { kind: 'unmeasured', why: 'u' } }))).toBe('unavailable:o3-effect');
       expect(said(m.actCeilingStep('relay', 'widen-scope', { act: 'not-asked', effect: over }))).toBe('unavailable:relay');
+      expect(said(m.actCeilingStep('relay', 'widen-scope', { act: { kind: 'unmeasured', why: 'u' }, effect: over }))).toBe('unavailable:relay');
+    },
+    'the two calls the contract names: step 10 asks the act\'s count only, the door that gathers the effect\'s verdict asks both': () => {
+      // call 1874: step 10's early call passes the act's count and the effect's as not asked; PR B's door passes both read.
+      const under = { kind: 'counted', programme: 0, all: 0 } as const;
+      expect(m.actCeilingStep('answer-item', 'approve-spec', { act: under, effect: 'not-asked' })).toEqual({ pass: true });
+      expect(m.actCeilingStep('answer-item', 'approve-spec', { act: under, effect: under })).toEqual({ pass: true });
+      expect(m.actCeilingStep('answer-item', 'approve-spec', { act: under, effect: { kind: 'counted', programme: 0, all: 3 } }))
+        .toEqual({ pass: false, word: 'act-ceiling', group: 'o3-effect', scope: 'all', limit: 3, latch: 'act-ceiling-hit' });
+      expect(m.actCeilingStep('answer-item', 'approve-spec', { act: under, effect: { kind: 'counted', programme: 1, all: 1 } }))
+        .toEqual({ pass: false, word: 'act-ceiling', group: 'o3-effect', scope: 'programme', limit: 1, latch: 'act-ceiling-hit' });
     },
     'an effect the build lacks, or one whose ceiling is not counted, adds no check': () => {
       const under = { kind: 'counted', programme: 0, all: 0 } as const;
@@ -235,18 +248,20 @@ const CEILING_SET: MutantSet<CeilingModule> = {
     // The plan's Step 5 hand mutations, and the rest of §5's rule.
     { id: 'A1 > in the all check', old: 'if (count.all >= ceiling.all)', new: 'if (count.all > ceiling.all)' },
     { id: 'A2 > in the programme check', old: 'count.programme >= ceiling.perProgramme', new: 'count.programme > ceiling.perProgramme' },
-    { id: 'A3 unmeasured read as zero', old: "    if (n.count.kind === 'unmeasured') return { pass: false, word: 'unavailable', group: n.group, why: n.count.why, latch: null };\n", new: "    if (n.count.kind === 'unmeasured') n.count = { kind: 'counted', programme: 0, all: 0 } as never;\n" },
+    { id: 'A3 unmeasured read as zero', old: "    if (n.count.kind === 'unmeasured') return { pass: false, word: 'unavailable', group: n.group, why: n.count.why, latch: null };\n", new: "    if (n.count.kind === 'unmeasured') { counted.push({ group: n.group, count: { kind: 'counted', programme: 0, all: 0 } }); continue; }\n" },
     { id: 'A4 the effect\'s count skipped', old: "if (theirs !== undefined && theirs.kind === 'counted') needed.push(", new: 'if (false) needed.push(' },
-    { id: 'A5 not-asked passes', old: "    if (n.count === 'not-asked') return { pass: false, word: 'unavailable', group: n.group, why: `the ${n.whose}'s count was not asked`, latch: null };\n", new: "    if (n.count === 'not-asked') continue;\n" },
-    { id: 'A6 the act\'s count skipped', old: "if (own.kind === 'counted') needed.push(", new: 'if (false) needed.push(' },
-    { id: 'A7 a held-by kind is counted', old: "if (own.kind === 'counted') needed.push({ group: own.group,", new: "if (own.kind !== 'never') needed.push({ group: (own as { group?: never }).group ?? 'relay'," },
+    { id: 'A5 not-asked passes', old: "if (counts.act === 'not-asked') return { pass: false, word: 'unavailable', group: own.group, why: \"the act's count was not asked\", latch: null };", new: "if (counts.act === 'not-asked') return { pass: true };" },
+    { id: 'A6 the act\'s count skipped', old: '    needed.push({ group: own.group, count: counts.act });\n', new: '' },
+    { id: 'A7 a held-by kind is counted', old: 'const own = OVERLORD_ACT_KINDS[act].ceiling;', new: "const own0 = OVERLORD_ACT_KINDS[act].ceiling; const own = (own0.kind === 'held-by' ? { kind: 'counted', group: 'relay' } : own0) as typeof own0;" },
     { id: 'A8 a null programme refuses', old: 'count.programme !== null && count.programme >=', new: 'count.programme === null || count.programme >=' },
     { id: 'A9 no per-programme ceiling reads as zero', old: 'ceiling.perProgramme !== null && count.programme', new: 'count.programme' },
     { id: 'A10 the programme scope reported as all', old: "scope: 'programme', limit: ceiling.perProgramme", new: "scope: 'all', limit: ceiling.perProgramme" },
     { id: 'A11 the latch dropped', old: "scope: 'all', limit: ceiling.all, latch: ACT_CEILING_LATCH", new: "scope: 'all', limit: ceiling.all, latch: null" },
     { id: 'A12 the programme limit is the all limit', old: "limit: ceiling.perProgramme, latch", new: 'limit: ceiling.all, latch' },
-    { id: 'A13 ceilings read before every count is measured', old: '  for (const n of needed) {\n    if (n.count', new: '  for (const n of [...needed].reverse()) {\n    const r = n.count !== \'not-asked\' && n.count.kind === \'counted\' ? overGroup(n.group, n.count) : null;\n    if (r !== null) return r;\n    if (n.count' },
-    { id: 'A14 an effect not asked is asked', old: "effect === null || counts.effect === 'not-asked' ? undefined", new: 'effect === null ? undefined' },
+    { id: 'A13 ceilings read before every count is measured', old: '  for (const n of needed) {\n    if (n.count', new: '  for (const n of needed) {\n    const r = n.count.kind === \'counted\' ? overGroup(n.group, n.count) : null;\n    if (r !== null) return r;\n    if (n.count' },
+    // A not-asked effect is dropped before it is needed (call 1874), so asking it reads nothing; the mutant that bites is one
+    // that refuses it.
+    { id: 'A14 an effect not asked refuses', old: "  if (effect !== null && counts.effect !== 'not-asked') {\n", new: "  if (effect !== null && counts.effect === 'not-asked' && actRow(effect)?.ceiling.kind === 'counted') return { pass: false, word: 'unavailable', group: 'answer', why: 'not asked', latch: null };\n  if (effect !== null && counts.effect !== 'not-asked') {\n" },
   ],
 };
 const LATCH_DUE_SET: MutantSet<CeilingModule> = {

@@ -4,7 +4,9 @@
 // W1 act kind at every rung and both door classes, the act kind every door row names, and what the gate order answers at every
 // Overlord door row at every rung. Every expected value is written out here, never read from the table the move changes, so a
 // move that changed an answer is a red case. A projection keeps the pass's added fields (the cell, the catalogue's Task A2) out
-// of the pin: the answers are pinned, not the shape of a pass.
+// of the pin: the answers are pinned, not the shape of a pass. It pins step 10's rung half; the ceiling half, which the move
+// added, is pinned by the two cases derived from the door rows in `overlord-act-ceiling.test.ts` (no door of today reaches
+// the count reader, and every door row answers as before through the read gate).
 import { describe, expect, it } from 'vitest';
 import { rungStep } from '../src/coord/overlordLadder.js';
 import { overlordGate } from '../src/coord/overlordGate.js';

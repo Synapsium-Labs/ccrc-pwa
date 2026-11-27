@@ -80,7 +80,11 @@ function neverRelaxesViolations(t: Table): string[] {
 /** The SAFETY scan (plan question 5): `live-box-act` is O1, uncovered and refused everywhere; no row's `what` names `ccd`
  *  followed by a forbidden verb; the catalogue's source spells none of those verbs as a string literal. */
 const reEscape = (s: string): string => s.replace(/[\\^$.*+?()[\]{}|-]/g, '\\$&');
-const ccdVerb = (what: string): string | null => FORBIDDEN_CCD_VERBS.find((v) => new RegExp(`\\bccd\\s+${reEscape(v.split(' ')[0]!)}(?![\\w-])`).test(what)) ?? null;
+/** The SAFETY list also names the fleet limit watchdog's two verbs as no session's (D-8123), and the approval guard's
+ *  forbidden list does not carry them; that list is not this piece's file, so the two are listed here (review 4135 F6). */
+const SAFETY_LIMIT_VERBS = ['limit-watchdog', 'limit-wait'] as const;
+const SCANNED_VERBS: readonly string[] = [...FORBIDDEN_CCD_VERBS, ...SAFETY_LIMIT_VERBS];
+const ccdVerb = (what: string): string | null => SCANNED_VERBS.find((v) => new RegExp(`\\bccd\\s+${reEscape(v.split(' ')[0]!)}(?![\\w-])`).test(what)) ?? null;
 function safetyViolations(t: Table, source: string): string[] {
   const out: string[] = [];
   const box = t['live-box-act'];
@@ -92,7 +96,7 @@ function safetyViolations(t: Table, source: string): string[] {
   }
   for (const [k, r] of Object.entries(t)) { const v = ccdVerb(r.what); if (v !== null) out.push(`${k}: names ccd ${v}`); }
   const literals = [...source.matchAll(/'([^'\n]*)'|"([^"\n]*)"/g)].map((m) => m[1] ?? m[2]);
-  for (const v of FORBIDDEN_CCD_VERBS) if (literals.includes(v)) out.push(`the catalogue's source spells ${v} as a literal`);
+  for (const v of SCANNED_VERBS) if (literals.includes(v)) out.push(`the catalogue's source spells ${v} as a literal`);
   return out;
 }
 const SOURCE = readFileSync(path.join(REPO, 'shared/overlord.ts'), 'utf8');
@@ -145,6 +149,14 @@ describe('the SAFETY scan (plan question 5)', () => {
   it('CONTROL: the scan has verbs to read, and the source was read', () => {
     expect(FORBIDDEN_CCD_VERBS.length).toBeGreaterThan(10);
     expect(SOURCE).toContain('OVERLORD_ACT_KIND_MAP');
+    // The two limit verbs are scanned beside the guard's list because the guard does not hold them; when it does, drop them here.
+    for (const v of SAFETY_LIMIT_VERBS) expect(FORBIDDEN_CCD_VERBS as readonly string[], v).not.toContain(v);
+  });
+  it('CONTROL: a row naming ccd and either limit verb is red, and either spelled as a literal is red', () => {
+    for (const v of SAFETY_LIMIT_VERBS) {
+      expect(safetyViolations(edit('propose-retire', { what: `wait with ccd ${v} first` }), SOURCE)).toEqual([`propose-retire: names ccd ${v}`]);
+      expect(safetyViolations(REAL, `${SOURCE}\nconst x = '${v}';`)).toEqual([`the catalogue's source spells ${v} as a literal`]);
+    }
   });
   it('live-box-act is O1, uncovered and refused at every rung; no row names a forbidden verb; the source spells none', () => {
     expect(safetyViolations(REAL, SOURCE)).toEqual([]);

@@ -64,6 +64,10 @@ describe('the compensators', () => {
       expect(piece.length).toBeGreaterThan(0);
     }
   });
+  it('LATER_DOORS is exactly today\'s list, so a new entry is a deliberate edit of this pin (review 4135 F5)', () => {
+    // Each entry leaves when its door registers (the case above reds then): the request record's door with request record B.
+    expect(Object.keys(LATER_DOORS)).toEqual(['POST /api/overlord/requests']);
+  });
   it('the team link\'s compensator is the operator\'s relink, registered today (call 1816)', () => {
     expect(OVERLORD_ACT_KINDS['link-team'].compensator).toBe('operator-relink');
     expect(REGISTERED.has(compensatorDoor('operator-relink'))).toBe(true);

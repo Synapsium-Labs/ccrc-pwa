@@ -40,22 +40,33 @@ function overGroup(group: CeilingGroup, count: Extract<GroupCount, { kind: 'coun
  *  and the effect's group when its count was asked and the effect is a counted kind (question 10: a carrier counts against
  *  its effect too; an effect this build lacks, or whose ceiling is not counted, adds none: what an act may carry is the act's
  *  decider's). A needed count `not-asked` or `unmeasured` refuses `unavailable` (rule 2) before any ceiling is read; then the
- *  act's group in all and for the programme (rules 3 and 4), then the effect's (rule 5); otherwise `pass` (rule 6). */
+ *  act's group in all and for the programme (rules 3 and 4), then the effect's (rule 5); otherwise `pass` (rule 6).
+ *
+ *  Who asks which count (call 1874): gate step 10 passes the act's count and the effect's as `not-asked`; the door that
+ *  gathers the effect's verdict (PR B) passes BOTH counts read. Only the act's count can be needed and `not-asked`, so it
+ *  is refused where it is read (the coordinator's item 8: not asked is never a pass for a group the step needs); a
+ *  `not-asked` effect count is dropped before it is needed, so `needed` holds read counts only, by its type. */
 export function actCeilingStep(
   act: OverlordActKind, effect: string | null,
   counts: { readonly act: GroupCount | 'not-asked'; readonly effect: GroupCount | 'not-asked' },
 ): CeilingVerdict {
-  const needed: { readonly group: CeilingGroup; readonly count: GroupCount | 'not-asked'; readonly whose: 'act' | 'effect' }[] = [];
+  const needed: { readonly group: CeilingGroup; readonly count: GroupCount }[] = [];
   const own = OVERLORD_ACT_KINDS[act].ceiling;
-  if (own.kind === 'counted') needed.push({ group: own.group, count: counts.act, whose: 'act' });
-  const theirs = effect === null || counts.effect === 'not-asked' ? undefined : actRow(effect)?.ceiling;
-  if (theirs !== undefined && theirs.kind === 'counted') needed.push({ group: theirs.group, count: counts.effect, whose: 'effect' });
-  for (const n of needed) {
-    if (n.count === 'not-asked') return { pass: false, word: 'unavailable', group: n.group, why: `the ${n.whose}'s count was not asked`, latch: null };
-    if (n.count.kind === 'unmeasured') return { pass: false, word: 'unavailable', group: n.group, why: n.count.why, latch: null };
+  if (own.kind === 'counted') {
+    if (counts.act === 'not-asked') return { pass: false, word: 'unavailable', group: own.group, why: "the act's count was not asked", latch: null };
+    needed.push({ group: own.group, count: counts.act });
   }
+  if (effect !== null && counts.effect !== 'not-asked') {
+    const theirs = actRow(effect)?.ceiling;
+    if (theirs !== undefined && theirs.kind === 'counted') needed.push({ group: theirs.group, count: counts.effect });
+  }
+  const counted: { readonly group: CeilingGroup; readonly count: Extract<GroupCount, { kind: 'counted' }> }[] = [];
   for (const n of needed) {
-    const refused = overGroup(n.group, n.count as Extract<GroupCount, { kind: 'counted' }>);
+    if (n.count.kind === 'unmeasured') return { pass: false, word: 'unavailable', group: n.group, why: n.count.why, latch: null };
+    counted.push({ group: n.group, count: n.count });
+  }
+  for (const n of counted) {
+    const refused = overGroup(n.group, n.count);
     if (refused !== null) return refused;
   }
   return { pass: true };

@@ -204,9 +204,10 @@ const OVERLORD_ACT_KIND_MAP = {
   'message-people': refused('Comment where other people take part', ['O1'], 'irreversible'),
   publish: refused('Make public or release', ['O1'], 'irreversible'),
   deploy: refused('Roll the fleet', ['O1'], 'compensable'),
-  // Every verb the SAFETY list forbids to sessions (`server/src/coord/approvalguard.ts#FORBIDDEN_CCD_VERBS`, named in prose
-  // only), touching tmux, units or the registries, updating, rolling back or rolling out a build, history writes, and writing
-  // live box config, arming markers included.
+  // The verbs the SAFETY list forbids to sessions, named in prose only: the approval guard's forbidden verbs
+  // (`server/src/coord/approvalguard.ts#FORBIDDEN_CCD_VERBS`) and the fleet limit watchdog's two, which that list does not
+  // hold (the act classes suite scans both); touching tmux, units or the registries, updating, rolling back or rolling out a
+  // build, history writes, and writing live box config, arming markers included.
   'live-box-act': refused('Act on a live box: a verb the SAFETY list forbids, its units, panes or registries, a build, a history write or its config', ['O1'], 'irreversible'),
   'account-management': refused('Manage accounts and their sign-ins', ['O1', 'O4'], 'irreversible'),
   spend: refused('Spend: credits, paid services and accounts', ['O2'], 'irreversible'),

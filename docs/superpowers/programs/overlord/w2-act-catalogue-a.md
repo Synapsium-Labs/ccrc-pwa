@@ -28,7 +28,7 @@ every call: every row answers as before and the reader is never called.
 
 ## What was built
 
-Seven commits, in order:
+Nine commits before review 4135, in order:
 
 1. `test(overlord)`: the characterization, green on main against the ladder's code: `rungStep` for the four W1 kinds
    at every rung and both door classes, every door row's act kind, and the gate's answer at every Overlord door row at
@@ -48,6 +48,31 @@ Seven commits, in order:
 7. `test(overlord)`: the four new mutant sets registered in `mutation-floors` at floor 1 (after the holder's yes to
    the packet), the gate's new word in the inbox simulator's gate-word table (`GATE_WORDS`, a record over every gate
    word, whose wake decider holds on any refusal word alike; its count pin moves from fourteen to fifteen), and this note.
+8. `docs(overlord)`: this note's lines on the three files the judge calls weakened (the coordinator's ruling to leave the
+   judge red, mail 40098), each saying what the old assertion held and what the new one holds.
+9. `test(overlord)`: the SAFETY scan escapes every regular-expression character of a verb; before, it escaped `-` only
+   (code scanning's alert on the pull request, incomplete sanitization). No answer of the scan changed.
+
+Fix round 1 (review 4135, call 1874), one commit, `fix(overlord)`:
+
+- F1: `actCeilingStep` refuses the act's count not asked where it is read, and drops a not-asked effect count before it is
+  needed, so its list of needed counts holds read counts only, by its type (the old branch that would name a not-asked
+  effect could not be reached: the old A14 mutant, which asked such an effect, survives on the new code, measured). No
+  answer changed: every case of the step's suite passes unchanged. A new case makes both calls the contract names
+  (below). Mutant A14 now refuses a not-asked effect; A3, A5 to A7 and A13 are re-anchored on the new text. The oracle's
+  header says where it follows the coordinator's item 8 rather than the plan.
+- F2: the ceiling latch's raise in `server/src/server.ts` warns a refused raise in the server's log form, as its sibling
+  raiser does (`overlordRestoreLatch.ts`). The case over the composed ports goes with act rows A, where the count is first
+  wired.
+- F3: two one-home scans in `server/test/single-definition/ladder-rung-words.test.ts`: a group's ceiling values, and
+  the map of the five cell words. Each was measured red on a second copy planted in a source file, then the copy removed.
+- F4: the slug `may-carry-is-a-list-of-strings`, below.
+- F5: `LATER_DOORS` is pinned exactly to today's one entry; each entry leaves when its door registers.
+- F6: the SAFETY scan reads the approval guard's forbidden verbs and the limit watchdog's two verbs, which the guard does
+  not hold (named in the test, a CONTROL that reds when the guard gains them, and a CONTROL per verb); the guard is not
+  edited. The comment in `shared/overlord.ts` says what is scanned.
+- F7: these counts; the composition file's figure (the seam); and the characterization's header, which now says it pins
+  step 10's rung half, the ceiling half being pinned by the two cases derived from the door rows (a comment only).
 
 Brief item 9: everything added is the product's own table and deciders, read by the server's gate and drawn by the
 console. Nothing depends on a surface one agent harness has.
@@ -98,6 +123,17 @@ console. Nothing depends on a surface one agent harness has.
   measured with the in-tree runner first and registered after the holder's yes, in a commit of their own.
 - **`ladder-test-reads-the-catalogues-list`**: `overlord-ladder.test.ts` held the act-kind list exactly; the catalogue
   owns it now, so that line holds W1's four are in it and `overlord-act-catalogue.test.ts` pins the list whole.
+- **`ceiling-door-call-asks-both-counts`** (review 4135 F1, call 1874): the plan's question 10 has the door that gathers
+  the effect's ceiling verdict leave the act's count unasked. Here a counted act whose own count was not asked refuses
+  `unavailable` (the coordinator's item 8: not asked is never a pass for a group the step needs), so that door asks both
+  counts, the act's and the effect's; gate step 10's early call passes the act's count and the effect's as not asked. The
+  coordinator corrects the plan's sentence on the ledger pull request; no plan is edited here. Pinned by the ceiling
+  suite's case "the two calls the contract names".
+- **`may-carry-is-a-list-of-strings`** (review 4135 F4): the plan types a row's `mayCarry` as a list of act kinds, which is
+  circular (the kind type is derived from the map whose rows carry the list). It is a forced departure: `mayCarry` is
+  `'question-effect' | readonly string[]`, and a misspelt kind is caught at run time by the catalogue suite's case "every
+  row's columns are words of their lists, and its keys are Table 4a's" (`overlord-act-catalogue.test.ts`: each listed
+  effect must pass `isOverlordActKind`).
 - **`latch-cause-has-a-console-sentence`**: the new cause needs its sentence in `pwa/src/overlord/ladderWords.ts`,
   a record over every cause (call 1827). The table's totality and a non-empty sentence per cause are already held by
   `pwa/test/overlord-words.test.ts`.
@@ -106,7 +142,9 @@ console. Nothing depends on a surface one agent harness has.
 
 Files outside server and shared: `pwa/src/overlord/ladderWords.ts`, one line, under call 1827. `shared/api.ts`, every
 route, door row, gate row, count line, migration, client row, ccd file, CI workflow and history gate-code file are
-untouched. `server/src/server.ts` grows by 7 lines (the count reader's default and the latch's two ports). Test files of
+untouched. `server/src/server.ts` grows by 10 lines and loses 2 against the merge base (net 8; before fix round 1, +8
+and -2, as the reviewer measured): two import lines changed and one added, and the count reader's default and the latch's
+two ports, the raise's refused answer warned in the server's log form (review 4135 F2). Test files of
 other areas that changed: the floors pair (`server/test/sim/mutation-floors.test.ts` and `.json`, a packet to its holder,
 answered yes) and the inbox simulator's gate-word table with its count pin (`server/test/sim/overlordInboxSets.ts`,
 `server/test/overlord-inbox-deciders.test.ts`), because `GateWord` gained `act-ceiling`.
@@ -138,7 +176,7 @@ names three files; for each, what the old assertion held, what the new one holds
 | `server/src/coord/overlordGate.ts#overlordGate` | 19 of 19 | 26 of 26 (O-20 to O-26: the ceiling before the rung, the latch dropped, the half skipped, an unavailable count passing, a start door reading a count, a held-by kind counted, the two words swapped); O-13 killed before and after |
 | `shared/overlord.ts#actRow` | new | 3 of 3, floor 1 |
 | `shared/overlord.ts#effectiveClasses` | new | 6 of 6, floor 1 |
-| `server/src/coord/overlordActCeiling.ts#actCeilingStep` | new | 14 of 14, floor 1 (the plan's least was 12) |
+| `server/src/coord/overlordActCeiling.ts#actCeilingStep` | new | 14 of 14, floor 1 (the plan's least was 12); after fix round 1, 14 of 14 over 8 cases (was 7): A14 now refuses a not-asked effect, because the old A14 survives as an equivalent once that branch is gone |
 | `server/src/coord/overlordActCeiling.ts#ceilingLatchDue` | new | 3 of 3, floor 1 |
 
 No floor was lowered.
@@ -150,7 +188,10 @@ No floor was lowered.
 - `CLASS_COVERS` and `COVER_KINDS`; `RUNG_CELL_WORDS` and `RungCellWord`; the row's `answer`, `carrier`, `mayCarry`
   and `leastStrength`.
 - `CeilingVerdict` and `actCeilingStep` from `server/src/coord/overlordActCeiling.ts`, for the effect's ceiling verdict
-  it takes as an input (F9): the door asks `actCeilingStep(act, effect, { act: 'not-asked', effect: <count> })`.
+  it takes as an input (F9). The door gathers it by calling the step with BOTH counts read,
+  `actCeilingStep(act, effect, { act: <the act's count>, effect: <the effect's count> })`; a counted act whose own count
+  is not asked refuses `unavailable`, so the door never passes the act's as not asked. Gate step 10's early call passes
+  the act's count and the effect's as `'not-asked'` (call 1874; slug `ceiling-door-call-asks-both-counts`).
 - `rungStep`'s pass carries the cell, the input `MayActFacts.cell` binds.
 
 ## Known limits

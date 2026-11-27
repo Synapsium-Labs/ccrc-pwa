@@ -107,12 +107,19 @@ describe('one home for the rung words and the rung cells (F15)', () => {
 });
 
 // The act catalogue's one home (W2 act catalogue A3, plan §8 "One home"): no other file under the source roots defines a cell
-// map, a list of act kinds or a map from class words to covers.
+// map, a list of act kinds, a map from class words to covers, a group's ceiling values or the map of the five cell words.
 const CELL = String.raw`['"](?:allow|refuse|proposal|armed|by-grant)['"]`;
 const CELL_MAP = new RegExp(String.raw`\{\s*chat:\s*${CELL}\s*,\s*advise:\s*${CELL}\s*,\s*full:\s*${CELL}\s*,?\s*\}`);
 const CLASS_COVERS_MAP = /\bO[1-6]\s*:\s*\[\s*(?:\]|['"](?:grant|command|operator-request|stated-entry)['"])/;
 /** The catalogue's kinds that are not plain words, so a list of three of them is a list of act kinds. */
 const DISTINCT_KINDS = new Set<string>(OVERLORD_ACT_KIND_LIST.filter((k) => k.includes('-')));
+/** A group's ceiling spelled as values (Table 5): a per-programme number or null beside an all number. */
+const CEILING_VALUE = /\bperProgramme\s*:\s*(?:\d+|null)\s*,\s*all\s*:\s*\d+/;
+/** A map keyed by the five cell words: every one of them as a key within one stretch of text around a `by-grant` key. */
+const CELL_WORD_KEYS = ['allow', 'refuse', 'proposal', 'armed'].map((w) => new RegExp(String.raw`(?:^|[\s{,])['"]?${w}['"]?\s*:`));
+const hasCellWordMap = (text: string): boolean =>
+  [...text.matchAll(/['"]by-grant['"]\s*:/g)].some((m) =>
+    CELL_WORD_KEYS.every((re) => re.test(text.slice(Math.max(0, m.index - 600), m.index + 600))));
 const hasKindList = (text: string): boolean =>
   [...text.matchAll(literalList(','))].some(([list]) =>
     new Set([...list.matchAll(/(['"])(.*?)\1/g)].map((m) => m[2]).filter((w) => DISTINCT_KINDS.has(w!))).size >= 3);
@@ -126,6 +133,18 @@ describe('one home for the act catalogue (W2 act catalogue A3)', () => {
     expect(CLASS_COVERS_MAP.test(`const m = { O3: ['grant'], O1: [] };`)).toBe(true);
     expect(hasKindList(`export const K = ['drop-request', 'close-request', 'answer-item'];`)).toBe(true);
     expect(hasKindList(`const K = ['drop-request', 'read', 'acknowledge'];`)).toBe(false);
+    expect(CEILING_VALUE.test(`const G = { relay: { perProgramme: 6, all: 30 } };`)).toBe(true);
+    expect(CEILING_VALUE.test(`const G = { 'own-record': { perProgramme: null, all: 60 } };`)).toBe(true);
+    expect(CEILING_VALUE.test('if (ceiling.perProgramme !== null && count.all >= ceiling.all)')).toBe(false);
+    expect(hasCellWordMap(`const W = {\n  allow: 'a',\n  refuse: 'b',\n  proposal: 'c',\n  armed: 'd',\n  'by-grant': 'e',\n};`)).toBe(true);
+    expect(hasCellWordMap(`const W = { refuse: 'b', proposal: 'c', armed: 'd', 'by-grant': 'e' };`)).toBe(false);
+    expect(hasCellWordMap(`if (cell === 'by-grant') return;`)).toBe(false);
+  });
+  it('only the catalogue spells a group\'s ceiling values (the plan\'s one home for Table 5, review 4135 F3)', () => {
+    expect(holders(CEILING_VALUE)).toEqual([CATALOGUE_HOME]);
+  });
+  it('only the catalogue spells the map of the five cell words (review 4135 F3)', () => {
+    expect(ALL.filter((f) => hasCellWordMap(code(f))).map(rel).sort()).toEqual([CATALOGUE_HOME]);
   });
   it('only the catalogue spells a cell map at chat, advise and full', () => {
     expect(holders(CELL_MAP)).toEqual([CATALOGUE_HOME]);
