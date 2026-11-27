@@ -9,7 +9,7 @@ import { ARTIFACT_IDLE_MS } from '../../shared/artifacts.js';
 import type { DocPin, DocSectionSlug } from '../../shared/docs.js';
 import { artifactConfig } from '../src/artifacts/policy.js';
 import type { ArtifactConfig } from '../src/artifacts/policy.js';
-import type { SessionLiveness } from '../src/artifacts/ports.js';
+import type { ArtifactBytes, SessionLiveness } from '../src/artifacts/ports.js';
 import { buildArtifactServer } from '../src/artifacts/routes.js';
 import { createArtifactStore, type ArtifactManifestEntry, type CapabilityInput } from '../src/artifacts/store.js';
 import { ARTIFACT_ENDED_BODY, WRAPPER_FRAME_NAME } from '../src/artifacts/wrapper.js';
@@ -58,7 +58,9 @@ function rig() {
   const ended = new Set<string>();
   const liveness: SessionLiveness = { of: (h) => (ended.has(h) ? 'ended' : 'live') };
   const store = createArtifactStore(() => now, liveness, nextToken, () => `id${++counter}`);
-  const app = buildArtifactServer({ cfg: onConfig(), store });
+  // The content door (X5 A3.3) is not used here: a port that reads nothing, and the real clock.
+  const bytes: ArtifactBytes = { prepare: async () => ({ ok: false, error: 'unreadable' }), read: async () => ({ ok: false, error: 'unreadable' }) };
+  const app = buildArtifactServer({ cfg: onConfig(), store, bytes, now: () => Date.now() });
   toClose.push(app);
   return {
     store, app, ended,

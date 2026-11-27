@@ -468,6 +468,15 @@ The block's third number, 8788, is unused. The adversarial pass proposed it for 
 
 - **D-9145 (2026-11-27)** — a-cache-never-stands-in-for-the-fence. Wave A3 (after Task A3.2, the coordinator's ruling of 2026-11-27): a script the page first loads with a script tag is cached under the design's cache rule, and the service worker update algorithm lets a registration with the cache allowed take its script from that cache, so neither `Sec-Fetch-Dest: serviceworker` nor the `Service-Worker` header would reach the fence (read from the algorithm, not measured in a browser). Departs from the design's section 4.3 header list and section 5's "Browser cache" row: every content response carries `Vary: Sec-Fetch-Dest, Service-Worker`, and every response a browser accepts as a script is `no-store`, as HTML is. So `CONTENT_HEADERS` gains `vary`, and `cacheControl` takes a third kind, `script`, which the new L1 `cacheKind(mime)` picks from the MIME type's essence. The design's 4.3, section 5's row and row A12 are amended with dated notes naming this entry. Wave A5's browser proof of "a service worker cannot register" loads the script by a script tag first and registers it with the cache allowed. Issued to run 4032 (X5 wave A3) in its brief's reserve, 9145 and 9146.
 
+- **D-9147 (2026-11-27)** — a3-interfaces-as-landed. Wave A3 (Tasks A3.1 and A3.3): six places where the code departs from the Interfaces this plan wrote, each for the reason given.
+  - The lane job's source word is `'reader' | 'artifact'` (`DocsJobSource`, absent meaning `reader`), not `'console' | 'artifact'`: the docs policy file's L1 scan (`docs-policy.test.ts`) refuses the word console in that file's code.
+  - The bytes port's `prepare` and `read` take an `AbortSignal`, so a request that ends (its capability, its client or a deadline) leaves the docs lane's queue instead of holding a place there.
+  - `laneOverflow` takes the job's source as a third parameter, so the artifact FIFO is held to its own bound of 16 by the same function that holds the console's.
+  - The artifact prepare budget (one at a time, three a minute) lives with the content door's bounded wait (`prepareSlot`, `server/src/artifacts/policy.ts`), not in the lane: the lane's own wait is 10 s, shorter than the minute, and the design puts a prepare's wait inside the request's 90 s wait.
+  - The door's engine is its own L4 file, `server/src/artifacts/content.ts`, beside `routes.ts`, with no Fastify import, talking to the reply through a small interface `routes.ts` implements, so the queue, the deadlines and the frame writing sit in a file the Fastify allow list never needs to name.
+  - `ArtifactRouteDeps` gains `store` with Task A3.1, its first consumer (the wrapper reads it), where D-9135 put it in A3.3; `bytes` and `now` arrive with A3.3 as D-9135 says.
+  Issued to run 4032 (X5 wave A3) by the coordinator, beyond its reserve.
+
 ## Results
 
 ### What was read and measured (2026-11-19)

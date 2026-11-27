@@ -10,7 +10,7 @@
 import { isExactHttpsOrigin } from '../../../shared/httpsOrigin.js';
 import {
   ARTIFACT_MAX_INFLIGHT, ARTIFACT_MAX_INFLIGHT_BOX, ARTIFACT_QUEUE_PER_CAPABILITY, ARTIFACT_SANDBOX_BASE, ARTIFACT_SANDBOX_WINDOWS,
-  ARTIFACT_MAX_ORIGINS, ARTIFACT_PUBLIC_SUFFIXES, artifactMime, type ArtifactListOk, type ArtifactMintOk, type ArtifactOffWhy,
+  ARTIFACT_MAX_ORIGINS, ARTIFACT_PUBLIC_SUFFIXES, ARTIFACT_QUEUE_WAIT_MS, ARTIFACT_HOURLY_BYTES, ARTIFACT_RESPONSE_MAX_MS, artifactMime, type ArtifactListOk, type ArtifactMintOk, type ArtifactOffWhy,
   type ArtifactRefusal, type ArtifactRevokeOk, type ArtifactRow, type ArtifactScopeOk,
 } from '../../../shared/artifacts.js';
 import {
@@ -18,7 +18,7 @@ import {
   type DocPin, type DocsEntry, type DocsFailureBody, type DocsRangePin, type DocsRefSpec, type DocsTreeOk,
 } from '../../../shared/docs.js';
 import {
-  badQuery, docsOwn as own, firstUnknownKey, isDocsRecord as isRecord, parseDocsProjectParam, parseFilePin, type DocsSignIn,
+  DOCS_LANE_LARGE_RAW, badQuery, docsOwn as own, firstUnknownKey, isDocsRecord as isRecord, parseDocsProjectParam, parseFilePin, type DocsSignIn,
 } from '../docs/policy.js';
 import type { ArtifactManifestEntry, CapabilityInput } from './store.js';
 
@@ -722,4 +722,224 @@ export function admitLoad(c: { inflight: number; queued: number }, boxInflight: 
 /** Whether a request already at the head of its capability's queue may start now: the same two bounds, with no queue to look at. */
 export function admitQueued(c: { inflight: number }, boxInflight: number): boolean {
   return c.inflight < ARTIFACT_MAX_INFLIGHT && boxInflight < ARTIFACT_MAX_INFLIGHT_BOX;
+}
+
+// ---- The content door's route decisions (X5 A3.3; spec 3.4, 4.3 and 5) -----------------------------------------------------
+// Pure decisions `content.ts` (L4) applies and never makes itself: the raw path, which host a route answers on, the fences'
+// input, every fixed answer, the whole header set, the prepare slot and what a failed read becomes.
+
+/** The path of a content request from the RAW request URL, never from the router's `*` parameter (which may already be decoded).
+ *  The query and fragment are cut first; the path must be `/c/<token>/<rest>`; `token` is the raw segment (not decoded) and `rest`
+ *  is decoded ONCE. `null` for a malformed escape, and for any segment that is empty, `.` or `..` or holds `\` or NUL, so a
+ *  traversal spelling is never a lookup. No file-system path is ever built from the answer. */
+export function contentRequestPath(rawUrl: string): { token: string; rel: string } | null {
+  let path = rawUrl;
+  const cut = path.search(/[?#]/);
+  if (cut >= 0) path = path.slice(0, cut);
+  if (!path.startsWith('/c/')) return null;
+  const rest = path.slice('/c/'.length);
+  const slash = rest.indexOf('/');
+  if (slash <= 0) return null;
+  const raw = rest.slice(slash + 1);
+  if (raw === '') return null;
+  let rel: string;
+  try {
+    rel = decodeURIComponent(raw);
+  } catch {
+    return null;
+  }
+  if (rel.split('/').some((s) => s === '' || s === '.' || s === '..' || s.includes('\\') || s.includes('\u0000'))) return null;
+  return { token: rest.slice(0, slash), rel };
+}
+
+/** The manifest key of a request path: the manifest is keyed by SECTION-relative path, a capability's `dir` is the page's directory
+ *  in its section (`''` at the root), and the request's path is relative to `dir`. */
+export function contentKey(dir: string, rel: string): string {
+  return dir === '' ? rel : `${dir}/${rel}`;
+}
+
+/** Which host each route answers on (spec 3.4's table): the wrapper on the artifact host, the content door and `/clear` on the
+ *  content host, `GET /` on either. A wrong host on a known route is that route's identical 404, never a 421: the 421 stays the
+ *  fence's, for a host that is neither. */
+export function routeHostOk(
+  route: 'wrapper' | 'content' | 'clear' | 'root', host: string | undefined, cfg: { artifactHost: string; contentHost: string },
+): boolean {
+  if (route === 'wrapper') return hostMatches(host, [cfg.artifactHost]);
+  if (route === 'root') return hostMatches(host, [cfg.artifactHost, cfg.contentHost]);
+  return hostMatches(host, [cfg.contentHost]);
+}
+
+/** `/clear` is loaded only into the wrapper's frame: exactly `iframe`. */
+export function clearDestOk(dest: string | undefined): boolean {
+  return dest === 'iframe';
+}
+
+/** The CSP of `/clear`'s page (spec 3.4): nothing loads, and only the artifact host may frame it. */
+export function CLEAR_CSP(artifactOrigin: string): string {
+  return `default-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors ${artifactOrigin}`;
+}
+
+/** The fence's input from the request's raw header values: the three `Sec-Fetch-*` values lower-cased, and a `Service-Worker`
+ *  header of ANY value, an empty one included, as present. The fence itself is `fetchFence`. */
+export function contentFence(
+  h: { dest?: string | string[]; mode?: string | string[]; site?: string | string[]; serviceWorker?: string | string[] },
+  windows: boolean,
+): 'ok' | 'refused' {
+  const low = (v: string | string[] | undefined): string | undefined =>
+    v === undefined ? undefined : (Array.isArray(v) ? v.join(',') : v).toLowerCase();
+  return fetchFence({ dest: low(h.dest), mode: low(h.mode), site: low(h.site), serviceWorker: low(h.serviceWorker) }, windows);
+}
+
+/** The artifact prepare slot (spec 5, "Prepare busy" and "Box budget"): at most this many prepares run at once, and this many start
+ *  in any minute, half of ccd's box-wide 2 and 6, so console prepares keep the other half. (The docs lane already holds one artifact
+ *  job at a time, but its own wait is 10 s, shorter than the minute, so the window is the door's, inside the request's wait.) */
+export const ARTIFACT_PREPARES_AT_ONCE = 1;
+export const ARTIFACT_PREPARES_PER_MINUTE = 3;
+/** The pause before a prepare asks ccd again after its `prepare-busy`. */
+export const ARTIFACT_PREPARE_RETRY_MS = 2000;
+const PREPARE_WINDOW_MS = 60000;
+
+/** Whether a prepare may start now, from whether one runs and when the recent ones started: a running one makes it wait with no
+ *  time to wake at (it wakes when that one ends); three starts within the last minute make it wait until the oldest counted one is
+ *  a minute old; else it starts. */
+export function prepareSlot(state: { running: boolean; starts: readonly number[] }, now: number):
+  { kind: 'start' } | { kind: 'wait'; until: number | null } {
+  if (state.running) return { kind: 'wait', until: null };
+  const recent = state.starts.filter((t) => now - t < PREPARE_WINDOW_MS).sort((a, b) => a - b);
+  if (recent.length >= ARTIFACT_PREPARES_PER_MINUTE) {
+    return { kind: 'wait', until: recent[recent.length - ARTIFACT_PREPARES_PER_MINUTE]! + PREPARE_WINDOW_MS };
+  }
+  return { kind: 'start' };
+}
+
+/** Whether a manifest entry is read as range frames with a snapshot: above `DOCS_LANE_LARGE_RAW`, derived, never restated. A
+ *  smaller one is one whole show cut to the range. */
+export function artifactFramed(entry: { size: number }): boolean {
+  return entry.size > DOCS_LANE_LARGE_RAW;
+}
+
+/** How long a request that arrived at `arrivedAt` may still wait, at `now`: `ARTIFACT_QUEUE_WAIT_MS` from its arrival, never below 0. */
+export function queueWaitLeft(arrivedAt: number, now: number): number {
+  return Math.max(0, ARTIFACT_QUEUE_WAIT_MS - (now - arrivedAt));
+}
+
+/** Whole seconds a capability may still live at `now`, from its expiry: never below 0. */
+export function secondsLeftOf(expiresAtMs: number, now: number): number {
+  return Math.max(0, Math.floor((expiresAtMs - now) / 1000));
+}
+
+/** The bytes a response carries: the range's length, or the whole file's. `range` is inclusive. */
+export function responseLength(range: { start: number; end: number } | null, size: number): number {
+  return range === null ? size : range.end - range.start + 1;
+}
+
+/** Whether a frame of `length` bytes still fits in a response of `total` bytes of which `sent` are out: a response never sends
+ *  past its `Content-Length`. */
+export function frameFits(sent: number, length: number, total: number): boolean {
+  return sent + length <= total;
+}
+
+/** The whole header set of a 200 or a 206 (spec 4.3 and 5): the type (with its charset on text), the length, the CSP built for this
+ *  capability, every `CONTENT_HEADERS` entry, the cache rule by the file's MIME kind, an attachment disposition for a file the
+ *  MIME table does not know, and for a range the `Content-Range`. No `set-cookie` and no `access-control-*`. */
+export function contentHeaders(i: {
+  key: string; entry: { mime: string; size: number }; range: { start: number; end: number } | null;
+  contentOrigin: string; artifactOrigin: string; token: string; origins: readonly string[]; windows: boolean; secondsLeft: number;
+}): Record<string, string> {
+  const h: Record<string, string> = {
+    'content-type': artifactContentType(i.entry.mime),
+    'content-length': String(responseLength(i.range, i.entry.size)),
+    'content-security-policy': contentCsp(i.contentOrigin, i.artifactOrigin, i.token, i.origins, i.windows),
+    ...CONTENT_HEADERS,
+    'cache-control': cacheControl(cacheKind(i.entry.mime), i.secondsLeft),
+  };
+  if (artifactMime(i.key).attachment) h['content-disposition'] = 'attachment';
+  if (i.range !== null) h['content-range'] = `bytes ${i.range.start}-${i.range.end}/${i.entry.size}`;
+  return h;
+}
+
+/** The content door's fixed answers other than the identical 404: a status, a fixed text body and the headers. None echoes
+ *  anything of the request. Each carries the `Vary` of `CONTENT_HEADERS` (D-9145). `wait-out` is the 503 of a wait that ran out or
+ *  a lane that is busy; `too-many` the 429 of a full queue or a spent hour. */
+export type ContentAnswerKind = 'forbidden' | 'too-many' | 'wait-out' | 'draft-changed';
+export function contentAnswer(kind: ContentAnswerKind): { status: number; body: string; headers: Record<string, string> } {
+  const vary = { vary: CONTENT_HEADERS['vary']! };
+  switch (kind) {
+    case 'forbidden': return { status: 403, body: 'Forbidden.', headers: vary };
+    case 'too-many': return { status: 429, body: 'Too many requests.', headers: vary };
+    case 'wait-out': return { status: 503, body: 'Busy. Try again shortly.', headers: { ...vary, 'retry-after': '5' } };
+    case 'draft-changed': return { status: 409, body: 'This draft file changed since the page was opened.', headers: vary };
+  }
+}
+
+/** The 416 of a range the file cannot satisfy, or several (RFC 9110: `Content-Range: bytes * /size`). */
+export function unsatisfiableAnswer(size: number): { status: 416; body: string; headers: Record<string, string> } {
+  return { status: 416, body: 'Range not satisfiable.', headers: { vary: CONTENT_HEADERS['vary']!, 'content-range': `bytes */${size}` } };
+}
+
+/** What a failed READ becomes. `wrote` is whether a byte is out already; `reprepared` whether the snapshot was already prepared
+ *  once more for this response. A `snapshot-gone` the first time is a re-prepare (before a byte or after, reading on from the next
+ *  unsent byte). After a byte every other failure destroys the socket short of `Content-Length`, never a short 200. Before one:
+ *  `draft-changed` is the 409, `busy` the 503 (kept apart from `unreadable`), anything else the identical 404. */
+export type ReadFailureAction =
+  { kind: 'status'; status: 404 | 409 | 503 } | { kind: 'reprepare' } | { kind: 'destroy' };
+export function readFailureAction(error: string, wrote: boolean, reprepared: boolean): ReadFailureAction {
+  if (error === 'snapshot-gone' && !reprepared) return { kind: 'reprepare' };
+  if (wrote) return { kind: 'destroy' };
+  if (error === 'draft-changed') return { kind: 'status', status: 409 };
+  if (error === 'busy') return { kind: 'status', status: 503 };
+  return { kind: 'status', status: 404 };
+}
+
+/** What a failed PREPARE becomes: `prepare-busy` (ccd's own word) is asked again after `ARTIFACT_PREPARE_RETRY_MS`, inside the
+ *  request's wait; the rest are `readFailureAction`'s before a byte, and after one the socket is destroyed. */
+export function prepareFailureAction(error: string, wrote: boolean): ReadFailureAction | { kind: 'retry' } {
+  if (error === 'prepare-busy') return { kind: 'retry' };
+  return readFailureAction(error, wrote, true);
+}
+
+// ---- The content door's small decisions, fix round of X5 A3.3 -----------------------------------------------------------
+
+/** The hour's byte budget is a window that restarts this long after its start: the store's rule, spelled once here and read by it. */
+export const ARTIFACT_BUDGET_WINDOW_MS = 3600000;
+
+/** Whether a capability's byte budget is already spent at `now` (spec 5: "1 GiB served an hour"): the window has not restarted and
+ *  the bytes served in it have reached the budget. A request is refused (429) only then; what it is then served is charged frame by
+ *  frame, so a ranged read that stops early costs only what it was sent. */
+export function budgetSpent(c: { servedThisHour: number; hourStart: number }, now: number): boolean {
+  return now - c.hourStart < ARTIFACT_BUDGET_WINDOW_MS && c.servedThisHour >= ARTIFACT_HOURLY_BYTES;
+}
+
+/** The status of a 200 or 206 head: a range is 206, the whole file 200. The one place that says so. */
+export function contentStatus(range: { start: number; end: number } | null): 200 | 206 {
+  return range === null ? 200 : 206;
+}
+
+/** What a read that answered `ok` becomes: the response is complete only when exactly its `Content-Length` was sent; any other
+ *  count is a cut socket, never a short 200. */
+export function readEndVerdict(sent: number, total: number): 'complete' | 'destroy' {
+  return sent === total ? 'complete' : 'destroy';
+}
+
+/** What a prepare whose wait ran out becomes: the 503 before a byte, a cut socket after one. */
+export function prepareTimeoutAction(wrote: boolean): 'wait-out' | 'destroy' {
+  return wrote ? 'destroy' : 'wait-out';
+}
+
+/** The answer a status from `readFailureAction` stands for: the identical 404 or one of the fixed answers. */
+export function statusAnswerKind(status: 404 | 409 | 503): 'not-found' | 'draft-changed' | 'wait-out' {
+  return status === 404 ? 'not-found' : status === 409 ? 'draft-changed' : 'wait-out';
+}
+
+/** The prepare starts still counted at `now`, with this one added: only those inside the prepare window are kept. */
+export function withPrepareStart(starts: readonly number[], now: number): number[] {
+  return [...starts.filter((t) => now - t < PREPARE_WINDOW_MS), now];
+}
+
+/** The instant a request's wait for a snapshot ends. The first prepare gets `ARTIFACT_QUEUE_WAIT_MS` from the request's arrival. A
+ *  re-prepare after `snapshot-gone`, which can come long after that, gets a fresh wait from `now`, never past the response
+ *  deadline (`ARTIFACT_RESPONSE_MAX_MS` from admission). */
+export function prepareWaitUntil(kind: 'first' | 'again', arrivedAt: number, admittedAt: number, now: number): number {
+  if (kind === 'first') return arrivedAt + ARTIFACT_QUEUE_WAIT_MS;
+  return Math.min(now + ARTIFACT_QUEUE_WAIT_MS, admittedAt + ARTIFACT_RESPONSE_MAX_MS);
 }

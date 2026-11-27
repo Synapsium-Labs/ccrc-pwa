@@ -634,7 +634,7 @@ describe('the box-token surface is derived, and no prose site under-claims it', 
   });
 
   it('a box-token call planted in the artifact listener\'s file is SEEN — the lane source is live (the control)', () => {
-    const LINE = "app.get('/clear', notFound);";
+    const LINE = "app.get('/clear', clearPage);";
     expect(ARTIFACT_SRC, 'the registration line moved — re-point this control at it').toContain(LINE);
     for (const call of ['requireMailToken(req, reply);', 'checkMailToken(null, undefined);']) {
       const planted = ARTIFACT_SRC.replace(LINE, `${LINE}\n  ${call}`);

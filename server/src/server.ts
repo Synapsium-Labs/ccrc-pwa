@@ -85,7 +85,7 @@ import { createQuestions, type OperatorDoorDeps, type Questions } from './coord/
 import { heldFor } from './coord/heldFor.js';
 import { registerUpdateRoutes } from './update/routes.js';
 import {
-  composeDocs, readTree, registerDocsArtifactRoutes, registerDocsFolderReadRoutes, registerDocsFolderRegistryRoutes,
+  artifactBytes, composeDocs, readTree, registerDocsArtifactRoutes, registerDocsFolderReadRoutes, registerDocsFolderRegistryRoutes,
   registerDocsReadRoutes, registerDocsRefreshRoute, registerDocsSettingsRoutes,
 } from './docs/routes.js';
 import { registerReviewOpenRoute, registerReviewPageRoutes } from './review/routes.js';
@@ -632,12 +632,12 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   // The one capability store (X5 A2.2), in memory, built first when the tier is on: the artifact instance reads it (A3.1's
   // wrapper) and it is handed to the docs plugin's mint-side doors below. Its liveness port asks `authStore` with the secret
   // measured afresh on every call: `secretNow` is declared further down this body and is only called at a request, after it exists.
+  // The instance itself is built further down, after `composeDocs`: its content door (A3.3) reads bytes through that composition's
+  // readers and lanes, so it is made, decorated and closed with the console there. The console's host fence stays here, an early
+  // onRequest hook, and so do the store and the listen state.
   const artifactStore = artifactCfg.state === 'on' ? createArtifactStore(Date.now, sessionLiveness(authStore, () => secretNow())) : null;
-  const artifactApp = artifactCfg.state === 'on' && artifactStore !== null ? buildArtifactServer({ cfg: artifactCfg, store: artifactStore }) : null;
-  app.decorate('artifactServer', artifactApp);
-  const artifactListener = artifactApp === null ? null : createArtifactListenerState();
+  const artifactListener = artifactCfg.state === 'on' ? createArtifactListenerState() : null;
   app.decorate('artifactListener', artifactListener);
-  if (artifactApp !== null) app.addHook('onClose', async () => { await artifactApp.close(); });
   installConsoleHostFence(app, artifactCfg);
   // The reader lab's door (the reader lab design, section 4): its counter is an onRequest hook added HERE, before the
   // gate's, so a probe the gate refuses (a sandboxed frame's WebSocket upgrade on an armed box) is still counted. It only
@@ -2504,6 +2504,14 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
       write: (...args) => docsCoord.writeDocsSettings(...args),
     },
   });
+  // The artifact tier's own instance (X5 A1.3, A3.3), built here because its content door reads bytes through the docs composition
+  // above (`artifactBytes` over its readers and lanes, the console's own read path). It is handed out as the `artifactServer`
+  // decoration (null when the tier is off), before this function returns, and closed with the console.
+  const artifactApp = artifactCfg.state === 'on' && artifactStore !== null
+    ? buildArtifactServer({ cfg: artifactCfg, store: artifactStore, bytes: artifactBytes(docs.readers, docs.lanes), now: Date.now })
+    : null;
+  app.decorate('artifactServer', artifactApp);
+  if (artifactApp !== null) app.addHook('onClose', async () => { await artifactApp.close(); });
   await app.register(async (app) => {
     installDocsRequestPolicy(app);
     installDocsResponsePolicy(app);

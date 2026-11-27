@@ -118,8 +118,14 @@ function rawRequest(port: number, text: string): Promise<string> {
  *  gave the instance a store). */
 const emptyStore = (): ArtifactStore => createArtifactStore(() => 1_800_000_000_000, { of: () => 'live' });
 
+/** The content door's two ports (X5 A3.3), which these cases never reach: a port that reads nothing, and the real clock. */
+const inertPorts = {
+  bytes: { prepare: async () => ({ ok: false as const, error: 'unreadable' as const }), read: async () => ({ ok: false as const, error: 'unreadable' as const }) },
+  now: () => Date.now(),
+};
+
 const artifactApp = (): FastifyInstance => {
-  const a = buildArtifactServer({ cfg: onConfig(), store: emptyStore() });
+  const a = buildArtifactServer({ cfg: onConfig(), store: emptyStore(), ...inertPorts });
   toClose.push(a);
   return a;
 };
@@ -444,7 +450,7 @@ describe('listener: an artifact host on the console instance is 421', () => {
     for (const host of ['127.0.0.1:7790', '127.0.0.1:7791']) {
       expect((await app.inject({ method: 'GET', url: '/api/auth/status', headers: { host } })).statusCode, host).toBe(421);
     }
-    const inst = buildArtifactServer({ cfg: lo, store: emptyStore() });
+    const inst = buildArtifactServer({ cfg: lo, store: emptyStore(), ...inertPorts });
     toClose.push(inst);
     for (const host of ['127.0.0.1:7790', '127.0.0.1:7791']) {
       expect((await inst.inject({ method: 'GET', url: '/', headers: { host } })).statusCode, host).toBe(404);
@@ -486,7 +492,7 @@ describe('listener: no cookie', () => {
 describe('listener: the error handler', () => {
   it('answers a fixed 500 with no thrown text and no console output', async () => {
     const spies = CONSOLE_METHODS.map((m) => vi.spyOn(console, m).mockImplementation(() => {}));
-    const app = buildArtifactServer({ cfg: onConfig(), store: emptyStore() });
+    const app = buildArtifactServer({ cfg: onConfig(), store: emptyStore(), ...inertPorts });
     toClose.push(app);
     app.get('/boom', async () => { throw new Error('SECRET-THROWN-TEXT /a/' + TOKEN); });
     app.get('/boom-sync', () => { throw Object.assign(new Error('SECRET-SYNC'), { statusCode: 418 }); });
@@ -585,7 +591,7 @@ describe('listener: a taken port leaves the console up', () => {
   });
 
   it('a request that arrives while the instance closes is answered by the hook and routes, never the framework\'s bare 503', async () => {
-    const inst = buildArtifactServer({ cfg: onConfig(), store: emptyStore() });
+    const inst = buildArtifactServer({ cfg: onConfig(), store: emptyStore(), ...inertPorts });
     await inst.listen({ host: '127.0.0.1', port: 0 });
     const { port } = inst.server.address() as net.AddressInfo;
     // The server has taken the connection off its queue before the close starts, so the close never resets it.

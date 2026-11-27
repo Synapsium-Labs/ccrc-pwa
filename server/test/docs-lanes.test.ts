@@ -816,3 +816,187 @@ describe('FR1 review F6: a settled flight detaches its joiners, so a joiner that
     expect(flight?.aborted, 'the settled flight kept a listener on its joiner').toBe(false);
   });
 });
+
+// X5 A3.3 part 1: the read lane's rules for artifact jobs. Appended, so no case above is touched; the names it adds to
+// the policy import sit in this second import (imports are hoisted) for the same reason.
+import { DOCS_LANE_ARTIFACT_QUEUE, laneAdmit, laneNext } from '../src/docs/policy.js';
+
+/** A small artifact job: far under every bound. */
+const ART: DocsJob = { raw: 1000, wire: 2000, source: 'artifact' };
+/** An artifact job at exactly the large threshold: the most an artifact job may carry. */
+const ART_EDGE: DocsJob = { raw: DOCS_LANE_LARGE_RAW, wire: 1100000, source: 'artifact' };
+/** An artifact range prepare: `RANGE_PREPARE_JOB` plus the source. */
+const ART_PREPARE: DocsJob = { ...RANGE_PREPARE_JOB, source: 'artifact' };
+const BUSY_READ: DocsLaneRun<string> = { kind: 'busy', body: docsBusyBody('read') };
+
+describe('X5 A3.3: artifact jobs on the read lane', () => {
+  it('lane: console first behind artifact jobs', async () => {
+    // One artifact job runs and two wait; a console job starts at once, before both.
+    const lane = readLane();
+    const b = blocker<string>();
+    const order: string[] = [];
+    void lane.run(ART, live(), named(order, 'a1', b));
+    void lane.run(ART, live(), named(order, 'a2', b));
+    void lane.run(ART, live(), named(order, 'a3', b));
+    expect(order).toStrictEqual(['a1']);
+    expect(lane.load()).toMatchObject({ execs: 1, artifact: 1, queued: 0, artifactQueued: 2 });
+    void lane.run(SMALL, live(), named(order, 'c1', b));
+    expect(order).toStrictEqual(['a1', 'c1']);
+
+    // A console job waiting behind a full lane is started before an artifact job that arrived earlier.
+    const lane2 = readLane();
+    const b2 = blocker<string>();
+    const order2: string[] = [];
+    void lane2.run(SMALL, live(), named(order2, 'c1', b2));
+    void lane2.run(SMALL, live(), named(order2, 'c2', b2));
+    void lane2.run(ART, live(), named(order2, 'a1', b2));
+    void lane2.run(SMALL, live(), named(order2, 'c3', b2));
+    expect(order2).toStrictEqual(['c1', 'c2']);
+    b2.release(0, 'x');
+    await flush();
+    expect(order2).toStrictEqual(['c1', 'c2', 'c3']);
+    b2.release(1, 'y');
+    await flush();
+    expect(order2).toStrictEqual(['c1', 'c2', 'c3', 'a1']);
+
+    // A running artifact job at the large threshold does not make a console job wait: it is not counted large.
+    const lane3 = readLane();
+    const b3 = blocker<string>();
+    void lane3.run(ART_EDGE, live(), b3.exec);
+    void lane3.run(LARGE, live(), b3.exec);
+    expect(b3.started()).toBe(2);
+    expect(lane3.load()).toMatchObject({ execs: 2, large: 1, artifact: 1 });
+
+    // An artifact job never passes a console job that waits: a second large console job is held at the console head
+    // (one large runs), an artifact job that the lane could admit waits behind it, and a pump caused by a console job
+    // behind the head leaving does not let the artifact job through.
+    const lane5 = readLane();
+    const b5 = blocker<string>();
+    const order5: string[] = [];
+    void lane5.run(LARGE, live(), named(order5, 'l1', b5));
+    void lane5.run(LARGE, live(), named(order5, 'l2', b5));
+    const gone5 = new AbortController();
+    const behind = lane5.run(SMALL, gone5.signal, named(order5, 'c', b5));
+    void lane5.run(ART, live(), named(order5, 'a', b5));
+    expect(order5).toStrictEqual(['l1']);
+    gone5.abort();
+    expect(await behind).toStrictEqual({ kind: 'abandoned' });
+    await flush();
+    expect(order5).toStrictEqual(['l1']);
+    expect(lane5.load()).toMatchObject({ execs: 1, queued: 1, artifactQueued: 1 });
+    b5.release(0, 'x');
+    await flush();
+    expect(order5).toStrictEqual(['l1', 'l2', 'a']);
+
+    // The artifact queue's own bound: the seventeenth queued artifact job is busy at once, the console queue is empty
+    // and the console's own bound is untouched.
+    const lane4 = readLane();
+    const b4 = blocker<string>();
+    void lane4.run(ART, live(), b4.exec);
+    for (let i = 0; i < DOCS_LANE_ARTIFACT_QUEUE; i += 1) void lane4.run(ART, live(), b4.exec);
+    expect(lane4.load()).toMatchObject({ queued: 0, artifactQueued: DOCS_LANE_ARTIFACT_QUEUE });
+    expect(await settledOrPending(lane4.run(ART, live(), b4.exec))).toStrictEqual(BUSY_READ);
+    expect(lane4.load()).toMatchObject({ queued: 0, artifactQueued: DOCS_LANE_ARTIFACT_QUEUE });
+    // The execs are two: one artifact job runs, one console job runs, and a full console queue still fits.
+    void lane4.run(SMALL, live(), b4.exec);
+    for (let i = 0; i < DOCS_LANE_QUEUE; i += 1) void lane4.run(SMALL, live(), b4.exec);
+    expect(lane4.load()).toMatchObject({ queued: DOCS_LANE_QUEUE, artifactQueued: DOCS_LANE_ARTIFACT_QUEUE });
+    expect(await settledOrPending(lane4.run(SMALL, live(), b4.exec))).toStrictEqual(BUSY_READ);
+
+    // The decider refuses an artifact job above the threshold even on an idle lane.
+    expect(laneAdmit({ execs: 0, bytes: 0, large: 0, prepares: 0 }, { raw: DOCS_LANE_LARGE_RAW + 1, wire: 1, source: 'artifact' })).toBe(false);
+    expect(laneAdmit({ execs: 0, bytes: 0, large: 0, prepares: 0 }, ART_EDGE)).toBe(true);
+  });
+
+  it('lane: one artifact job at a time', async () => {
+    const lane = readLane();
+    const b = blocker<string>();
+    const first = lane.run(ART, live(), b.exec);
+    const second = lane.run(ART, live(), b.exec);
+    // A second exec is free, yet the second artifact job waits.
+    expect(b.started()).toBe(1);
+    expect(lane.load()).toMatchObject({ execs: 1, artifact: 1, queued: 0, artifactQueued: 1 });
+    b.release(0, 'a');
+    await flush();
+    expect(await first).toStrictEqual({ kind: 'ran', value: 'a' });
+    expect(b.started()).toBe(2);
+    expect(lane.load()).toMatchObject({ execs: 1, artifact: 1, artifactQueued: 0 });
+    b.release(1, 'b');
+    expect(await second).toStrictEqual({ kind: 'ran', value: 'b' });
+    expect(lane.load()).toStrictEqual(IDLE);
+  });
+
+  it('lane: a second artifact range prepare waits while one runs', async () => {
+    const lane = readLane();
+    const b = blocker<string>();
+    const first = lane.run(ART_PREPARE, live(), b.exec);
+    const second = lane.run(ART_PREPARE, live(), b.exec);
+    expect(b.started()).toBe(1);
+    expect(lane.load()).toMatchObject({ execs: 1, prepares: 1, artifact: 1, artifactQueued: 1 });
+    b.release(0, 'a');
+    await flush();
+    expect(await first).toStrictEqual({ kind: 'ran', value: 'a' });
+    expect(b.started()).toBe(2);
+    b.release(1, 'b');
+    expect(await second).toStrictEqual({ kind: 'ran', value: 'b' });
+    expect(lane.load()).toStrictEqual(IDLE);
+  });
+
+  it('lane: laneNext', () => {
+    const idle: LaneLoad = { execs: 0, bytes: 0, large: 0, prepares: 0 };
+    const full: LaneLoad = { execs: DOCS_LANE_EXECS, bytes: 0, large: 0, prepares: 0 };
+    const artifactRunning: LaneLoad = { execs: 1, bytes: 2000, large: 0, prepares: 0, artifact: 1 };
+    // A console head that is admitted goes first, even with an artifact head also admitted.
+    expect(laneNext(idle, SMALL, ART)).toBe('reader');
+    // A console head that is not admitted blocks the artifact head, which alone would be admitted.
+    expect(laneAdmit({ execs: 1, bytes: 0, large: 1, prepares: 0 }, LARGE)).toBe(false);
+    expect(laneAdmit({ execs: 1, bytes: 0, large: 1, prepares: 0 }, ART)).toBe(true);
+    expect(laneNext({ execs: 1, bytes: 0, large: 1, prepares: 0 }, LARGE, ART)).toBeNull();
+    // No console head: the artifact head by laneAdmit.
+    expect(laneNext(idle, null, ART)).toBe('artifact');
+    expect(laneNext(full, null, ART)).toBeNull();
+    expect(laneNext(artifactRunning, null, ART)).toBeNull();
+    // Nothing waits.
+    expect(laneNext(idle, null, null)).toBeNull();
+  });
+
+  it('lane: artifact jobs leave on abort, wait and close', async () => {
+    const lane = docsReadLane();
+    const b = blocker<string>();
+    void lane.run(ART, live(), b.exec);
+
+    // Abort: abandoned, dequeued, timer cleared.
+    const gone = new AbortController();
+    const aborted = lane.run(ART, gone.signal, b.exec);
+    expect(lane.load()).toMatchObject({ artifactQueued: 1 });
+    gone.abort();
+    expect(await settledOrPending(aborted)).toStrictEqual({ kind: 'abandoned' });
+    expect(lane.load()).toMatchObject({ artifactQueued: 0 });
+    expect(vi.getTimerCount()).toBe(0);
+
+    // Wait: still waiting one millisecond early, busy at DOCS_LANE_MAX_WAIT_MS.
+    const waiting = lane.run(ART, live(), b.exec);
+    await vi.advanceTimersByTimeAsync(DOCS_LANE_MAX_WAIT_MS - 1);
+    expect(await settledOrPending(waiting)).toBe('pending');
+    await vi.advanceTimersByTimeAsync(1);
+    expect(await settledOrPending(waiting)).toStrictEqual(BUSY_READ);
+    expect(lane.load()).toMatchObject({ artifactQueued: 0 });
+    expect(vi.getTimerCount()).toBe(0);
+
+    // Close: every queued job of both FIFOs is busy, no timer is left, and a later run is busy and never starts.
+    const queuedArtifact = lane.run(ART, live(), b.exec);
+    void lane.run(SMALL, live(), b.exec);
+    const queuedConsole = [0, 1].map(() => lane.run(SMALL, live(), b.exec));
+    expect(lane.load()).toMatchObject({ queued: 2, artifactQueued: 1 });
+    lane.close();
+    expect(vi.getTimerCount()).toBe(0);
+    expect(await Promise.all([queuedArtifact, ...queuedConsole].map(settledOrPending))).toStrictEqual([BUSY_READ, BUSY_READ, BUSY_READ]);
+    expect(lane.load()).toMatchObject({ queued: 0, artifactQueued: 0 });
+    expect(await settledOrPending(lane.run(ART, live(), b.exec))).toStrictEqual(BUSY_READ);
+    expect(b.started()).toBe(2);
+    b.release(0, 'a');
+    b.release(1, 'b');
+    await flush();
+    expect(b.started()).toBe(2);
+  });
+});

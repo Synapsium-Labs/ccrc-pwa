@@ -10,8 +10,10 @@
 //
 // WHAT IT NEVER DOES. It sets no cookie, reads no body, and writes no log line on any request path: a request path on this tier
 // holds a capability token, so the instance never has a console call on a request path, the error handler included. In A1 every
-// route answers the identical 404 page; A3 fills `/a/:token`, `/c/:token/*` and `/clear`. A3.1 fills `/a/:token`: the wrapper,
-// built in `wrapper.ts` from the capability the store finds live for the token.
+// route answered the identical 404 page; A3 filled `/a/:token`, `/c/:token/*` and `/clear`. A3.1 filled `/a/:token`: the wrapper,
+// built in `wrapper.ts` from the capability the store finds live for the token. A3.3 filled the content door (its engine is
+// `content.ts`; this file only implements its reply interface and passes the raw request) and `/clear`, and made every route answer
+// only on its own host (a wrong host on a known route is that route's identical 404, never a 421).
 //
 // THE FENCES. Every request first meets the host fence (421 when `Host` is not one of the two artifact hosts) and then the method
 // fence (405 unless GET or HEAD). `installConsoleHostFence` is the console's side: a request naming an artifact host, in any
@@ -19,10 +21,13 @@
 //
 // A FAILED LISTEN TURNS THE TIER OFF, NEVER THE CONSOLE: `listenArtifactServer` never throws. It writes one warning, marks the
 // listen state `down`, and the console's own listen, which follows it in `index.ts`, still runs.
-import Fastify, { type FastifyInstance, type FastifyReply } from 'fastify';
+import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest } from 'fastify';
 import {
-  artifactMethodAllowed, clientErrorAction, frameworkErrorStatus, hostFence, namesArtifactHost, type ArtifactConfig, type ArtifactListenWord,
+  CLEAR_CSP, artifactMethodAllowed, clearDestOk, clientErrorAction, frameworkErrorStatus, hostFence, namesArtifactHost, routeHostOk,
+  type ArtifactConfig, type ArtifactListenWord,
 } from './policy.js';
+import { createContentDoor, type ContentReply } from './content.js';
+import type { ArtifactBytes } from './ports.js';
 import type { ArtifactStore } from './store.js';
 import { ARTIFACT_ENDED_BODY, wrapperDestOk, wrapperDocument } from './wrapper.js';
 import { refuseRoute } from '../refuse.js';
@@ -48,6 +53,10 @@ export interface ArtifactRouteDeps {
   /** The capability store: the one thing a route reads (X5 A3.1). It asks the session store itself whether a capability's
    *  minting session still stands, so this instance has no other dependency and no cookie. */
   store: ArtifactStore;
+  /** The bytes of a manifest entry, over the console's own docs reads (X5 A3.3): the content door's only source of file bytes. */
+  bytes: ArtifactBytes;
+  /** The wall clock in milliseconds, which the door's waits and its `Cache-Control` seconds are measured against. */
+  now: () => number;
 }
 
 /** The fixed page every unknown or unfilled path answers (spec 3.4): one sentence, no script, no reference to anything. */
@@ -79,6 +88,50 @@ const HARDENING: Readonly<Record<string, string>> = {
 /** The hardening headers on a reply, and its content type. Idempotent, so every answering path may call it. */
 function answer(reply: FastifyReply, status: number, contentType: string, body: string): FastifyReply {
   return reply.code(status).headers(HARDENING).header('content-type', contentType).send(body);
+}
+
+/** `/clear`'s page: empty, fixed, no script and no reference to anything (spec 3.4). */
+const CLEAR_BODY =
+  '<!doctype html><html lang="en"><head><meta charset="utf-8"><title>ccrc artifacts</title></head><body></body></html>';
+
+/** The content door's reply over the instance's reply (X5 A3.3). `notFound` and `fixed` answer through the instance, so its
+ *  hardening headers and its error handling apply; `head` takes the reply over and writes the head on the raw response, with the
+ *  door's own complete header set (the hardening set's CSP and cache rule are replaced by the page's, and the rest are in it). */
+function contentReplyOver(reply: FastifyReply): ContentReply {
+  const raw = reply.raw;
+  const gone = new AbortController();
+  // The client's connection going, measured on the response (the request stream's own `close` means different things on different
+  // Node versions): it aborts while the response has not finished.
+  if (raw.destroyed && !raw.writableFinished) gone.abort();
+  else raw.once('close', () => { if (!raw.writableFinished) gone.abort(); });
+  let hijacked = false;
+  let wroteHead = false;
+  const hijack = (): void => {
+    if (!hijacked) { reply.hijack(); hijacked = true; }
+  };
+  return {
+    closed: gone.signal,
+    notFound: () => { answer(reply, 404, HTML, ARTIFACT_NOT_FOUND_BODY); },
+    fixed: (status, body, headers) => { answer(headers === undefined ? reply : reply.headers(headers), status, TEXT, body); },
+    // A head that cannot be written (a header value Node refuses) leaves a hijacked reply nobody will answer: the socket is cut, so a
+    // client never hangs, the head counts as written (nothing more can be answered) and the throw goes on to the door.
+    head: (status, headers) => {
+      hijack();
+      try {
+        raw.writeHead(status, headers);
+      } catch (err) {
+        wroteHead = true;
+        raw.destroy();
+        throw err;
+      }
+      wroteHead = true;
+    },
+    write: (chunk) => raw.write(chunk),
+    onDrain: (f) => { raw.once('drain', f); return () => { raw.off('drain', f); }; },
+    end: () => { raw.end(); },
+    destroy: () => { hijack(); raw.destroy(); },
+    wrote: () => wroteHead,
+  };
 }
 
 /** A whole HTTP/1.1 answer for a socket no request object reached: the status, the hardening headers, a fixed text body, and
@@ -150,7 +203,11 @@ export function buildArtifactServer(deps: ArtifactRouteDeps): FastifyInstance {
   // navigation is the fixed 403. Then the one look-up: every token that does not name a live capability (malformed, unknown,
   // revoked, idle, expired, its session ended) gets the same 404 page, byte for byte. A live one has its idle clock moved and is
   // answered with the wrapper; its six headers replace the hardening CSP and the rest equal the hardening set. Nothing is logged.
-  app.get<{ Params: { token: string } }>('/a/:token', (req, reply) => {
+  // (The request's type is spelled on the parameter, not as a generic on `app.get`, so the box-token census's registration scan,
+  // which reads `app.get(` followed by a quote, sees this door.)
+  app.get('/a/:token', (req: FastifyRequest<{ Params: { token: string } }>, reply) => {
+    // Each route answers only on its own host (spec 3.4): the wrapper on the artifact host, anywhere else the not-found page.
+    if (!routeHostOk('wrapper', req.headers.host, deps.cfg)) return notFound(req, reply);
     if (!wrapperDestOk(req.headers['sec-fetch-dest'])) return answer(reply, 403, TEXT, FORBIDDEN_BODY);
     const { token } = req.params;
     const c = deps.store.lookup(token);
@@ -159,8 +216,25 @@ export function buildArtifactServer(deps: ArtifactRouteDeps): FastifyInstance {
     const doc = wrapperDocument(c, token, deps.cfg.contentOrigin);
     return reply.code(200).headers(HARDENING).headers(doc.headers).header('content-type', HTML).send(doc.html);
   });
-  app.get('/c/:token/*', notFound);
-  app.get('/clear', notFound);
+  // The content door (X5 A3.3): the engine is `content.ts`, which reads the raw URL, not the router's decoded `*` parameter.
+  const door = createContentDoor({ cfg: deps.cfg, store: deps.store, bytes: deps.bytes, now: deps.now });
+  app.get('/c/:token/*', async (req, reply) => {
+    await door({
+      rawUrl: req.raw.url ?? '', host: req.headers.host, method: req.method === 'HEAD' ? 'HEAD' : 'GET',
+      dest: req.headers['sec-fetch-dest'], mode: req.headers['sec-fetch-mode'], site: req.headers['sec-fetch-site'],
+      serviceWorker: req.headers['service-worker'], range: req.headers.range,
+    }, contentReplyOver(reply));
+    return reply;
+  });
+  // `/clear` (spec 3.4): loaded into the wrapper's own frame by its "Clear this host's data" link, on the content host only.
+  const clearPage = (req: FastifyRequest, reply: FastifyReply): FastifyReply => {
+    if (!routeHostOk('clear', req.headers.host, deps.cfg)) return notFound(req, reply);
+    if (!clearDestOk(req.headers['sec-fetch-dest'])) return answer(reply, 403, TEXT, FORBIDDEN_BODY);
+    return reply.code(200).headers(HARDENING).headers({
+      'content-security-policy': CLEAR_CSP(deps.cfg.artifactOrigin), 'clear-site-data': '"cache", "storage"',
+    }).header('content-type', HTML).send(CLEAR_BODY);
+  };
+  app.get('/clear', clearPage);
   app.setNotFoundHandler(notFound);
   // A fixed body: no request detail, no error text, and no log line (the request path holds a token).
   app.setErrorHandler((_err, _req, reply) => answer(reply, 500, TEXT, ERROR_BODY));
