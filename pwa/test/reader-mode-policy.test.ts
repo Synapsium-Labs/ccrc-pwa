@@ -8,6 +8,8 @@ import {
   READER_WAKE_IDLE_MS,
   readerModeDocKey,
   readerModeDocKeyOf,
+  readerModeExitShown,
+  readerModeGuardTarget,
   readerModeOffered,
   readerModeStep,
   readerTurnOf,
@@ -431,5 +433,27 @@ describe('reader mode: time left and its words', () => {
       turn: 'Turning', turnScreens: 'Pages', turnScroll: 'Scroll',
     });
     expect(Object.isFrozen(READER_MODE_TEXT)).toBe(true);
+  });
+});
+
+describe('reader mode: the Exit with no frame, and where the guards send focus (X6 XR fix round 1)', () => {
+  it('exit shown: only while reader mode is on and no frame stands', () => {
+    expect(readerModeExitShown({ on: true, frameStands: false })).toBe(true);
+    expect(readerModeExitShown({ on: true, frameStands: true }), 'a standing frame has the overlay').toBe(false);
+    expect(readerModeExitShown({ on: false, frameStands: false }), 'reader mode is off').toBe(false);
+    expect(readerModeExitShown({ on: false, frameStands: true })).toBe(false);
+  });
+
+  it('guard target: none off, the Exit with no frame, the overlay\'s last control or the frame otherwise (review M2)', () => {
+    const base = { on: true, frameStands: true, overlayShown: false };
+    expect(readerModeGuardTarget({ ...base, on: false, guard: 'leading' })).toBe('none');
+    expect(readerModeGuardTarget({ ...base, on: false, guard: 'trailing' })).toBe('none');
+    for (const guard of ['leading', 'trailing'] as const) {
+      expect(readerModeGuardTarget({ ...base, frameStands: false, guard }), `no frame: the ${guard} guard`).toBe('exit-only');
+    }
+    expect(readerModeGuardTarget({ ...base, overlayShown: true, guard: 'leading' })).toBe('overlay-last');
+    expect(readerModeGuardTarget({ ...base, overlayShown: true, guard: 'trailing' }), 'the trailing guard goes into the frame').toBe('frame');
+    expect(readerModeGuardTarget({ ...base, guard: 'leading' })).toBe('frame');
+    expect(readerModeGuardTarget({ ...base, guard: 'trailing' })).toBe('frame');
   });
 });

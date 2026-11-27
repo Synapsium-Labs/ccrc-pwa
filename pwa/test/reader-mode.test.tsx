@@ -1086,6 +1086,23 @@ describe('reader mode: an Exit with no frame standing (X6 XR fix round 1, item 2
     await flush();
     expect(screen.queryByRole('button', { name: READER_MODE_TEXT.exit }), 'an Exit beside a standing frame').toBeNull();
   });
+
+  it('no frame: both focus guards send focus to the Exit, so Tab never leaves the container for an invisible span (review M2)', async () => {
+    installFullScreen();
+    const view = render(<CtxHarness frame={fakeFrame()} places={fakePlaces()} />);
+    act(() => { latest.enter('button'); });
+    await flush();
+    view.rerender(<CtxHarness frame={null} places={fakePlaces()} />);
+    await flush();
+    const exit = screen.getByRole('button', { name: READER_MODE_TEXT.exit });
+    const guards = [...document.querySelectorAll<HTMLElement>('.docs-reading-guard')];
+    expect(guards, 'CONTROL: two guards').toHaveLength(2);
+    for (const [i, guard] of guards.entries()) {
+      (document.activeElement as HTMLElement | null)?.blur();
+      act(() => { guard.focus(); });
+      expect(document.activeElement, `the ${i === 0 ? 'leading' : 'trailing'} guard left focus on itself`).toBe(exit);
+    }
+  });
 });
 
 describe('wake lock: a refusal is remembered (X6 XR fix round 1, item 5)', () => {

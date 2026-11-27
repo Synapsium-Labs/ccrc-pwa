@@ -252,6 +252,20 @@ export function readerModeExitShown(input: { on: boolean; frameStands: boolean }
   return input.on && !input.frameStands;
 }
 
+/** Where focus goes when a focus guard of the reading container is reached (spec 6.5; X6 XR fix round 1). `none`: reader mode is
+ *  off, the guards are out of the tab order. `exit-only`: no frame stands, so the Exit alone is drawn and both guards send focus to
+ *  it (a guard that sent it to a frame that is not there would leave it on an invisible span, and the next Tab out of the
+ *  container). `overlay-last`: the leading guard while the overlay shows, to its last control. `frame`: otherwise, into the frame. */
+export type ReaderGuardTarget = 'none' | 'exit-only' | 'overlay-last' | 'frame';
+
+export function readerModeGuardTarget(
+  input: { on: boolean; frameStands: boolean; overlayShown: boolean; guard: 'leading' | 'trailing' },
+): ReaderGuardTarget {
+  if (!input.on) return 'none';
+  if (readerModeExitShown({ on: input.on, frameStands: input.frameStands })) return 'exit-only';
+  return input.guard === 'leading' && input.overlayShown ? 'overlay-last' : 'frame';
+}
+
 /** The one wake-lock decider, re-read on every state change: on, visible, and active within `READER_WAKE_IDLE_MS`, and not
  *  refused. `refused` is the memo of a request the browser refused (X6 XR fix round 1): until the next entry into reader mode or
  *  the page becoming visible again (both clear it, in delivery) a refusal means the lock is not wanted, so activity asks nothing. */

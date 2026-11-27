@@ -15,7 +15,7 @@
 import { useContext, useRef, useState, type ReactNode } from 'react';
 import { SheetPortalContext } from '@ccrc/ui';
 import { ReaderModeExitOnly, ReaderModeOverlay, type ReaderModeOverlayHandle } from './ReaderModeOverlay';
-import { readerModeExitShown } from './reader/readerMode';
+import { readerModeExitShown, readerModeGuardTarget } from './reader/readerMode';
 import { ReaderModeContext, type ReaderModeContainer } from './useReaderMode';
 
 /** One focus guard of the reading container's wrap (spec §6.5): in the tab order only while reader mode is on, and moving the focus
@@ -35,17 +35,17 @@ export function DocsReading(p: { reading: ReaderModeContainer; children: ReactNo
   // With reader mode on and no frame standing (the leaf is changing or failed), the Exit alone is drawn with no tap (X6 XR fix
   // round 1): `readerModeExitShown` decides, and no phone has a key or a browser Back to leave with.
   const exitOnly = ctx !== null && readerModeExitShown({ on: ctx.state.on, frameStands: ctx.frame !== null });
-  const onLeadingGuard = (): void => {
-    if (!reading.on) return;
-    if (shown !== null || exitOnly) overlay.current?.focusLast();
-    else reading.focusFrame();
-  };
-  const onTrailingGuard = (): void => {
-    if (reading.on) reading.focusFrame();
+  /** A guard was reached: `readerModeGuardTarget` says where focus goes, this only does it. */
+  const onGuard = (guard: 'leading' | 'trailing'): void => {
+    const target = readerModeGuardTarget({
+      on: reading.on, frameStands: ctx === null || ctx.frame !== null, overlayShown: shown !== null, guard,
+    });
+    if (target === 'overlay-last' || target === 'exit-only') overlay.current?.focusLast();
+    else if (target === 'frame') reading.focusFrame();
   };
   return (
     <div className="docs-reading" ref={reading.setContainer} data-reader-mode={reading.how}>
-      <FocusGuard tabIndex={tabIndex} onFocus={onLeadingGuard} />
+      <FocusGuard tabIndex={tabIndex} onFocus={() => onGuard('leading')} />
       <SheetPortalContext value={portal}>{p.children}</SheetPortalContext>
       <div className="docs-reading-controls">
         {ctx !== null && shown !== null && (
@@ -58,7 +58,7 @@ export function DocsReading(p: { reading: ReaderModeContainer; children: ReactNo
         )}
         {ctx !== null && exitOnly && <ReaderModeExitOnly ref={overlay} onExit={() => ctx.exit('exit-tap')} onActivity={ctx.activity} />}
       </div>
-      <FocusGuard tabIndex={tabIndex} onFocus={onTrailingGuard} />
+      <FocusGuard tabIndex={tabIndex} onFocus={() => onGuard('trailing')} />
       <p className="docs-reading-live sr-only" aria-live="polite">{reading.live}</p>
       <div className="docs-reading-portal" ref={setPortal} />
     </div>
