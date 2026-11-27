@@ -328,7 +328,8 @@ describe('reader mode: the container, the sheets and the frame (XR1.2)', () => {
           inContainer: dialog.closest('.docs-reading') !== null,
           hitInDialog: hit !== null && dialog.contains(hit),
           w: r.width, h: r.height, fullScreen: document.fullscreenElement?.classList.contains('docs-reading') === true,
-          text: dialog.textContent?.includes('example.org') === true,
+          // The link's full address, as the document wrote it, shown as the text of one element of the dialog (not a bare host test).
+          text: Array.from(dialog.querySelectorAll('*')).some((el) => el.children.length === 0 && el.textContent?.trim() === 'https://example.org/page'),
         };
       });
       console.log(`XRB-FIGURE link-sheet ${JSON.stringify(sheet)}`);
