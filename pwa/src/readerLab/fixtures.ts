@@ -82,6 +82,101 @@ export const LAB_PAGES: readonly { readonly label: string; readonly text: string
   { label: 'all', text: prose('All six figures') + LAB_FIGURES.join('') },
 ];
 
+// The gate-sized page (X2 P6.1 Step 0b). Markdown above the render gate is read in parts of at most the gate, so the lab
+// times one part of exactly the gate: a dense page with every block a real doc has (headings of three levels, tables,
+// bullet and numbered lists, fenced code with an info string, block quotes and prose) and no figure, so the number is
+// the reader's own and not Mermaid's. It is ASCII, so its length in characters is its length in UTF-8 bytes, and it is
+// built the same way every time. It is no member of `LAB_PAGES`: the nine pages' mounts and the result's gap line stay
+// as they were, and the run times this page apart from them (`run.ts`).
+
+/** The page's size: `DOCS_RENDER_GATE_BYTES` (`lib/markdownLimits.ts`), written here because this file imports nothing;
+ *  `reader-lab-gate.test.ts` holds the two together. */
+const GATE_PAGE_BYTES = 524288;
+
+const TOPICS = ['river', 'harbour', 'orchard', 'lantern', 'meadow', 'compass', 'granite', 'willow', 'ledger', 'beacon', 'quarry', 'thicket'];
+const VERBS = ['gathers', 'carries', 'measures', 'follows', 'records', 'shelters', 'crosses', 'repairs'];
+
+/** One section of the page, the same shape each time with its own words: a `##` heading, prose, a `###` heading over a
+ *  bullet list, a numbered list, a table, a fenced code block and a block quote. */
+function gateSection(i: number): string {
+  const a = TOPICS[i % TOPICS.length]!;
+  const b = TOPICS[(i * 5 + 3) % TOPICS.length]!;
+  const v = VERBS[i % VERBS.length]!;
+  const n = i + 1;
+  return [
+    `## Section ${n}: the ${a} and the ${b}`,
+    '',
+    `The ${a} ${v} what the ${b} leaves behind, and the notes of section ${n} say how. A reader goes over the page line by `
+      + `line, so each paragraph is plain prose with a **bold** word, an *emphasised* one and a \`code span\` in it.`,
+    '',
+    `### Notes ${n}`,
+    '',
+    `- The ${a} is counted once for each pass, number ${n}.`,
+    `- The ${b} keeps its own tally, with \`tally_${n}\` as its name.`,
+    `  - A nested point about the ${a}, which a list inside a list carries.`,
+    `- Both are checked against the same rule before the next section starts.`,
+    '',
+    `1. Read the ${a} entry for section ${n}.`,
+    `2. Compare it with the ${b} entry beside it.`,
+    `3. Write down the difference, or write that there is none.`,
+    '',
+    `| Name | Count | Note |`,
+    `| --- | ---: | :--- |`,
+    `| ${a}-${n} | ${n * 3} | first pass |`,
+    `| ${b}-${n} | ${n * 7 % 1000} | second pass |`,
+    `| total-${n} | ${n * 10 % 1000} | both passes |`,
+    '',
+    '```ts',
+    `export function tally${n}(values: readonly number[]): number {`,
+    `  let total = ${n};`,
+    '  for (const value of values) total += value;',
+    '  return total;',
+    '}',
+    '```',
+    '',
+    `> The ${a} ${v} and the ${b} waits. Nothing in section ${n} asks for more than that.`,
+    '',
+    '',
+  ].join('\n');
+}
+
+/** The gate-sized page: a `#` heading over each forty sections, sections while the next one fits, then plain closing prose
+ *  that brings the page to exactly `bytes`. The closing prose is one paragraph under its own heading, so no fence is ever
+ *  cut. */
+function gatePage(bytes: number): string {
+  let text = '';
+  for (let i = 0; ; i += 1) {
+    const part = (i % 40 === 0 ? `# Part ${i / 40 + 1}\n\nA part of the gate-sized page, whose sections follow.\n\n` : '') + gateSection(i);
+    if (text.length + part.length > bytes - 96) break;
+    text += part;
+  }
+  const head = '## Closing words\n\n';
+  const room = bytes - text.length - head.length - 1;
+  return `${text}${head}${closingProse(room)}\n`;
+}
+
+const CLOSING_SENTENCE = 'The page ends in plain prose, which only brings it to its size. ';
+/** Words of two to six letters, by length, that the last sentence is made of. */
+const CLOSING_WORDS = ['so', 'and', 'also', 'which', 'though'];
+
+/** Plain prose of exactly `room` characters (at least 24) that ends on a whole sentence: whole copies of one sentence, then a
+ *  last sentence of a start word and as many small words as it takes, so the length is exact whatever the room. */
+function closingProse(room: number): string {
+  const copies = Math.max(0, Math.floor((room - 24) / CLOSING_SENTENCE.length));
+  let left = room - copies * CLOSING_SENTENCE.length - 'Done.'.length;
+  let last = 'Done';
+  while (left > 0) {
+    // The next word is the longest one that leaves nothing, or room for another word of at least two letters.
+    const w = [...CLOSING_WORDS].reverse().find((x) => left - (x.length + 1) === 0 || left - (x.length + 1) >= 3)!;
+    last += ` ${w}`;
+    left -= w.length + 1;
+  }
+  return `${CLOSING_SENTENCE.repeat(copies)}${last}.`;
+}
+
+/** The gate page, for the run's gate timing: not one of `LAB_PAGES`. */
+export const LAB_GATE_PAGE: { readonly label: 'gate'; readonly text: string } = { label: 'gate', text: gatePage(GATE_PAGE_BYTES) };
+
 /** Two hostile figures (the desktop leg's): a directive that tries to restyle the frame, and one that loosens Mermaid's
  *  security level to load an image and bind a click, both aimed at this run's door through `base`. */
 export function hostileDoc(base: string): string {

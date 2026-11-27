@@ -24,14 +24,14 @@ import type { ReaderRenderOutcome } from '../lib/readerRenderJob';
 import { isRecord } from '../lib/wire';
 import type { LabCheckId, LabOutcome } from './checks';
 import type { LabDevice } from './device';
-import { LAB_PAGES, hostileDoc } from './fixtures';
+import { LAB_GATE_PAGE, LAB_PAGES, hostileDoc } from './fixtures';
 import {
   AMBIENT_SCRIPT, BATTERY_SCRIPT, BUSY_SCRIPT, COOKIE_SCRIPT, POPUP_SCRIPT, SELF_NAV_SCRIPT, STRAYS_SCRIPT,
 } from './frameScripts';
 import { mountLabFrame, type LabFrame, type LabFrameSpec } from './frames';
 import { LAB_TEXT } from './labText';
 import { formatLabResult, type LabFinalRead } from './result';
-import { labVerdicts, type LabLocal, type LabMount } from './verdicts';
+import { labVerdicts, type LabGateRun, type LabLocal, type LabMount } from './verdicts';
 import { readLabRunView } from './wire';
 
 // The reader's types come through the loader's own signature, so this file names the bridge nowhere (the docs scan's
@@ -45,6 +45,10 @@ export const LAB_WATCHDOG_PROBE_MS = 500;
 export const LAB_TAP_READ_EVERY_MS = 1000;
 /** The stall the Mermaid line is held to (question Q2). The busy frame is a fact and has no budget. */
 export const LAB_STALL_BUDGET_MS = 200;
+/** How many times the gate-sized page is rendered and mounted (X2 P6.1 Step 0b); the result line reports the median of them.
+ *  The gate's mounts run after the door's last read, so they are outside `LAB_RUN_CAPS_MS` (`shared/readerLab.ts`) by design:
+ *  the door's run life covers everything the door reads, and no figure of this page is read from it. */
+export const LAB_GATE_RUNS = 5;
 
 /** Where a timed mount's frame-gap window ends (the reader lab design, section 8). `ready`: at the mount's outcome, which
  *  holds the draw while the library's `ready` waits for its figures (library 1.0.0). `ready-and-settle`: LAB_DRAW_SETTLE_MS
@@ -88,6 +92,9 @@ export interface LabDeps {
   readonly address: () => string;
   /** Where each timed mount's gap window ends (`LAB_GAP_WINDOW` in the real dependencies). */
   readonly gapWindow: LabGapWindow;
+  /** The gate-sized page the run times `LAB_GATE_RUNS` times after the Mermaid pages (the real dependencies hand it
+   *  `LAB_GATE_PAGE`). Absent: no gate timing, and the run is the run it was. */
+  readonly gatePage?: { readonly label: string; readonly text: string };
   readonly signal: AbortSignal;
 }
 
@@ -192,6 +199,38 @@ async function timedMount(deps: LabDeps, label: string, text: string): Promise<L
   }
 }
 
+/** One timing of the gate-sized page: the render job on its own, then the mount to its outcome, with the shape of
+ *  `timedMount`'s (a fresh host, the watchdog, the abort) and no frame-gap window: the figure is the time, not the stall. */
+async function gateRun(deps: LabDeps, text: string): Promise<LabGateRun> {
+  const bytes = utf8ByteLength(text);
+  const r0 = deps.now();
+  const out = await deps.render(text, { budgetMs: DOCS_PARSE_BUDGET_MS(bytes), signal: deps.signal });
+  const renderMs = deps.now() - r0;
+  if (out.kind !== 'rendered') return { renderMs, mountMs: 0, render: out.kind, mount: null };
+  const host = hostIn(deps.stage);
+  let settle: (o: NonNullable<LabGateRun['mount']>) => void = noop;
+  const settled = new Promise<NonNullable<LabGateRun['mount']>>((resolve) => { settle = resolve; });
+  const onAbort = (): void => settle('timeout');
+  deps.signal.addEventListener('abort', onAbort, { once: true });
+  void deps.sleep(LAB_MOUNT_WAIT_MS).then(() => settle('timeout'));
+  const t0 = deps.now();
+  let mount: ReaderMount | null = null;
+  try {
+    try {
+      mount = await deps.mountReader(host, mountInput(out, bytes, { onReady: () => settle('ready'), onFallback: () => settle('fallback'),
+        onMermaidDrop: () => settle('mermaid-dropped') }));
+    } catch {
+      settle('fallback');
+    }
+    const outcome = await settled;
+    return { renderMs, mountMs: deps.now() - t0, render: 'rendered', mount: outcome };
+  } finally {
+    deps.signal.removeEventListener('abort', onAbort);
+    mount?.destroy();
+    host.remove();
+  }
+}
+
 /** One page mounted under the lab profile for step 7, with no timing: `true` once it is ready (after `whileReady` has run
  *  while it is up), `false` for a fallback or throw before ready, the cap or a stop. `onFallback` hears every fallback with
  *  whether ready had come, and `effect` is every host callback the page's messages can reach. The mount and its host are
@@ -277,7 +316,7 @@ export async function runReaderLab(deps: LabDeps, progress: (p: LabProgress) => 
   const nonce = opened.nonce;
   const base = `${deps.origin}${readerLabProbeBase(nonce)}`;
   const counts: { view: LabRunView | null } = { view: null };
-  const local: { selfNavLoads: number | null; busy: LabLocal['busy']; mounts: LabMount[]; hostile: LabLocal['hostile']; strays: LabLocal['strays'] } =
+  const local: { selfNavLoads: number | null; busy: LabLocal['busy']; mounts: LabMount[]; hostile: LabLocal['hostile']; strays: LabLocal['strays']; gate?: LabLocal['gate'] } =
     { selfNavLoads: null, busy: null, mounts: [], hostile: null, strays: null };
   let step = 0;
   const say = (line: string, tap = false): void => {
@@ -375,6 +414,18 @@ export async function runReaderLab(deps: LabDeps, progress: (p: LabProgress) => 
     stop();
     if (last !== 'unknown-run' && last !== 'unreadable') counts.view = last;
     const finalRead: LabFinalRead = typeof last === 'string' ? last : 'read';
+    // Still step 9: the gate-sized page, LAB_GATE_RUNS times, after the door's last read, so its mounts cannot spend the
+    // door's run life (`LAB_GATE_RUNS`' note).
+    if (deps.gatePage !== undefined) {
+      const runs: LabGateRun[] = [];
+      for (let i = 1; i <= LAB_GATE_RUNS; i += 1) {
+        stop();
+        say(`${LAB_TEXT.steps.gate} ${i} of ${LAB_GATE_RUNS}`);
+        runs.push(await gateRun(deps, deps.gatePage.text));
+      }
+      const bytes = utf8ByteLength(deps.gatePage.text);
+      local.gate = { bytes, budgetMs: DOCS_PARSE_BUDGET_MS(bytes), runs };
+    }
     return { outcomes: labVerdicts(counts.view, local, LAB_STALL_BUDGET_MS), local, run: counts.view, finalRead };
   } finally {
     await deps.door.close(nonce).catch(noop);
@@ -426,6 +477,7 @@ export function defaultLabDeps(p: { readonly stage: HTMLElement; readonly signal
     sleep: (ms) => new Promise((resolve) => { window.setTimeout(resolve, ms); }),
     address: () => location.href,
     gapWindow: LAB_GAP_WINDOW,
+    gatePage: LAB_GATE_PAGE,
     signal: p.signal,
   };
 }
