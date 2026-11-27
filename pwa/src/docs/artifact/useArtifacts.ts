@@ -44,6 +44,8 @@ let generation = 0;
 let newest = 0;
 // How many reads are in flight now: a consumer that mounts, or a sign-in that returns, starts none while one is.
 let inflight = 0;
+// When the last ok answer was published (`Date.now()`), or null before one: the one clock `ensureFresh` reads.
+let readAt: number | null = null;
 const listeners = new Set<() => void>();
 
 function publish(next: ArtifactsState): void {
@@ -81,13 +83,17 @@ async function read(doors: ArtifactDoors): Promise<void> {
   }
   if (mine !== generation) return;
   inflight -= 1;
-  if (my === newest) publish({ ...state, list: next });
+  if (my === newest) {
+    if (next.s === 'ok') readAt = Date.now();
+    publish({ ...state, list: next });
+  }
 }
 
 /** Puts the store back as a fresh page load has it. For tests. */
 export function resetArtifactsForTest(): void {
   generation += 1;
   inflight = 0;
+  readAt = null;
   state = IDLE;
   for (const fn of [...listeners]) fn();
 }
@@ -96,6 +102,10 @@ export interface UseArtifacts {
   readonly state: ArtifactsState;
   /** Reads the availability and the live list again (after a mint or a revoke). */
   refresh(): Promise<void>;
+  /** Reads again when the last ok answer is older than `maxAgeMs` and no read is in flight: the one rule for a list that was left
+   *  standing while the page was open elsewhere (a link another tab minted, or that lapsed). A store with no ok answer yet is left to
+   *  the mount's own read. */
+  ensureFresh(maxAgeMs: number): void;
   openSheet(key: string): void;
   closeSheet(): void;
 }
@@ -119,7 +129,10 @@ export function useArtifacts(): UseArtifacts {
     wasLost.current = lost;
   }, [lost, doors]);
   const refresh = useCallback(() => read(doors), [doors]);
+  const ensureFresh = useCallback((maxAgeMs: number): void => {
+    if (state.list.s === 'ok' && inflight === 0 && readAt !== null && Date.now() - readAt > maxAgeMs) void read(doors);
+  }, [doors]);
   const openSheet = useCallback((key: string) => publish({ ...state, sheetFor: key }), []);
   const closeSheet = useCallback(() => publish({ ...state, sheetFor: null }), []);
-  return { state: now, refresh, openSheet, closeSheet };
+  return { state: now, refresh, ensureFresh, openSheet, closeSheet };
 }

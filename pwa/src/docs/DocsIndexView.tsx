@@ -6,6 +6,7 @@ import { docsPageUrl, type DocsIndexRow, type DocsPageLocation, type DocsProject
 import type { DocsSettings } from '../../../shared/docsTracker';
 import { formatAge } from '../fleet/formatReset';
 import { navigate } from '../lib/router';
+import { ArtifactList } from './artifact/ArtifactList';
 import { docsListingHome, docsLocation } from './docsLinks';
 import { DOCS_FOLDER_TEXT, DOCS_VIEW_TEXT, fillSentence, pluralS, shortCommit } from './docsText';
 import { SECTION_LABEL, indexNewest, leafName, presentSectionCounts, sectionCountsText } from './docsTree';
@@ -189,6 +190,7 @@ export function DocsIndexView(p: {
         onChange={(e) => setFilter(e.target.value)}
       />
       <ul className="docs-rows">{ready.map(item)}{rest.map(item)}</ul>
+      <ArtifactList />
       {none.length > 0 && (
         <details className="docs-nodocs">
           <summary>{fillSentence(DOCS_VIEW_TEXT.noDocs, { n: none.length })}</summary>
