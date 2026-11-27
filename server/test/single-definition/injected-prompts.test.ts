@@ -108,17 +108,34 @@ const OPERATOR_TEXT_SITES: ReadonlyArray<{ file: string; callee: string; arg: st
   // The paste delivery recipe's driver (Desktop polish wave 178) sends what the console sends for one fixed case, on a test
   // box capture's private server only: the operator's text, stood in for by `shared/deliveryCapture.ts`'s cases.
   { file: 'server/src/inject/deliveryDrive.ts', callee: 'sendPrompt', arg: 'deliveryCaseText(input.case)', count: 1 },
+  // The box frames recipe's driver (Desktop polish wave 187) sends one fixed case's text the same way, on a test box
+  // capture's private server only: its `send` arrow passes `shared/framesCapture.ts`'s drafts, turns and held text.
+  { file: 'server/src/inject/deliveryDrive.ts', callee: 'sendPrompt', arg: 'text', count: 1 },
 ];
 
 /** The keys the server presses by name. */
 const SERVER_KEYS = new Set(['Enter', 'M-Enter', 'C-u', 'C-s', 'Tab', 'Up', 'Escape']);
 
-/** The four keys the server computes, each with its derivation (F13). */
+/** The keys the server computes, each with its derivation (F13): four, the stash key's one name at its two presses, and
+ *  the box frames recipe's driver's three, on a test box capture's private server only (Desktop polish wave 187). */
 const COMPUTED_KEY_SITES: ReadonlyArray<{ file: string; symbol: string; arg: string; derivation: string }> = [
   { file: 'server/src/inject/send.ts', symbol: 'walkCursor', arg: 'key', derivation: 'a direction word, Down or Up' },
   { file: 'server/src/inject/send.ts', symbol: 'moveDialogTab', arg: 'key', derivation: 'a direction word, Left or Right' },
   { file: 'server/src/inject/send.ts', symbol: 'answerDialogMulti', arg: 'String(k)', derivation: 'a digit from an index' },
   { file: 'server/src/inject/ask.ts', symbol: 'answerAsk', arg: 'String(i + 1)', derivation: 'a digit from an index' },
+  { file: 'server/src/inject/send.ts', symbol: 'stashDraft', arg: 'STASH_KEY', derivation: 'the stash key, C-s, named once' },
+  { file: 'server/src/inject/send.ts', symbol: 'popHeldStash', arg: 'STASH_KEY', derivation: 'the stash key, C-s, named once' },
+  { file: 'server/src/inject/deliveryDrive.ts', symbol: 'driveFramesStep', arg: 'STASH_KEY', derivation: 'the stash key, C-s, send.ts\'s one name' },
+  { file: 'server/src/inject/deliveryDrive.ts', symbol: 'driveFramesStep', arg: 'k', derivation: 'a view key of the case, Up or PageUp (framesViewKeys)' },
+  { file: 'server/src/inject/deliveryDrive.ts', symbol: 'driveFramesStep', arg: 'FRAMES_PERSON.newline', derivation: 'the person\'s newline, C-j (FRAMES_PERSON)' },
+];
+
+/** The sites outside the two primitives that type a literal: the send's own line loop, which `sendPrompt` types every
+ *  message through (`typeComposedLines`), and the box frames recipe's person, who types a fixed draft in bursts on a test
+ *  box capture's private server only (Desktop polish wave 187). Each is keyed by its file and its enclosing symbol. */
+const LITERAL_SITES: ReadonlyArray<{ file: string; symbol: string }> = [
+  { file: 'server/src/inject/send.ts', symbol: 'typeComposedLines' },
+  { file: 'server/src/inject/deliveryDrive.ts', symbol: 'driveFramesStep' },
 ];
 
 interface ServerFile { file: string; parsed: ParsedFile }
@@ -189,7 +206,8 @@ export function serverCensus(files: readonly ServerFile[]): ServerCensus {
         const sym = enclosing(p, c.start);
         const inPrimitive = file === 'server/src/inject/send.ts'
           && (sym === 'sendPrompt' || sym.startsWith('sendPrompt.') || sym === 'answerDialogText' || sym.startsWith('answerDialogText.'));
-        if (!inPrimitive) findings.push(`${where}: sendLiteral is called outside sendPrompt and answerDialogText`);
+        const named = LITERAL_SITES.some((s) => s.file === file && s.symbol === sym);
+        if (!inPrimitive && !named) findings.push(`${where}: sendLiteral is called outside sendPrompt and answerDialogText`);
       } else if (c.name === 'answerDialogText') {
         const a = c.args[4];
         const site = OPERATOR_TEXT_SITES.find((s) => s.file === file && s.callee === 'answerDialogText' && a?.kind === 'other' && s.arg === a.text);

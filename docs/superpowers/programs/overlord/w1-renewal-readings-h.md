@@ -37,7 +37,7 @@ serves, readiness reads `stranded`, as for any other reason nothing serves.
   (`holdTargetOf`), the sandbox check's verdict of its newest `startup` or `resume` start (`newestStartVerdict`) and
   `holdOfStart` over it. `hold` writes; `settled` (a pass, or failures another account would not cure) ends the decision for
   that start: its loads report is still read every pass, but nothing is decided or written for it again; `unmeasured` (no report
-  yet, an unmeasured property, an unknown account) holds nothing and is decided again next pass (F10). A start that ran another
+  yet, an unmeasured property, an unknown account) holds nothing and is decided again next pass (F10), except a `profile` property that reads `unmeasured` because the report names no profile, which settles (next sentence). A start that ran another
   launch profile (its `profile` property not held: the role or the digest differs, or the report names none) is settled with no
   hold, whatever else it loaded: its extras say nothing about the account (fix round 1, F2, the stance `overlordInstallBehindOf`
   takes on build skew). The settled starts are a per-process memo (`GenerationsDeps.holdsSettled`, kept by the watcher). Nobody designated:
@@ -117,8 +117,8 @@ serves, readiness reads `stranded`, as for any other reason nothing serves.
 | `holds-read-shape-in-l0` | `AccountHoldsRead` in `shared/renewal-readings.ts` is the one shape of the read for the store, the list, the account readings and readiness. |
 | `install-behind-rides-w1-inputs` | `W1Inputs` gains `installBehind`, so the wiring answers the Overlord's and the lane's spread lays it over the gather's `behind`; a coordinator's, and a store without the two reads, keep the gather's. |
 | `readiness-candidates-take-the-holds` | The readiness port's `candidates(d, held)`: the lane reads the holds once a pass and hands them to the candidates, the word and the items. |
-| `first-start-failure-writes-no-hold` | A start that fails the check during designate or rebind writes no hold (fix round 1, F3, ruled a recorded limit): the hold is written by the generations pass, which sees only live generations, and the settle retires a failing pending generation in the same transaction. The fix rides the next readings PR (ticket `first-start-failure-holds-its-account`). |
-| `another-profile-holds-nothing` | `holdOfStart` settles a start whose `profile` property is not held, with no hold (fix round 1, F2): the plan's question 6 reads the extras alone. |
+| `first-start-failure-writes-no-hold` | A start that fails the check during designate or rebind writes no hold (fix round 1, F3, ruled a recorded limit): the hold is written by the generations pass, which sees only live generations, and the settle retires a failing pending generation in the same transaction. A second, independent cause: `holdTargetOf` answers only for a session `boundTo` reads as designated, so a pending generation is never a target even while it is still live. The fix rides the next readings PR (ticket `first-start-failure-holds-its-account`). |
+| `another-profile-holds-nothing` | `holdOfStart` settles a start whose `profile` property is not held, with no hold (fix round 1, F2): the plan's Task 11 reads the extras alone (not its question 6, which is about where the hold's operator item lives). |
 | `holds-read-unreadable-answers-502` | The account holds' read answers 502 `unmeasured` when the table cannot be read, the `unmeasured` refusal's own status, as for every sibling in `continuity/routes.ts`; the home plan says "or 503". |
 | `settled-starts-memo-in-the-watcher` | `GenerationsDeps.holdsSettled`, a memo the watcher keeps across passes, like `retried` and `emptyTries`; `watch.ts` grows by three lines. |
 | `newest-start-verdict-in-the-sandbox-check` | `newestStartVerdict` (L1) beside `profileEngagedOf`, which it does not replace (the ladder's mutants pin `profileEngagedOf`'s text). |

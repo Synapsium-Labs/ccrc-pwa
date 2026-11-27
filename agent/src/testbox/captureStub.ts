@@ -19,6 +19,8 @@ export interface StandIn {
   readonly requests: readonly unknown[];
   readonly routes: readonly DeliveryRoute[];
   readonly others?: readonly number[];
+  /** Releases every response a `holdMs` reply is holding, at once (absent on a fake stand-in). */
+  release?(): void;
   close(): Promise<void>;
 }
 
@@ -43,6 +45,9 @@ export async function startStandIn(opts: { host?: string; port?: number; reply?:
   const routes: DeliveryRoute[] = [];
   const others: number[] = [];
   let n = 0;
+  // Responses a `{kind:'text', holdMs}` reply is holding: each ends at `release()` or when its own timer fires.
+  const held = new Set<() => void>();
+  const releaseAll = (): void => { for (const h of [...held]) h(); };
 
   const json = (res: http.ServerResponse, status: number, body: Obj): void => {
     const text = JSON.stringify(body);
@@ -55,6 +60,24 @@ export async function startStandIn(opts: { host?: string; port?: number; reply?:
     routes.push('messages');
     const reply = (opts.reply ?? standInReply)(body);
     if (reply.kind === 'error') { json(res, reply.status, errorBody('invalid_request_error', reply.message)); return; }
+    if (reply.kind === 'text' && reply.holdMs !== undefined && reply.holdMs > 0) {
+      const settled = reply;
+      let timer: ReturnType<typeof setTimeout> | null = null;
+      const go = (): void => {
+        if (timer === null) return;
+        clearTimeout(timer);
+        timer = null;
+        held.delete(go);
+        if (!res.destroyed) send(res, settled, body);
+      };
+      timer = setTimeout(go, reply.holdMs);
+      held.add(go);
+      return;
+    }
+    send(res, reply, body);
+  };
+
+  const send = (res: http.ServerResponse, reply: Exclude<StandInReply, { kind: 'error' }>, body: unknown): void => {
     n += 1;
     const o = typeof body === 'object' && body !== null && !Array.isArray(body) ? (body as Obj) : {};
     const model = typeof o['model'] === 'string' ? o['model'] : 'ccrc-capture-stand-in';
@@ -96,7 +119,7 @@ export async function startStandIn(opts: { host?: string; port?: number; reply?:
   });
   const port = (server.address() as AddressInfo).port;
   return {
-    port, requests, routes, others,
-    close: () => new Promise<void>((resolve) => { server.close(() => resolve()); server.closeAllConnections(); }),
+    port, requests, routes, others, release: releaseAll,
+    close: () => new Promise<void>((resolve) => { held.forEach((h) => { try { h(); } catch { /* the socket is gone */ } }); held.clear(); server.close(() => resolve()); server.closeAllConnections(); }),
   };
 }

@@ -73,6 +73,8 @@ export interface MessageRecordInput {
   /** The console's send key for one composed message, or null (open question 17). Not named `sendKey` in code: that is one of
    *  the pane typers' names, which `single-definition/injected-prompts.test.ts` reserves (slug `send-key-field-is-composed-key`). */
   readonly composedKey: string | null;
+  /** Sent under the chat's off-the-record toggle (§9.4 rule 9): recorded and answered all the same; no feed learns from it. */
+  readonly offRecord: boolean;
 }
 export interface MessageRecorded {
   readonly id: number;
@@ -81,6 +83,8 @@ export interface MessageRecorded {
   /** True when the send key named a message this session already recorded: that record is answered, and nothing is
    *  written. */
   readonly replay: boolean;
+  /** The row's off-the-record fact: the new row's, or on a replay the PRIOR row's stored value, whatever the retry said. */
+  readonly offRecord: boolean;
 }
 
 /** One entry of the uploaded name list as the store holds it: the shape `entryOf` makes (`shared/private-names.mjs`), keyed
@@ -95,17 +99,18 @@ const isEntryRow = (e: NameListEntryRow): boolean => typeof e === 'object' && e 
   && typeof e.f === 'string' && HASH32.test(e.f) && Number.isSafeInteger(e.n) && e.n >= 1 && isNameListMode(e.mode);
 
 /** The column list every row read names: `SELECT *` is banned, so an unknown column a later build adds is ignored. */
-const ROW_COLUMNS = 'id, at, term, state, text, cut, sha256, queuedAt, deliveredAt, pickedUpAt, settledAt, settledBy, spentAt';
+const ROW_COLUMNS = 'id, at, term, state, text, cut, sha256, queuedAt, deliveredAt, pickedUpAt, settledAt, settledBy, spentAt, offRecord';
 interface RawRow {
   id: number; at: number; term: number; state: string; text: string; cut: number; sha256: string;
   queuedAt: number | null; deliveredAt: number | null; pickedUpAt: number | null;
-  settledAt: number | null; settledBy: string | null; spentAt: number | null;
+  settledAt: number | null; settledBy: string | null; spentAt: number | null; offRecord: number;
 }
 /** A row as a reader answers it: an unknown state or settlement word is revived as `unknown`, never thrown. */
 const revive = (r: RawRow): OperatorMessageRow => ({
   id: r.id, at: r.at, term: r.term, state: isMessageState(r.state) ? r.state : 'unknown', text: r.text, cut: r.cut === 1,
   sha256: r.sha256, queuedAt: r.queuedAt, deliveredAt: r.deliveredAt, pickedUpAt: r.pickedUpAt, settledAt: r.settledAt,
   settledBy: r.settledBy === null ? null : isSettledBy(r.settledBy) ? r.settledBy : 'unknown', spentAt: r.spentAt,
+  offRecord: r.offRecord === 1,
 });
 
 /** The facts readers' columns: the ones the inbox needs, never `text` or `sha256` (the inbox plan, question 20). */
@@ -150,11 +155,11 @@ export class OperatorModelStore {
     try {
       return tx(this.db, (): StoreWrite<MessageRecorded> => {
         if (m.composedKey !== null) {
-          const prior = this.db.prepare('SELECT id, cut, state, sha256 FROM operator_messages WHERE sessionId = ? AND sendKey = ?')
-            .get(m.sessionId, m.composedKey) as { id: number; cut: number; state: string; sha256: string } | undefined;
+          const prior = this.db.prepare('SELECT id, cut, state, sha256, offRecord FROM operator_messages WHERE sessionId = ? AND sendKey = ?')
+            .get(m.sessionId, m.composedKey) as { id: number; cut: number; state: string; sha256: string; offRecord: number } | undefined;
           if (prior !== undefined) {
             if (prior.sha256 !== capped.sha256) throw new StoreStop({ error: 'refused', detail: 'send-key-reused' });
-            return { ok: true, value: { id: prior.id, cut: prior.cut === 1, state: isMessageState(prior.state) ? prior.state : 'unknown', replay: true } };
+            return { ok: true, value: { id: prior.id, cut: prior.cut === 1, state: isMessageState(prior.state) ? prior.state : 'unknown', replay: true, offRecord: prior.offRecord === 1 } };
           }
         }
         if (this.privacy.kind === 'refused') {
@@ -169,11 +174,11 @@ export class OperatorModelStore {
         if (!issued.ok) throw new StoreStop({ error: issued.error, detail: issued.detail });
         const state: MessageState = m.mark ? 'settled' : 'recorded';
         this.db.prepare(
-          'INSERT INTO operator_messages (id, at, sessionId, term, actor, sha256, sendKey, text, cut, state, settledAt, settledBy) '
-          + 'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+          'INSERT INTO operator_messages (id, at, sessionId, term, actor, sha256, sendKey, text, cut, state, settledAt, settledBy, offRecord) '
+          + 'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
         ).run(issued.id, m.at, m.sessionId, m.term, m.actor.subject, capped.sha256, m.composedKey, capped.text, capped.cut ? 1 : 0,
-          state, m.mark ? m.at : null, m.mark ? 'mark' : null);
-        return { ok: true, value: { id: issued.id, cut: capped.cut, state, replay: false } };
+          state, m.mark ? m.at : null, m.mark ? 'mark' : null, m.offRecord ? 1 : 0);
+        return { ok: true, value: { id: issued.id, cut: capped.cut, state, replay: false, offRecord: m.offRecord } };
       });
     } catch (err) {
       if (err instanceof StoreStop) return { ok: false, ...err.answer };
@@ -261,16 +266,22 @@ export class OperatorModelStore {
     });
   }
 
-  /** The read ceiling's counter (the inbox plan, Task 2): a door's served lines after `sinceMs` by any caller but the console,
-   *  the oldest one's time, and the newest `read-ceiling` line's time of the door. Two statements over `read_ledger_door_at`. An
-   *  oldest time that is null beside a count above zero cannot be (the same rows) and reads `unmeasured`, never a number. */
-  servedReadsSince(door: ReadDoor, sinceMs: number): StoreRead<CeilingCount> {
+  /** The read ceiling's counter (the inbox plan, Task 2; the chat plan, question 9): a door's served lines after `sinceMs` for ONE
+   *  side, the oldest one's time, and the newest `read-ceiling` line's time of the door for the same side. The console and the
+   *  Overlord keep separate ceilings on a door: `'operator'` counts only lines whose caller is the console, `'overlord'` every
+   *  other caller's (today's rule, now the refusal query's too), so the console never spends the Overlord's allowance and the
+   *  Overlord never spends the console's. Two statements over `read_ledger_door_at`. An oldest time that is null beside a count
+   *  above zero cannot be (the same rows) and reads `unmeasured`, never a number. */
+  servedReadsSince(door: ReadDoor, sinceMs: number, caller: 'operator' | 'overlord'): StoreRead<CeilingCount> {
     if (!isReadDoor(door)) return { kind: 'unmeasured', why: 'door: not a read door' };
     if (!isCount(sinceMs)) return { kind: 'unmeasured', why: 'sinceMs: a non-negative safe integer' };
+    if (caller !== 'operator' && caller !== 'overlord') return { kind: 'unmeasured', why: 'caller: operator or overlord' };
+    // The side's own filter: the console's lines, or every line but them. Both are fixed text, never built from the argument.
+    const side = caller === 'operator' ? "caller = 'operator'" : "caller <> 'operator'";
     return this.read((): CeilingCount => {
-      const served = this.db.prepare("SELECT count(*) AS c, min(at) AS oldest FROM read_ledger WHERE door = ? AND at > ? AND outcome = ? AND caller <> 'operator'")
+      const served = this.db.prepare(`SELECT count(*) AS c, min(at) AS oldest FROM read_ledger WHERE door = ? AND at > ? AND outcome = ? AND ${side}`)
         .get(door, sinceMs, READ_SERVED_OUTCOME) as { c: number; oldest: number | null };
-      const refused = this.db.prepare('SELECT max(at) AS last FROM read_ledger WHERE door = ? AND outcome = ?')
+      const refused = this.db.prepare(`SELECT max(at) AS last FROM read_ledger WHERE door = ? AND outcome = ? AND ${side}`)
         .get(door, READ_CEILING_OUTCOME) as { last: number | null };
       if (served.oldest === null && served.c > 0) throw new Error('the counter has lines and no oldest time');
       return { count: served.c, oldestAt: served.oldest ?? 'none', lastRefusalAt: refused.last ?? 'none' };
@@ -328,6 +339,24 @@ export class OperatorModelStore {
     return this.read(() => {
       const r = this.db.prepare(`SELECT ${ROW_COLUMNS} FROM operator_messages WHERE id = ?`).get(id) as RawRow | undefined;
       return r === undefined ? 'absent' : revive(r);
+    });
+  }
+
+  /** One page of the thread: the newest `limit` rows with an id below `beforeId` (every row when `beforeId` is null), returned
+   *  OLDEST FIRST, with `more` true exactly when a row with a smaller id than the oldest returned exists. No session filter: every
+   *  row is a message to the designated session of its time. A `beforeId` that is neither null nor a positive safe integer, or a
+   *  `limit` that is not a safe integer from 1 to 500, is `unmeasured`, never a short page. It is a WORDS reader (it returns `text`),
+   *  called by the chat's thread door alone (`operator-message-readers.test.ts` holds the callers). */
+  messagesPage(beforeId: number | null, limit: number): StoreRead<{ readonly rows: readonly OperatorMessageRow[]; readonly more: boolean }> {
+    if (beforeId !== null && !(Number.isSafeInteger(beforeId) && beforeId >= 1)) return { kind: 'unmeasured', why: 'beforeId: null or a positive safe integer' };
+    if (!Number.isSafeInteger(limit) || limit < 1 || limit > 500) return { kind: 'unmeasured', why: 'limit: a safe integer from 1 to 500' };
+    return this.read(() => {
+      // One row past the page tells whether an older one exists, so `more` needs no second statement.
+      const newest = (beforeId === null
+        ? this.db.prepare(`SELECT ${ROW_COLUMNS} FROM operator_messages ORDER BY id DESC LIMIT ?`).all(limit + 1)
+        : this.db.prepare(`SELECT ${ROW_COLUMNS} FROM operator_messages WHERE id < ? ORDER BY id DESC LIMIT ?`).all(beforeId, limit + 1)) as unknown as RawRow[];
+      const more = newest.length > limit;
+      return { rows: newest.slice(0, limit).reverse().map(revive), more };
     });
   }
 

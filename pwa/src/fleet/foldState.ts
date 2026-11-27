@@ -5,7 +5,7 @@
 //
 // Per-browser, not per-account: two devices fold independently, which is the
 // right default for a layout preference and needs no sync.
-import { useCallback, useState } from 'react';
+import { useCallback, useState, useSyncExternalStore } from 'react';
 import { readKey, writeKey } from '../lib/storage';
 import { NO_ROLLUP_PREFS, type ActivityClass, type RollupPrefs } from './rollup';
 
@@ -99,4 +99,41 @@ export function useRollupPrefs(): [RollupPrefs, (next: (prev: RollupPrefs) => Ro
     });
   }, []);
   return [prefs, update];
+}
+
+// THE LANDING LINE'S FOLD (desktop polish wave 192): the projects whose landing block the operator has opened. Absent
+// means ROLLED UP, the opposite of the project fold above, because the operator ruled the rolled-up block the default
+// on every load of the page. Legitimately different from the two stores above in one respect, by the same ruling: it is
+// kept in memory, never in the browser, so a reload starts every block rolled up. It lives at module scope, not in a
+// component, so the choice outlives what unmounts during the page's life: a re-read, the card folding, a switch between
+// the Status and Project views, and the block going and coming back on a later read. Two readers: the block itself
+// (`LandingLine`) and `FleetCards`' view-hold key, whose part depends on it.
+let landingLineOpen: ReadonlySet<string> = new Set();
+const landingLineListeners = new Set<() => void>();
+const landingLineSnapshot = (): ReadonlySet<string> => landingLineOpen;
+function subscribeLandingLineOpen(listener: () => void): () => void {
+  landingLineListeners.add(listener);
+  return () => { landingLineListeners.delete(listener); };
+}
+function setLandingLineOpen(next: ReadonlySet<string>): void {
+  landingLineOpen = next;
+  for (const l of [...landingLineListeners]) l();
+}
+
+/** Open `project`'s landing block when it is rolled up, else roll it up. The operator's tap is its only caller. */
+export function toggleLandingLineOpen(project: string): void {
+  const next = new Set(landingLineOpen);
+  if (next.has(project)) next.delete(project);
+  else next.add(project);
+  setLandingLineOpen(next);
+}
+
+/** Every block rolled up, as a reload leaves them: for tests, which share one module across cases. */
+export function resetLandingLineOpen(): void {
+  setLandingLineOpen(new Set());
+}
+
+/** The projects whose landing block is open. A new set on every toggle, so a memo keyed on it re-runs. */
+export function useLandingLineOpen(): ReadonlySet<string> {
+  return useSyncExternalStore(subscribeLandingLineOpen, landingLineSnapshot);
 }

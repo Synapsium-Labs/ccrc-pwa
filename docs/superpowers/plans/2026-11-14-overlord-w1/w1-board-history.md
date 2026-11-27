@@ -324,7 +324,9 @@ and the recommendation everywhere else.
       column existed.
     - **This plan's part.** It fills the column and implements nothing more than the line and the ceiling.
     - **No act key.** History reads take no act key in W1. The spec's design stands: attribution, plus the line, plus
-      the ceiling.
+      the ceiling. (Corrected 2026-11-27, call 1590: the history read and the board read are unfenced views, attributed
+      reads and not proven ones, and both are readable by readers through the read tool. The history row is not
+      fenced, whatever an earlier plan says of it.)
 16. **No `--regex` in W1** (ruled, F3; slug `no-regex-from-the-wire`). `lib.mjs`'s `parseGrepArgs` accepts `--regex`,
     and `recall.mjs` runs a regex search as a child process (`recall.mjs#WORKER_PATH`, `regex-worker.mjs`, through
     `spawnSync`). From the wire that would be a new spawn class, outside the agent's scans, inheriting the agent's

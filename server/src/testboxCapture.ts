@@ -30,6 +30,9 @@
 //     Its `not-taken` (the box was REACHED and closed the connection on the frame: a box, or a driver, that predates the
 //     recipe) is `recipe-not-run`, a not-sent word of the delivery lane's own, told from `no-test-box` (a box not reached)
 //     for a reader; a trust job's `not-taken` stays `no-runner`.
+//   - A FRAMES job (`recipe: 'frames'`, a part; Desktop polish wave 187) maps every row the same way as a delivery job, its
+//     result read from the reply's `frames` field: answered with a frames result ... answered, unread; `frames` null ...
+//     unavailable `unanswered`; its `not-taken` ... `recipe-not-run` with the detail; with no part ... `not-started`, never asked.
 //   - outcome `unanswered` ................................................................. unavailable `unanswered`
 //   - a thrown io call (the member never rejects, and the lane catches too) ............... unavailable `unanswered`
 //   - a `refused` reply with no refusal word (the op's reader forbids it) ................. unavailable `unanswered`
@@ -44,11 +47,12 @@ import type { TestboxCaptureReply } from '../../shared/agent-protocol.js';
 
 const gone = (why: BuildCaptureUnavailable): BuildCaptureAnswer => ({ kind: 'unavailable', why });
 
-function answerOf(r: TestboxCaptureReply, delivery: boolean): BuildCaptureAnswer {
+function answerOf(r: TestboxCaptureReply, recipe: 'delivery' | 'frames' | undefined): BuildCaptureAnswer {
+  const own = recipe !== undefined;
   switch (r.outcome) {
     case 'unconfigured': case 'unreachable': case 'bad-answer': return gone('no-test-box');
-    // A delivery job's not-taken carries what was measured to the lane, which writes its one line (review 3898 F6).
-    case 'not-taken': return delivery ? { kind: 'unavailable', why: 'recipe-not-run', ...(r.detail === null ? {} : { detail: r.detail }) } : gone('no-runner');
+    // A delivery or frames job's not-taken carries what was measured to the lane, which writes its one line (review 3898 F6).
+    case 'not-taken': return own ? { kind: 'unavailable', why: 'recipe-not-run', ...(r.detail === null ? {} : { detail: r.detail }) } : gone('no-runner');
     case 'refused':
       switch (r.refusal) {
         case 'not-test-box': return gone('no-test-box');
@@ -57,7 +61,7 @@ function answerOf(r: TestboxCaptureReply, delivery: boolean): BuildCaptureAnswer
         case 'capture-id-used': default: return gone('unanswered');
       }
     case 'answered': {
-      const got = delivery ? r.delivery ?? null : r.result;
+      const got = recipe === 'delivery' ? r.delivery ?? null : recipe === 'frames' ? r.frames ?? null : r.result;
       return got === null ? gone('unanswered') : { kind: 'answered', result: got };
     }
     case 'unanswered': return gone('unanswered');
@@ -66,10 +70,11 @@ function answerOf(r: TestboxCaptureReply, delivery: boolean): BuildCaptureAnswer
 
 /** The log line of a reply whose `detail` the port's word drops (a refusal's detail is its word's sentence, and a verdict is
  *  kept, so neither is logged). */
-function logDropped(build: string, r: TestboxCaptureReply, delivery: boolean): void {
-  if (r.detail === null || r.outcome === 'refused' || (r.outcome === 'answered' && (delivery ? (r.delivery ?? null) !== null : r.result !== null))) return;
-  // A delivery job's not-taken: its detail rides the answer, and the lane's one line says it (review 3898 F6).
-  if (delivery && r.outcome === 'not-taken') return;
+function logDropped(build: string, r: TestboxCaptureReply, recipe: 'delivery' | 'frames' | undefined): void {
+  const kept = recipe === 'delivery' ? (r.delivery ?? null) !== null : recipe === 'frames' ? (r.frames ?? null) !== null : r.result !== null;
+  if (r.detail === null || r.outcome === 'refused' || (r.outcome === 'answered' && kept)) return;
+  // A delivery or frames job's not-taken: its detail rides the answer, and the lane's one line says it (review 3898 F6).
+  if (recipe !== undefined && r.outcome === 'not-taken') return;
   console.warn(`ccrc-server: build capture ${build}: ${r.outcome}, no verdict: ${r.detail}`);
 }
 
@@ -78,10 +83,12 @@ export function testboxCaptureTransport(io: () => Pick<FleetIO, 'testboxCapture'
   return {
     capture: async (job) => {
       try {
-        const delivery = job.recipe === 'delivery';
-        // A delivery job carries its part; one that does not is never asked (`not-started`: no job went out).
-        if (delivery && job.part === undefined) return gone('not-started');
-        const asked = delivery ? await io().testboxCapture(job.build, 'delivery', job.part!) : await io().testboxCapture(job.build);
+        const recipe = job.recipe;
+        // A delivery or frames job carries its part; one that does not is never asked (`not-started`: no job went out).
+        if (recipe !== undefined && job.part === undefined) return gone('not-started');
+        const asked = recipe === 'delivery' ? await io().testboxCapture(job.build, 'delivery', job.part!)
+          : recipe === 'frames' ? await io().testboxCapture(job.build, 'frames', job.part!)
+          : await io().testboxCapture(job.build);
         if (!asked.ok) {
           switch (asked.reason) {
             case 'no-op': return gone('no-runner');
@@ -89,8 +96,8 @@ export function testboxCaptureTransport(io: () => Pick<FleetIO, 'testboxCapture'
             case 'unanswered': return gone('unanswered');
           }
         }
-        logDropped(job.build, asked.reply, delivery);
-        return answerOf(asked.reply, delivery);
+        logDropped(job.build, asked.reply, recipe);
+        return answerOf(asked.reply, recipe);
       } catch {
         return gone('unanswered');
       }

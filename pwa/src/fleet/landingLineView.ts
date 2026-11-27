@@ -15,7 +15,7 @@ import { sameJson } from '../lib/sameJson';
 import type { PollOutcome } from '../lib/usePoll';
 import {
   EJECTED_TEXT, PAUSE_LABEL, ROLE_TEXT, STATUS_HELD, STATUS_NONE_READY, STATUS_PAUSED, STATUS_RED_FIXES_MAIN, STATUS_RUNNING,
-  UNREADABLE_ANSWER_TEXT, WAITS_TEXT, landingFailureOf, type LandingFailure,
+  SUMMARY_COUNT, SUMMARY_ENTRY, SUMMARY_MORE, SUMMARY_WORD, UNREADABLE_ANSWER_TEXT, WAITS_TEXT, landingFailureOf, type LandingFailure,
 } from './landingWords';
 
 const ENTRIES_SCOPES: readonly NonNullable<LandingLineView['entriesScope']>[] = ['open', 'pr'];
@@ -102,6 +102,8 @@ export type LandingStatus =
   | { kind: 'held' } | { kind: 'red-fixes-main'; headPr: number };
 export interface LandingLineCard {
   project: string; status: LandingStatus; statusText: string; rows: LandingRow[];
+  /** The rolled-up block's one line naming every row (desktop polish wave 192); `null` exactly when there is no row. */
+  summary: string | null;
   pauseLabel: string; pauseBusyLabel: string; pauseNext: boolean;
 }
 
@@ -131,6 +133,21 @@ function rowOf(e: LandingEntry, view: LandingLineView): LandingRow {
   return { ...base, role: 'in-line', text: ROLE_TEXT['in-line'] };
 }
 
+/** How many entries the rolled-up summary names before it says how many more (desktop polish wave 192). */
+export const LANDING_SUMMARY_NAMED = 12;
+/** The short word a row's role carries in the summary: the head and a row plainly in line carry none. */
+const SUMMARY_WORD_OF: Readonly<Record<LandingRowRole, string | null>> = {
+  head: null, 'in-line': null, waits: SUMMARY_WORD.waits, ejected: SUMMARY_WORD.ejected, unknown: SUMMARY_WORD.unknown,
+};
+/** The rolled-up block's summary of `rows`, in their order: the count, then each row's PR and short word, the first
+ *  `LANDING_SUMMARY_NAMED` only, then how many more. `null` when there is no row (a pause on an empty line). */
+export function landingSummaryOf(rows: readonly LandingRow[]): string | null {
+  if (rows.length === 0) return null;
+  const named = rows.slice(0, LANDING_SUMMARY_NAMED).map((r) => SUMMARY_ENTRY(r.pr, SUMMARY_WORD_OF[r.role]));
+  const more = rows.length - named.length;
+  return `${SUMMARY_COUNT(rows.length)}: ${named.join(', ')}${more > 0 ? ` ${SUMMARY_MORE(more)}` : ''}`;
+}
+
 /** `null` when there is nothing to say: no open entry and no operator pause (Q2: main red alone says nothing). */
 export function landingCardOf(view: LandingLineView): LandingLineCard | null {
   const open = openOf(view);
@@ -144,8 +161,9 @@ export function landingCardOf(view: LandingLineView): LandingLineCard | null {
     ordered.push(x);
   }
   const status = statusOf(view);
+  const rows = ordered.map((e) => rowOf(e, view));
   return {
-    project: view.project, status, statusText: statusTextOf(status), rows: ordered.map((e) => rowOf(e, view)),
+    project: view.project, status, statusText: statusTextOf(status), rows, summary: landingSummaryOf(rows),
     pauseLabel: view.operatorPaused ? PAUSE_LABEL.resume : PAUSE_LABEL.pause,
     pauseBusyLabel: view.operatorPaused ? PAUSE_LABEL.resuming : PAUSE_LABEL.pausing,
     pauseNext: !view.operatorPaused,
@@ -206,11 +224,17 @@ const HOLD_LETTER: { readonly [K in LandingStatus['kind']]: (s: Extract<LandingS
   held: () => 'h',
   'red-fixes-main': () => 'm',
 };
-/** The card's part of `FleetCards`' view-hold key (F8, R8): `''` for `none` or no state; else the row count, then the
- *  status kind's letter (`r` running with a head, `n` running with none ready, `p` paused, `q` paused and held, `h` held,
- *  `m` red with a fixing head), then `s` while the stale sentence shows. */
-export function landingLineHoldPart(state: LandingCardState | undefined): string {
+/** The card's part of `FleetCards`' view-hold key (F8, R8): `''` for `none` or no state. Open, as before desktop polish
+ *  wave 192: the row count, then the status kind's letter (`r` running with a head, `n` running with none ready, `p`
+ *  paused, `q` paused and held, `h` held, `m` red with a fixing head), then `s` while the stale sentence shows. Rolled up
+ *  (wave 192), what that block's height depends on: `c`, then how many entries the summary names (`0` when it draws none),
+ *  `+` when it says how many more, then the same letter and `s`. Neither form holds wrapped text (a longer wait list, an
+ *  ejection's reason, a short word in the summary, a different `by` list), as R8 ruled for the rows. */
+export function landingLineHoldPart(state: LandingCardState | undefined, open: boolean): string {
   if (state === undefined || state.kind === 'none') return '';
   const s = state.card.status;
-  return `${state.card.rows.length}${(HOLD_LETTER[s.kind] as (x: LandingStatus) => string)(s)}${state.stale === null ? '' : 's'}`;
+  const tail = `${(HOLD_LETTER[s.kind] as (x: LandingStatus) => string)(s)}${state.stale === null ? '' : 's'}`;
+  const n = state.card.rows.length;
+  if (open) return `${n}${tail}`;
+  return `c${Math.min(n, LANDING_SUMMARY_NAMED)}${n > LANDING_SUMMARY_NAMED ? '+' : ''}${tail}`;
 }
