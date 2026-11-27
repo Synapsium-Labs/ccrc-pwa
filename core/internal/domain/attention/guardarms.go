@@ -77,7 +77,7 @@ func MergeDeny(in PreIn, rd PreReads) string {
 		return ""
 	}
 	mwhy := ""
-	if mmerge && !in.Miss { // a miss reads no row: a coordinator lands PRs, and a miss cannot tell one from a worker
+	if mmerge && !in.Miss { // a miss reads no row: a plain merge is landing policy, and a coordinator lands PRs
 		if b, rc := rd.Reg(in.ID + ".hold"); rc == 0 {
 			if v, _ := ctRead(b, in.UTF8); Chars(v, in.UTF8) <= holdMax && holdWaveRE().MatchString(v) {
 				mwhy = "this workspace's hold reads `" + v + "` — a programme wave's session"
@@ -99,7 +99,9 @@ func MergeDeny(in PreIn, rd PreReads) string {
 		return ""
 	}
 	mallow := false
-	if mover == "" && !mapi && strings.Contains(mflags, "s") && !in.Miss { // unprovable on a miss: the bypass is refused
+	// Unprovable on a miss, so the bypass is refused: it is SAFETY (the controller's ruling F2, Task 9c), since CLAUDE.md
+	// forbids a merge that skips the queue to every session and the operator lands from their own, unhooked shell.
+	if mover == "" && !mapi && strings.Contains(mflags, "s") && !in.Miss {
 		if b, rc := rd.Reg(in.ID + ".project"); rc == 0 {
 			if v, rawn := ctRead(b, in.UTF8); v != "" && projClass(v) && Chars(v, in.UTF8) <= projMax && rawn < idMax && rd.AdminAllowed(v) {
 				mallow = true
@@ -154,9 +156,9 @@ var guardTools = map[string]bool{"Bash": true, "Write": true, "Edit": true, "Mul
 // text in deny mode; the envelope, or "".
 func AccountDeny(in PreIn, rd PreReads) string {
 	apf := in.Payload
-	// A lookup miss is asked as a child is, the refusing side (Task 9c, D-TBD-go-hook-lookup-miss): a child whose tmux
-	// lookup timed out runs with permissions bypassed. The child's prefilter already passes every account row, and the
-	// approval surface alone is asked again in account mode below (a coordinator rules approvals).
+	// A lookup miss is asked as a child is, the refusing side of a SAFETY arm (Task 9c, D-TBD-go-hook-lookup-miss): a child
+	// whose tmux lookup timed out runs with permissions bypassed. The child's prefilter already passes every account row;
+	// only the approval surface's API half is asked again in account mode below (a coordinator rules approvals).
 	child := in.Miss || rd.Exists(in.ID+".child")
 	if in.Tool == "Bash" && strings.ContainsAny(apf, `'"\`) && (child || Chars(apf, in.UTF8) <= apfStripMax) {
 		apf = strings.ReplaceAll(apf, `\\\n`, "")
@@ -195,7 +197,8 @@ func AccountDeny(in PreIn, rd PreReads) string {
 		return ""
 	}
 	afw = cmdSubst(afw + "\n")
-	if in.Miss && strings.HasPrefix(afw, "surface\t") { // a miss reading as the surface is asked again as any session is
+	// a miss whose answer is the surface's API half is asked again as any session is; its key and verifier rows stay (F3)
+	if in.Miss && afw == "surface\tthe approval surface" {
 		if afw, ok = Forbidden(in.V, "account", nil, &home); !ok {
 			return ""
 		}

@@ -97,10 +97,10 @@ func TestPreToolArmsOrder(t *testing.T) {
 	}
 }
 
-// A lookup miss (Task 9c) asks for no session fact: the arms that need none refuse as everywhere, the rows that need one
-// take their refusing side (the child's rows, the heavy test route, a subagent's door write), except a coordinator's own
-// acts (the wave's plain merge, the approval surface), and the graph gate and the landing advisory do not run. Every row
-// read fails the test if asked; the deny file is the box's, not a row.
+// A lookup miss (Task 9c, fix round 1) asks for no session fact, and only the SAFETY arms run: the merge bypass and the
+// account arm asked as a child is (but for the approval surface's API half). The fleet POLICY arms answer as before 9c,
+// with no deny, and so do a coordinator's own acts. Every row read fails the test if asked; the deny file is the box's,
+// not a row.
 func TestPreToolArmsOnALookupMiss(t *testing.T) {
 	asked := func(what string) { t.Helper(); t.Errorf("a miss asked for %s", what) }
 	g := func(string) bool { asked("the graph"); return false }
@@ -114,34 +114,47 @@ func TestPreToolArmsOnALookupMiss(t *testing.T) {
 		HasCcrc:      func() bool { return true },
 		ScriptStat:   func(string) (bool, int64) { return false, 0 }, ScriptText: func(string) string { return "" },
 	}
-	call := func(tool, input, verdict string, paid bool) string {
-		p := `{"hook_event_name":"PreToolUse","tool_name":"` + tool + `","tool_input":` + input + `}`
+	call := func(tool, input, verdict, extra string, paid bool) string {
+		p := `{"hook_event_name":"PreToolUse","tool_name":"` + tool + `","tool_input":` + input + extra + `}`
 		rd.Classify = func(string, bool) string { return verdict }
 		return PreToolArms(PreIn{Tool: tool, Payload: p, V: parse(t, p), Paid: paid, Gq: "0", Gd: "0", Subs: "[]", UTF8: true,
-			GOOS: "linux", Miss: true}, rd).Json
+			GOOS: "linux", Home: "/home/u", Force: "1", SubagentModel: "haiku", Miss: true}, rd).Json
 	}
+	const acct, surface = "an account-management act", "reaches the approval surface"
 	for _, c := range []struct {
-		name, tool, input, verdict string
-		paid                       bool
-		want                       string // "" for no envelope
+		name, tool, input, verdict, extra string
+		paid                              bool
+		want                              string // "" for no envelope
 	}{
-		{"the admin bypass, its allowance unprovable", "Bash", `{"command":"gh pr merge 5 --admin"}`, "", false, "merges are refused in every session"},
-		{"a plain merge: the wave's row is left", "Bash", `{"command":"gh pr merge 5"}`, "", false, ""},
-		{"the account row", "Bash", `{"command":"ccrc account remove --id lane-x"}`, "", false, "ccrc account remove"},
-		{"the prune row", "Bash", `{"command":"git worktree prune"}`, "", false, "git worktree prune"},
-		{"a child's verb row", "Bash", `{"command":"ccd ws-rm lane-a"}`, "", false, "could not match this call to a session's registry row"},
-		{"a child's build row", "Bash", `{"command":"claude update"}`, "", false, "installing or updating a Claude Code build"},
-		{"the approval surface is left: a coordinator rules approvals", "Bash", `{"command":"ccrc-api approvals list"}`, "", false, ""},
-		{"the role skill from a subagent", "Skill", `{"skill":"ccrc-worker"}`, "", true, "loads the `ccrc-worker` skill"},
-		{"Fable", "Agent", `{"model":"fable","prompt":"x"}`, "", false, "names a Fable model"},
-		{"a fan-out with no model", "Agent", `{"prompt":"x"}`, "", false, "names no model"},
-		{"a wrapped test", "Bash", `{"command":"systemd-run --user --scope npx vitest run"}`, "wrapped", false, "never under a systemd-run of your own"},
-		{"a heavy test", "Bash", `{"command":"npx vitest run"}`, "heavy", false, "starts a heavy test or typecheck outside"},
-		{"a subagent's door write", "mcp__door__write", `{"x":1}`, "", true, "a reader holds no write door"},
-		{"a search: the graph gate is off", "Grep", `{"pattern":"x"}`, "", false, ""},
-		{"a sync: the advisory is off", "Bash", `{"command":"git merge origin/main"}`, "", false, ""},
+		// SAFETY: refused
+		{"the admin bypass, its allowance unprovable", "Bash", `{"command":"gh pr merge 5 --admin"}`, "", "", false, "merges are refused in every session"},
+		{"the gh api merge", "Bash", `{"command":"gh api -X PUT repos/o/r/pulls/5/merge"}`, "", "", false, "merges are refused in every session"},
+		{"the account row", "Bash", `{"command":"ccrc account remove --id lane-x"}`, "", "", false, "ccrc account remove"},
+		{"the prune row", "Bash", `{"command":"git worktree prune"}`, "", "", false, "git worktree prune"},
+		{"the quiz record", "Bash", `{"command":"ccrc quiz-record --week 1"}`, "", "", false, "the replay quiz's record"},
+		{"a secret read", "Read", `{"file_path":"~/.cc-secrets/ccrc-mail.token"}`, "", "", false, acct},
+		{"an Edit of the roster", "Edit", `{"file_path":"~/.ccrc/accounts.json","old_string":"a","new_string":"b"}`, "", "", false, acct},
+		{"a Write into the build directory", "Write", `{"file_path":"~/.local/share/claude/versions/9","content":"x"}`, "", "", false, "a write to a Claude Code build"},
+		{"a child's verb row", "Bash", `{"command":"ccd ws-rm lane-a"}`, "", "", false, "could not match this call to a session's registry row"},
+		{"a child's build row", "Bash", `{"command":"claude update"}`, "", "", false, "installing or updating a Claude Code build"},
+		{"a Read of the signing key", "Read", `{"file_path":"~/.ccrc/approval-signing.key"}`, "", "", false, surface},
+		{"a cat of the signing key", "Bash", `{"command":"cat ~/.ccrc/approval-signing.key"}`, "", "", false, surface},
+		{"a Write of the verifier", "Write", `{"file_path":"~/.cc-sessions/approval-verify.mjs","content":"x"}`, "", "", false, surface},
+		// POLICY, and a coordinator's own acts: no deny, as before 9c
+		{"a plain merge", "Bash", `{"command":"gh pr merge 5"}`, "", "", false, ""},
+		{"the approval surface's API half", "Bash", `{"command":"ccrc-api approvals list"}`, "", "", false, ""},
+		{"the role skill from a subagent", "Skill", `{"skill":"ccrc-worker"}`, "", "", true, ""},
+		{"Fable", "Agent", `{"model":"fable","prompt":"x"}`, "", "", false, ""},
+		{"a fan-out with no model", "Agent", `{"prompt":"x"}`, "", "", false, ""},
+		{"a model other than the pinned one", "Agent", `{"model":"opus","prompt":"x"}`, "", "", false, ""},
+		{"a wrapped test", "Bash", `{"command":"systemd-run --user --scope npx vitest run"}`, "wrapped", "", false, ""},
+		{"a heavy test", "Bash", `{"command":"npx vitest run"}`, "heavy", "", false, ""},
+		{"a reader's write door", "mcp__door__write", `{"x":1}`, "", `,"agent_id":"a","agent_type":"Explore"`, true, ""},
+		{"a subagent's door write", "mcp__door__write", `{"x":1}`, "", "", true, ""},
+		{"a search: the graph gate", "Grep", `{"pattern":"x"}`, "", "", false, ""},
+		{"a sync: the advisory", "Bash", `{"command":"git merge origin/main"}`, "", "", false, ""},
 	} {
-		got := call(c.tool, c.input, c.verdict, c.paid)
+		got := call(c.tool, c.input, c.verdict, c.extra, c.paid)
 		if c.want == "" && got != "" || c.want != "" && !(strings.Contains(got, c.want) && Denied(got)) {
 			t.Errorf("%s: %s", c.name, got)
 		}

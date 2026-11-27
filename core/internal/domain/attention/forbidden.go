@@ -458,7 +458,7 @@ var (
 	ccrcUpd      = re(wb + `ccrc['"]?` + sp + `+` + flags + `(?:update|rollback|rollout)` + nwEnd)
 	paneRe       = re(ccdH + `account-pane` + nwEnd)
 	aauthRe      = re("(?:(?:\\A|[" + wsc + ";&|()`'\"=])|/\\.local/bin/)ccd-account-auth" + btEnd)
-	surfaceRe    = re(`(?:ccrc-api|\$\{?API\}?)['"]?` + sp + `+` + flags + `approvals` + nwEnd + `|/api/approvals` + nwEnd + `|/api/questions/approval-|approval-signing|approval-verify\.mjs`)
+	surfaceRe    = re(`(?:ccrc-api|\$\{?API\}?)['"]?` + sp + `+` + flags + `approvals` + nwEnd + `|/api/approvals` + nwEnd + `|/api/questions/approval-`)
 	ccrcWord     = re(wb + `ccrc` + nwEnd)
 	ccdWord      = re(wb + `ccd` + nwEnd)
 	updX         = re(expv + `(?:update|rollback|rollout)` + nwEnd)
@@ -519,6 +519,10 @@ func (g *guard) fmatch(s string, f func(string) bool) bool {
 		return true
 	}
 	if strings.Contains(s, "ccd-account-auth") && aauthRe().MatchString(s) && f("account\tccd-account-auth") {
+		return true
+	}
+	// the signing key and the verifier (a protected path) before the API half, as the bash's row order has it (Task 9c F3)
+	if strings.Contains(s, "approval") && surfaceWrite().MatchString(s) && f("surface\ta signing key or the verifier") {
 		return true
 	}
 	if strings.Contains(s, "approval") && surfaceRe().MatchString(s) && f("surface\tthe approval surface") {

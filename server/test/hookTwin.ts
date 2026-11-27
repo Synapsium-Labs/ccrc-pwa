@@ -94,15 +94,16 @@ export function runHook(h: HookFixture, impl: Impl, payload: object | string | B
  *  the HOME) and the files the hook keeps (the mail hold's seen files and shadow log, the start report's pending files,
  *  the anchor's mark, the roster card's shadow log, each with its clock numbers compared as offsets from its own run's
  *  start; `watch`: more files, such as a stub's log; `tree`: every file name under the HOME) must be the same.
- *  The bash run is the answer: its stderr, its `ms` and the files it left in the case's HOME are what the case reads. What
- *  cannot be copied (an unreadable file or directory, a FIFO) is made again in the twin, empty, with its mode. */
+ *  The bash run is the answer: its stderr, its `ms` and the files it left in the case's HOME are what the case reads
+ *  (`goStderr` is the Go run's stderr, for a case that holds it too). What cannot be copied (an unreadable file or
+ *  directory, a FIFO) is made again in the twin, empty, with its mode. */
 export function hookBoth(home: string, payload: object | string | Buffer, env: NodeJS.ProcessEnv,
   at: { hook?: string; core?: string; watch?: string[]; tree?: boolean; tol?: number } = {}) {
   if (HOOK_ONLY_GO) {
     const p0 = performance.now();
     const g = runHook({ home, env: (e = {}) => e }, 'go', payload, env, at.core);
     const ms = Math.round(performance.now() - p0);
-    return { ...g, ms, goMs: ms };
+    return { ...g, ms, goMs: ms, goStderr: g.stderr };
   }
   const twin = twinOf(home);
   try {
@@ -128,7 +129,7 @@ export function hookBoth(home: string, payload: object | string | Buffer, env: N
     expect({ status: g.status, stdout: g.stdout.split(twin).join(home).split(json(twin)).join(json(home)) }, 'the Go hook answers as the bash does')
       .toEqual({ status: b.status, stdout: b.stdout });
     sameFiles(keptFiles(twin, at.watch ?? [], twin, at.tree === true), keptFiles(home, at.watch ?? [], home, at.tree === true), t0g, t0b, Math.max(at.tol ?? 2500, goMs, ms));
-    return { ...b, ms, goMs };
+    return { ...b, ms, goMs, goStderr: g.stderr };
   } finally {
     fs.rmSync(twin, { recursive: true, force: true });
   }

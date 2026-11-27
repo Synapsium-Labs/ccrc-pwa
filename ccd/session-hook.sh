@@ -3127,14 +3127,18 @@ elif [[ -n "${CLAUDE_JOB_DIR:-}" && -n "${CLAUDE_CODE_SESSION_ID:-}" && -d "$REG
 fi
 # THE LOOKUP MISS FAILS CLOSED (Go core wave 2, Task 9c; the controller's ruling "the spine's misses"). No session
 # matched this event: no pane named `cc-<id>`, no registry row whose `.uuid` is this session's, or a name off the id
-# class (the regex rejects the empty string too). Every event but a PreToolUse still ends here, as it always has. A
-# PreToolUse goes on with `hook_miss` set and the id empty, and the deny arms run without reading a row: an arm that
-# needs no session fact refuses as it does everywhere, and one that does takes its refusing side (a child's rows, a fleet
-# session's heavy test route, a joined reader's door, an admin-merge allowance unprovable), except where refusing would
-# stop a coordinator's own act (the wave's plain merge, the approval surface). Nothing that reads or writes a session's
-# row runs: the stages between the parse and the arms are skipped, and the miss ends before the mail hold
-# (`@hook-miss-end`). The prefilter is a builtin, so every other miss forks nothing. Which rows refuse on a miss, and why
-# the others are left: the wave 2 plan's `D-TBD-go-hook-lookup-miss` (docs/superpowers/plans/2026-11-24-ccrc-go-core-w2-hook.md).
+# class (the regex rejects the empty string too, and an off-class name is reset to empty, so no row is named by it).
+# Every event but a PreToolUse still ends here, as it always has. A PreToolUse goes on with `hook_miss` set and the id
+# empty, and only the SAFETY arms run (the controller's ruling "scope of fail-closed"): the merge arm's `--admin` and
+# `gh api` bypass, and the account arm, asked as a child is (account management, the forbidden verbs, build and install,
+# protected paths and secrets, the quiz record, the prune). The fleet POLICY arms answer a miss as before 9c, with no
+# deny: the role skill, Fable, the test route, the reader arms, the fan-out pin, the graph gate and the landing advisory.
+# The coordinator's own acts are left open too: the wave's plain merge, and the approval surface's API half. The stages
+# between the parse and the arms are skipped, and the miss ends after the account arm (`@hook-miss-end`), before the
+# mail hold, so no row is written; the one read with the empty id is the delegation spool's gate before the parse
+# (`$REG/.generation`, `$REG/.deleg`), which only reads and builds nothing without a generation. The prefilter is a
+# builtin, so every other miss forks nothing. Row by row: the wave 2 plan's `D-TBD-go-hook-lookup-miss`
+# (docs/superpowers/plans/2026-11-24-ccrc-go-core-w2-hook.md).
 hook_miss=""
 if [[ ! "$id" =~ ^[A-Za-z0-9._-]+$ ]]; then
   [[ "$payload" == *PreToolUse* ]] || exit 0
@@ -3569,8 +3573,8 @@ esac
 # A LOOKUP MISS SKIPS EVERY STAGE FROM HERE TO THE DENY ARMS (`hook_miss`, above): each reads or writes this session's
 # row, or its hookstate, and a miss has neither. The arms read what these stages set, so the miss sets it as an
 # unidentified session has it: no joined subagent, no subagent roster, no envelope yet. The graph gate and the landing
-# advisory are inside: the gate's bound is the session's hookstate counter, so on a miss it would deny every search
-# with no bound, and the advisory is a nudge, never a deny.
+# advisory are inside: both are fleet policy, which a miss answers with no deny (the gate's bound is the session's
+# hookstate counter, and the advisory is a nudge).
 if [[ -n "$hook_miss" ]]; then
   tmsub="" subs="[]" pre_json=""
 else
@@ -5286,8 +5290,10 @@ if [[ "$event" == PreToolUse && "${tool:-}" == Bash \
   if [[ -n "$madmin" || -n "$mapi" ]]; then mbypass=1; fi
   if [[ -n "$mmerge" || -n "$mbypass" ]]; then
     mwhy="" mreason=""
-    # A lookup miss (empty id) reads no row: the wave's question is left unasked, since a coordinator lands PRs and a
-    # miss cannot tell one from a worker, and the allowance below is unprovable, so the bypass is refused (Task 9c).
+    # A lookup miss (empty id) reads no row (Task 9c). The wave's question is left unasked: a plain merge is landing
+    # policy, and a coordinator lands PRs. The `--admin` and `gh api` bypass is SAFETY (the controller's ruling F2):
+    # CLAUDE.md forbids a merge that skips the queue to every session, and the operator lands from their own shell,
+    # which no hook runs in; the allowance below is unprovable on a miss, so the bypass is refused.
     if [[ -n "$mmerge" && -n "$id" ]]; then
       if _ct_read "$REG/$id.hold" && (( ${#CT_V} <= CCRC_HOLD_MAX )) && [[ "$CT_V" =~ $CCRC_HOLD_WAVE_RE ]]; then
         mwhy="this workspace's hold reads \`$CT_V\` — a programme wave's session"
@@ -5393,7 +5399,7 @@ fi
 # `pre_json` as it was. This arm prints nothing itself: the one print site at
 # the end of the file emits the envelope, after the hookstate rename.
 ROLE_SKILLS="ccrc-worker ccrc-reviewer ccrc-coordinator ccrc-overlord"
-if [[ "$event" == PreToolUse && "${tool:-}" == Skill && -n "$paid" \
+if [[ "$event" == PreToolUse && "${tool:-}" == Skill && -n "$paid" && -z "$hook_miss" \
       && "$pre_json" != *'"permissionDecision":"deny"'* ]]; then
   rsk=$(jq -r '
     def ws: . == 32 or (. >= 9 and . <= 13) or . == 160 or . == 5760
@@ -5589,7 +5595,8 @@ def fmatch:
   (ACCTV as $v | select(test(WB + "ccrc[" + $q + "\"]?" + SP + "+" + FLAGS + "account" + SP + "+" + FLAGS + $v + NW)) | "account\tccrc account \($v)"),
   (select(test(CCD + "account-pane" + NW)) | "account\tccd account-pane"),
   (select(test(AAUTH)) | "account\tccd-account-auth"),
-  (select(test("(?:ccrc-api|\\$\\{?API\\}?)[" + $q + "\"]?" + SP + "+" + FLAGS + "approvals" + NW + "|/api/approvals" + NW + "|/api/questions/approval-|approval-signing|approval-verify\\.mjs")) | "surface\tthe approval surface"),
+  (select(test("approval-signing|approval-verify\\.mjs")) | "surface\ta signing key or the verifier"),
+  (select(test("(?:ccrc-api|\\$\\{?API\\}?)[" + $q + "\"]?" + SP + "+" + FLAGS + "approvals" + NW + "|/api/approvals" + NW + "|/api/questions/approval-")) | "surface\tthe approval surface"),
   (select(hbt("\n"; WB + "(?:systemctl|systemd-run|kill|pkill|killall)" + NW; "claude-session@|ccrc|tmux")) | "other\ta session unit or the tmux scope"),
   (select(hbt("[\n;&|]"; WR; SENS)) | "other\tan edit to a settings file, a hook or a CLAUDE.md"),
   (select(hbt("[\n;&|]"; WR; BUILD)) | "other\ta write to a Claude Code build or its launcher"),
@@ -5865,10 +5872,10 @@ if [[ "$event" == PreToolUse && "$pre_json" != *'"permissionDecision":"deny"'* ]
   # The strip is quadratic in bash on a quote- or backslash-dense payload, so on a session that is not a child it runs
   # only under APF_ACCT_STRIP_MAX bytes; over that the account arm's prefilter reads the payload as written (a verb
   # split by quotes inside a longer payload is a residual of the accident guard, D-6202). A child's arm is as before.
-  # A LOOKUP MISS (Task 9c) is asked as a child is, the refusing side: a child whose tmux lookup timed out runs with
-  # permissions bypassed, and this deny is all that stops its verb or build row. The child's prefilter already passes
-  # every account row (a child is refused those too), and the approval surface alone is asked again in account mode below
-  # (a coordinator rules approvals).
+  # A LOOKUP MISS (Task 9c) is asked as a child is, the refusing side of a SAFETY arm: a child whose tmux lookup timed
+  # out runs with permissions bypassed, and this deny is all that stops its verb, build or protected-path row. The
+  # child's prefilter already passes every account row (a child is refused those too). Only the approval surface's API
+  # half is asked again in account mode below (a coordinator rules approvals); its signing-key and verifier rows stay.
   if [[ "${tool:-}" == Bash && "$apf" == *[\'\"\\]* ]] \
      && { [[ -n "$hook_miss" || ( -n "$id" && -e "$REG/$id.child" ) ]] || (( ${#apf} <= APF_ACCT_STRIP_MAX )); }; then
     apf=${apf//\\\\\\n/}; apf=${apf//[\'\"\\]/}
@@ -5915,8 +5922,9 @@ if [[ -n "$apf" ]]; then
         [[ -n "$APF_DENY" ]] && adeny=(--arg deny "$APF_DENY")
       fi
       afw=$(jq -r --arg q "'" --arg mode "$amode" "${adeny[@]}" "$APPROVAL_FORBIDDEN_JQ" <<<"$payload" 2>/dev/null) || afw=""
-      # A miss that reads as the approval surface is asked again as any session is (a coordinator rules approvals).
-      if [[ -n "$hook_miss" && "$afw" == surface$'\t'* ]]; then
+      # A miss whose answer is the approval surface's API half is asked again as any session is (a coordinator rules
+      # approvals); its signing-key and verifier rows, a protected path, stay refused (Task 9c F3).
+      if [[ -n "$hook_miss" && "$afw" == surface$'\t'"the approval surface" ]]; then
         afw=$(jq -r --arg q "'" --arg mode account "$APPROVAL_FORBIDDEN_JQ" <<<"$payload" 2>/dev/null) || afw=""
       fi
       areason=""
@@ -5945,6 +5953,12 @@ if [[ -n "$apf" ]]; then
       if [[ -n "$areason" ]] && ajson=$(_hook_deny_json "$areason"); then pre_json=$ajson; fi ;;
   esac
 fi
+
+# THE LOOKUP MISS ENDS HERE (Task 9c), after the last SAFETY arm: the envelope the merge bypass or the account arm built,
+# if any, printed as the one print site below prints it, and nothing else. The arms below are fleet POLICY (Fable, the
+# test route, the reader arms, the fan-out pin) and answer a miss as before 9c, with no deny; nor does the mail hold run
+# (its marker and seen files are the session's), nor the hookstate write or a report.
+if [[ -n "$hook_miss" ]]; then [ -z "$pre_json" ] || printf '%s\n' "$pre_json"; exit 0; fi  # @anchor hook-miss-end
 
 # FABLE RUNS ONLY WHEN THE OPERATOR SELECTS IT (D-6792; operator ruling 2026-10-24): on every session, an Agent or Task
 # call whose `model` names Fable, and a Workflow call whose script or input names a Fable model for an agent
@@ -5989,8 +6003,7 @@ fi
 # the tmux question above when a bound is on PATH.
 if [[ "$event" == PreToolUse && "$pre_json" != *'"permissionDecision":"deny"'* && "${tool:-}" == Bash ]]; then
   tfleet=0
-  # a lookup miss (Task 9c) takes the refusing side: `ccrc test` is on PATH whenever this arm asks, so a heavy run has a way through
-  [[ "${OSTYPE:-}" == linux* && ( -n "$hook_miss" || ( -n "$id" && -f "$REG/$id.generation" ) ) ]] && tfleet=1
+  [[ "${OSTYPE:-}" == linux* && -n "$id" && -f "$REG/$id.generation" ]] && tfleet=1
   task=0
   case "$payload" in
     *systemd-run*) task=1 ;;
@@ -6017,7 +6030,7 @@ if [[ "$event" == PreToolUse && "$pre_json" != *'"permissionDecision":"deny"'* ]
   rd=""
   case "${tool:-}" in
     mcp__door__read) ;;
-    mcp__door__?*) { [[ -n "$tmsub" || ( -n "$hook_miss" && -n "$paid" ) ]] || jq -e '(.agent_type | type) == "string" and .agent_type != ""' <<<"$payload" >/dev/null 2>&1; } \
+    mcp__door__?*) { [[ -n "$tmsub" ]] || jq -e '(.agent_type | type) == "string" and .agent_type != ""' <<<"$payload" >/dev/null 2>&1; } \
       && rd="ccrc: a reader holds no write door (C55): a subagent here may call only the read tool, \`mcp__door__read\`. Hand anything else back to the main thread in your answer." ;;
     Agent|Task)
       [[ -z "$paid" && "${CCRC_DOOR_NONCE_SHA256-}" =~ ^[0-9a-f]{64}$ ]] && (( $(jq 'length' <<<"$subs" 2>/dev/null || echo 0) >= 3 )) \
@@ -6133,10 +6146,6 @@ if [[ "$event" == PreToolUse && "$pre_json" != *'"permissionDecision":"deny"'* \
     if fojson=$(_hook_deny_json "$foreason"); then pre_json=$fojson; fi
   fi
 fi
-
-# THE LOOKUP MISS ENDS HERE (Task 9c): the envelope the arms built, if any, printed as the one print site below prints
-# it, and nothing else: no mail hold (its marker and seen files are the session's), no hookstate, no report.
-if [[ -n "$hook_miss" ]]; then [ -z "$pre_json" ] || printf '%s\n' "$pre_json"; exit 0; fi  # @anchor hook-miss-end
 
 # THE MAIL HOLD (`_hook_mail_hold`, defined beside the precompact read): after the last deny arm, while no deny is built.
 if [[ ( "$event" == PreToolUse || "$event" == Stop ) && "$pre_json" != *'"permissionDecision":"deny"'* ]]; then _hook_mail_hold || true; fi

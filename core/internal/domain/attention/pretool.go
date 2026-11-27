@@ -32,10 +32,10 @@ type PreIn struct {
 	Force, SubagentModel string // CLAUDE_CODE_SUBAGENT_MODEL_FORCE and CLAUDE_CODE_SUBAGENT_MODEL
 	ID                   string // the session id
 	Home                 string // HOME, as the guard's jq reads $ENV.HOME
-	// Miss is a session lookup that matched no session (Task 9c, D-TBD-go-hook-lookup-miss): ID is empty and no session
-	// fact is read. A row that needs one takes its refusing side (the child's rows, the heavy route, a subagent's door
-	// write, the admin-merge allowance unproved), except a coordinator's own acts (the wave's plain merge, the approval
-	// surface); the graph gate and the landing advisory do not run.
+	// Miss is a session lookup that matched no session (Task 9c, D-TBD-go-hook-lookup-miss): ID is empty, no session fact
+	// is read, and only the SAFETY arms run: the merge bypass (its allowance unprovable) and the account arm asked as a
+	// child is, but for the approval surface's API half. The fleet POLICY arms (graph gate, landing advisory, role skill,
+	// Fable, test route, reader arms, fan-out pin) answer a miss with no deny, as before 9c.
 	Miss bool
 }
 
@@ -212,7 +212,7 @@ func PreToolArms(in PreIn, rd PreReads) PreOut {
 	}
 
 	// ── The role-skill deny (D-4934) ──
-	if tool == "Skill" && in.Paid && !denied(pre) {
+	if tool == "Skill" && in.Paid && !in.Miss && !denied(pre) { // policy: not on a lookup miss
 		rsk := skillName(in.V)
 		rbare := rsk
 		if i := strings.Index(rsk, ":"); i >= 0 {
@@ -234,6 +234,13 @@ func PreToolArms(in PreIn, rd PreReads) PreOut {
 		}
 	}
 
+	// A lookup miss ends here, after the last SAFETY arm (ccd/session-hook.sh#@hook-miss-end): the arms below are fleet
+	// POLICY and answer a miss as before Task 9c, with no deny.
+	if in.Miss {
+		o.Json = pre
+		return o
+	}
+
 	// ── Fable runs only when the operator selects it (D-6792) ──
 	if !denied(pre) && (tool == "Agent" || tool == "Task" || tool == "Workflow") && strings.Contains(lower(p, in.UTF8), "fable") {
 		if namesFable(in.V) {
@@ -243,8 +250,7 @@ func PreToolArms(in PreIn, rd PreReads) PreOut {
 
 	// ── Tests run through `ccrc test` (D-7298) ──
 	if !denied(pre) && tool == "Bash" {
-		// a lookup miss takes the refusing side: `ccrc test` is on PATH whenever this arm asks, so a heavy run has a way through
-		fleet := ostypeLinux(in.GOOS, in.OSType, in.OSTypeSet) && (in.Miss || rd.Generation())
+		fleet := ostypeLinux(in.GOOS, in.OSType, in.OSTypeSet) && rd.Generation()
 		task := false
 		switch {
 		case strings.Contains(p, "systemd-run"):
@@ -280,7 +286,7 @@ func PreToolArms(in PreIn, rd PreReads) PreOut {
 		switch {
 		case tool == "mcp__door__read":
 		case strings.HasPrefix(tool, "mcp__door__") && len(tool) > len("mcp__door__"):
-			if in.Tmsub || in.Miss && in.Paid || nonEmptyAgentType(in.V) {
+			if in.Tmsub || nonEmptyAgentType(in.V) {
 				rdn = "ccrc: a reader holds no write door (C55): a subagent here may call only the read tool, `mcp__door__read`. Hand anything else back to the main thread in your answer."
 			}
 		case tool == "Agent" || tool == "Task":

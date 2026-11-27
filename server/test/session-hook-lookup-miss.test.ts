@@ -1,16 +1,17 @@
 /**
  * A PreToolUse whose session lookup misses fails closed (Go core wave 2, Task 9c; the controller's ruling "the spine's
  * misses"). The miss is no session matched: a pane whose tmux session is not `cc-<id>`, a job directory whose session
- * id no registry row's `.uuid` holds, or neither. Until this task both hooks ended there and skipped every deny arm. Now
- * the arms run without reading a row: each arm that needs no session fact refuses as it does in every session (the
- * account, quiz and prune rows, the `--admin` and `gh api` bypass, the role skill, Fable, the fan-out pin, the
- * `wrapped` test route, a reader's write door), and each row that needs one takes its refusing side (the child's verb
- * and build rows, the `heavy` test route on Linux, a subagent's door write), except a coordinator's own acts, which are
- * left (the wave's plain merge, the approval surface). The graph gate and the landing advisory do not run, and nothing
- * reads or writes a row: the fixture plants decoys at the names an empty id would reach (`$REG/.child`, `.hold`,
- * `.project`, `.generation`, `.joined`), so a stage or an arm that ran with the empty id would deny what is left, allow
- * what is refused, or leave a file, and every case asserts the HOME's files unchanged. Every case runs the bash hook and
- * the Go hook (hookBoth), which must answer the same.
+ * id no registry row's `.uuid` holds, a name off the id class, or neither. Until this task both hooks ended there and
+ * skipped every deny arm. Now only the SAFETY arms run, without reading a row (the controller's ruling "scope of
+ * fail-closed"): account management and secrets, the forbidden verbs, build and install, the protected paths (the
+ * approval surface's signing key and verifier among them), the quiz record, the prune, and the `--admin` and `gh api`
+ * merge bypass, the account arm asked as a child is. The fleet POLICY arms answer a miss as before 9c, with no deny (the
+ * role skill, Fable, the fan-out pin, the test route, the reader arms, the graph gate, the landing advisory), and so do
+ * a coordinator's own acts (the wave's plain merge, the approval surface's API half). The fixture plants decoys at the
+ * names an empty id would reach (`$REG/.child`, `.hold`, `.project`, `.generation`, `.joined`), so a stage or an arm that
+ * ran with the empty id would deny what is left, allow what is refused, or leave a file, and every case asserts the
+ * HOME's files unchanged and both hooks' stderr empty. Every case runs the bash hook and the Go hook (hookBoth), which
+ * must answer the same.
  */
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import fs from 'node:fs';
@@ -76,6 +77,7 @@ const run = (shape: Shape, payload: object, env: NodeJS.ProcessEnv = {}): string
   }, { tree: true });
   expect(r.status, 'the hook contract: exit 0 on every path').toBe(0);
   expect(r.stderr, 'the hook contract: silent on stderr').toBe('');
+  expect(r.goStderr, 'the Go hook, silent on stderr too').toBe('');
   expect(files(), 'a miss writes nothing').toEqual(before);
   return r.stdout.trim();
 };
@@ -87,50 +89,67 @@ const denial = (out: string): string => {
   return String(j.hookSpecificOutput.permissionDecisionReason);
 };
 
-// A heavy test is a fleet box's question, Linux only: there a miss takes the refusing side; elsewhere no box refuses it.
-const HEAVY = pre('Bash', { command: 'npx vitest run' });
-const LINUX = process.platform === 'linux';
-
-// Each refuses on a miss, in every shape of miss: the arms that need no session fact, and the refusing side of the
-// rows that need one.
+// The SAFETY arms: each refuses on a miss (the controller's ruling "scope of fail-closed", Task 9c fix round 1).
+const ACCT = /an account-management act no fleet session runs/;
+const SURFACE = /reaches the approval surface/;
 const REFUSED: [string, object, RegExp][] = [
+  ['the account row', pre('Bash', { command: 'ccrc account remove --id lane-x' }), ACCT],
   ['the --admin bypass, its allowance unprovable', pre('Bash', { command: 'gh pr merge 5 --admin' }), /merges are refused in every session/],
-  ['the account row', pre('Bash', { command: 'ccrc account remove --id lane-x' }), /an account-management act no fleet session runs/],
+  ['the gh api merge', pre('Bash', { command: 'gh api -X PUT repos/o/r/pulls/5/merge' }), /merges are refused in every session/],
   ['the prune row', pre('Bash', { command: 'git worktree prune' }), /runs `git worktree prune`/],
-  ['the role skill from a subagent', pre('Skill', { skill: 'ccrc-worker' }, { agent_id: 'agent-1' }), /loads the `ccrc-worker` skill from a subagent/],
-  ['a Fable model', pre('Agent', { model: 'fable', prompt: 'x' }), /names a Fable model/],
-  ['a fan-out that names no model', pre('Agent', { prompt: 'x' }), /names no model/],
-  ['a wrapped test run', pre('Bash', { command: 'systemd-run --user --scope npx vitest run' }), /never under a systemd-run of your own/],
-  ['a reader\'s write door', pre('mcp__door__write', { x: 1 }, { agent_id: 'agent-2', agent_type: 'Explore' }), /a reader holds no write door/],
+  ['the quiz record', pre('Bash', { command: 'ccrc quiz-record --week 1' }), /the replay quiz's record/],
+  ['a secret read', pre('Read', { file_path: '~/.cc-secrets/ccrc-mail.token' }), ACCT],
+  ['an Edit of the roster', pre('Edit', { file_path: '~/.ccrc/accounts.json', old_string: 'a', new_string: 'b' }), ACCT],
+  ['a Write into the build directory', pre('Write', { file_path: '~/.local/share/claude/versions/9.9.9', content: 'x' }), /a write to a Claude Code build/],
   ['a child\'s verb row', pre('Bash', { command: 'ccd ws-rm lane-a' }), /ws-rm.*which a dispatched child never runs.*could not match this call to a session's registry row/],
   ['a child\'s build row', pre('Bash', { command: 'claude update' }), /installing or updating a Claude Code build.*could not match this call/],
-  ['a subagent\'s door write, its join unread', pre('mcp__door__write', { x: 1 }, { agent_id: 'agent-1' }), /a reader holds no write door/],
-  ...(LINUX ? [['a heavy test run', HEAVY, /starts a heavy test or typecheck outside `ccrc test`/] as [string, object, RegExp]] : []),
+  ['a Read of the signing key', pre('Read', { file_path: '~/.ccrc/approval-signing.key' }), SURFACE],
+  ['a cat of the signing key', pre('Bash', { command: 'cat ~/.ccrc/approval-signing.key' }), SURFACE],
+  ['a Write of the verifier', pre('Write', { file_path: '~/.cc-sessions/approval-verify.mjs', content: 'x' }), SURFACE],
+  ['an Edit of the verifier', pre('Edit', { file_path: '~/.cc-sessions/approval-verify.mjs', old_string: 'a', new_string: 'b' }), SURFACE],
 ];
 
-// Left on a miss: a coordinator's own acts, the gate whose bound is the session's, and advice.
-const LEFT: [string, object][] = [
+// Answered as before 9c, with no deny: the fleet POLICY arms, and a coordinator's own acts.
+const LEFT: [string, object, NodeJS.ProcessEnv?][] = [
   ['a plain merge: a coordinator lands PRs, and the wave\'s hold is unread', pre('Bash', { command: 'gh pr merge 5' })],
-  ['the approval surface: a coordinator rules approvals', pre('Bash', { command: 'ccrc-api approvals list' })],
-  ['a search: the graph gate\'s bound is the session\'s counter', pre('Grep', { pattern: 'x' })],
-  ['a sync: the landing advisory is a nudge, never a deny', pre('Bash', { command: 'git merge origin/main' })],
-  ...(LINUX ? [] : [['a heavy test: no fleet box here', HEAVY] as [string, object]]),
+  ['the approval surface\'s API half: a coordinator rules approvals', pre('Bash', { command: 'ccrc-api approvals list' })],
+  ['the role skill from a subagent', pre('Skill', { skill: 'ccrc-worker' }, { agent_id: 'agent-1' })],
+  ['a Fable model', pre('Agent', { model: 'fable', prompt: 'x' })],
+  ['a fan-out that names no model', pre('Agent', { prompt: 'x' })],
+  ['a wrapped test run', pre('Bash', { command: 'systemd-run --user --scope npx vitest run' })],
+  ['a heavy test run', pre('Bash', { command: 'npx vitest run' })],
+  ['a reader\'s write door', pre('mcp__door__write', { x: 1 }, { agent_id: 'agent-2', agent_type: 'Explore' })],
+  ['a subagent\'s door write', pre('mcp__door__write', { x: 1 }, { agent_id: 'agent-1' })],
+  ['a model other than the pinned one', pre('Agent', { model: 'opus', prompt: 'x' }),
+    { CLAUDE_CODE_SUBAGENT_MODEL_FORCE: '1', CLAUDE_CODE_SUBAGENT_MODEL: 'haiku' }],
+  ['a search: the graph gate', pre('Grep', { pattern: 'x' })],
+  ['a sync: the landing advisory', pre('Bash', { command: 'git merge origin/main' })],
 ];
 
-describe('a PreToolUse whose session lookup misses runs the deny arms that need no session fact', () => {
+describe('a PreToolUse whose session lookup misses runs the SAFETY arms, and the POLICY arms answer as before', () => {
   for (const shape of ['neither', 'pane', 'job'] as const) {
     describe(`a miss: ${shape}`, () => {
-      // every case on the first shape; the other two take one refusal and one left row each
-      const refused = shape === 'neither' ? REFUSED : REFUSED.slice(0, 1);
+      // every case on the first shape; the other two take two refusals and one left row
+      const refused = shape === 'neither' ? REFUSED : REFUSED.slice(0, 2);
       const left = shape === 'neither' ? LEFT : LEFT.slice(0, 1);
       it.each(refused)('refuses %s', (_n, payload, why) => {
         expect(denial(run(shape, payload))).toMatch(why);
       });
-      it.each(left)('leaves %s', (_n, payload) => {
-        expect(run(shape, payload)).toBe('');
+      it.each(left)('leaves %s', (_n, payload, env) => {
+        expect(run(shape, payload, env)).toBe('');
       });
     });
   }
+
+  // An off-class name (`cc-a b`): a miss whose id is reset to empty, so the row it names is never read (F5).
+  it('a pane named off the id class is a miss, and the row its name spells is never read', () => {
+    fs.writeFileSync(path.join(home, 'bin', 'tmux'), '#!/bin/sh\necho "cc-a b"\n', { mode: 0o755 });
+    fs.writeFileSync(path.join(reg, 'a b.hold'), WAVE_HOLD);
+    fs.writeFileSync(path.join(reg, 'a b.project'), 'project-a');
+    expect(run('pane', pre('Bash', { command: 'gh pr merge 5' })), 'its wave hold is unread').toBe('');
+    expect(denial(run('pane', pre('Bash', { command: 'gh pr merge 5 --admin' }))), 'its allowance is unread').toMatch(/merges are refused in every session/);
+    expect(denial(run('pane', pre('Bash', { command: 'claude update' }))), 'asked as a child').toMatch(/could not match this call/);
+  });
 
   // A payload that only names PreToolUse passes the builtin prefilter and ends at the parsed event: a typed /model in a
   // session with a door would otherwise be refused and reported under no session.

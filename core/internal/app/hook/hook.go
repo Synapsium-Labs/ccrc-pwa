@@ -198,7 +198,7 @@ func (h *run) main(stdin io.Reader) {
 }
 
 // missed is a PreToolUse whose session lookup matched no session (ccd/session-hook.sh#@hook-miss-end,
-// D-TBD-go-hook-lookup-miss): the deny arms with no row read (PreIn.Miss decides each row's side), the envelope printed,
+// D-TBD-go-hook-lookup-miss): the SAFETY arms with no row read (PreIn.Miss decides which run), the envelope printed,
 // and nothing else (no stage reads or writes a row).
 func (h *run) missed(ps attention.Parsed, payload string) {
 	if ps.Event != "PreToolUse" {
