@@ -180,7 +180,7 @@ describe('the train tool\'s train-members block proves a member, by the one pars
       .toBe(W('has a ccrc-train v1 block with a line that is not a member line'));
   });
   // Wave 5m (docs/superpowers/plans/2026-11-27-landing-order-wave5m-carried-corrections.md, section 4.1): the three
-  // cases the reviews of waves 5k and 5l carried. They characterise today's prover and must be green as written.
+  // cases the reviews of wave 5l carried. They characterise today's prover and must be green as written.
   it('P41: both blocks bad: a doubled v1 block beside an empty tool block prints the v1 sentence', () => {
     const v1 = trainBlock([[42, H]]);
     expect(check(toolTrainRow(50, M, `${rawTrainMembers('[]')}\n${v1}${v1}`))).toBe(W('carries 2 ccrc-train v1 blocks, not one'));
@@ -191,6 +191,8 @@ describe('the train tool\'s train-members block proves a member, by the one pars
   it('P43: a key given twice inside the value of a key that is never read refuses the tool block; with two keys it proves', () => {
     const blast = (value: string): string => rawTrainMembers(`[{"pr": 42, "headSha": "${H}", "blast": ${value}}]`);
     expect(check(toolTrainRow(50, M, blast('{"a": 1, "a": 2}')))).toBe(NOT_ARRAY);
+    // Fix round 1 (review run 4030, F4): a key given twice with the SAME value is refused too.
+    expect(check(toolTrainRow(50, M, blast('{"a": 1, "a": 1}')))).toBe(NOT_ARRAY);
     expect(check(toolTrainRow(50, M, blast('{"a": 1, "b": 2}')))).toBe(PROVED);
   });
 });

@@ -362,6 +362,18 @@ describe('the block removes itself (R6)', () => {
     await flush();
     expect(document.activeElement).toBe(pauseButton('Pause line'));
   });
+  // Wave 5m fix round 1 (review run 4030, F3): the other half of the control. The record is also NEEDED: with the page's
+  // focus on the body and no focus event on any control of the block, the same read moves no focus.
+  it('the page\'s focus on the body and no control recorded: a read that removes a row moves no focus', async () => {
+    const { rerender } = render(<Card state={stateOf(lineView())} onReload={() => {}} />);
+    const elsewhere = screen.getByRole('button', { name: 'elsewhere' });
+    elsewhere.focus();
+    elsewhere.blur();
+    expect(document.activeElement).toBe(document.body);
+    rerender(<Card state={stateOf(withoutRow)} onReload={() => {}} />);
+    await flush();
+    expect(document.activeElement).toBe(document.body);
+  });
   it('the same empty read while focus is outside the block moves no focus', async () => {
     const { rerender } = render(<Card state={stateOf(pausedEmpty())} onReload={() => {}} />);
     pauseButton('Resume line').focus();

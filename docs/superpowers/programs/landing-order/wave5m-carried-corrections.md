@@ -34,8 +34,11 @@ committed bytes after its row, and `git status` showed no product file changed.
 | FR8 | the wrapper's generation check removed (`reread` calls `onReload` always) | the same file | Both unmount cases, on `onReload`: `expected "vi.fn()" to not be called at all, but actually been called 1 times` (line 295). Nothing else (2 failed, 26 passed). | 28 of 28 |
 | NOREC | the section's `onFocus` record removed (`onFocus={() => {}}`) | the same file | The new control case, at its last line: `document.activeElement` is the body, not the pause button (line 363). Three other cases go red too: the Cancel-in-flight focus case (line 261), Resume on a line with no entries then an empty read (line 329), and the blur-to-nowhere case (line 337). The focus case beside the control stays green, as review 3983 measured: it expects focus to stay on `elsewhere` either way. 4 failed, 24 passed. | 28 of 28 |
 
-Nothing came out redder or greener than the plan's section 5 predicts. X-door's list of other red cases is the one the plan
-asked for: nine besides the two unmount cases.
+One row came out redder than the plan's section 5 predicts: NOREC. The plan's row names one red case, the new control; it
+measured four. The reason is that each of the three others needs the block's record to put focus back: the Cancel-in-flight
+case, Resume then an empty read, and the blur-to-nowhere case all expect focus to move from a removed control to the pause
+button or the card, and with the record gone the effect returns early and focus stays on the body. Every other row is as
+predicted. X-door's list of other red cases is the one the plan asked for: nine besides the two unmount cases.
 
 ## The suites run
 
@@ -45,6 +48,31 @@ asked for: nine besides the two unmount cases.
   die.
 - From `server/`, one file per process: `anchors` 9 passed, `citations` 4 passed, `deviation-refs` 35 passed (after one
   `git fetch origin main`).
+
+## Fix round 1 (review run 4030, rulings of the coordinator's call 1670)
+
+Four minor findings, none critical or important. Two cases, two rows, two sentences:
+
+- **F3, a case added** beside the control in `pwa/test/landing-line.test.tsx`: the page's focus on the body, no focus event on
+  any control of the block, a re-render that removes row #104, a flush, and focus still on the body. Focus on the body is
+  asserted before the re-render, as the control does. It shows the record is needed, as the control shows it is enough.
+- **F4, a body added** to P43 in the same case: `{"a": 1, "a": 1}`, a key given twice with equal values, expecting the same
+  refusal. The prover refuses it today, so this is a case and not a finding about the product.
+- **F1, the closing sentence above corrected**, with the reason the three extra NOREC cases go red.
+- **F2, the comment above P41 corrected:** the three prover cases come from wave 5l's reviews alone; wave 5k's review
+  carried the two console hardenings.
+
+| Row | Mutation | Command (inside `ccrc test --`) | Red | Green after restore |
+|---|---|---|---|---|
+| M-samevalue | the pairs hook refuses a doubled key only when its values differ: it accepts an object that has a key twice with an equal pair (`or len({(k, repr(v)) for k, v in kv}) < len(kv)` on the accepting side) | vitest run of `test/ccd-train-members.test.ts` | P43, on its new equal-values line (195): expected the not-one-array sentence, received the proving line. P7 goes red too, because its doubled `pr` has equal values (`{"pr": 42, "pr": 42}`). 2 failed, 50 passed. | 52 of 52 |
+| M-noheld | the effect in `LandingLine.tsx` no longer returns early when no control is recorded: `if (sheet !== null \|\| (held !== null && held.isConnected)) return;`, which does not throw | vitest run of `test/landing-line.test.tsx` | The new case alone, at its last line (375): expected the body, received the pause button. 1 failed, 28 passed. | 29 of 29 |
+
+Restored sha256 after both rows: `ccd/lib/train-proof.sh` 8f807fd7d5de9a55803d3c768e3c03c85dcba62d932a40ee07a1b0ea03e7e141
+and `pwa/src/fleet/LandingLine.tsx` 2b3c84b1e7a5e2f0748138e56bf32e5b41a5bbd8e75435d212805c78499e990c, each equal to the committed
+bytes, and `git status` showed only the two test files and this note.
+
+Suites after the round, each alone in the test slice: `ccd-train-members` 52 passed (P43 gained an assertion, no case),
+`landing-line` 29 passed with the type check on and no type errors.
 
 ## Departures
 
