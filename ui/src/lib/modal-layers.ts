@@ -69,17 +69,18 @@ export function recordModalLayer(panel: Element): ReadonlySet<Element> {
 // `data-aria-hidden` mark.
 //
 // A node the page had already hidden (it carries `aria-hidden="true"`) is made inert but its `aria-hidden` is not touched, and
-// it is not in `hidden`: it is the page's before reader mode and after it. A node that was already `inert` is not recorded
-// either, so leaving never makes it focusable.
+// it is not in `hidden`: it is the page's before reader mode and after it. The one exception is a node an earlier reader mode
+// left held (below), still hidden: it is adopted into `hidden`, so this hiding's release gives it back (review 4052 A1). A node
+// that was already `inert` is not recorded either, so leaving never makes it focusable.
 //
 // LEAVING reader mode while a modal is open: a node in `hidden` that a modal marked (`data-aria-hidden`) while a
 // `[role="dialog"][data-state="open"]` stands (the open-modal test `sheet.tsx` uses) keeps its `aria-hidden`: the console stays
 // hidden behind the open modal. It is deleted from every layer's record, so it is no longer the page's own and that modal's
 // close lifts it like any other mark. A marked node with no open dialog (a sheet still animating closed, `data-state="closed"`,
 // has already made its one lift) is un-hidden at once, so the console is announced and focusable from the moment reader mode
-// ends. A modal that UNMOUNTS while still open is no close and lifts nothing, so `releaseAsPage` also remembers each node it
-// left hidden, and `liftHandedAtUnmount` (the unmount's lift, X6 XR fix round 2, review 4043 F1) gives it back once no open
-// dialog stands.
+// ends. A modal that UNMOUNTS while still open is no close and lifts nothing, and the command palette lifts none of its marks
+// even as it closes, so `releaseAsPage` also remembers each node it left hidden, and `liftHeld` (a sheet's unmount and the
+// palette's close or unmount; X6 XR fix round 2, review 4043 F1, and review 4052 A1) gives it back once no open dialog stands.
 //
 // TWO PRECONDITIONS. The hiding is entered with no modal layer in the document (reader mode is not offered while any
 // `[role="dialog"]` is mounted, open or closing): under one, a node a modal hid would read as the page's own and never be
@@ -91,14 +92,22 @@ export function recordModalLayer(panel: Element): ReadonlySet<Element> {
 let live: PageHiding | null = null;
 
 // WHAT `releaseAsPage` LEFT HIDDEN FOR AN OPEN MODAL (X6 XR fix round 2, review 4043 F1). The nodes above that stay
-// `aria-hidden` for the modal's close to lift are kept here, written by `releaseAsPage` alone. A modal that UNMOUNTS while
-// open is no close: Radix's undo takes the node's mark but never the `aria-hidden` it found already set, so the node would stay
+// `aria-hidden` for the modal's close to lift are kept here. Only `releaseAsPage` adds a node; `hideAsPage` only takes nodes
+// out or puts back nodes that were in it, so the set is empty while reader mode is never used. A modal that UNMOUNTS while open
+// is no close: Radix's undo takes the node's mark but never the `aria-hidden` it found already set, so the node would stay
 // hidden for good (a sheet in the Docs body unmounts open when the body remounts or the route leaves, after reader mode ended
-// behind it). `liftHandedAtUnmount` is that unmount's lift. `hideAsPage` empties the set: a hiding is entered with no modal in
-// the document, so nothing is handed then. The set outlives a modal's normal close (that close lifts the node, and it stays
-// here), so `recordModalLayer` drops every node that is visible or gone when a new layer mounts: a layer's own hiding is
-// then never taken for a handed one (X6 XR fix round 2, review M1).
+// behind it), and the palette's close lifts nothing of its own (a Docs sheet that unmounts under it). `liftHeld` is the lift of
+// both. `hideAsPage` takes every node out of the set as it starts: one still held and hidden that its walk meets is adopted
+// into the hiding (a hiding is entered with no modal in the document, so that node's modal is gone; review 4052 A1), and one
+// it does not reach is put back, held for a later lift. The set outlives a modal's normal close (that close lifts the node, and
+// it stays here), so `recordModalLayer` drops every node that is visible or gone when a new layer mounts: a layer's own hiding
+// is then never taken for a handed one (X6 XR fix round 2, review M1).
 const handed = new Set<Element>();
+
+/** How many nodes are held now (read only, for the suite's proof that the set stays empty while reader mode is never used). */
+export function heldNodeCount(): number {
+  return handed.size;
+}
 
 /** What `hideAsPage` set, for `releaseAsPage` to undo: the nodes it made `inert` and the nodes it gave `aria-hidden`. */
 export interface PageHiding {
@@ -113,6 +122,11 @@ const NOT_CONTENT = new Set(['SCRIPT', 'STYLE', 'TEMPLATE']);
  *  templates and any node that contains `keep` are left alone. While a hiding is live, it is answered again (above). */
 export function hideAsPage(keep: Element): PageHiding {
   if (live !== null) return live;
+  // A node an earlier hiding left held and still hidden (its modal went without lifting it) is ADOPTED: this hiding takes it as one
+  // it hid, so its release gives it back. Skipped as already hidden, as before review 4052 A1, it was in neither `hidden` nor the
+  // set, and every later layer recorded it as the page's own, hidden for good. A held node this hiding does not reach stays held,
+  // for a later lift: nothing is un-hidden here.
+  const leftover = new Set([...handed].filter((node) => node.isConnected && node.getAttribute('aria-hidden') === 'true'));
   handed.clear();
   const inerted: Element[] = [];
   const hidden: Element[] = [];
@@ -126,9 +140,12 @@ export function hideAsPage(keep: Element): PageHiding {
       if (sibling.getAttribute('aria-hidden') !== 'true') {
         sibling.setAttribute('aria-hidden', 'true');
         hidden.push(sibling);
+      } else if (leftover.delete(sibling)) {
+        hidden.push(sibling);
       }
     }
   }
+  for (const node of leftover) handed.add(node);
   live = { inerted, hidden };
   return live;
 }
@@ -149,15 +166,16 @@ export function releaseAsPage(h: PageHiding): void {
   }
 }
 
-/** A modal layer's unmount (`sheet.tsx`, passive cleanup, after the DOM removal): give back each node `releaseAsPage` left
- *  hidden for an open modal, when no `[role="dialog"][data-state="open"]` stands in the document any more. With another open
- *  dialog the node stays hidden and in the set, and that dialog's own close or unmount, when it is a Sheet, lifts it. The
- *  command palette lifts nothing, so a node handed while a Docs sheet was open and still hidden when that sheet unmounts
- *  under an open palette stays hidden until the next sheet unmount with no dialog open, or the next reader mode (a stated
- *  residue, X6 XR fix round 2, review M2). A node that is no longer hidden, or has left the document, is dropped; so is one
- *  visible when a new layer mounts (`recordModalLayer`, review M1). A no-op while the set is empty, which is every sheet
- *  outside reader mode. */
-export function liftHandedAtUnmount(): void {
+/** A modal layer closed or unmounted: give back each node `releaseAsPage` left hidden for an open modal, when no
+ *  `[role="dialog"][data-state="open"]` stands in the document any more, so the LAST dialog over it to go gives it back, whichever
+ *  layer that is. Called by a sheet's unmount (`sheet.tsx`, passive cleanup, after the DOM removal; a sheet's close lifts the
+ *  node with its own marks) and by the command palette's close and unmount (`command-palette.tsx`, which lifts none of its own
+ *  marks: a Docs sheet that unmounts under the open palette, the palette's "Go to" path, left the node to it; review 4052 A1).
+ *  With another open dialog the node stays hidden and in the set, for that dialog's own close or unmount. A node that is no
+ *  longer hidden, or has left the document, is dropped; so is one visible when a new layer mounts (`recordModalLayer`, review
+ *  M1), and one still held when the next reader mode starts is adopted by it (`hideAsPage`). A no-op while the set is empty,
+ *  which is every layer while reader mode is never used. */
+export function liftHeld(): void {
   if (handed.size === 0) return;
   const modalOpen = document.querySelector('[role="dialog"][data-state="open"]') !== null;
   for (const node of [...handed]) {

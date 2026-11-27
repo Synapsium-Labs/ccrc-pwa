@@ -9,7 +9,8 @@ import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from 'vitest';
 import { Fragment, useContext, useEffect, useState, type ReactNode } from 'react';
 import { act, cleanup, render, screen } from '@testing-library/react';
-import { Sheet } from '@ccrc/ui';
+import { flushSync } from 'react-dom';
+import { CommandPalette, Sheet } from '@ccrc/ui';
 import { DocsReading } from '../src/docs/DocsReading';
 import { readerModeHandle } from '../src/docs/readerModeHandle';
 import {
@@ -685,6 +686,79 @@ describe('docs screen (X6 XR1.2)', () => {
       expect(screen.queryByRole('dialog'), 'CONTROL: the sheet went with it').toBeNull();
       expect(suspendedOutside(), 'a console node stayed hidden or inert after the sheet unmounted').toEqual([]);
     } finally {
+      outside.remove();
+    }
+  });
+
+  // X6 follow-up, review 4052 A1, its five steps: (1) enter and open the external-link sheet in the reading container; (2) leave
+  // full screen with the browser's Esc, so reader mode ends and the sheet stays open, the console held hidden for it; (3) Ctrl+K
+  // opens the palette over the sheet; (4) a "Go to" command: `CommandLayer` runs the command before it closes the palette, and
+  // without view transitions or under reduced motion the router commits the route inside `flushSync`, so the Docs screen and its
+  // sheet unmount while the palette still reads open; (5) the palette closes. Then a second reader mode, and the console must be
+  // announced again.
+  it('reader mode: the palette\'s "Go to" path (the sheet unmounts under the open palette, which then closes), then a second reader mode, leaves no console node hidden', async () => {
+    const fs = installFullScreen();
+    const f = fakeLoaders();
+    let setPalette: (open: boolean) => void = () => undefined;
+    function Routed(): ReactNode {
+      const { path, search } = useLocation();
+      const [palette, setOpen] = useState(false);
+      setPalette = setOpen;
+      return (
+        <>
+          {path.startsWith('/docs')
+            ? <DocsScreen path={path} search={search} loaders={f.loaders} parser={parser} reader={reader} />
+            : <p>Another screen</p>}
+          <CommandPalette open={palette} onClose={() => setOpen(false)} query="" onQueryChange={() => undefined} options={[]} onRun={() => undefined} />
+        </>
+      );
+    }
+    navigate('/docs/demo/specs/a.md');
+    render(<Routed />);
+    await screen.findByTestId('reader-host');
+    await flush();
+    const outside = document.createElement('aside');
+    document.body.appendChild(outside);
+    const before = suspendedOutside();
+    try {
+      // (1)
+      act(() => { readerModeHandle()?.toggle(); });
+      await act(async () => { fs.grant(); });
+      await sheetOpen(true);
+      const added = suspendedOutside().filter((el) => !before.includes(el));
+      expect(added, 'CONTROL: reader mode hid the console').toContain(outside);
+      // (2)
+      await act(async () => { fs.lose(); });
+      expect(readerModeHandle()?.on(), 'CONTROL: losing full screen ended reader mode').toBe(false);
+      expect(outside.getAttribute('aria-hidden'), 'CONTROL: hidden behind the open sheet').toBe('true');
+      // (3)
+      act(() => { setPalette(true); });
+      await settle();
+      expect(screen.getByRole('dialog', { name: 'Command palette' }).getAttribute('data-state'), 'CONTROL: the palette is open').toBe('open');
+      // (4)
+      act(() => { flushSync(() => { navigate('/somewhere-else'); }); });
+      await settle();
+      expect(screen.getByText('Another screen'), 'CONTROL: the route left the Docs screen').toBeDefined();
+      expect(screen.queryByRole('dialog', { name: 'A link' }), 'CONTROL: the sheet went with it').toBeNull();
+      expect(outside.getAttribute('aria-hidden'), 'the console was announced under the open palette').toBe('true');
+      // (5)
+      act(() => { setPalette(false); });
+      await settle();
+      expect(document.querySelector('[role="dialog"]'), 'CONTROL: the palette is closed and gone').toBeNull();
+      expect(stillSuspended(added), 'a console node stayed hidden or inert after the palette, the last dialog over it, closed').toEqual([]);
+      // A second reader mode, entered and left: the console is announced again.
+      await act(async () => { navigate('/docs/demo/specs/a.md'); });
+      await screen.findByTestId('reader-host');
+      await flush();
+      act(() => { readerModeHandle()?.toggle(); });
+      expect(readerModeHandle()?.on(), 'CONTROL: the second reader mode is on').toBe(true);
+      expect(outside.getAttribute('aria-hidden'), 'CONTROL: the second reader mode hides the console').toBe('true');
+      act(() => { readerModeHandle()?.toggle(); });
+      await settle();
+      expect(readerModeHandle()?.on(), 'CONTROL: the second reader mode ended').toBe(false);
+      expect(stillSuspended(added), 'a console node stayed hidden or inert after the second reader mode').toEqual([]);
+    } finally {
+      leaveReaderMode();
       outside.remove();
     }
   });
