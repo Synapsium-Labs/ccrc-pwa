@@ -21,7 +21,7 @@ import type { AuthorityAppender } from '../src/coord/overlordDesignationStore.js
 import type { AuthorityAppend, AuthorityAppendError } from '../src/coord/overlordAuthorityJournal.js';
 import type { AuthorityState } from '../src/coord/overlordAuthorityCoherence.js';
 import type { OverlordAuthorityMove } from '../src/coord/overlordAuthority.js';
-import type { OldBodyState, OverlordBodyState } from '../src/coord/overlordDesignation.js';
+import { DESIGNATE_LANES, type OldBodyState, type OverlordBodyState } from '../src/coord/overlordDesignation.js';
 import type { AccountGate, AccountGateAsk } from '../src/accounts/gate.js';
 import { gateActorOf } from '../src/accounts/audit.js';
 import { attributionIdentity } from '../src/auth/attributionIdentity.js';
@@ -161,6 +161,8 @@ async function rig(opts: { bound?: boolean; noOldBody?: boolean; noBodyFact?: bo
   const db = openCoordDb(path.join(dir, 'coord.db'));
   opened.push(db);
   const coord = new CoordStore(db);
+  // The lanes a start needs are live (overlord-v1's guard, call 1887); a case sets one back to shadow.
+  for (const lane of DESIGNATE_LANES) coord.setLaneArm(lane, 'live', 1);
   const gate = fakeGate(); const body = new FakeBody(); const journal = fakeJournal(); const host = new FakeHost();
   const time = fakeTime();
   const facts: Facts = {
@@ -959,5 +961,34 @@ describe('the unmeasured designation row', () => {
     expect(r.body.ops()).toEqual([]);
     expect(r.facts.bodyAsked).toEqual([]);
     expect(snapshot(r)).toEqual(before);
+  });
+});
+
+describe('the lane guard on Rebind (overlord-v1, call 1887)', () => {
+  it('a rebind that would start a body refuses 409 overlord-lanes-unarmed while a lane is not live, and stops and writes nothing', async () => {
+    const r = await rig();
+    r.coord.setLaneArm('anchor-slot', 'shadow', 2);
+    const before = snapshot(r);
+    const res = await rebind(r);
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toEqual({ ok: false, error: 'overlord-lanes-unarmed', detail: 'not live: anchor-slot (shadow)', lanes: [{ lane: 'anchor-slot', reads: 'shadow' }] });
+    expect(snapshot(r)).toEqual(before);
+  });
+
+  it('its own checks answer first: no binding is not-found, whatever the lanes read', async () => {
+    const r = await rig({ bound: false });
+    for (const lane of DESIGNATE_LANES) r.coord.setLaneArm(lane, 'shadow', 2);
+    expect((await rebind(r)).json()).toMatchObject({ error: 'not-found' });
+  });
+
+  it('Restart never reads the lanes: a bound Overlord restarts with every lane in shadow', async () => {
+    const r = await rig();
+    for (const lane of DESIGNATE_LANES) r.coord.setLaneArm(lane, 'shadow', 2);
+    let asked = 0;
+    const real = r.coord.laneArmSetting.bind(r.coord);
+    r.coord.laneArmSetting = (lane) => { asked += 1; return real(lane); };
+    const res = await restart(r);
+    expect(res.json().error).not.toBe('overlord-lanes-unarmed');
+    expect(asked).toBe(0);
   });
 });

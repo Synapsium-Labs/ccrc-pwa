@@ -42,8 +42,11 @@ import type { AuthorityAppendError } from './overlordAuthorityJournal.js';
 import type { AuthorityState } from './overlordAuthorityCoherence.js';
 import {
   accountSetStepUp, accountSetVerdict, designateVerdict, modelClassVerdict, modelStepUp, overlordAccounts, rebindMovedDetail, rebindVerdict, restartVerdict,
-  renewalSetOf, retireVerdict, routeOf, type AccountFacts, type DesignateVerdict, type OldBodyState, type OverlordBodyState,
+  renewalSetOf, retireVerdict, routeOf, DESIGNATE_LANES, laneReadingOf, type AccountFacts, type DesignateVerdict, type HistoryAgentFact, type OldBodyState,
+  type OverlordBodyState,
 } from './overlordDesignation.js';
+import { laneArmRowViewOf } from './laneArm.js';
+import type { LaneArmRowView } from '../../../shared/lane-arm.js';
 import type { ActorRefused, AuthorityAppender, AuthorityRefused, RowUnreadable } from './overlordDesignationStore.js';
 import { ladderRead, ladderWire, NO_WITNESS_YET, type LadderConditionInputs, type NarrowingWitness } from './overlordLadderRead.js';
 import { isRung, isLadderCauseKey, type Rung } from '../../../shared/overlord-ladder.js';
@@ -109,7 +112,9 @@ export interface OverlordBody {
 export type OverlordCoord = Pick<CoordStore,
   'designationRead' | 'designatePending' | 'rebindPending' | 'bindPendingGeneration' | 'failPending' | 'retire' | 'stopDone'
   | 'raiseItem' | 'accountPoolEdges' | 'accountHolds'
-  | 'setModelClass' | 'setAccountSet'>;
+  | 'setModelClass' | 'setAccountSet'
+  // The store's one reader of a lane-arm row (overlord-v1's guard): the lanes a start needs, read by Start and Rebind only.
+  | 'laneArmSetting'>;
 
 export interface OverlordRouteDeps {
   /** The account gate (D-5511): its `actor` is the row's, recorded through `identity` (gates A). */
@@ -183,6 +188,7 @@ const unreachable = (): never => { throw new Error('the Overlord designation sto
 export const NO_OVERLORD_STORE: { readonly coord: OverlordCoord; readonly journal: AuthorityAppender } = {
   coord: {
     designationRead: () => ({ kind: 'unmeasured', why: 'this server has no coordination store or authority journal' }),
+    laneArmSetting: () => ({ kind: 'unreadable', detail: 'this server has no coordination store' }),
     accountPoolEdges: () => new Map(),
     accountHolds: () => ({ ok: false, detail: 'this server has no coordination store' }),
     designatePending: unreachable, rebindPending: unreachable, bindPendingGeneration: unreachable, failPending: unreachable, retire: unreachable,
@@ -327,6 +333,28 @@ export function registerOverlordRoutes(app: FastifyInstance, deps: OverlordRoute
    *  empty list. */
   const accountFactsOf = (): Promise<AccountFacts & { shares: SharesRead }> => readAccountFacts(deps);
 
+  /** What a start needs beside the words (overlord-v1's guard, call 1887), read once per Start or Rebind and decided by the
+   *  decider: each lane's view by the lane-arm owner's own function over the store's one reader (a read that throws is the
+   *  owner's unreadable row), and the history op through the history door's own chooser over the same agent links. No fleet
+   *  link at all is this server's configuration (local mode, or a server built without them), so the op is not asked. */
+  const startFactsOf = (): { lanes: readonly LaneArmRowView[]; historyAgent: HistoryAgentFact } => {
+    const lanes = DESIGNATE_LANES.map((lane) => {
+      try { return laneArmRowViewOf(lane, coord.laneArmSetting(lane)); } catch (err) {
+        return laneArmRowViewOf(lane, { kind: 'unreadable', detail: err instanceof Error ? err.message : String(err) });
+      }
+    });
+    const links = deps.chat?.links() ?? [];
+    return { lanes, historyAgent: links.length === 0 ? 'no-link' : historyAgentFor(links).kind };
+  };
+  /** A refused start names each unread lane by its reading only; the store's own words go to this one log line (call 1887). */
+  const logUnreadLanes = (door: 'Start' | 'Rebind', lanes: readonly LaneArmRowView[]): void => {
+    for (const v of lanes) {
+      if (laneReadingOf(v) !== 'unread') continue;
+      const why = v.detail ?? (v.stored === 'unknown' ? 'it holds a token this build does not know' : `it reads ${v.stored}`);
+      console.warn(`ccrc-server: ${door} the Overlord refused: the lane-arm row of ${v.lane} could not be read: ${why.replace(/\s+/g, ' ')}`);
+    }
+  };
+
   const authorityRefusal = (reply: FastifyReply, f: { authority: AuthorityAppendError; detail: string }): FastifyReply =>
     refuseRoute(reply, AUTHORITY_REFUSAL[f.authority], { detail: f.detail });
 
@@ -383,13 +411,15 @@ export function registerOverlordRoutes(app: FastifyInstance, deps: OverlordRoute
     // verb, `no such session` included, is what says the word is present.
     const probe = await body.poolAnswer(id);
     let verdict: ReturnType<typeof designateVerdict>;
+    let start: ReturnType<typeof startFactsOf> | null = null;
     try {
       const f = await accountFactsOf();
       const set = { state: 'set', set: parsed.accountPools } as const;
+      start = startFactsOf();
       verdict = designateVerdict({
         read: coord.designationRead(), ccdWords: facts.ccdWords(), serverWords: facts.serverWords, builds: facts.builds(), probe,
         model: parsed.model, accountPools: parsed.accountPools, accounts: f,
-        home: projectHome(f.roster, f.limits, set, f.edges, parsed.model, f.shares, f.nowS),
+        home: projectHome(f.roster, f.limits, set, f.edges, parsed.model, f.shares, f.nowS), ...start,
       });
     } catch (err) {
       return refuseRoute(reply, 'unavailable', { detail: err instanceof Error ? err.message : String(err) });
@@ -397,9 +427,10 @@ export function registerOverlordRoutes(app: FastifyInstance, deps: OverlordRoute
     if (verdict.act === 'unmeasured') return refuseRoute(reply, 'unavailable', { detail: UNREADABLE });
     if (verdict.act === 'refuse-input') return refuseRoute(reply, 'bad-request', { detail: 'accountPools' });
     if (verdict.act === 'refuse') {
+      if (verdict.lanes !== undefined) logUnreadLanes('Start', start?.lanes ?? []);
       return refuseRoute(reply, verdict.word, {
         detail: verdict.detail, ...(verdict.needs === undefined ? {} : { needs: verdict.needs }),
-        ...(verdict.count === undefined ? {} : { count: verdict.count }),
+        ...(verdict.count === undefined ? {} : { count: verdict.count }), ...(verdict.lanes === undefined ? {} : { lanes: verdict.lanes }),
       });
     }
 
@@ -501,13 +532,16 @@ export function registerOverlordRoutes(app: FastifyInstance, deps: OverlordRoute
     const id = workspaceId(OVERLORD_PROJECT, slug);
     const probe = await body.poolAnswer(id);
     let verdict: ReturnType<typeof rebindVerdict>;
+    let start: ReturnType<typeof startFactsOf> | null = null;
     try {
       const old = oldId === null ? 'unmeasurable' : await (facts.oldBody?.(oldId) ?? Promise.resolve('unmeasurable' as const));
       const f = await accountFactsOf();
       const row = read.kind === 'designated' ? read.row : null;
+      start = startFactsOf();
       verdict = rebindVerdict({
         read, ccdWords: facts.ccdWords(), serverWords: facts.serverWords, builds: facts.builds(), probe, accounts: f, old, force,
         home: row === null ? null : projectHome(f.roster, f.limits, { state: 'set', set: row.accountPools }, f.edges, row.model, f.shares, f.nowS),
+        ...start,
       });
     } catch (err) {
       return refuseRoute(reply, 'unavailable', { detail: err instanceof Error ? err.message : String(err) });
@@ -515,9 +549,11 @@ export function registerOverlordRoutes(app: FastifyInstance, deps: OverlordRoute
     if (verdict.act === 'unmeasured') return refuseRoute(reply, 'unavailable', { detail: UNREADABLE });
     if (verdict.act === 'refuse-input') return refuseRoute(reply, 'bad-request', { detail: 'accountPools' });
     if (verdict.act === 'refuse') {
+      if ('lanes' in verdict && verdict.lanes !== undefined) logUnreadLanes('Rebind', start?.lanes ?? []);
       return refuseRoute(reply, verdict.word, {
         detail: verdict.detail, ...('needs' in verdict && verdict.needs !== undefined ? { needs: verdict.needs } : {}),
         ...('count' in verdict && verdict.count !== undefined ? { count: verdict.count } : {}),
+        ...('lanes' in verdict && verdict.lanes !== undefined ? { lanes: verdict.lanes } : {}),
       });
     }
     // `create` means a live binding stood (`rebindVerdict` refused every other row), so `oldId` is that binding's.

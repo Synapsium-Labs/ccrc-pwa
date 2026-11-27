@@ -176,6 +176,8 @@ const W1_GROUP: Readonly<Record<string, number>> = {
   'overlord-attempt-pending': 409, 'authority-unrecorded': 503,
   'authority-rolled-back': 503, 'stale-designation': 409, 'stale-generation': 409, 'card-unread': 409, 'unwitnessed': 409, 'unknown-message': 404,
   'overlord-uses-its-doors': 403, 'overlord-not-a-coordinator': 403, 'history-unreachable': 503, 'read-ceiling': 429,
+  // overlord-v1's lane guard on Start and Rebind (call 1887): a state of the world the operator changes, so 409.
+  'overlord-lanes-unarmed': 409,
 };
 
 /** The W2 group, as the W2 vocabulary plan's Table V1 gives it: each word with its status, chosen by the family rule. */

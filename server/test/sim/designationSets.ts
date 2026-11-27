@@ -21,6 +21,8 @@ import { mkTmp } from '../tmpHelpers.js';
 import { gateActorOf } from '../../src/accounts/audit.js';
 import { attributionIdentity } from '../../src/auth/attributionIdentity.js';
 import { designationFenceCases } from '../overlordDesignationFenceCases.js';
+import { ANCHOR_SLOT_LANE, CONTINUITY_LANE, LAUNCH_PROFILE_LANE, type LaneArmLane, type LaneArmRowView } from '../../../shared/lane-arm.js';
+import { laneArmRowViewOf } from '../../src/coord/laneArm.js';
 import { authorityReceiptCases } from '../authorityReceiptCases.js';
 
 /** The operator's actor as a designation writer takes it: the account gate's actor minted through the identity port (gates A). */
@@ -103,9 +105,16 @@ const ANSWER = {
   kind: 'answer', answer: { side: 'set:pool-a', verdict: 'serve', poolSide: 'account', poolState: 'untagged', crossing: 'none', account: 'lane-a' },
 } as const;
 
+/** A lane-arm row's view as the owner reads it (`laneArmRowViewOf`), from a stored token, an absent row or an unreadable one. */
+export const laneView = (lane: LaneArmLane, read: 'live' | 'shadow' | 'absent' | 'unreadable' | 'nonsense', gate: string | null = null): LaneArmRowView =>
+  laneArmRowViewOf(lane, read === 'absent' ? { kind: 'absent' } : read === 'unreadable' ? { kind: 'unreadable', detail: 'SQLITE_BUSY' }
+    : { kind: 'row', choice: read, updatedAt: 1, importedAt: null, imported: null }, gate);
+/** Every lane a start needs, live (overlord-v1's guard). */
+export const LANES_LIVE: readonly LaneArmRowView[] = [CONTINUITY_LANE, LAUNCH_PROFILE_LANE, ANCHOR_SLOT_LANE].map((l) => laneView(l, 'live'));
+
 export const dfacts = (over: Partial<Facts> = {}): Facts => ({
   read: NONE, ccdWords: ALL_CCD, serverWords: SERVER_WORDS, builds: 'agreed', probe: ANSWER, model: 'opus', accountPools: SET_AB,
-  accounts: afacts(), home: { wrapper: 'lane-a', score: 5 }, ...over,
+  accounts: afacts(), home: { wrapper: 'lane-a', score: 5 }, lanes: LANES_LIVE, historyAgent: 'agent', ...over,
 });
 
 // --------------------------------------------------------------------------------------------------- overlordAccounts
@@ -260,6 +269,49 @@ export function designateVerdictCases(m: DesignationModule): Record<string, Suit
       expect(unknown).toMatchObject({ act: 'refuse', word: 'launch-profile-unmet' });
       expect(unknown.act === 'refuse' && unknown.detail).toContain('unmeasured');
       expect(refuse(verdict({ builds: 'agreed' }))).toBe('create');
+    },
+    // overlord-v1's guard (call 1887): step 3b, the lanes the body needs, between the builds and the set's spelling.
+    'step 3b: each lane that is not live refuses overlord-lanes-unarmed, naming only those lanes, in the fixed order': () => {
+      const lanes = [laneView(ANCHOR_SLOT_LANE, 'shadow'), laneView(CONTINUITY_LANE, 'absent'), laneView(LAUNCH_PROFILE_LANE, 'live')];
+      expect(verdict({ lanes })).toEqual({ act: 'refuse', word: 'overlord-lanes-unarmed', detail: 'not live: continuity (shadow), anchor-slot (shadow)',
+        lanes: [{ lane: 'continuity', reads: 'shadow' }, { lane: 'anchor-slot', reads: 'shadow' }] });
+      for (const lane of [CONTINUITY_LANE, LAUNCH_PROFILE_LANE, ANCHOR_SLOT_LANE]) {
+        const one = LANES_LIVE.map((v) => (v.lane === lane ? laneView(lane, 'shadow') : v));
+        expect(verdict({ lanes: one }), lane).toMatchObject({ word: 'overlord-lanes-unarmed', lanes: [{ lane, reads: 'shadow' }] });
+      }
+      expect(refuse(verdict({ lanes: LANES_LIVE }))).toBe('create');
+    },
+    'step 3b: an unreadable row and an unknown token read unread, never live and never shadow; the store\'s detail stays off': () => {
+      const v = verdict({ lanes: [laneView(CONTINUITY_LANE, 'unreadable'), laneView(LAUNCH_PROFILE_LANE, 'nonsense'), laneView(ANCHOR_SLOT_LANE, 'live')] });
+      expect(v).toEqual({ act: 'refuse', word: 'overlord-lanes-unarmed', detail: 'not live: continuity (unread), launch-profile (unread)',
+        lanes: [{ lane: 'continuity', reads: 'unread' }, { lane: 'launch-profile', reads: 'unread' }] });
+      expect(JSON.stringify(v)).not.toContain('SQLITE');
+    },
+    'step 3b: a row stored live behind a closed gate reads gated; a lane with no view reads unread': () => {
+      expect(verdict({ lanes: LANES_LIVE.map((x) => (x.lane === ANCHOR_SLOT_LANE ? laneView(ANCHOR_SLOT_LANE, 'live', 'a gate') : x)) }))
+        .toMatchObject({ word: 'overlord-lanes-unarmed', lanes: [{ lane: 'anchor-slot', reads: 'gated' }] });
+      expect(verdict({ lanes: LANES_LIVE.filter((x) => x.lane !== LAUNCH_PROFILE_LANE) }))
+        .toMatchObject({ word: 'overlord-lanes-unarmed', lanes: [{ lane: 'launch-profile', reads: 'unread' }] });
+      expect(verdict({ lanes: [] })).toMatchObject({ lanes: [{ lane: 'continuity', reads: 'unread' }, { lane: 'launch-profile', reads: 'unread' },
+        { lane: 'anchor-slot', reads: 'unread' }] });
+    },
+    'step 3b sits between the builds and the spelling: a standing designation, missing words and skewed builds answer first; the spelling after': () => {
+      const shadow = [laneView(CONTINUITY_LANE, 'shadow')];
+      expect(refuse(verdict({ lanes: shadow, read: BOUND }))).toBe('overlord-exists');
+      expect(refuse(verdict({ lanes: shadow, ccdWords: null }))).toBe('capability-missing');
+      expect(refuse(verdict({ lanes: shadow, builds: 'skewed' }))).toBe('launch-profile-unmet');
+      expect(refuse(verdict({ lanes: shadow, accountPools: { pools: ['Bad Name'], untagged: false } }))).toBe('overlord-lanes-unarmed');
+      expect(refuse(verdict({ lanes: shadow, accountPools: { pools: [], untagged: false } }))).toBe('overlord-lanes-unarmed');
+    },
+    'E18: links that serve the history op none or several times are a missing word, the detail saying which; one serves; no link is not asked': () => {
+      expect(verdict({ historyAgent: 'no-agent' })).toEqual({ act: 'refuse', word: 'capability-missing', needs: ['overlord-history'],
+        detail: 'missing: overlord-history; no connected agent advertises overlord-history' });
+      expect(verdict({ historyAgent: 'many-agents' })).toEqual({ act: 'refuse', word: 'capability-missing', needs: ['overlord-history'],
+        detail: 'missing: overlord-history; more than one connected agent advertises overlord-history' });
+      expect(refuse(verdict({ historyAgent: 'agent' }))).toBe('create');
+      expect(refuse(verdict({ historyAgent: 'no-link' }))).toBe('create');
+      const v = verdict({ historyAgent: 'no-agent', ccdWords: ALL_CCD.filter((w) => w !== 'pool-set') });
+      expect(v).toMatchObject({ needs: ['pool-set', 'overlord-history'] });
     },
     'step 4: an unspellable set is an input refusal, before the count': () => {
       expect(verdict({ accountPools: { pools: ['Bad Name'], untagged: false } })).toEqual({ act: 'refuse-input', why: 'unspellable' });
@@ -512,6 +564,17 @@ const DESIGNATE_SET: MutantSet<DesignationModule> = { modulePath: MODULE, mutant
     { id: 'D11 acctorder is the counted list', old: "wrapper, acctorder: list.join(',')", new: "wrapper, acctorder: counted.join(',')" },
     { id: 'D12 server words unchecked', old: 'for (const w of DESIGNATE_SERVER_WORDS) if (!f.serverWords.includes(w)) needs.push(w);', new: '' },
     { id: 'D13 an unparsed probe passes', old: "return p.kind === 'answer' || (", new: "return p.kind !== 'not-run' && p.kind !== 'refused' || (" },
+    // overlord-v1's guard (call 1887): each condition, and its place in the order.
+    { id: 'L1 a lane ignored', old: '[CONTINUITY_LANE, LAUNCH_PROFILE_LANE, ANCHOR_SLOT_LANE];', new: '[CONTINUITY_LANE, LAUNCH_PROFILE_LANE];' },
+    { id: 'L2 an unread lane read as live', old: "return v.stored === 'live' ? 'gated' : 'unread';", new: "return v.stored === 'live' ? 'gated' : null;" },
+    { id: 'L3 a gated lane read as live', old: "return v.stored === 'live' ? 'gated' : 'unread';", new: "return v.stored === 'live' ? null : 'unread';" },
+    { id: 'L4 a lane with no view read as live', old: "if (v === undefined) return 'unread';", new: 'if (v === undefined) return null;' },
+    { id: 'L5 the lanes asked before the words', old: '  // 2. every missing word, ccd\'s, then the server\'s, then the probe\'s.\n',
+      new: "  { const u = unarmedLanes(f.lanes); if (u.length > 0) return { act: 'refuse', word: 'overlord-lanes-unarmed', lanes: u, detail: 'x' }; }\n  // 2. every missing word, ccd's, then the server's, then the probe's.\n" },
+    { id: 'L6 the lanes asked after the spelling', old: "  const unarmed = unarmedLanes(f.lanes);\n  if (unarmed.length > 0) {",
+      new: "  const unarmed = unarmedLanes(f.lanes);\n  if (poolSetSpelling(f.accountPools).kind === 'unspellable') return { act: 'refuse-input', why: 'unspellable' };\n  if (unarmed.length > 0) {" },
+    { id: 'H1 many agents read as served', old: "f.historyAgent === 'no-agent' || f.historyAgent === 'many-agents' ? f.historyAgent : null", new: "f.historyAgent === 'no-agent' ? f.historyAgent : null" },
+    { id: 'H2 no link read as none', old: "f.historyAgent === 'no-agent' || f.historyAgent === 'many-agents' ? f.historyAgent : null", new: "f.historyAgent !== 'agent' ? 'no-agent' : null" },
   ], suite: designateVerdictCases };
 const ACCOUNTS_SET: MutantSet<DesignationModule> = { modulePath: MODULE, mutants: [
     { id: 'A1 an API-key lane listed', old: "if (provider !== 'anthropic') return;", new: '' },
@@ -753,6 +816,15 @@ export function rebindVerdictCases(m: DesignationModule): Record<string, SuiteCa
       const read = boundRead({ pending: PEND() });
       expect(word(verdict({ read, old: 'alive', ccdWords: null }))).toBe('overlord-attempt-pending');
       expect(word(verdict({ read, old: 'unmeasurable', force: true }))).toBe('overlord-attempt-pending');
+    },
+    'overlord-v1\'s guard: a rebind that would start a body refuses overlord-lanes-unarmed too, after its own three checks': () => {
+      const lanes = [laneView(CONTINUITY_LANE, 'live'), laneView(LAUNCH_PROFILE_LANE, 'live'), laneView(ANCHOR_SLOT_LANE, 'unreadable')];
+      expect(verdict({ lanes })).toEqual({ act: 'refuse', word: 'overlord-lanes-unarmed', detail: 'not live: anchor-slot (unread)',
+        lanes: [{ lane: 'anchor-slot', reads: 'unread' }] });
+      expect(word(verdict({ lanes, read: NONE }))).toBe('not-found');
+      expect(word(verdict({ lanes, read: boundRead({ pending: PEND() }) }))).toBe('overlord-attempt-pending');
+      expect(word(verdict({ lanes, old: 'alive' }))).toBe('overlord-body-alive');
+      expect(word(verdict({ lanes, historyAgent: 'many-agents' }))).toBe('capability-missing');
     },
     'step 4: an alive body, and one that cannot be measured, refuse overlord-body-alive; dead passes': () => {
       expect(verdict({ old: 'alive' })).toMatchObject({ act: 'refuse', word: 'overlord-body-alive' });

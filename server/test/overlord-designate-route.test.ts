@@ -7,12 +7,15 @@ import Fastify, { type FastifyInstance } from 'fastify';
 import type { DatabaseSync } from 'node:sqlite';
 import path from 'node:path';
 import { copyFileSync, mkdirSync } from 'node:fs';
+import { callsIn, symbolOf } from './scan/symbols.js';
 import { openCoordDb } from '../src/coord/db.js';
 import { CoordStore } from '../src/coord/store.js';
 import {
-  drainOwedStops, registerOverlordRoutes,
+  drainOwedStops, NO_OVERLORD_STORE, registerOverlordRoutes,
   type BodyAnswer, type CreateAnswer, type KeepAwakeAnswer, type OverlordBody, type OverlordRouteDeps, type StopAnswer,
 } from '../src/coord/overlordRoutes.js';
+import { DESIGNATE_LANES } from '../src/coord/overlordDesignation.js';
+import type { HistoryLink } from '../src/coord/overlordHistory.js';
 import type { AuthorityAppender } from '../src/coord/overlordDesignationStore.js';
 import type { AuthorityAppend, AuthorityAppendError } from '../src/coord/overlordAuthorityJournal.js';
 import type { AuthorityState } from '../src/coord/overlordAuthorityCoherence.js';
@@ -135,13 +138,15 @@ interface Rig {
   time: ReturnType<typeof fakeTime>;
 }
 
-async function rig(opts: { serial?: 'real' | 'off' } = {}): Promise<Rig> {
+async function rig(opts: { serial?: 'real' | 'off'; lanes?: 'live' | 'unset'; links?: readonly HistoryLink[] } = {}): Promise<Rig> {
   const dir = path.join(mkTmp('ccrc-overlord-route-'), '.ccrc');
   mkdirSync(dir, { recursive: true });
   copyFileSync(template, path.join(dir, 'coord.db'));
   const db = openCoordDb(path.join(dir, 'coord.db'));
   opened.push(db);
   const coord = new CoordStore(db);
+  // The lanes a start needs are live unless a case says otherwise (overlord-v1's guard, call 1887).
+  if (opts.lanes !== 'unset') for (const lane of DESIGNATE_LANES) coord.setLaneArm(lane, 'live', 1);
   const gate = fakeGate(); const body = new FakeBody(); const journal = fakeJournal(); const host = new FakeHost();
   const time = fakeTime();
   const facts = { ccdWords: [...DESIGNATE_CCD_WORDS] as string[] | null, builds: 'agreed' as 'agreed' | 'skewed' | 'unknown', authority: { kind: 'coherent' } as AuthorityState };
@@ -155,6 +160,8 @@ async function rig(opts: { serial?: 'real' | 'off' } = {}): Promise<Rig> {
     gate, identity: attributionIdentity({ attribute: async () => ({ ok: true }), incarnation: async () => ({ kind: 'unmeasured', reason: 'absent' }) }),
     serial, coord, journal, body, host: host as unknown as OverlordRouteDeps['host'],
     clock: time.ports.clock, entropy: time.ports.entropy, dec: () => null,
+    // The agent links only, as the history door reads them (E18); absent, as on main, the rig has no fleet link at all.
+    ...(opts.links === undefined ? {} : { chat: { links: () => opts.links! } as unknown as OverlordRouteDeps['chat'] }),
     facts: {
       ccdWords: () => facts.ccdWords, serverWords: ['continuity-v1'], builds: () => facts.builds, roster: () => ROSTER,
       limits: async () => HEALTHY, shares: async () => ({ kind: 'absent' }), authority: () => facts.authority,
@@ -837,5 +844,92 @@ describe('GET /api/overlord/designation', () => {
     const res = await get(r);
     expect(res.statusCode).toBe(503);
     expect(res.json()).toMatchObject({ error: 'unavailable', detail: 'coord.db is locked' });
+  });
+});
+
+// ── overlord-v1's guard (call 1887): a Start refuses while a lane the body needs is not live, and the history op is asked ──
+
+describe('the lane guard on Start (overlord-v1, call 1887)', () => {
+  it('a lane in shadow or never written refuses 409 overlord-lanes-unarmed, naming only those lanes, and writes nothing', async () => {
+    const r = await rig({ lanes: 'unset' });
+    r.coord.setLaneArm('continuity', 'live', 1);
+    r.coord.setLaneArm('anchor-slot', 'shadow', 1);
+    const res = await post(r);
+    expect(res.statusCode).toBe(REFUSAL_STATUS['overlord-lanes-unarmed']);
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toEqual({ ok: false, error: 'overlord-lanes-unarmed', detail: 'not live: launch-profile (shadow), anchor-slot (shadow)',
+      lanes: [{ lane: 'launch-profile', reads: 'shadow' }, { lane: 'anchor-slot', reads: 'shadow' }] });
+    expectNothingWritten(r);
+  });
+
+  it('an unreadable row, or a read that throws, reads unread; the store\'s words go to one server log line each, never the answer', async () => {
+    const r = await rig();
+    const real = r.coord.laneArmSetting.bind(r.coord);
+    r.coord.laneArmSetting = (lane) => (lane === 'anchor-slot' ? { kind: 'unreadable', detail: 'SQLITE_BUSY: database\nis locked' }
+      : lane === 'launch-profile' ? (() => { throw new Error('disk I/O error'); })() : real(lane));
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    try {
+      const res = await post(r);
+      expect(res.json()).toEqual({ ok: false, error: 'overlord-lanes-unarmed', detail: 'not live: launch-profile (unread), anchor-slot (unread)',
+        lanes: [{ lane: 'launch-profile', reads: 'unread' }, { lane: 'anchor-slot', reads: 'unread' }] });
+      expect(res.body).not.toContain('SQLITE');
+      expect(res.body).not.toContain('disk');
+      expect(warn.mock.calls.map((c) => String(c[0]))).toEqual([
+        'ccrc-server: Start the Overlord refused: the lane-arm row of launch-profile could not be read: disk I/O error',
+        'ccrc-server: Start the Overlord refused: the lane-arm row of anchor-slot could not be read: SQLITE_BUSY: database is locked',
+      ]);
+    } finally { warn.mockRestore(); }
+    expectNothingWritten(r);
+  });
+
+  it('a standing designation answers overlord-exists as before, whatever the lanes read', async () => {
+    const r = await rig();
+    expect((await post(r)).statusCode).toBe(200);
+    for (const lane of DESIGNATE_LANES) r.coord.setLaneArm(lane, 'shadow', 2);
+    const res = await post(r);
+    expect([res.statusCode, res.json().error]).toEqual([REFUSAL_STATUS['overlord-exists'], 'overlord-exists']);
+  });
+
+  it('E18: links that serve the history op none or several times refuse capability-missing naming it; one serves; no link is not asked', async () => {
+    const serving = { connected: true, agentOps: ['overlord-history'] };
+    const cases: [readonly HistoryLink[] | undefined, number, string | null][] = [
+      [[{ connected: true, agentOps: [] }], 501, 'missing: overlord-history; no connected agent advertises overlord-history'],
+      [[{ ...serving, connected: false }], 501, 'missing: overlord-history; no connected agent advertises overlord-history'],
+      [[serving, serving], 501, 'missing: overlord-history; more than one connected agent advertises overlord-history'],
+      [[serving], 200, null],
+      [[], 200, null],
+      [undefined, 200, null],
+    ];
+    for (const [links, status, detail] of cases) {
+      const r = await rig(links === undefined ? {} : { links });
+      const res = await post(r);
+      expect(res.statusCode, JSON.stringify(links)).toBe(status);
+      if (detail !== null) expect(res.json(), JSON.stringify(links)).toEqual({ ok: false, error: 'capability-missing', detail, needs: ['overlord-history'] });
+    }
+  });
+
+  it('Retire and the designation read never read the lanes; the absent store\'s reader answers unreadable', async () => {
+    const r = await rig();
+    expect((await post(r)).statusCode).toBe(200);
+    let asked = 0;
+    const real = r.coord.laneArmSetting.bind(r.coord);
+    r.coord.laneArmSetting = (lane) => { asked += 1; return real(lane); };
+    await get(r);
+    await del(r);
+    expect(asked).toBe(0);
+    expect(NO_OVERLORD_STORE.coord.laneArmSetting('continuity')).toMatchObject({ kind: 'unreadable' });
+  });
+
+  it('CENSUS: the lanes are read by the start facts alone, and only Start and Rebind ask for them', () => {
+    const ROUTES = path.resolve(import.meta.dirname, '../src/coord/overlordRoutes.ts');
+    const named = (n: string) => (c: { name: string | null }): boolean => c.name !== null && (c.name === n || c.name.endsWith(`.${n}`));
+    const all = callsIn(symbolOf(ROUTES, 'registerOverlordRoutes'));
+    expect(all.filter(named('laneArmSetting')).map((c) => c.line))
+      .toEqual(callsIn(symbolOf(ROUTES, 'registerOverlordRoutes.startFactsOf')).filter(named('laneArmSetting')).map((c) => c.line));
+    expect(all.filter(named('laneArmSetting'))).toHaveLength(1);
+    const askers = ['registerOverlordRoutes.designate', 'registerOverlordRoutes.rebind']
+      .map((s) => callsIn(symbolOf(ROUTES, s)).filter(named('startFactsOf')).length);
+    expect(askers).toEqual([1, 1]);
+    expect(all.filter(named('startFactsOf'))).toHaveLength(2);
   });
 });
