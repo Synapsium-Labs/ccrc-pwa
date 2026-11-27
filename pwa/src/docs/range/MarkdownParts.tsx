@@ -1,24 +1,32 @@
 // Markdown in parts (X2 P1 Task P1.5; spec 4.3, "Markdown in parts", amended by the coordinator's render-gate carry of
-// 2026-11-19): a Markdown text above the render gate is cut into parts of at most the gate (`splitMarkdownParts`), and
-// the page shows one part at a time under a bar, "Part k of n", with Previous and Next. Each part mounts rich in the
-// reader frame through `renderPart`, the leaf's own Markdown body, so no reader host file changes.
+// 2026-11-19): a Markdown text above the render gate is cut into parts of at most the gate, and the page shows one part at
+// a time under a bar, "Part k of n", with Previous and Next. Each part mounts rich in the reader frame through `renderPart`,
+// the leaf's own Markdown body, so no reader host file changes.
 //
-// The pre-pass: when the page opens with a fragment, the parts are rendered through the render job (`pre`, the reader's
-// own), in order, each under its parse budget, until one's heading ids hold the fragment (as written or decoded once):
-// that part opens, at it. A part the budget refuses keeps its ids unknown, and a fragment no known part holds opens part
-// 1, with a note when some part's ids are unknown. With no fragment there is no pre-pass, and part 1 shows at once. Ids
-// are de-duplicated within each part (spec 4.3), so a heading repeated in another part has that part's own id there.
-// Unmounting aborts the pre-pass.
+// The cut (X2 P6.1 Step 0b2): with the render job (`pre`, the reader's own) the text is read for the shared library's own block
+// boundaries, window by window, and cut at them as it is read (`cutMarkdownText`, `mdParts.ts`, which holds every decision: what a
+// window's answer is, what a refusal or a throw does, what the line cutter takes). A part is mounted as soon as it is final, while
+// the rest is read: the bar then reads "Part k" with Next for a final part only, and "Part k of n" once the cut is whole. Until
+// the first part is final the page says "Preparing the parts of this document (k of n)", k and n in render gates (the blocks read's
+// coverage, and then the pre-pass's, so one unit throughout). A pending fragment waits for the whole cut. With no render job
+// (`pre === null`) the line cutter cuts at once. A new text, or unmounting, aborts the read.
+//
+// The pre-pass: when the page opens with a fragment, the parts are rendered through the render job, in order, each under its
+// parse budget, until one's heading ids hold the fragment (as written or decoded once): that part opens, at it. A part the
+// budget refuses keeps its ids unknown, and a fragment no known part holds opens part 1, with a note when some part's ids are
+// unknown. With no fragment there is no pre-pass, and part 1 shows at once. Ids are de-duplicated within each part (spec 4.3),
+// so a heading repeated in another part has that part's own id there. Unmounting aborts the pre-pass.
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { Button } from '@ccrc/ui';
 import { utf8Bytes } from '../../../../shared/utf8';
 import { DOCS_PARSE_BUDGET_MS, DOCS_RENDER_GATE_BYTES } from '../../lib/markdownLimits';
 import type { ReaderRenderOutcome } from '../../lib/readerRenderJob';
 import { DOCS_RANGE_TEXT, fillSentence } from '../docsText';
-import { partForFragment, partHolds, partText, splitMarkdownParts } from './mdParts';
+import { cutMarkdownText, partForFragment, partHolds, partText, splitMarkdownParts, type MdPart } from './mdParts';
+import { PARTS_WORDS } from './partsWords';
 
-/** The render job the pre-pass asks, the reader's (`ReaderDeps['render']`). */
-export type PartsPrePass = (src: string, o: { budgetMs: number; signal?: AbortSignal }) => Promise<ReaderRenderOutcome>;
+/** The render job the pre-pass and the blocks read ask, the reader's (`ReaderDeps['render']`). */
+export type PartsPrePass = (src: string, o: { budgetMs: number; signal?: AbortSignal; blocks?: true }) => Promise<ReaderRenderOutcome>;
 
 /** One part as the leaf mounts it: its text, its index, and the fragment it should open at (null: none). */
 export interface PartToMount { readonly text: string; readonly index: number; readonly fragment: string | null }
@@ -26,10 +34,11 @@ export interface PartToMount { readonly text: string; readonly index: number; re
 type Ids = readonly (ReadonlySet<string> | null)[];
 
 /** The part bar, one for every document read in parts (Markdown here, source in `SourceParts`): "Part k of n" with
- *  Previous and Next. `index` is 0-based; `onGo` is told the part to show. Nothing for a single part. */
-export function PartBar(p: { readonly index: number; readonly count: number; readonly onGo: (to: number) => void }): ReactNode {
-  if (p.count < 2) return null;
-  const at = fillSentence(DOCS_RANGE_TEXT.partBar, { k: p.index + 1, n: p.count });
+ *  Previous and Next. `index` is 0-based; `onGo` is told the part to show. Nothing for a single part. `more`: the rest of the
+ *  text is still being cut, so `count` is the parts final so far: the bar reads "Part k" and Next is for a final part only. */
+export function PartBar(p: { readonly index: number; readonly count: number; readonly onGo: (to: number) => void; readonly more?: boolean }): ReactNode {
+  if (p.count < 2 && p.more !== true) return null;
+  const at = p.more === true ? fillSentence(PARTS_WORDS.partOpen, { k: p.index + 1 }) : fillSentence(DOCS_RANGE_TEXT.partBar, { k: p.index + 1, n: p.count });
   return (
     <nav className="docs-parts" aria-label={at}>
       <Button variant="ghost" className="docs-part-prev" disabled={p.index === 0}
@@ -48,20 +57,56 @@ export function MarkdownParts(p: {
   readonly pre: PartsPrePass | null;
   readonly fragment: string | null;
 }): ReactNode {
-  const parts = useMemo(() => splitMarkdownParts(p.text, DOCS_RENDER_GATE_BYTES).parts, [p.text]);
+  const { pre } = p;
+  const fragment = p.fragment;
+  // With no render job the line cutter cuts at once; with one, `cutMarkdownText` (`mdParts.ts`) reads the blocks window by window
+  // and hands over each part as it becomes final (`cut`, for one text and one render job; `complete` once the cut is whole), and
+  // `reading` says how far the read got.
+  const lineParts = useMemo(() => (pre === null ? splitMarkdownParts(p.text, DOCS_RENDER_GATE_BYTES).parts : null), [p.text, pre]);
+  const [cut, setCut] = useState<{ readonly text: string; readonly pre: PartsPrePass; readonly parts: readonly MdPart[]; readonly complete: boolean } | null>(null);
+  const [reading, setReading] = useState<{ readonly covered: number; readonly total: number }>(() => ({ covered: 0, total: utf8Bytes(p.text) }));
+  const now = cut !== null && cut.text === p.text && cut.pre === pre ? cut : null;
+  const parts: readonly MdPart[] | null = lineParts ?? (now !== null && now.parts.length > 0 ? now.parts : null);
+  const complete = lineParts !== null || (now !== null && now.complete);
+  // The bytes of the text each part ends at, once the cut is whole: what the preparing line counts the pre-pass in.
+  const ends = useMemo(() => {
+    if (!complete || parts === null) return [] as number[];
+    let sum = 0;
+    return parts.map((q) => (sum += utf8Bytes(p.text.slice(q.start, q.end))));
+  }, [complete, parts, p.text]);
   const [done, setDone] = useState(0);
   const [index, setIndex] = useState(0);
   const [note, setNote] = useState(false);
   // The fragment this page was opened with is placed once, at the first part whose ids hold it.
   const [placed, setPlaced] = useState<string | null>(null);
-  const { pre } = p;
-  const fragment = p.fragment;
+
+  // The blocks read: windows of the text through the render job, then the cut at the library's own block boundaries. Whatever
+  // the worker cannot read the line cutter cuts; a new text or an unmount aborts it.
+  useEffect(() => {
+    if (pre === null) return undefined;
+    const ac = new AbortController();
+    const text = p.text;
+    setReading({ covered: 0, total: utf8Bytes(text) });
+    setCut({ text, pre, parts: [], complete: false });
+    cutMarkdownText(text, pre, ac.signal, {
+      onProgress: (covered, total) => { if (!ac.signal.aborted) setReading({ covered, total }); },
+      onParts: (more) => {
+        if (ac.signal.aborted) return;
+        setCut((prev) => (prev !== null && prev.text === text && prev.pre === pre ? { ...prev, parts: [...prev.parts, ...more] } : prev));
+      },
+    }).then(
+      (all) => { if (!ac.signal.aborted) setCut({ text, pre, parts: all, complete: true }); },
+      () => { /* an abort: the effect's cleanup already ran */ },
+    );
+    return () => ac.abort();
+  }, [p.text, pre]);
+
   // The pre-pass runs only while a fragment waits to be placed, and stops at the first part that holds it (the first
   // match wins, as the whole document would name it); with no fragment it costs nothing.
   const pending = fragment !== null && fragment !== placed ? fragment : null;
 
   useEffect(() => {
-    if (pending === null) return undefined;
+    if (pending === null || parts === null || !complete) return undefined;
     if (pre === null || parts.length < 2) {
       setIndex(0);
       setNote(false);
@@ -97,18 +142,23 @@ export function MarkdownParts(p: {
       setPlaced(pending);
     })();
     return () => ac.abort();
-  }, [pending, pre, parts, p.text]);
+  }, [pending, pre, parts, complete, p.text]);
 
-  // Until the fragment is placed, no part mounts: a part mounted and then replaced would cost a frame for nothing.
-  const waiting = pending !== null && pre !== null && parts.length > 1;
-
-  if (waiting) {
-    return <p className="docs-loading">{fillSentence(DOCS_RANGE_TEXT.partPreparing, { k: done, n: parts.length })}</p>;
-  }
-  const part = parts[index]!;
+  // The preparing line counts one unit throughout, render gates of the text: how many the blocks read has covered, then how many
+  // the parts the pre-pass has rendered end at, of how many the text holds.
+  const gates = Math.max(1, Math.ceil(reading.total / DOCS_RENDER_GATE_BYTES));
+  const preparing = (coveredBytes: number): ReactNode => (
+    <p className="docs-loading">{fillSentence(DOCS_RANGE_TEXT.partPreparing, { k: Math.min(gates, Math.floor(coveredBytes / DOCS_RENDER_GATE_BYTES)), n: gates })}</p>
+  );
+  // No part yet: the first is not final until the blocks read has passed it.
+  if (parts === null) return preparing(reading.covered);
+  // Until the fragment is placed, no part mounts (a part mounted and then replaced would cost a frame for nothing), and a
+  // fragment waits for the whole cut, as the first part holding its heading is the first of the whole.
+  if (pending !== null && pre !== null && (!complete || parts.length > 1)) return preparing(complete ? (done > 0 ? ends[done - 1] ?? 0 : 0) : reading.covered);
+  const part = parts[Math.min(index, parts.length - 1)]!;
   return (
-    <div className="docs-in-parts" data-part={index + 1} data-parts={parts.length}>
-      <PartBar index={index} count={parts.length} onGo={(to) => { setIndex(to); setNote(false); }} />
+    <div className="docs-in-parts" data-part={index + 1} data-parts={complete ? parts.length : undefined}>
+      <PartBar index={index} count={parts.length} more={!complete} onGo={(to) => { setIndex(to); setNote(false); }} />
       {note && <p className="docs-note" role="status">{DOCS_RANGE_TEXT.fragmentUnknown}</p>}
       {part.continued && index > 0 && <p className="docs-note">{DOCS_RANGE_TEXT.partContinued}</p>}
       {p.renderPart({ text: partText(p.text, part), index, fragment: placed !== null && placed === fragment ? fragment : null })}

@@ -103,7 +103,7 @@ const READER_HOLD_FRAMES = 2;
 
 /** What the leaf needs of the reader: the render job, the mount, and the page's images. A test injects all three. */
 export interface ReaderDeps {
-  render(src: string, o: { budgetMs: number; signal?: AbortSignal }): Promise<ReaderRenderOutcome>;
+  render(src: string, o: { budgetMs: number; signal?: AbortSignal; blocks?: true }): Promise<ReaderRenderOutcome>;
   mount(el: HTMLElement, input: ReaderMountInput): Promise<ReaderMount>;
   images: typeof loadReaderImages;
   /** The doc's commit list (B2's history loader). Absent, no commit list is read. */
@@ -181,6 +181,10 @@ function outcomeReason(o: Exclude<ReaderRenderOutcome, { kind: 'rendered' | 'tim
       return `${o.kind}: ${o.error}`;
     case 'worker-unavailable':
       return o.kind;
+    case 'blocks':
+      // Only a job that asked for blocks is answered so, and the frame never asks: a render that came back as blocks is a
+      // wrong answer, not a page.
+      return 'blocks: not a page';
   }
 }
 

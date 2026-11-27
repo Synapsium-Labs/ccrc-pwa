@@ -1,6 +1,7 @@
 // The parse worker's first-party import closure stays pure (native Docs reader, W4 Task 3; design 2026-10-01 section
 // 4.10 and the W4 plan's ring rule): starting from the worker-side roots, every first-party file the closure reaches
-// imports only other closure files, `unified`, `remark-parse`, `remark-gfm`, `remark-rehype` and the types-only `hast`
+// imports only other closure files, `unified`, `remark-parse`, `remark-gfm`, `remark-rehype`, the shared Markdown library's
+// renderer entry, the HTML parser `hast-util-from-html` (from `renderTree.ts` alone, X2 P6.1) and the types-only `hast`
 // and `mdast`. So no first-party import brings React, react-dom, highlight.js, `../session/*`, `./api` or a stylesheet
 // to the worker. The walk stops at those package names: what the allowed packages import in turn, and which entry
 // of theirs the bundler picks by export condition, are not read here. That is how the DOM reached the built worker
@@ -19,7 +20,8 @@
 // asset URL built with `new URL(..., import.meta.url)` and a file the closure does not resolve are not seen here, and
 // the worker, which has no DOM, is where such a use would fail.
 //
-// The five direct dependencies the closure rests on are pinned exactly, in `package.json` and in the lock's root.
+// The six direct dependencies the closure rests on are pinned exactly, in `package.json` and in the lock's root; the sixth
+// is the HTML parser, `hast-util-from-html` (X2 P6.1), which only `renderTree.ts` may import.
 import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { ts } from '../../server/test/scan/parse';
@@ -32,6 +34,8 @@ const ROOTS: readonly string[] = [
   'readerRenderJob.ts', 'readerLimits.ts',
   // Chat's marks (chat reading Task M, D-8060): the chat profile's plugin and the recogniser table it reads.
   'chatMarks.ts', 'remarkChatMarks.ts',
+  // Print and the block-boundary cutter (X2 P6.1): the render job's HTML parse, which alone imports the parser.
+  'renderTree.ts',
 ];
 /**
  * The shared kernel files the closure reaches, relative to the package: the one UTF-8 byte counter, which
@@ -40,7 +44,10 @@ const ROOTS: readonly string[] = [
 const SHARED_FILES: readonly string[] = ['../shared/utf8.ts'];
 const ALLOWED_PACKAGES: ReadonlySet<string> = new Set([
   'unified', 'remark-parse', 'remark-gfm', 'remark-rehype', 'hast', 'mdast', '@synapsium-labs/pinax-lib/render',
+  'hast-util-from-html',
 ]);
+/** The one closure file that may import the HTML parser (X2 P6.1): the render job's own parse of the library's output. */
+const PARSER_HOME = 'src/lib/renderTree.ts';
 
 /** The file a relative specifier names, or `undefined` when no `.ts`/`.tsx` file answers it. */
 function resolveRelative(from: string, spec: string): string | undefined {
@@ -143,9 +150,15 @@ describe('the parse worker closure', () => {
   it('imports nothing outside the closure but unified, the three remark plugins and the hast/mdast types', () => {
     expect(refused).toEqual([]);
   });
+
+  it('the HTML parser is imported by renderTree.ts alone (X2 P6.1)', () => {
+    const importers = files.filter((f) => scanModule(readFileSync(path.join(PWA, f), 'utf8'), f).specs.includes('hast-util-from-html'));
+    expect(importers).toEqual([PARSER_HOME]);
+  });
 });
 
 const PINS: Readonly<Record<string, string>> = {
+  'hast-util-from-html': '2.1.0',
   'hast-util-to-jsx-runtime': '2.3.7',
   'html-url-attributes': '3.0.1',
   'remark-parse': '11.0.0',
@@ -153,7 +166,7 @@ const PINS: Readonly<Record<string, string>> = {
   unified: '11.0.5',
 };
 
-describe('the five direct dependencies are pinned exactly', () => {
+describe('the six direct dependencies are pinned exactly', () => {
   const pkg = JSON.parse(readFileSync(path.join(PWA, 'package.json'), 'utf8')) as {
     dependencies: Record<string, string>;
   };

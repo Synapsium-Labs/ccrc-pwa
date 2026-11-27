@@ -616,6 +616,20 @@ describe('W8a Task 4: a render job on the same runner', () => {
     expect(Object.keys(workers[0]!.posts[0]!).sort()).toEqual(['id', 'kind', 'src']);
   });
 
+  it('a render job with blocks: true posts exactly {id, kind: render, src, blocks: true}, and one without has no blocks key (X2 P6.1 Step 0b2)', () => {
+    const { runner, workers } = harness();
+    void runner.render('# T', { ...RENDER, blocks: true });
+    void runner.render('# U', RENDER);
+    void runner.render('# V', { ...RENDER, blocks: undefined });
+    expect(workers[0]!.posts[0]).toEqual({ id: expect.any(Number), kind: 'render', src: '# T', blocks: true });
+    expect(Object.keys(workers[0]!.posts[0]!).sort()).toEqual(['blocks', 'id', 'kind', 'src']);
+    // The queue is FIFO, one job at a time: answer each so the next is posted.
+    workers[0]!.send({ id: workers[0]!.posts[0]!.id, outcome: NOT_RENDERED });
+    expect(Object.keys(workers[0]!.posts[1]!).sort()).toEqual(['id', 'kind', 'src']);
+    workers[0]!.send({ id: workers[0]!.posts[1]!.id, outcome: NOT_RENDERED });
+    expect(Object.keys(workers[0]!.posts[2]!).sort()).toEqual(['id', 'kind', 'src']);
+  });
+
   it('a parse job still posts exactly {id, src, profile}', () => {
     const { runner, workers } = harness();
     void runner.parse('x', DOCS);

@@ -1,7 +1,8 @@
 // The reader frame's caps, declared once (native Docs reader, W8a Task 4; the rich-docs spec's (amended 2026-10-31) A6 and
 // section 4.3's "Rendered HTML" row, the W8a plan's refinement (m)). Ring L1: this file imports nothing, so the render job in the
 // parse worker's lazy chunk and the main thread's reader files can both read it.
-// The caps: `READER_HTML_MAX_BYTES`, `READER_IMAGE_BUDGET_BYTES`, `READER_STORE_PREFIX`, `READER_COPY_WRITE_MAX_BYTES`
+// The caps: `READER_HTML_MAX_BYTES`, `READER_BLOCKS_MAX_BYTES` and `READER_BLOCKS_HTML_MAX_BYTES` (the blocks read of the Markdown
+// parts' cutter, X2 P6.1 Step 0b2), `READER_IMAGE_BUDGET_BYTES`, `READER_STORE_PREFIX`, `READER_COPY_WRITE_MAX_BYTES`
 // (M8.19: the most text the reader writes to the clipboard without asking), `READER_DOC_KEY_MAX_UNITS` (A15/G7:
 // the longest per-doc key) and `READER_COPY_SHEET_MARKERS_MAX` (the most hidden characters the copy sheet names).
 // `READER_IMAGE_BUDGET_BYTES` equals the shared Markdown library's own image budget and section 4.3's 5 MiB; Task 10
@@ -10,6 +11,18 @@
 /** The most UTF-8 bytes of rendered html the reader accepts for one page (4 MiB). The render job passes it as the
  *  library's `maxHtmlBytes`; a page past it is `not-rendered` `output-over-limit`. */
 export const READER_HTML_MAX_BYTES = 4194304;
+
+/** The largest source, in UTF-8 bytes, the render job reads the BLOCKS of (2 MiB, four render gates; X2 P6.1 Step 0b2). The
+ *  Markdown parts' cutter asks for a window of a gate and doubles it while one block runs past it, up to this: a block longer than
+ *  this is not cut at the library's boundaries but by the line cutter, so the job's work for one ask stays bounded. */
+export const READER_BLOCKS_MAX_BYTES = 2097152;
+
+/** The most UTF-8 bytes of rendered html a blocks read accepts (10 MiB): it covers a window of `READER_BLOCKS_MAX_BYTES` of the
+ *  shapes that draw the most html for their size, measured: a table 4.4 times its size, a list 3.4, dense mixed Markdown under 3
+ *  (a window of one-character paragraphs draws about ten times, and is refused, which the runner's budget would time out parsing
+ *  anyway). A render's own cap (`READER_HTML_MAX_BYTES`, 4 MiB) is for one gate; the blocks read takes windows up to four. The html
+ *  is parsed and dropped in the worker, and only the blocks go back. */
+export const READER_BLOCKS_HTML_MAX_BYTES = 10485760;
 
 /** The most bytes of image data the reader holds for one page (5 MiB). */
 export const READER_IMAGE_BUDGET_BYTES = 5242880;

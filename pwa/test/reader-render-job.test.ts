@@ -2,9 +2,18 @@
 // cases call `answerRenderJob` directly and collect its posts, as `markdown-parse.test.ts` does for
 // `answerMarkdownJob`; the lazy chunk and the runner's side are `markdown-purity`, `markdown-runner` and
 // `markdown-worker-built`. The library's own outcome words are asserted here as the job reports them.
-import { describe, expect, it } from 'vitest';
+import { render } from '@synapsium-labs/pinax-lib/render';
+import { describe, expect, it, vi } from 'vitest';
 import { DOCS_RENDER_GATE_BYTES, MD_MAX_DELIMITER_RUN } from '../src/lib/markdownLimits';
+import { READER_BLOCKS_HTML_MAX_BYTES, READER_BLOCKS_MAX_BYTES, READER_HTML_MAX_BYTES } from '../src/lib/readerLimits';
 import { answerRenderJob, type ReaderRenderReply } from '../src/lib/readerRenderJob';
+
+/** The options each `render()` call of the library received, in order (the library itself still renders). */
+const renderCalls: unknown[] = [];
+vi.mock('@synapsium-labs/pinax-lib/render', async (importOriginal) => {
+  const lib = await importOriginal<typeof import('@synapsium-labs/pinax-lib/render')>();
+  return { ...lib, render: ((src: string, o: unknown) => { renderCalls.push(o); return lib.render(src, o as never); }) as typeof lib.render };
+});
 
 /** What `answerRenderJob` posts for `data`. */
 function posts(data: unknown): ReaderRenderReply[] {
@@ -76,6 +85,75 @@ describe('answerRenderJob', () => {
   it('a message with no numeric id gets no answer', () => {
     expect(posts({ kind: 'render', src: 'x' })).toEqual([]);
     expect(posts({ id: 'a', kind: 'render', src: 'x' })).toEqual([]);
+  });
+
+  it('render job: blocks answers the library\'s top-level blocks, highlight off, under its own caps', () => {
+    const src = '# T\n\nlead\n\n- a\n- b\n  ```ts\n  x\n  ```\n\n```js\ny\n```\n';
+    renderCalls.length = 0;
+    const out = posts({ id: 20, kind: 'render', src, blocks: true });
+    expect(out).toEqual([{ id: 20, outcome: { kind: 'blocks', blocks: [
+      { from: 0, to: 1, kind: 'heading' },
+      { from: 2, to: 3, kind: 'other' },
+      { from: 4, to: 10, kind: 'list', items: [
+        { from: 4, to: 5, kind: 'other' },
+        { from: 5, to: 10, kind: 'other', items: [{ from: 6, to: 9, kind: 'fence' }] },
+      ] },
+      { from: 10, to: 13, kind: 'fence' },
+    ] } }]);
+    // The library is asked once, with its own caps and no highlighting (a block read needs no colour).
+    expect(renderCalls).toEqual([{ maxBytes: READER_BLOCKS_MAX_BYTES, maxHtmlBytes: READER_BLOCKS_HTML_MAX_BYTES, highlight: false }]);
+    expect(READER_BLOCKS_MAX_BYTES).toBe(2097152);
+    expect(READER_BLOCKS_HTML_MAX_BYTES).toBe(10485760);
+    // A window of READER_BLOCKS_MAX_BYTES of tables draws the most html of the shapes measured (4.4 times its size, a list 3.4):
+    // the cap covers it, so a window the cutter grew to is never refused for its html.
+    const rows = (i: number): string => `| ${i} | x |\n`;
+    const table = '| a | b |\n|---|---|\n' + Array.from({ length: 6000 }, (_, i) => rows(i)).join('');
+    const probe = render(table, { highlight: false });
+    if (probe.outcome !== 'rendered') throw new Error('fixture');
+    const ratio = bytes(probe.html) / bytes(table);
+    expect(ratio, 'a table draws more than four times its size, so 8 MiB was too small for 2 MiB of one').toBeGreaterThan(4);
+    expect(ratio * READER_BLOCKS_MAX_BYTES, 'and the cap covers a window of them').toBeLessThanOrEqual(READER_BLOCKS_HTML_MAX_BYTES);
+    // The pre-scan runs first, and refuses as it does for a render.
+    const bad = `a ${String.fromCharCode(42).repeat(MD_MAX_DELIMITER_RUN + 1)} b`;
+    expect(posts({ id: 21, kind: 'render', src: bad, blocks: true })[0]!.outcome).toMatchObject({ kind: 'refused', why: 'delimiter-run' });
+    // Its own cap: a source of up to READER_BLOCKS_MAX_BYTES is read where a render stops at the gate, and one byte past it is over.
+    const big = 'lorem ipsum dolor sit amet, consectetur adipiscing elit\n\n'.repeat(Math.ceil((DOCS_RENDER_GATE_BYTES + 1) / 56));
+    expect(bytes(big)).toBeGreaterThan(DOCS_RENDER_GATE_BYTES);
+    expect(posts({ id: 22, kind: 'render', src: big })[0]!.outcome).toEqual({ kind: 'not-rendered', why: 'over-limit' });
+    const read = posts({ id: 23, kind: 'render', src: big, blocks: true })[0]!.outcome;
+    expect(read.kind).toBe('blocks');
+    expect(posts({ id: 24, kind: 'render', src: 'a'.repeat(READER_BLOCKS_MAX_BYTES + 1), blocks: true }))
+      .toEqual([{ id: 24, outcome: { kind: 'not-rendered', why: 'over-limit' } }]);
+    // Its own html cap (8 MiB; asserted above in the options): html past it is output-over-limit, and the html is never parsed.
+    // (One-character paragraphs are the shape; measured on the dev box, the parser took 8 to 22 s on the html of 130 000 of them,
+    // 4.4 MB, which the runner's budget answers `timeout`, so this case stops at the cap instead of reading a window under it.)
+    const denser = 'a\n\n'.repeat(Math.floor(READER_BLOCKS_MAX_BYTES / 3));
+    expect(posts({ id: 27, kind: 'render', src: denser, blocks: true }))
+      .toEqual([{ id: 27, outcome: { kind: 'not-rendered', why: 'output-over-limit' } }]);
+  });
+
+  it('render job: a job without blocks is answered as before', () => {
+    const src = '# T\n\ntext ![a](a.png)\n\n```mermaid\nflowchart LR\n  A-->B\n```\n';
+    const exact = {
+      kind: 'rendered',
+      result: {
+        outcome: 'rendered',
+        html: '<h1 id="t" data-line="1-1">T</h1>\n<p data-line="3-3">text <img src="a.png" alt="a" /></p>\n'
+          + '<figure class="mermaid-figure" data-line="5-8"><pre class="mermaid">flowchart LR\n  A--&gt;B\n</pre></figure>\n',
+        meta: { title: 'T', frontList: null, headings: [{ level: 1, id: 't', text: 'T' }], figures: 1, mermaidKinds: ['flowchart'], readingMinutes: 0.508695652173913 },
+      },
+      mermaid: { fences: 1, largestBytes: 21, totalBytes: 21, largestChars: 21, totalChars: 21 },
+      images: ['a.png'],
+      imagesTruncated: false,
+    };
+    renderCalls.length = 0;
+    expect(posts({ id: 30, kind: 'render', src })).toEqual([{ id: 30, outcome: exact }]);
+    // The render's options are exactly the gate and the html cap of old: no highlight key, no blocks.
+    expect(renderCalls).toEqual([{ maxBytes: DOCS_RENDER_GATE_BYTES, maxHtmlBytes: READER_HTML_MAX_BYTES }]);
+    // Only `true` asks for blocks.
+    for (const blocks of [false, 1, 'true', undefined, null]) {
+      expect(posts({ id: 31, kind: 'render', src, blocks })).toEqual([{ id: 31, outcome: exact }]);
+    }
   });
 
   it('a post that throws is answered once more with threw', () => {
