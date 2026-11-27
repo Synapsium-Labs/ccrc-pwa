@@ -21,7 +21,21 @@ Reader mode in the console's Docs reader, on the library's 1.2.0 release: a Read
 | `8d1ff446a1` | XR1.5: entry from the head, the one bar and `r`; `book-open` vendored |
 | `4de222cfe3` | absorb of `main` (wave PH squashed) |
 | `3944cffb09` | XR2.2: the turn setting and time left |
-| (next) | XR2.3: the reading proved end to end, and the wave's browser leg; one product fix, a mount made while reader mode is on held hidden until its turn is applied (the first-paint row) |
+| `4870f4f045` | XR2.3: the reading proved end to end, and the wave's browser leg; one product fix, a mount made while reader mode is on held hidden until its turn is applied (the first-paint row) |
+| `965366e64e` | the gate before the push: the Reader mode control and the focus guard each written once (two census reds), the review lab's fixture regenerated |
+| `924e77b62e` | fix round 1: the link sheet's row asserts the full address (code scanning) |
+| `2724fb178a` | fix round 1, item 1: the mouse link-tap row split (a plain row for the jump, a narrow known-failure row) |
+| `3fee0264b2` | fix round 1, item 7: the compact control's tooltip pinned |
+| `899c0d6c9e` | fix round 1, item 2: an Exit with no frame standing |
+| `f9779b2c25` | fix round 1, item 3: not offered while a figure is open |
+| `e9e0806c57` | fix round 1, item 5: a refused wake lock remembered |
+| `548357e5b8` | fix round 1, item 4: an exit steps over an entry the record does not hold |
+| `21fa9f982f` | fix round 1, review I1: an exit's step-back that falls short steps once more (decidePop) |
+| `0b1f4e5f7e` | fix round 1, review M1: a replaced frame has no figure open |
+| `c978869ff7` | fix round 1, review M2: the focus guards' target decided in L1, the Exit-only form wraps |
+| `190e509148` | fix round 1, review M3: only the current wake-lock request's refusal is remembered; the nits |
+| `b11a798006` | fix round 1, review M4: the mouse jump measured in the frame in one step |
+| (next) | fix round 1: the records (the design's frame row, the plan's Results, this note) |
 
 ## Deviation numbers
 
@@ -38,7 +52,7 @@ The run was issued 9142, 9143 and 9144. None was defined: every departure below 
 
 ## Not right yet
 
-With a mouse, in full screen, in Pages, a link to a place inside the document jumps and then returns (170 to 200 ms later). Not ccrc's and not the library's resize-restore path, as far as the bounded diagnosis measured; it needs the library's own jump, real full screen and a fine pointer together, and is with the library's programme. The browser row is carried as a known failure and reds the day it is fixed.
+With a mouse, in full screen, a link to a place inside the document jumps and then returns (160 to 200 ms later), in automated Chromium. The second bounded diagnosis (fix round 1) found the library is not needed: the revert follows a focus move without scroll inside the frame while an ancestor is the full-screen element, and no script of the library's or the console's causes it. Whether a person's browser shows it is not measured (device row FS-11). The browser row's known-failure part holds only the stays-at-the-target assertion and reds the day it holds; a plain row proves the jump itself.
 
 ## Stated residues
 
@@ -52,7 +66,7 @@ With a mouse, in full screen, in Pages, a link to a place inside the document ju
 
 ## Not measured here
 
-Firefox, phones, full screen and the wake lock on real devices: the device rows FS-1 to FS-10 (FS-9 moved to X2's P5.1 with the layout rule; FS-10 against the overlay's Aa) belong to acceptance (AR-X6).
+Firefox, phones, full screen and the wake lock on real devices: the device rows FS-1 to FS-10 (FS-9 moved to X2's P5.1 with the layout rule; FS-10 against the overlay's Aa) belong to acceptance (AR-X6). Beside them, FS-11 (fix round 1, the coordinator's ruling): on a desktop browser with a real mouse, in full screen, in Pages, a click on a link to a place further down the same document stays there.
 
 ## Slips
 
