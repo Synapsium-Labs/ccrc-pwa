@@ -463,7 +463,8 @@ describe(TABLES_PIN, () => {
       decision_host: ['server/src/coord/decisionModelStore.ts#setDecisionHostInTx'],
       decision_lines: ['admitDecisionLine', 'recordCanary'].map((f) => `server/src/coord/decisionModelStore.ts#${f}`),
       // The Overlord's account holds (Overlord W1 renewal readings H, §3.6): two writers, each a different move of one fact, the
-      // generations pass's hold and the operator door's clear.
+      // hold and the operator door's clear. The hold has two callers behind one decider (renewal readings G): the generations
+      // pass, and the designation store's `failPending` for a first start that failed the launch profile check.
       overlord_account_holds: ['clearAccountHold', 'holdAccount'].map((f) => `server/src/continuity/accountHolds.ts#${f}`),
       // The daily backstop (Overlord W1 renewal readings A): its seed row, and its door's one writer.
       renewal_backstop_settings: ['server/src/continuity/continuityStore.ts#setBackstop', 'server/src/coord/schema.ts#(module)'],

@@ -2372,7 +2372,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   const settlePort: SandboxSettlePort | undefined = designationStore === undefined ? undefined : { serial: coordRoutes.serial, read: () => designationStore.coord.designationRead(),
       expected: () => expectedSurfaceOf('overlord', deps.overlordSandbox?.ownLists), settled: deps.overlordSandbox?.settled,
       goLive: (id, g, at) => { const r = designationStore.coord.goLive(designationStore.journal, id, g, at); return r.ok ? { ok: true, previous: r.changed ? r.previous : null } : { ok: false, detail: r.detail }; },
-      failPending: (id, at) => designationStore.coord.failPending(id, 'overlord-sandbox-unmet', at, true),
+      failPending: (id, at, hold) => designationStore.coord.failPending(id, 'overlord-sandbox-unmet', at, true, hold), laneOf: async (id) => { const r = await readSessionRecord(deps.io, deps.cfg, id); return r.kind === 'found' && !r.record.unmeasured.includes('wrapper') ? r.record.wrapper : null; },
       drain: async (id, unrecorded) => { await drainOwedStops({ body: overlordBody, coord: designationStore.coord }, [id], new Set(unrecorded ? [id] : [])); },
       workspaceOf: async (id) => { const p = measuredProjectOf(await readSessionRecord(deps.io, deps.cfg, id)); return p === null ? { kind: 'unmeasured', reason: 'the registry did not measure its project' } : { kind: 'measured', project: p }; } };
   // Designation B: the watcher's one port into the designation (the deadline sweep, the write-set before each renewal).
