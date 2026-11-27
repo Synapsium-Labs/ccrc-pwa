@@ -1216,13 +1216,21 @@ describe('reader mode: where focus goes after the frameless Exit (X6 XR fix roun
     act(() => { exit.click(); });
   };
 
-  it('no frame: the Exit\'s tap puts focus on the head\'s Reader mode action when the head draws it', async () => {
+  // X6 follow-up, review 4052 F1: this case first pinned focus ON the stand-in action. The real head draws its action only while
+  // reader mode is offered, from React's state, one commit behind the controller, so an action on the page with no frame standing
+  // is one the next commit takes away (a fall back after entering: `reader-mode-mount.test.tsx`, the real head). Focus now goes to
+  // that action only while the controller's own offer says it stays after the step, which needs a ready frame, so here it goes to
+  // the main region; the stand-in action stays drawn, as a stale one would be.
+  it('no frame: a head Reader mode action still on the page is not taken, since the controller\'s own offer is off after the exit; focus goes to the main region (review 4052 F1)', async () => {
     await onWithoutFrame(true);
     const action = screen.getByRole('button', { name: READER_MODE_TEXT.enter, hidden: true });
     tapExit();
     expect(latest.state.on, 'the Exit did not leave reader mode').toBe(false);
     expect(hiddenUp(action), 'CONTROL: the head is back on screen').toBe(false);
-    expect(document.activeElement, 'focus did not go to the head\'s Reader mode action').toBe(action);
+    expect(action.isConnected, 'CONTROL: the stand-in action is still drawn').toBe(true);
+    expect(latest.offered, 'CONTROL: reader mode is not offered with no frame').toBe(false);
+    expect(document.activeElement, 'focus went to a head action the controller does not offer').not.toBe(action);
+    expect(document.activeElement, 'focus did not go to the main region').toBe(document.getElementById('content'));
   });
 
   it('no frame: the Exit\'s tap puts focus on the main region when the head draws no Reader mode action', async () => {
