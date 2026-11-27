@@ -609,14 +609,17 @@ const READER_MODE_ICON: IconName = 'book-open';
  *  `.docs-reader-words`, not `.docs-action-words`: the row's first stage hides its neighbours' words and keeps this one, which
  *  gives way only at the row's next stage (`useRowStage`'s `readerWord`, `data-reader-word`) and under the `docs-head` container
  *  query, the widths where the row's words gave way before reader mode was drawn. Its name and its tooltip are its words. Its
- *  tap is the context's `enter('button')`; whether it is drawn at all is the context's `offered`, decided by the caller. */
-function ReaderModeAction(p: { readonly ctx: ReaderModeContextValue }): ReactNode {
+ *  tap is the context's `enter('button')`; whether it is drawn at all is the context's `offered`, decided by the caller. The
+ *  compact row draws the same control as its icon alone (`compact`), so the one control is written once. */
+function ReaderModeAction(p: { readonly ctx: ReaderModeContextValue; readonly compact?: true }): ReactNode {
   return (
     <button
       type="button" className="docs-action docs-reader-mode" aria-label={READER_MODE_TEXT.enter} title={READER_MODE_TEXT.enter}
       onClick={() => p.ctx.enter('button')}
     >
-      <RowFace icon={READER_MODE_ICON} words={READER_MODE_TEXT.enter} wordsClass="docs-reader-words" />
+      {p.compact === true
+        ? <Icon name={READER_MODE_ICON} size={20} />
+        : <RowFace icon={READER_MODE_ICON} words={READER_MODE_TEXT.enter} wordsClass="docs-reader-words" />}
     </button>
   );
 }
@@ -1366,14 +1369,7 @@ function CompactControls(p: CompactProps & {
           readAt={file.s === 'ok' ? file.receivedAt : null} onPlainView={p.onPlainView} glyph
         />
       )}
-      {readerMode !== null && readerMode.offered && (
-        <button
-          type="button" className="docs-action docs-reader-mode" aria-label={READER_MODE_TEXT.enter}
-          onClick={() => readerMode.enter('button')}
-        >
-          <Icon name={READER_MODE_ICON} size={20} />
-        </button>
-      )}
+      {readerMode !== null && readerMode.offered && <ReaderModeAction ctx={readerMode} compact />}
       <button
         ref={toggle.button} type="button" className="docs-more" aria-expanded={toggle.open} aria-controls={toggle.panelId}
         aria-label={moreName(p.dot)}

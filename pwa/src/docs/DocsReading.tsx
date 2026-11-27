@@ -16,6 +16,12 @@ import { SheetPortalContext } from '@ccrc/ui';
 import { ReaderModeOverlay, type ReaderModeOverlayHandle } from './ReaderModeOverlay';
 import { ReaderModeContext, type ReaderModeContainer } from './useReaderMode';
 
+/** One focus guard of the reading container's wrap (spec §6.5): in the tab order only while reader mode is on, and moving the focus
+ *  on as `onFocus` says. The two guards are this one element. */
+function FocusGuard(p: { tabIndex: number; onFocus: () => void }): ReactNode {
+  return <span className="docs-reading-guard" tabIndex={p.tabIndex} onFocus={p.onFocus} />;
+}
+
 export function DocsReading(p: { reading: ReaderModeContainer; children: ReactNode }): ReactNode {
   const { reading } = p;
   const ctx = useContext(ReaderModeContext);
@@ -34,7 +40,7 @@ export function DocsReading(p: { reading: ReaderModeContainer; children: ReactNo
   };
   return (
     <div className="docs-reading" ref={reading.setContainer} data-reader-mode={reading.how}>
-      <span className="docs-reading-guard" tabIndex={tabIndex} onFocus={onLeadingGuard} />
+      <FocusGuard tabIndex={tabIndex} onFocus={onLeadingGuard} />
       <SheetPortalContext value={portal}>{p.children}</SheetPortalContext>
       <div className="docs-reading-controls">
         {ctx !== null && shown !== null && (
@@ -46,7 +52,7 @@ export function DocsReading(p: { reading: ReaderModeContainer; children: ReactNo
           />
         )}
       </div>
-      <span className="docs-reading-guard" tabIndex={tabIndex} onFocus={onTrailingGuard} />
+      <FocusGuard tabIndex={tabIndex} onFocus={onTrailingGuard} />
       <p className="docs-reading-live sr-only" aria-live="polite">{reading.live}</p>
       <div className="docs-reading-portal" ref={setPortal} />
     </div>
