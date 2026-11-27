@@ -64,11 +64,12 @@ the shared client's three calls in stage 2. Nothing outside a test builds the pa
 | `OVERLORD_DOORS` gains `chat` and `chat-earlier`, operator `view` rows | `server/src/coord/overlordDoors.ts` | L1 |
 | The thread door's answer read by status and body, beside the send answer's reader | `shared/overlordChat.ts#readChatThreadAnswer` | L0, C11 |
 | The client's three calls, each read by its L0 reader through one helper (`readAnswer`): a 2xx and a refusal are both answers, only no answer is `no-answer`; a 401 still raises the login screen | `pwa/src/lib/api.ts` (17 lines) | L3 |
-| Part 7 of the place: `ChatPart`, mounted below the capacity line, reusing the place's one session store (`useOverlordSessionStream`'s connect): the store's events are the live rows (`buildChatItems`), and a change of its transcript or status is handed to the refresh as the frame it came from, so no second stream and no new frame | `pwa/src/overlord/ChatPart.tsx` (new), `OverlordPlace.tsx` (2 lines) | L4 |
+| Part 7 of the place: `ChatPart`, mounted below the capacity line, reusing the place's one session store (`useOverlordSessionStream`'s connect): the store's events are the live rows (`buildChatItems`), and a change of its transcript or status is handed to the refresh as the frame it came from, so no second stream and no new frame | `pwa/src/overlord/ChatPart.tsx` (new), `OverlordPlace.tsx` (4 lines added, 2 changed) | L4 |
 | The thread bounded at 70dvh, its own scroller | `pwa/src/overlord/overlordChat.css` | L4 |
 
 Censuses moved, each re-derived on the merged tree: the gate census (both reads flag-aware, thirty-nine to forty-one; 343
-scanned, 340 HTTP, 222 gated, 118 exempt) and `gate.ts`'s count; `OVERLORD_OPERATOR_DOORS` and the Overlord file's route count
+scanned, 340 HTTP, 222 gated, 118 exempt on stage 2's base, and 344, 341, 222, 119 since the merge of the board's main, under
+Known limits) and `gate.ts`'s count; `OVERLORD_OPERATOR_DOORS` and the Overlord file's route count
 (sixteen to eighteen); the doors census's landing list; the operator-message readers census (`messagesPage` is a text reader, and
 `GET /api/overlord/chat` is the one entry of `OPERATOR_MESSAGE_DOORS`); `MASKED_GET_ROUTES`; the floors (the twelve sets
 registered, each at 1); the contrast suite's sheet list; the `CLAUDE.md` sentence beside the witness door's. `time-ports` and
@@ -171,8 +172,9 @@ The coordinator ruled on the first five on 2026-11-26 (call 1543): all stand as 
 
 ## Mutation rows
 
-Every set scores 1 (each mutant killed), measured by `runMutants` on stage 1's tip. Registration in
-`server/test/sim/mutation-floors.test.ts` and its floors file waits for stage 2: both files are held by another run.
+Every set scores 1 (each mutant killed), measured by `runMutants` on stage 1's tip. They were registered in
+`server/test/sim/mutation-floors.test.ts` and its floors file in stage 2 (renewal readings G's yes on the floors file), each at 1;
+fix round 1 added the refresh's three deciders, below.
 
 | Decider | Mutants | Killed |
 |---|---|---|
@@ -188,11 +190,14 @@ Every set scores 1 (each mutant killed), measured by `runMutants` on stage 1's t
 | `pwa/src/overlord/chatWords.ts#turnOrigin` | O1 pane text read as a nudge, O2 a near miss is ccrc's | 2/2 |
 | `pwa/src/overlord/chatWords.ts#mergeLive` | M1 an id drawn twice, M2 pane text passed through as a live user row, M3 an early message drawn at the end, M4 a nudge outside the page dropped | 4/4 |
 | `pwa/src/overlord/chatWords.ts#historyItemsToChat` | H1 a user item drawn as the Overlord's text, H2 an unreadable item drawn as text | 2/2 |
+| `pwa/src/overlord/chatWords.ts#chatReadTrigger` (fix round 1) | RT1 any events frame asks, RT2 idle after anything asks, RT3 busy asks | 3/3 |
+| `pwa/src/overlord/chatWords.ts#nextReadAt` (fix round 1) | N1 the ceiling's wait ignored, N2 no spacing after a read, N3 no default spacing | 3/3 |
+| `pwa/src/overlord/chatWords.ts#pickUpReadEvery` (fix round 1) | P1 no bound, P2 an unknown state awaited, P3 the oldest decides, P4 no slowdown, P5 a pick-up awaited, P6 a settlement awaited | 6/6 |
 | `server/src/operatorModel/messages.ts#promptTargetVerdict` (existing set) | PT13 `offRecord` on a typed prompt types, PT14 any `offRecord` value counts | 2/2 added |
 
 By hand (each red, each reverted): drop the caller filter from `servedReadsSince` (4 cases red, the operator-ceiling case among
-them); let `messagesPage` answer an empty page for a closed store (red); drop the `offRecord` rule from `promptTargetVerdict` (3
-red); write `offRecord` in a second statement (the new column check red, the per-table check green, so the column check is the
+them); let `messagesPage` answer an empty page for a closed store (red); drop the `offRecord` rule from `promptTargetVerdict` (4
+red, re-measured in fix round 1; the note said 3); write `offRecord` in a second statement (the new column check red, the per-table check green, so the column check is the
 mechanism); let the runner read the turn in operator mode (2 red).
 
 By hand in stage 2, each red and reverted: the thread's height cap removed (the long-thread cases, 4 red, in the browser); a pane
@@ -214,8 +219,12 @@ Code, and each stays behind a reader that already exists:
 - what a pane turn is (the mail lane's nudge line typed into that transcript, and `INJECTED_PROMPTS`' other lines);
 - an earlier generation's text, read through the history door (`ccrc history`'s store, which today's sweep fills from Claude
   Code's transcripts).
-Another harness changes those readers (its transcript reader, its injected lines, what the sweep ingests); the chat's doors,
-deciders and part do not change, and `chatWords.ts` keeps its rule that no transcript user turn is ever the operator's words.
+Two facts the chat draws come from the session hook, a Claude Code hook today: each divider's time and each generation's
+conversation id come from the session hook's start report, and the picked-up tick is written by the session hook. Another
+harness needs its own arms for both, beside its readers (review F13).
+Another harness changes those readers (its transcript reader, its injected lines, what the sweep ingests) and those two arms; the
+chat's doors, deciders and part do not change, and `chatWords.ts` keeps its rule that no transcript user turn is ever the
+operator's words.
 
 ## The first CI runs on the tip (red), and the fixes
 
@@ -232,7 +241,49 @@ and every pwa leg were green (the chat's browser file, 36 cases, and the place's
 - `mutation-floors`, the send answer's set: the thread answer's reader repeated the send's refusal lines, so two mutants' old text
   occurred twice. Both readers now read a refusal through one helper (`refusalOf`, `shared/overlordChat.ts`), and S4 mutates it.
 
+## Fix round 1 (review 4070, the coordinator's call 1737)
+
+Thirteen findings survived, none critical; eleven were built here, each with its case red first (19 new cases, every one red
+before the code: 10 in the words suite, 8 in the part's, 1 in the composer's; then green), and two are known limits below.
+
+| Finding | What changed | Where |
+|---|---|---|
+| F1, the pick-up poll had no end | The timer reads only for a message still waiting for its pick-up, in a state this console can read, and younger than ten minutes; every 10 s in its first minute, then every 30 s; the youngest decides. The stream's triggers still read | `chatWords.ts#pickUpReadEvery`, `PICK_UP_WAIT_MS`, `PICK_UP_READ_LATER_MS`; the hook |
+| F2, older messages were silent | One line, "Older messages are in the record; this shows the newest 100.", when the door answers `more`; the page's bound moved to `shared/overlordChat.ts#CHAT_PAGE_ROWS` (the door re-exports it), so the line and the door name one number. No paging control: the client's `before` and its control are PR B's | `chatWords.ts#OLDER_MESSAGES_WORDS`, the part |
+| F3, the replay notice | A replay answers the first record's fact; when that differs from the toggle now, the notice says the first record stands, and which way. The toggle is not in the key | `chatWords.ts#sendNotice` |
+| F4, the toggle reset under an edited draft | The toggle resets only when the composer really cleared the box: the composer's record mode gains `onRecordCleared`, called after it clears, never on keep, a throw or an edited draft (chosen over holding the toggle during a send, because the clear is the composer's own decision and the toggle should follow the box, not the answer) | `pwa/src/session/Composer.tsx`, the part |
+| F5, the at-once read waited out the timer | An ask that must read sooner replaces a pending later timer, so a moved designation's re-read runs at once, and a trigger past a slower pick-up timer runs at the coalescer's spacing | the hook's `ask` |
+| F7, the first read's words | Before any thread was read, a failure says "the conversation could not be read yet", never "as last read" | `chatWords.ts#threadTroubleWords` |
+| F10, decisions in the hook | What an earlier page answer becomes and what "Show earlier" asks next (`earlierPageOf`), and the no-Overlord sentence (`NOBODY_TO_SEND_WORDS`), moved to the words module; the hook's header names every decider | `chatWords.ts`, the hook |
+| F11, the refresh's deciders | Direct cases for `chatReadTrigger`, `nextReadAt` and `pickUpReadEvery`, and the three registered as mutant sets (the floors pair was unclaimed): RT1-RT3, N1-N3, P1-P6, each killed, each floor 1 | the words suite, `sim/chatSets.ts`, the floors file |
+| F9, the GET mask | The thread door's suite plants a secret the masker knows in a message, through a server holding that masker, and the answer leaves masked while the store holds it raw; the earlier door's suite pins both routes in `MASKED_GET_ROUTES` and masks a paged body built by the door's own composer (W1's arm refuses before any text) | both door suites |
+| F8, part | The plan's door mutations on the live arms, by hand, below; one case pins `CHAT_EARLIER_PAGEABLE` false, with the comment that whoever turns it on builds the paged route cases through the fleet fake first | the earlier door's suite |
+| F12, F13, prose | The shared operator-messages header; this note's pre-merge counts, its registration line, the re-measured row above, the place file's lines; the two comments that said the client comes in the second stage; the harness section's two sentences | here, the hook, the part, `shared/operatorMessages.ts` |
+
+THE BOUND, F1: ten minutes. The mail lane types the nudge when the Overlord's turn ends, and a long turn runs some minutes, so
+the timer covers that quiet gap; past it, a message that never reaches its pick-up (a retire, a rebind, a nudge that never lands)
+stops costing reads, about 24 timer reads at most for such a message. A pick-up typed later still shows, at that turn's end,
+because its typing and the turn's end each ask through the stream's allow-list.
+
+Door mutations by hand (F8, F9), each red, each reverted, on the fix round's tree, each suite alone:
+- D1 the thread door skips the account gate: its suite 1 red of 17;
+- D2 the earlier door skips the account gate: its suite 1 red of 17;
+- D3 readiness read as ready when its read fails: the thread door's suite 1 red;
+- D4 the ledger line written before the ceiling: the thread door's suite 7 red;
+- D5 a lane function calls the words reader: the message-readers census 1 red of 10;
+- D6 no line on a composed refusal (the arm a W1 earlier answer takes): the earlier door's suite 7 red;
+- D7 the thread dropped from `MASKED_GET_ROUTES`: the thread door's suite 1 red (the new mask case).
+
 ## Known limits (so far)
+
+- `chat-thread-shows-the-newest-100` (F2): the thread holds the newest 100 messages; when older ones exist one line says so, and
+  the console cannot page to them in this PR. The client's `before` argument and its control are PR B's (the coordinator's
+  ticket).
+- `chat-server-line-needs-the-readiness-history` (F6): a message older than the readiness store's ninety-day prune can draw no
+  server line, because the history that would say the Overlord's state at its time is gone.
+- `chat-earlier-paged-arm-unbuilt` (F8's rest): the paged arm's route cases and its two door mutations (the target from the
+  designated session; step 7's filter dropped) wait for the arm. Under the not-pageable arm every earlier-door answer is a
+  refusal, so that door's ceiling never refuses and its lines are bounded only by the sign-in.
 
 - Earlier generations are not paged in W1 (the measured arm); the divider names `ccrc history` instead. The part draws a
   `readable` divider's page and its "Show earlier" (the next page asks `around` the page's first item) for when paging joins.

@@ -8,14 +8,16 @@
 // operator's words. `turnOrigin` sorts each one: the mail lane's nudge line for a recorded message is replaced by that record;
 // a prompt ccrc typed is a quiet system line naming it; anything else is "Typed in the Overlord's pane, not from the console",
 // with the text as data. `mergeLive` places the record's messages in the live transcript; `historyItemsToChat` draws an earlier
-// page; `draftAfterSend` keeps the composer's text on every answer but a recorded one.
+// page; `draftAfterSend` keeps the composer's text on every answer but a recorded one. The refresh's three deciders
+// (`chatReadTrigger`, `nextReadAt`, `pickUpReadEvery`), what an earlier page answer becomes (`earlierPageOf`) and every sentence
+// the part says are here too, so the hook and the part decide nothing.
 //
 // The one harness surface this leans on is Claude Code's transcript (the live generation's stream, and what a pane turn is).
 // It is read only through the readers that already exist (`buildChatItems`, the history door's items), so another harness
 // changes those readers, not this file.
 import type { SessionStatus, SessionStreamMsg } from '../../../shared/api';
-import type { ChatEntry, ChatSendAnswer, ChatThread, ChatTicks, TickStage } from '../../../shared/overlordChat';
-import { TICK_STAGES, tickStageWords } from '../../../shared/overlordChat';
+import type { ChatEarlierAnswer, ChatEntry, ChatSendAnswer, ChatThread, ChatTicks, TickStage } from '../../../shared/overlordChat';
+import { CHAT_PAGE_ROWS, TICK_STAGES, tickStageWords } from '../../../shared/overlordChat';
 import { carriesOperatorMessageMarker, operatorMessageNudgeIdOf } from '../../../shared/operatorMessages';
 import { injectedPromptOf } from '../../../shared/injected-prompts.mjs';
 import type { ChatItem } from '../session/chatItems';
@@ -43,15 +45,34 @@ export function chatReadTrigger(msg: SessionStreamMsg, was: SessionStatus | null
   return false;
 }
 
-/** When the next thread read may run: not before the coalescer's spacing after the last read, and not before a ceiling's
- *  `retryAfterS` has passed (`notBefore`). Null `lastReadAt`: no read yet. */
-export function nextReadAt(lastReadAt: number | null, now: number, notBefore: number): number {
-  return Math.max(now, lastReadAt === null ? now : lastReadAt + CHAT_READ_EVERY_MS, notBefore);
+/** When the next thread read may run: not before the spacing (`every`, the coalescer's by default; the pick-up timer's when it
+ *  asks) after the last read, and not before a ceiling's `retryAfterS` has passed (`notBefore`). Null `lastReadAt`: no read yet. */
+export function nextReadAt(lastReadAt: number | null, now: number, notBefore: number, every: number = CHAT_READ_EVERY_MS): number {
+  return Math.max(now, lastReadAt === null ? now : lastReadAt + every, notBefore);
 }
 
-/** Whether a shown message still waits for its pick-up (not picked up and not settled): the timer reads only then. */
-export function awaitsPickUp(thread: ChatThread): boolean {
-  return thread.entries.some((e) => e.kind === 'message' && !e.ticks.lit['picked-up'] && !e.ticks.lit.settled);
+/** How long a message is awaited for its pick-up, from its record: ten minutes (review F1). The mail lane types the nudge when
+ *  the Overlord's turn ends, and a long turn runs some minutes, so the timer covers that quiet gap; past it, a message that never
+ *  reaches its pick-up (a retire, a rebind, a nudge that never landed) stops costing reads. The stream's triggers still read: a
+ *  pick-up typed later shows at that turn's end, since its typing and the turn's end each ask. */
+export const PICK_UP_WAIT_MS = 10 * 60_000;
+/** The timer's spacing once a message is a minute old: a pick-up within the first minute is the common case, so the timer reads
+ *  at the coalescer's spacing then, and three times slower after: about 24 timer reads for a message that is never picked up. */
+export const PICK_UP_READ_LATER_MS = 30_000;
+
+/** The pick-up timer's spacing, or null when the timer reads nothing: only a message still waiting for its pick-up (not picked up,
+ *  not settled, in a state this console can read) and younger than `PICK_UP_WAIT_MS` is awaited, and the youngest decides:
+ *  every 10 s in its first minute, then every 30 s. Total over `now`: a message stamped later than `now` (clocks apart) is young. */
+export function pickUpReadEvery(thread: ChatThread, now: number): number | null {
+  let youngest: number | null = null;
+  for (const e of thread.entries) {
+    if (e.kind !== 'message' || e.ticks.unknown || e.ticks.lit['picked-up'] || e.ticks.lit.settled) continue;
+    const age = now - e.row.at;
+    if (age >= PICK_UP_WAIT_MS) continue;
+    if (youngest === null || age < youngest) youngest = age;
+  }
+  if (youngest === null) return null;
+  return youngest < 60_000 ? CHAT_READ_EVERY_MS : PICK_UP_READ_LATER_MS;
 }
 
 // ── what a transcript user turn is (question 6) ───────────────────────────────────────────────────────────────────────
@@ -170,6 +191,23 @@ export function mergeLive(thread: readonly ChatEntry[], live: readonly ChatItem[
   return [...before, ...out.flatMap((o, i) => [...o.rows, ...(after.get(i) ?? [])])];
 }
 
+/** The earlier door's answer, or why there is none. */
+export type ChatEarlierRead = ChatEarlierAnswer | 'off-shape' | 'no-answer';
+
+/** What an earlier page answer becomes: its items, with what "Show earlier" asks for next (the first item's uuid, when the page
+ *  holds fewer than its total and that item names one; else none), or why the page cannot be shown (the answer's cause, detail or
+ *  word; the outcome of a page that is not rows). */
+export function earlierPageOf(r: ChatEarlierRead):
+  | { readonly kind: 'rows'; readonly items: readonly Readonly<Record<string, unknown>>[]; readonly next: string | null }
+  | { readonly kind: 'unreachable'; readonly cause: string } {
+  if (r === 'off-shape' || r === 'no-answer') return { kind: 'unreachable', cause: r };
+  if (!r.ok) return { kind: 'unreachable', cause: r.cause ?? r.detail ?? r.error };
+  if (r.page.outcome !== 'rows') return { kind: 'unreachable', cause: r.page.outcome };
+  const items = r.page.items as readonly Readonly<Record<string, unknown>>[];
+  const first = items[0]?.['uuid'];
+  return { kind: 'rows', items, next: r.page.shown < r.page.total && typeof first === 'string' ? first : null };
+}
+
 /** An earlier page's items (the history door's `rows`, each untrusted) as chat rows. Each item is read by the fields Task 3's
  *  measurement pinned: `role` and `text` (and `uuid` for its key). An assistant item is its text; a user item goes through
  *  `turnOrigin` like a live one (a nudge becomes a link to its message); an item with no readable role or text is one untrusted
@@ -226,6 +264,26 @@ export const NO_OVERLORD_WORDS = 'No Overlord is started. Messages already sent 
 export const THREAD_NO_ANSWER_WORDS = 'No answer from the server; this is the conversation as last read.';
 export const THREAD_OFF_SHAPE_WORDS = "This server's answer could not be read; this is the conversation as last read.";
 export const READING_WORDS = 'Reading the conversation';
+export const NOBODY_TO_SEND_WORDS = 'No Overlord is started, so there is nobody to send to.';
+/** The thread holds the newest `CHAT_PAGE_ROWS` messages; this line says so when the door answers that older ones exist. */
+export const OLDER_MESSAGES_WORDS = `Older messages are in the record; this shows the newest ${CHAT_PAGE_ROWS}.`;
+
+/** Why the thread could not be read this time. The last thread read is kept beside it, never replaced by an empty one. */
+export type ThreadTrouble =
+  | { readonly kind: 'ceiling' }
+  | { readonly kind: 'refused'; readonly words: string }
+  | { readonly kind: 'no-answer' }
+  | { readonly kind: 'off-shape' };
+
+/** The trouble's line. `read`: whether any thread was read before, so a first read that fails never says "as last read". */
+export function threadTroubleWords(t: ThreadTrouble, read: boolean): string {
+  if (t.kind === 'ceiling') return READ_CEILING_WORDS;
+  if (t.kind === 'refused') return t.words;
+  if (read) return t.kind === 'no-answer' ? THREAD_NO_ANSWER_WORDS : THREAD_OFF_SHAPE_WORDS;
+  return t.kind === 'no-answer'
+    ? 'No answer from the server; the conversation could not be read yet.'
+    : "This server's answer could not be read; the conversation could not be read yet.";
+}
 
 /** The two refusal words the chat acts on beyond showing them: the designation moved (keep the draft, drop its key and term,
  *  read again at once), and the console's read ceiling (keep the thread, wait). Read by lookup, so no branch spells a word. */
@@ -235,9 +293,14 @@ export function chatRefusalRole(error: string): ChatRefusalRole | null {
   return Object.hasOwn(CHAT_REFUSAL_ROLE_MAP, error) ? CHAT_REFUSAL_ROLE_MAP[error as keyof typeof CHAT_REFUSAL_ROLE_MAP] : null;
 }
 
-/** What the chat says after a send beside the refusal's own words (`apiErrorText`'s), or null for nothing more. A toggled send
- *  whose answer carries no `offRecord` echo was recorded on the record by a server that does not know the toggle (question 4). */
+/** What the chat says after a send beside the refusal's own words (`apiErrorText`'s), or null for nothing more. A replay (the
+ *  retry of a send whose answer was lost) answers the first record's fact, so when it went the other way than the toggle now
+ *  says, the first record stands, and the notice says which (review F3). A fresh toggled send whose answer carries no `offRecord`
+ *  echo was recorded on the record by a server that does not know the toggle (question 4). */
 export function sendNotice(a: ChatSendAnswer, toggled: boolean): string | null {
+  if (a.kind === 'recorded' && a.replay) {
+    return a.offRecord === toggled ? null : `This message was already recorded ${a.offRecord ? 'off the record' : 'on the record'}; the first record stands.`;
+  }
   if (a.kind === 'recorded') return toggled && !a.offRecord ? 'Recorded on the record: this server does not know the toggle' : null;
   if (a.kind === 'off-shape') return 'This server did not record the message; it may have been typed into the pane.';
   if (a.kind === 'no-answer') return 'No answer from the server. Your message is kept; send it again.';

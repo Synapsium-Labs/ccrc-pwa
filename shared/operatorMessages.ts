@@ -1,9 +1,9 @@
-// The Operator Model's vocabulary (context C11; Overlord W1 private store plan, Task 2). L0: it imports nothing, because the
-// PWA bundles `shared/*.ts`. The operator's messages to the designated session: their states, the events that move them,
-// the actor allowed each event, the message moves table, the settlement kinds, the read ledger's words, the text bound,
-// the nudge's subject helpers and the wire row. Each runtime list is derived from its map, so a word is spelled once.
-// Its one import is the injected-prompt list, for the nudge line's head (the chat's recogniser reads the line the mail lane
-// types, so the line has one grammar, here).
+// The Operator Model's vocabulary (context C11; Overlord W1 private store plan, Task 2). L0: the PWA bundles `shared/*.ts`, so it
+// imports no `node:*` module and nothing outside `shared/`; its one import is another L0 file, the injected-prompt list
+// (`shared/injected-prompts.mjs`), for the nudge line's head (Overlord W1 chat: the chat's recogniser reads the line the mail lane
+// types, so the line has one grammar, here). The operator's messages to the designated session: their states, the events that
+// move them, the actor allowed each event, the message moves table, the settlement kinds, the read ledger's words, the text bound,
+// the nudge's line and subject helpers and the wire row. Each runtime list is derived from its map, so a word is spelled once.
 import { INJECTED_PROMPTS } from './injected-prompts.mjs';
 
 const MESSAGE_STATE_MAP = {

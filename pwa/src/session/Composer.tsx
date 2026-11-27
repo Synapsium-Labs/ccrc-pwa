@@ -62,6 +62,9 @@ export interface ComposerProps {
   onRecord?: (text: string) => Promise<'clear' | 'keep'>;
   /** Opt-in: a node drawn in the input bar before the send control (the chat's off-the-record toggle). */
   leading?: ReactNode;
+  /** With `onRecord`: told when a record's answer really cleared the box (a `clear` answer with the draft unedited), never on
+   *  `keep`, a throw or an edited draft, so a caller's state tied to the sent draft (the chat's toggle) follows the box. */
+  onRecordCleared?: () => void;
 }
 
 /** After a send empties the draft during a busy turn, the danger Stop takes Send's spot at once; it ignores taps for
@@ -122,6 +125,7 @@ export function Composer({
   askUp = false,
   onRecord,
   leading,
+  onRecordCleared,
 }: ComposerProps): ReactNode {
   // Paste chips (wave 169). The field's value is the draft, chips included (pasteChips.ts header): the live chips are a
   // parse of it after every change, so nothing about them is tracked between changes. `valueNow` mirrors the state for
@@ -407,6 +411,7 @@ export function Composer({
         if (d !== 'clear' || valueNow.current !== sent) return;
         put('');
         chips.current = emptyChips();
+        onRecordCleared?.();
       });
       return;
     }

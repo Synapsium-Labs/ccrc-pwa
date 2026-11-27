@@ -16,7 +16,7 @@ import type { OperatorMessageRow } from '../../../shared/operatorMessages.js';
 import type { ReadinessWord } from '../../../shared/overlord-readiness.js';
 import { READ_SCOPE_MAX_CHARS } from '../../../shared/operatorMessages.js';
 import type { RouteRefusal } from '../../../shared/refusal.js';
-import type { ChatThread, GenerationKey } from '../../../shared/overlordChat.js';
+import { CHAT_PAGE_ROWS, type ChatThread, type GenerationKey } from '../../../shared/overlordChat.js';
 import { designationFactFrom, identityOf } from '../roleOf.js';
 import { composeChat, earlierPagePlan, isChatKebab, type ChatFacts, type GenerationFact } from './overlordChat.js';
 import type { HistoryDoorAnswer } from './overlordHistory.js';
@@ -24,8 +24,8 @@ import type { OverlordHistoryRequest } from '../../../shared/overlordHistory.js'
 
 /** Task 3 Step 1's measured arm: no history verb names a conversation's newest entries (`not-pageable`). */
 export const CHAT_EARLIER_PAGEABLE = false;
-/** The thread door's page of messages. */
-export const CHAT_PAGE_ROWS = 100;
+/** The thread door's page of messages (`shared/overlordChat.ts`'s bound, which the console's older-messages line names too). */
+export { CHAT_PAGE_ROWS };
 
 /** What a door hands the read runner to answer (the runner's `ReadComposed`, structurally). */
 export type ChatComposed =

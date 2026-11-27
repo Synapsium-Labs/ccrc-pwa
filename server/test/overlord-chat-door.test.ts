@@ -23,6 +23,7 @@ import { mkdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import type { FastifyInstance } from 'fastify';
 import { buildServer, type Deps } from '../src/server.js';
+import { SecretMasker } from '../src/accounts/mask.js';
 import { loadConfig } from '../src/config.js';
 import { Tmux, type Runner } from '../src/exec.js';
 import { localIO } from '../src/io.js';
@@ -79,7 +80,7 @@ interface Rig {
   messagesPage: ReturnType<typeof spyMessagesPage>;
   readinessChanges: ReturnType<typeof spyReadiness>;
 }
-interface RigOpts { auth?: boolean; origin?: string; designation?: DesignationRead }
+interface RigOpts { auth?: boolean; origin?: string; designation?: DesignationRead; masker?: SecretMasker }
 const spyMessagesPage = (s: OperatorModelStore) => vi.spyOn(s, 'messagesPage');
 const spyReadiness = (c: CoordStore) => vi.spyOn(c, 'readinessChanges');
 
@@ -99,7 +100,7 @@ async function rig(opts: RigOpts = {}): Promise<Rig> {
   const journal = { appendInTx: () => ({ ok: false, error: 'authority-unmeasured', detail: 'a fixture journal appends nothing' }) } as unknown as OverlordAuthorityJournal;
   const time = fakeTime();
   const deps: Deps = { cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: localIO, queue: new KeyedQueue(), time: time.ports, coord, mailToken: BOX_TOKEN,
-    operatorModel: store, overlordAuthority: journal };
+    operatorModel: store, overlordAuthority: journal, ...(opts.masker === undefined ? {} : { masker: opts.masker }) };
   const app = await buildServer(deps, new Bus());
   await app.ready();
   apps.push(app);
@@ -469,5 +470,28 @@ describe('GET /api/overlord/chat: the read-ledger line of a served read', () => 
     expect(second.statusCode, second.body).toBe(200);
     expect(ledger(r)).toHaveLength(2);
     expect(ledger(r)[1]).toEqual({ door: 'chat', caller: 'operator', scope: `session:${LANE_A}`, count: 2, outcome: 'rows', generation: null, generationRead: 'not-a-session', turnState: null });
+  });
+});
+
+// ── the server's answer mask (review F9; the plan's Task 2: the answer passes the GET mask) ───────────────────────────────────
+
+describe('GET /api/overlord/chat: the server\'s answer mask (MASKED_GET_ROUTES)', () => {
+  it('a secret the masker knows, planted in a message, leaves the door masked; the store holds it raw (the control), and the rest of the text rides', async () => {
+    const SECRET = 'Zq7'.repeat(12);
+    const mdb = openCoordDb(path.join(mkTmp('ccrc-chat-door-mask-'), '.ccrc', 'coord.db'));
+    const masker = new SecretMasker({ db: mdb, token: () => BOX_TOKEN, log: () => {} });
+    try {
+      expect(masker.ingestSecret('lane-a', SECRET)).toBe('masked');
+      const r = await rig({ masker });
+      fixtureA(r);
+      seedMessage(r, { id: 4, at: T - 1_000, text: `the key is ${SECRET} for now`, state: 'recorded' });
+      const raw = storeDb(r.store).prepare('SELECT text FROM operator_messages WHERE id = 4').get() as { text: string };
+      expect(raw.text, 'the control: the store holds the secret raw, so only the answer hook can hide it').toContain(SECRET);
+      const res = await get(r, THREAD);
+      expect(res.statusCode, res.body).toBe(200);
+      expect(res.body).not.toContain(SECRET);
+      expect(res.body).toContain('the key is');
+      for (const text of FIXTURE_A_TEXTS) expect(res.body).toContain(text);
+    } finally { mdb.close(); }
   });
 });

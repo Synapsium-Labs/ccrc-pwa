@@ -3,10 +3,13 @@
 //
 // L4: it reads the thread, refreshes it through ONE coalescer, reads earlier pages and sends. Every decision is
 // `chatWords.ts`'s (L1): which stream frames ask for a read (`chatReadTrigger`), when the next read may run (`nextReadAt`),
-// whether the timer reads at all (`awaitsPickUp`), and whether a send clears the draft (`draftAfterSend`).
+// whether and how often the pick-up timer reads (`pickUpReadEvery`, which ends it ten minutes after a message), what an earlier
+// page answer becomes and what comes next (`earlierPageOf`), whether a send clears the draft (`draftAfterSend`), and every
+// sentence it sets (`sendNotice`, `NOBODY_TO_SEND_WORDS`). A refusal word's sentence is the shared client's tables'
+// (`refusalWords` below reads `sendErrorText`, then `apiErrorText`).
 //
-// The port is declared HERE, by its consumer, for the three calls the chat makes. The shared client (`lib/api.ts`) gains the
-// three functions that implement it in the chat's second stage; until then nothing outside a test builds one.
+// The port is declared HERE, by its consumer, for the three calls the chat makes; the shared client's three calls
+// (`api.overlordChat`, `overlordChatEarlier`, `overlordSend`) implement it, in `ChatPart.tsx`.
 //
 // The kept draft (question 5): a send carries a send key, 128 random bits in base64url, and the term of the thread it was
 // composed in. The key and term are bound to the draft's text: a retry of the same text after no answer carries the same
@@ -14,19 +17,19 @@
 // edited draft makes a new key, and `stale-designation` drops the binding, so the next send carries the new thread's term.
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { SessionStatus, SessionStreamMsg } from '../../../shared/api';
-import type { ChatEarlierAnswer, ChatSendAnswer, ChatThread, ChatThreadAnswer, GenerationKey } from '../../../shared/overlordChat';
+import type { ChatSendAnswer, ChatThread, ChatThreadAnswer, GenerationKey } from '../../../shared/overlordChat';
 import { ApiError } from '../lib/apiError';
 import { apiErrorText, sendErrorText } from '../lib/api';
 import { onPageVisible } from '../lib/pageClock';
 import {
-  awaitsPickUp, chatReadTrigger, chatRefusalRole, draftAfterSend, historyItemsToChat, nextReadAt, sendNotice, type ChatRow,
+  NOBODY_TO_SEND_WORDS, chatReadTrigger, chatRefusalRole, draftAfterSend, earlierPageOf, historyItemsToChat, nextReadAt,
+  pickUpReadEvery, sendNotice, type ChatEarlierRead, type ChatRow, type ThreadTrouble,
 } from './chatWords';
+
+export type { ChatEarlierRead, ThreadTrouble };
 
 /** The thread door's answer as the chat reads it (`shared/overlordChat.ts#readChatThreadAnswer`). */
 export type ChatThreadRead = ChatThreadAnswer;
-
-/** The earlier door's answer, or why there is none. */
-export type ChatEarlierRead = ChatEarlierAnswer | 'off-shape' | 'no-answer';
 
 export interface ChatSendOpts { readonly offRecord: boolean; readonly sendKey: string; readonly overlordTerm: number }
 
@@ -36,13 +39,6 @@ export interface OverlordChatPort {
   earlier(gen: GenerationKey, around: string | null): Promise<ChatEarlierRead>;
   send(sessionId: string, text: string, opts: ChatSendOpts): Promise<ChatSendAnswer>;
 }
-
-/** Why the thread could not be read this time. The last thread read is kept beside it, never replaced by an empty one. */
-export type ThreadTrouble =
-  | { readonly kind: 'ceiling' }
-  | { readonly kind: 'refused'; readonly words: string }
-  | { readonly kind: 'no-answer' }
-  | { readonly kind: 'off-shape' };
 
 /** One earlier generation's page state. `next` is what "Show earlier" asks for, or null when there is no more. */
 export type EarlierState =
@@ -96,6 +92,7 @@ export function useOverlordChat(port: OverlordChatPort): OverlordChat {
   const lastReadAt = useRef<number | null>(null);
   const notBefore = useRef(0);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const timerAt = useRef(0);
   const inFlight = useRef(false);
   const again = useRef(false);
   const stale = useRef(false);
@@ -103,9 +100,10 @@ export function useOverlordChat(port: OverlordChatPort): OverlordChat {
   const binding = useRef<{ text: string; key: string; term: number; sessionId: string } | null>(null);
   const earlierNow = useRef<Map<string, EarlierState>>(new Map());
 
-  // One coalescer for every trigger (question 10): a read already waiting absorbs the next ask; a hidden tab reads
-  // nothing and reads once when it is shown again.
-  const ask = useRef<(now?: boolean) => void>(() => undefined);
+  // One coalescer for every trigger (question 10): a read already waiting absorbs any ask it would answer as soon, and an ask
+  // that must read sooner (a trigger past a slower pick-up timer, a moved designation's at-once read) takes its place; a hidden
+  // tab reads nothing and reads once when it is shown again.
+  const ask = useRef<(o?: { readonly soon?: boolean; readonly every?: number }) => void>(() => undefined);
   const read = useRef<() => Promise<void>>(async () => undefined);
   read.current = async (): Promise<void> => {
     if (inFlight.current) { again.current = true; return; }
@@ -126,17 +124,24 @@ export function useOverlordChat(port: OverlordChatPort): OverlordChat {
       setTrouble(r.kind === 'refused' ? { kind: 'refused', words: refusalWords(r.error) } : { kind: r.kind });
     }
     const t = threadNow.current;
-    if (again.current) { again.current = false; ask.current(); } else if (t !== null && awaitsPickUp(t)) ask.current();
+    const every = t === null ? null : pickUpReadEvery(t, Date.now());
+    if (again.current) { again.current = false; ask.current(); } else if (every !== null) ask.current({ every });
   };
   // `soon`: past the spacing, never past a ceiling's wait. Only a `stale-designation` answer asks so, since the next send
-  // must carry the new thread's term.
-  ask.current = (soon = false): void => {
-    if (timer.current !== null || !alive.current) return;
+  // must carry the new thread's term. `every`: the pick-up timer's spacing (`pickUpReadEvery`).
+  ask.current = (o = {}): void => {
+    if (!alive.current) return;
     if (!visible()) { stale.current = true; return; }
     if (inFlight.current) { again.current = true; return; }
     const now = Date.now();
-    const at = nextReadAt(soon ? null : lastReadAt.current, now, notBefore.current);
+    const at = nextReadAt(o.soon === true ? null : lastReadAt.current, now, notBefore.current, o.every);
+    if (timer.current !== null) {
+      if (at >= timerAt.current) return;
+      clearTimeout(timer.current);
+      timer.current = null;
+    }
     if (at <= now) { void read.current(); return; }
+    timerAt.current = at;
     timer.current = setTimeout(() => {
       timer.current = null;
       if (!visible()) { stale.current = true; return; }
@@ -171,7 +176,7 @@ export function useOverlordChat(port: OverlordChatPort): OverlordChat {
     let b = binding.current;
     if (b === null || b.text !== text) {
       if (t === null || t.designation !== 'designated' || t.sessionId === null || t.term === null) {
-        setNotice('No Overlord is started, so there is nobody to send to.');
+        setNotice(NOBODY_TO_SEND_WORDS);
         return 'keep';
       }
       b = { text, key: newSendKey(), term: t.term, sessionId: t.sessionId };
@@ -185,7 +190,7 @@ export function useOverlordChat(port: OverlordChatPort): OverlordChat {
     const moved = a.kind === 'refused' && chatRefusalRole(a.error) === 'moved';
     if (a.kind === 'recorded' || moved) binding.current = null;
     setNotice(sendNotice(a, offRecord) ?? (a.kind === 'refused' ? refusalWords(a.error) : null));
-    if (a.kind !== 'no-answer') ask.current(moved);
+    if (a.kind !== 'no-answer') ask.current({ soon: moved });
     return draftAfterSend(a);
   }, []);
 
@@ -206,13 +211,10 @@ export function useOverlordChat(port: OverlordChatPort): OverlordChat {
       let r: ChatEarlierRead;
       try { r = await portRef.current.earlier(gen, around); } catch { r = 'no-answer'; }
       if (!alive.current) return;
-      if (r === 'off-shape' || r === 'no-answer') { putEarlier(key, { kind: 'unreachable', rows, cause: r }); return; }
-      if (!r.ok) { putEarlier(key, { kind: 'unreachable', rows, cause: r.cause ?? r.detail ?? r.error }); return; }
-      if (r.page.outcome !== 'rows') { putEarlier(key, { kind: 'unreachable', rows, cause: r.page.outcome }); return; }
-      const items = r.page.items as readonly Readonly<Record<string, unknown>>[];
-      const first = items[0]?.['uuid'];
-      const more = r.page.shown < r.page.total && typeof first === 'string';
-      putEarlier(key, { kind: 'rows', rows: [...historyItemsToChat(items), ...rows], next: more ? first : null });
+      const page = earlierPageOf(r);
+      putEarlier(key, page.kind === 'unreachable'
+        ? { kind: 'unreachable', rows, cause: page.cause }
+        : { kind: 'rows', rows: [...historyItemsToChat(page.items), ...rows], next: page.next });
     })();
   }, []);
 

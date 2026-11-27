@@ -34,7 +34,15 @@ export interface ChatWordsModule {
   turnOrigin(text: string): { kind: 'nudge'; id: number } | { kind: 'ccrc'; name: string } | { kind: 'pane' };
   mergeLive(thread: readonly ChatEntry[], live: readonly LiveItem[]): readonly Row[];
   historyItemsToChat(items: readonly Readonly<Record<string, unknown>>[]): readonly Row[];
+  chatReadTrigger(msg: StreamFrame, was: 'idle' | 'busy' | null): boolean;
+  nextReadAt(lastReadAt: number | null, now: number, notBefore: number, every?: number): number;
+  pickUpReadEvery(thread: { readonly entries: readonly ChatEntry[] }, now: number): number | null;
 }
+/** The stream frames the refresh's allow-list reads (`shared/api.ts#SessionStreamMsg`'s, structurally). */
+type StreamFrame =
+  | { type: 'events'; uuid: string; offset: number; events: { kind: 'user' | 'assistant'; uuid: string; ts: string; text: string }[] }
+  | { type: 'status'; status: 'idle' | 'busy'; statusUpdatedAt: null }
+  | { type: 'beat'; at: number };
 
 // ── fixtures ──────────────────────────────────────────────────────────────────────────────────────────────────────────
 
@@ -327,6 +335,55 @@ export function mergeLiveCases(m: ChatWordsModule): Record<string, SuiteCase> {
   };
 }
 
+// The refresh's three deciders (review F11).
+export function chatReadTriggerCases(m: ChatWordsModule): Record<string, SuiteCase> {
+  const ev = (kind: 'user' | 'assistant'): StreamFrame =>
+    ({ type: 'events', uuid: 'u', offset: 0, events: [{ kind, uuid: 'e', ts: new Date(T0).toISOString(), text: 'x' }] });
+  const st = (status: 'idle' | 'busy'): StreamFrame => ({ type: 'status', status, statusUpdatedAt: null });
+  return {
+    'a user turn asks, an assistant frame does not': () => {
+      expect([m.chatReadTrigger(ev('user'), null), m.chatReadTrigger(ev('assistant'), 'busy')]).toEqual([true, false]);
+    },
+    'idle after busy asks; idle after idle, idle first and busy do not': () => {
+      expect([m.chatReadTrigger(st('idle'), 'busy'), m.chatReadTrigger(st('idle'), 'idle'), m.chatReadTrigger(st('idle'), null), m.chatReadTrigger(st('busy'), 'idle')])
+        .toEqual([true, false, false, false]);
+    },
+    'a beat never asks': () => { expect(m.chatReadTrigger({ type: 'beat', at: 1 }, 'busy')).toBe(false); },
+  };
+}
+
+export function nextReadAtCases(m: ChatWordsModule): Record<string, SuiteCase> {
+  return {
+    'no read yet reads now; the default spacing is 10 s; a wider one is honoured': () => {
+      expect([m.nextReadAt(null, T0, 0), m.nextReadAt(T0, T0 + 1_000, 0), m.nextReadAt(T0, T0 + 1_000, 0, 30_000)]).toEqual([T0, T0 + 10_000, T0 + 30_000]);
+    },
+    'a ceiling\'s wait wins when it is later': () => {
+      expect([m.nextReadAt(T0, T0 + 1_000, T0 + 60_000), m.nextReadAt(null, T0, T0 + 5_000)]).toEqual([T0 + 60_000, T0 + 5_000]);
+    },
+  };
+}
+
+export function pickUpReadEveryCases(m: ChatWordsModule): Record<string, SuiteCase> {
+  const NOW = T0 + 1_000_000;
+  const lit = (pickedUp: boolean, settled: boolean) => ({ recorded: true, delivery: true, 'picked-up': pickedUp, settled });
+  const waiting = (id: number, age: number, o: { unknown?: boolean; pickedUp?: boolean; settled?: boolean } = {}): ChatEntry =>
+    ({ kind: 'message', row: msg(id, NOW - age), ticks: { lit: lit(o.pickedUp ?? false, o.settled ?? false), delivery: 'queued', settledBy: null, unknown: o.unknown ?? false } }) as ChatEntry;
+  const t = (...entries: ChatEntry[]) => ({ entries });
+  return {
+    'young: every 10 s; past a minute: every 30 s; past ten minutes: never': () => {
+      expect([m.pickUpReadEvery(t(waiting(1, 5_000)), NOW), m.pickUpReadEvery(t(waiting(1, 120_000)), NOW), m.pickUpReadEvery(t(waiting(1, 600_000)), NOW)])
+        .toEqual([10_000, 30_000, null]);
+    },
+    'an unknown state, a pick-up and a settlement are not awaited': () => {
+      expect([m.pickUpReadEvery(t(waiting(1, 5_000, { unknown: true })), NOW), m.pickUpReadEvery(t(waiting(1, 5_000, { pickedUp: true })), NOW),
+        m.pickUpReadEvery(t(waiting(1, 5_000, { settled: true })), NOW)]).toEqual([null, null, null]);
+    },
+    'the youngest awaited message decides': () => {
+      expect([m.pickUpReadEvery(t(waiting(1, 300_000), waiting(2, 5_000)), NOW), m.pickUpReadEvery(t(waiting(1, 5_000), waiting(2, 300_000)), NOW)]).toEqual([10_000, 10_000]);
+    },
+  };
+}
+
 export function historyItemsCases(m: ChatWordsModule): Record<string, SuiteCase> {
   return {
     'an assistant item is its text; a user nudge is its link; pane text is a pane turn; no role is one untrusted block': () => {
@@ -410,6 +467,24 @@ export const CHAT_MUTANT_SETS: Record<string, MutantSet<never>> = {
     { id: 'M2 pane text passed through as a live user row', old: "rows.push({ kind: 'pane-turn', key: `pane-${t.key}`, text: t.text });", new: "rows.push({ kind: 'live', key: t.key, item });" },
     { id: 'M3 an early message drawn at the end', old: '    if (slot === -1) before.push(...u.rows);', new: '    if (slot === -1) slot = out.length - 1;\n    if (slot === -1) before.push(...u.rows);' },
     { id: 'M4 a nudge outside the page dropped', old: "rows.push({ kind: 'message-link', key: `link-${o.id}`, id: o.id }); continue;", new: 'continue;' },
+  ]),
+  'pwa/src/overlord/chatWords.ts#chatReadTrigger': set<ChatWordsModule>(WORDS, chatReadTriggerCases, [
+    { id: 'RT1 any events frame asks', old: "if (msg.type === 'events') return msg.events.some((e) => e.kind === 'user');", new: "if (msg.type === 'events') return true;" },
+    { id: 'RT2 idle after anything asks', old: "return msg.status === 'idle' && was === 'busy';", new: "return msg.status === 'idle';" },
+    { id: 'RT3 busy asks', old: "return msg.status === 'idle' && was === 'busy';", new: "return was === 'busy' || msg.status === 'busy';" },
+  ]),
+  'pwa/src/overlord/chatWords.ts#nextReadAt': set<ChatWordsModule>(WORDS, nextReadAtCases, [
+    { id: 'N1 the ceiling\'s wait ignored', old: 'lastReadAt + every, notBefore);', new: 'lastReadAt + every);' },
+    { id: 'N2 no spacing after a read', old: 'lastReadAt + every, notBefore);', new: 'lastReadAt, notBefore);' },
+    { id: 'N3 no default spacing', old: 'every: number = CHAT_READ_EVERY_MS', new: 'every: number = 0' },
+  ]),
+  'pwa/src/overlord/chatWords.ts#pickUpReadEvery': set<ChatWordsModule>(WORDS, pickUpReadEveryCases, [
+    { id: 'P1 no bound', old: '    if (age >= PICK_UP_WAIT_MS) continue;\n', new: '' },
+    { id: 'P2 an unknown state awaited', old: 'e.ticks.unknown || ', new: '' },
+    { id: 'P3 the oldest decides', old: 'if (youngest === null || age < youngest) youngest = age;', new: 'if (youngest === null || age > youngest) youngest = age;' },
+    { id: 'P4 no slowdown', old: 'return youngest < 60_000 ? CHAT_READ_EVERY_MS : PICK_UP_READ_LATER_MS;', new: 'return CHAT_READ_EVERY_MS;' },
+    { id: 'P5 a pick-up awaited', old: " || e.ticks.lit['picked-up']", new: '' },
+    { id: 'P6 a settlement awaited', old: ' || e.ticks.lit.settled) continue;', new: ') continue;' },
   ]),
   'pwa/src/overlord/chatWords.ts#historyItemsToChat': set<ChatWordsModule>(WORDS, historyItemsCases, [
     { id: 'H1 a user item drawn as the Overlord\'s text', old: "if (typeof text === 'string' && role === 'assistant') return", new: "if (typeof text === 'string') return" },

@@ -8,8 +8,8 @@ import { isSendKey, operatorMessageNudgeLine, type OperatorMessageRow } from '..
 import { chatTicksOf, type ChatEntry, type ChatSendAnswer, type ChatThread } from '../../shared/overlordChat';
 import { OverlordChat } from '../src/overlord/OverlordChat';
 import {
-  EARLIER_UNREACHABLE_WORDS, GENERATIONS_UNMEASURED_WORDS, MESSAGES_UNMEASURED_WORDS, NO_OVERLORD_WORDS, PANE_TURN_WORDS,
-  READ_CEILING_WORDS,
+  EARLIER_UNREACHABLE_WORDS, GENERATIONS_UNMEASURED_WORDS, MESSAGES_UNMEASURED_WORDS, NO_OVERLORD_WORDS, OLDER_MESSAGES_WORDS,
+  PANE_TURN_WORDS, READ_CEILING_WORDS,
 } from '../src/overlord/chatWords';
 import type { ChatEarlierRead, ChatThreadRead, ChatSendOpts, OverlordChatPort } from '../src/overlord/useOverlordChat';
 import { buildChatItems, type ChatItem } from '../src/session/chatItems';
@@ -344,7 +344,8 @@ describe('the refresh: an allow-list of triggers through one coalescer', () => {
     await tick(0);
     expect(port.threadCalls, 'shown again, it reads once').toBe(3);
     port.threads = [{ kind: 'thread', thread: quiet() }];
-    await tick(10_000);
+    // Past the message's first minute the timer's spacing is 30 s (`pickUpReadEvery`), so the next read answers the pick-up.
+    await tick(30_000);
     const n = port.threadCalls;
     await tick(60_000);
     expect(port.threadCalls, 'picked up: the timer stops').toBe(n);
@@ -363,5 +364,119 @@ describe('the refresh: an allow-list of triggers through one coalescer', () => {
     await tick(10_000);
     expect(port.threadCalls).toBe(3);
     expect(screen.queryByText(READ_CEILING_WORDS)).toBeNull();
+  });
+});
+
+// ── fix round 1 (review 4070, call 1737) ───────────────────────────────────────────────────────────────────────────────
+
+describe('the pick-up poll has an end (review F1)', () => {
+  beforeEach(() => { vi.useFakeTimers({ now: T0 + 60_000 }); });
+  const tick = async (ms: number): Promise<void> => { await act(async () => { await vi.advanceTimersByTimeAsync(ms); }); };
+
+  it('a message older than the wait is never polled for: a visible console reads once and then waits for a trigger', async () => {
+    const port = fakePort({ kind: 'thread', thread: thread([divider(2, 1, 0, { current: true }), message(row(4, -700))]) });
+    await mount(port);
+    expect(port.threadCalls).toBe(1);
+    await tick(15 * 60_000);
+    expect(port.threadCalls, 'no timer read for an eleven-minute-old message').toBe(1);
+  });
+
+  it('the spacing grows: every 10 s in the message\'s first minute, then every 30 s, and none past ten minutes', async () => {
+    const port = fakePort({ kind: 'thread', thread: thread([divider(2, 1, 0, { current: true }), message(row(4, 5))]) });
+    await mount(port);
+    await tick(10_000);
+    expect(port.threadCalls, 'at 65 s old, the first minute\'s spacing still applied to this read').toBe(2);
+    await tick(20_000);
+    expect(port.threadCalls, 'past the first minute: not before 30 s').toBe(2);
+    await tick(10_000);
+    expect(port.threadCalls).toBe(3);
+    await tick(10 * 60_000);
+    const n = port.threadCalls;
+    await tick(10 * 60_000);
+    expect(port.threadCalls, 'past ten minutes the timer reads nothing').toBe(n);
+  });
+
+  it('a message in a state this console cannot read is never polled for', async () => {
+    const port = fakePort({ kind: 'thread', thread: thread([divider(2, 1, 0, { current: true }), message(row(4, 5, { state: 'unknown' as never }))]) });
+    await mount(port);
+    await tick(5 * 60_000);
+    expect(port.threadCalls).toBe(1);
+  });
+});
+
+describe('a stale-designation answer reads at once, past a pending pick-up timer (review F5)', () => {
+  beforeEach(() => { vi.useFakeTimers({ now: T0 + 60_000 }); });
+  it('with a message awaiting its pick-up, the refused send\'s re-read does not wait out the timer', async () => {
+    const port = fakePort({ kind: 'thread', thread: thread([divider(2, 1, 0, { current: true }), message(row(4, 55))]) });
+    port.sends.push({ kind: 'refused', error: 'stale-designation' });
+    await mount(port);
+    expect(port.threadCalls).toBe(1);
+    type('to whoever is there');
+    await send();
+    await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+    expect(port.threadCalls, 'read at once, not 10 s later').toBe(2);
+  });
+});
+
+describe('the first read\'s trouble, and the older messages line (review F7, F2)', () => {
+  it('a first read with no answer says nothing was read, never "as last read"', async () => {
+    await mount(fakePort({ kind: 'no-answer' }));
+    expect(screen.getByText('No answer from the server; the conversation could not be read yet.')).toBeInTheDocument();
+    expect(screen.queryByText(/as last read/)).toBeNull();
+  });
+
+  it('when the door answers that older messages exist, one line says so; when it does not, no line', async () => {
+    const more = thread([divider(2, 1, 0, { current: true }), message(row(4, 5))], { messages: { kind: 'read', value: { more: true } } });
+    const r = await mount(fakePort({ kind: 'thread', thread: more }));
+    expect(screen.getByText(OLDER_MESSAGES_WORDS)).toBeInTheDocument();
+    r.unmount();
+    await mount(fakePort({ kind: 'thread', thread: thread([divider(2, 1, 0, { current: true }), message(row(4, 5))]) }));
+    expect(screen.queryByText(OLDER_MESSAGES_WORDS)).toBeNull();
+  });
+});
+
+describe('the toggle and the retry (review F3, F4)', () => {
+  const recorded = (over: Partial<Extract<ChatSendAnswer, { kind: 'recorded' }>> = {}): ChatSendAnswer =>
+    ({ kind: 'recorded', messageId: 9, cut: false, replay: false, offRecord: false, ...over });
+  const live = (): Fake => fakePort({ kind: 'thread', thread: thread([divider(2, 1, 0, { current: true })]) });
+  const toggle = (): HTMLElement => screen.getByRole('button', { name: 'Off the record' });
+
+  it('a retry after a lost answer, with the toggle changed, keeps its key and says the first record stands', async () => {
+    const port = live();
+    port.sends.push({ kind: 'no-answer' }, recorded({ replay: true, offRecord: false }));
+    await mount(port);
+    type('said once');
+    await send();
+    fireEvent.click(toggle());
+    await send();
+    expect(port.sendCalls[1]!.opts.sendKey, 'the toggle is not in the key').toBe(port.sendCalls[0]!.opts.sendKey);
+    expect(port.sendCalls[1]!.opts.offRecord).toBe(true);
+    expect(screen.getByText('This message was already recorded on the record; the first record stands.')).toBeInTheDocument();
+    expect(screen.queryByText(/does not know the toggle/)).toBeNull();
+  });
+
+  it('the toggle resets only when the box really cleared: an edit made while the answer was on its way keeps the toggle on', async () => {
+    const port = live();
+    let answer: (a: ChatSendAnswer) => void = () => {};
+    port.send = async (sessionId, text, opts) => {
+      port.sendCalls.push({ sessionId, text, opts });
+      return new Promise<ChatSendAnswer>((r) => { answer = r; });
+    };
+    await mount(port);
+    fireEvent.click(toggle());
+    // The first half: the draft is edited while the answer is on its way, so the box keeps the follow-up, and the toggle with it.
+    type('between us');
+    await send();
+    type('and a follow-up, still between us');
+    await act(async () => { answer(recorded({ offRecord: true })); });
+    await flush();
+    expect(box().value).toBe('and a follow-up, still between us');
+    expect(toggle(), 'the follow-up stays off the record').toHaveAttribute('aria-pressed', 'true');
+    // The second half: nothing edited, so the box clears, and the toggle resets with it.
+    await send();
+    await act(async () => { answer(recorded({ messageId: 10, offRecord: true })); });
+    await flush();
+    expect(box().value).toBe('');
+    expect(toggle()).toHaveAttribute('aria-pressed', 'false');
   });
 });

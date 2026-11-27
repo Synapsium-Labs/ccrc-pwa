@@ -14,7 +14,10 @@ import { userRow, assistantRow, type Row } from './historyFixtures.js';
 import { mkTmp, removeTmpFixturesEachTest } from './tmpHelpers.js';
 import type { DatabaseSync } from 'node:sqlite';
 import type { FastifyInstance } from 'fastify';
-import { buildServer, type Deps } from '../src/server.js';
+import { buildServer, MASKED_GET_ROUTES, type Deps } from '../src/server.js';
+import { SecretMasker } from '../src/accounts/mask.js';
+import { CHAT_EARLIER_PAGEABLE, earlierComposed } from '../src/coord/overlordChatDoor.js';
+import { historyDoorAnswer } from '../src/coord/overlordHistory.js';
 import { loadConfig } from '../src/config.js';
 import { Tmux, type Runner } from '../src/exec.js';
 import { localIO, type FleetIO } from '../src/io.js';
@@ -431,6 +434,41 @@ function historyOpeningsUnder(root: string): string[] {
   }
   return out;
 }
+
+describe('the paged arm is off in W1 (review F8)', () => {
+  // WHOEVER TURNS IT ON (`CHAT_EARLIER_PAGEABLE` true, when the history door gains a cursor) builds this door's paged route cases
+  // FIRST, through the fleet fake this file's rig already takes (`FleetIO.overlordHistory`): a first page, an older page by `around`,
+  // the rebound body's own session as the target, the four unreachable causes, and a 503 that still writes its line; and the two
+  // door mutations the plan lists for that arm (the target from the designated session; step 7's filter dropped). Until then every
+  // answer of this door is a refusal, so its ceiling never refuses and its lines are bounded only by the sign-in.
+  it('CHAT_EARLIER_PAGEABLE is false, so the door never asks the history port', () => {
+    expect(CHAT_EARLIER_PAGEABLE).toBe(false);
+  });
+});
+
+describe('GET /api/overlord/chat/earlier: the server\'s answer mask (review F9; the plan\'s Task 3)', () => {
+  it('the route is one MASKED_GET_ROUTES lists, and a page whose history item carries a secret leaves masked once its JSON passes the answer hook\'s maskDeep', () => {
+    expect(MASKED_GET_ROUTES.has('/api/overlord/chat/earlier')).toBe(true);
+    expect(MASKED_GET_ROUTES.has('/api/overlord/chat')).toBe(true);
+    const SECRET = 'Zq7'.repeat(12);
+    const mdb = openCoordDb(path.join(mkTmp('ccrc-chat-earlier-mask-'), '.ccrc', 'coord.db'));
+    try {
+      const masker = new SecretMasker({ db: mdb, token: () => 'a'.repeat(64), log: () => {} });
+      expect(masker.ingestSecret('lane-a', SECRET)).toBe('masked');
+      // The paged arm's body, built by the door's own composer (W1's arm refuses before any text, so no route case can carry one).
+      const page = { outcome: 'rows' as const, exit: 0 as const, items: [{ trust: 'untrusted' as const, role: 'assistant', text: `an old answer naming ${SECRET}` }],
+        shown: 1, total: 1, scope: { kind: 'overlord' as const, id: 'session:lane-a-overlord', project: null, families: [], families_total: 0, transcripts: 1 } };
+      const composed = earlierComposed({ term: 1, n: 1 }, historyDoorAnswer({ kind: 'answer', answer: page }), 's');
+      expect(composed.kind).toBe('rows');
+      const body = JSON.stringify(composed.kind === 'rows' ? composed.body : null);
+      expect(body, 'the control: the composed body carries the text').toContain(SECRET);
+      // `server.ts`'s preSerialization hook is `mk.maskDeep(payload)` over every route MASKED_GET_ROUTES lists.
+      const masked = JSON.stringify(masker.maskDeep(JSON.parse(body)));
+      expect(masked).not.toContain(SECRET);
+      expect(masked).toContain('an old answer naming');
+    } finally { mdb.close(); }
+  });
+});
 
 describe('census: nothing in the server or the console reads the history store itself', () => {
   it('no file under server/src or pwa/src names history.db, imports from ccd/history/, or spawns a command line that holds ccrc history', () => {

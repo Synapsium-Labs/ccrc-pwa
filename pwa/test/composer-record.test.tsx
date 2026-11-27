@@ -129,6 +129,26 @@ describe('onRecord: the text is kept until the answer, and cleared only on clear
     await act(async () => { d.settle('clear'); await d.p; });
     expect(box().value).toBe('first, and more');
   });
+
+  it('onRecordCleared is told exactly when the box cleared: on clear with the draft unedited, never on keep or an edited draft (review F4)', async () => {
+    const onRecordCleared = vi.fn();
+    const d1 = deferred();
+    const d2 = deferred();
+    const answers = [d1.p, d2.p, Promise.resolve('keep' as const)];
+    render(<Composer onRecord={() => answers.shift()!} onRecordCleared={onRecordCleared} pending={[]} />);
+    type('first');
+    fireEvent.click(sendButton());
+    type('first, edited');
+    await act(async () => { d1.settle('clear'); await d1.p; });
+    expect(onRecordCleared, 'an edited draft is not cleared, so nothing is told').not.toHaveBeenCalled();
+    fireEvent.click(sendButton());
+    await act(async () => { d2.settle('clear'); await d2.p; });
+    expect(box().value).toBe('');
+    expect(onRecordCleared).toHaveBeenCalledTimes(1);
+    type('kept');
+    await act(async () => { fireEvent.click(sendButton()); });
+    expect(onRecordCleared, 'keep clears nothing').toHaveBeenCalledTimes(1);
+  });
 });
 
 describe('leading: a node drawn before the send control', () => {

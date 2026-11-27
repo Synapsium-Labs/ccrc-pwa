@@ -7,9 +7,13 @@ import { INJECTED_PROMPTS, INJECTED_PROMPT_KEYS } from '../../shared/injected-pr
 import { operatorMessageNudgeLine, type OperatorMessageRow } from '../../shared/operatorMessages';
 import { chatTicksOf, type ChatEntry, type ChatSendAnswer } from '../../shared/overlordChat';
 import { buildChatItems } from '../src/session/chatItems';
+import type { SessionStreamMsg } from '../../shared/api';
+import { CHAT_PAGE_ROWS, type ChatThread } from '../../shared/overlordChat';
 import {
-  PANE_TURN_WORDS, ccrcLineWords, dividerWords, draftAfterSend, earlierWords, historyItemsToChat, mergeLive, sendNotice, tickWords,
-  turnOrigin, type ChatRow,
+  CHAT_READ_EVERY_MS, NOBODY_TO_SEND_WORDS, OLDER_MESSAGES_WORDS, PANE_TURN_WORDS, PICK_UP_READ_LATER_MS, PICK_UP_WAIT_MS,
+  THREAD_NO_ANSWER_WORDS, THREAD_OFF_SHAPE_WORDS, READ_CEILING_WORDS, ccrcLineWords, chatReadTrigger, dividerWords, draftAfterSend,
+  earlierPageOf, earlierWords, historyItemsToChat, mergeLive, nextReadAt, pickUpReadEvery, sendNotice, threadTroubleWords,
+  tickWords, turnOrigin, type ChatRow,
 } from '../src/overlord/chatWords';
 
 const T0 = Date.UTC(2026, 9, 1, 10, 0, 0);
@@ -146,5 +150,120 @@ describe('the words', () => {
     expect(sendNotice({ kind: 'refused', error: 'renewing' }, false)).toBeNull();
     expect(sendNotice({ kind: 'off-shape' }, false)).toMatch(/did not record/);
     expect(sendNotice({ kind: 'no-answer' }, false)).toMatch(/kept/);
+  });
+});
+
+describe('the replay notice (review F3): a retry\'s answer is the first record\'s fact', () => {
+  it('a replay whose first record went the other way says the first record stands, never that the server does not know the toggle', () => {
+    const replay = (offRecord: boolean): ChatSendAnswer => ({ kind: 'recorded', messageId: 1, cut: false, replay: true, offRecord });
+    expect(sendNotice(replay(false), true)).toBe('This message was already recorded on the record; the first record stands.');
+    expect(sendNotice(replay(true), false)).toBe('This message was already recorded off the record; the first record stands.');
+    expect(sendNotice(replay(true), true)).toBeNull();
+    expect(sendNotice(replay(false), false)).toBeNull();
+  });
+});
+
+// ── the refresh's deciders, directly (review F11) ──────────────────────────────────────────────────────────────────────
+
+describe('chatReadTrigger: the allow-list of frames that ask for a read', () => {
+  const events = (...kinds: ('user' | 'assistant')[]): SessionStreamMsg =>
+    ({ type: 'events', uuid: 'u', offset: 0, events: kinds.map((k, i) => (k === 'user' ? user(`u${i}`, i, 'x') : assistant(`a${i}`, i, 'x'))) });
+  const status = (st: 'idle' | 'busy'): SessionStreamMsg => ({ type: 'status', status: st, statusUpdatedAt: null });
+  it('an events frame asks only when it holds a user turn', () => {
+    expect(chatReadTrigger(events('user'), null)).toBe(true);
+    expect(chatReadTrigger(events('assistant', 'user'), 'busy')).toBe(true);
+    expect(chatReadTrigger(events('assistant'), 'busy')).toBe(false);
+    expect(chatReadTrigger(events(), 'busy')).toBe(false);
+  });
+  it('a status frame asks only at a turn\'s end: idle after busy, never idle after idle or before any status, never busy', () => {
+    expect(chatReadTrigger(status('idle'), 'busy')).toBe(true);
+    expect(chatReadTrigger(status('idle'), 'idle')).toBe(false);
+    expect(chatReadTrigger(status('idle'), null)).toBe(false);
+    expect(chatReadTrigger(status('busy'), 'idle')).toBe(false);
+  });
+  it('a beat never asks', () => {
+    expect(chatReadTrigger({ type: 'beat', at: 1 }, 'busy')).toBe(false);
+  });
+});
+
+describe('nextReadAt: the coalescer\'s spacing and the ceiling\'s wait', () => {
+  it('no read yet reads now; after a read, not before the spacing; a ceiling\'s wait wins when it is later; a wider spacing is honoured', () => {
+    expect(nextReadAt(null, T0, 0)).toBe(T0);
+    expect(nextReadAt(T0, T0 + 1_000, 0)).toBe(T0 + CHAT_READ_EVERY_MS);
+    expect(nextReadAt(T0, T0 + 20_000, 0)).toBe(T0 + 20_000);
+    expect(nextReadAt(T0, T0 + 1_000, T0 + 60_000)).toBe(T0 + 60_000);
+    expect(nextReadAt(null, T0, T0 + 5_000)).toBe(T0 + 5_000);
+    expect(nextReadAt(T0, T0 + 1_000, 0, 30_000)).toBe(T0 + 30_000);
+  });
+});
+
+describe('pickUpReadEvery: the timer reads only for a young message waiting for its pick-up (review F1)', () => {
+  const t = (...rows: OperatorMessageRow[]): ChatThread => ({
+    v: 1, designation: 'designated', sessionId: 'lane-a-overlord', term: 1, entries: rows.map(message),
+    messages: { kind: 'read', value: { more: false } }, generations: { kind: 'read', value: { count: 1 } }, readiness: { kind: 'read', value: { oldest: null } },
+  });
+  const now = T0 + 1_000_000;
+  const aged = (id: number, ageMs: number, over: Partial<OperatorMessageRow> = {}): OperatorMessageRow =>
+    ({ ...row(id, 0, over), at: now - ageMs });
+  it('the bound: awaited at its first minute (every 10 s), later (every 30 s) until ten minutes, then never', () => {
+    expect(PICK_UP_WAIT_MS).toBe(600_000);
+    expect(pickUpReadEvery(t(aged(1, 5_000)), now)).toBe(CHAT_READ_EVERY_MS);
+    expect(pickUpReadEvery(t(aged(1, 59_999)), now)).toBe(CHAT_READ_EVERY_MS);
+    expect(pickUpReadEvery(t(aged(1, 60_000)), now)).toBe(PICK_UP_READ_LATER_MS);
+    expect(pickUpReadEvery(t(aged(1, PICK_UP_WAIT_MS - 1)), now)).toBe(PICK_UP_READ_LATER_MS);
+    expect(pickUpReadEvery(t(aged(1, PICK_UP_WAIT_MS)), now)).toBeNull();
+    expect(pickUpReadEvery(t(aged(1, 3_600_000)), now)).toBeNull();
+  });
+  it('a row whose state this build cannot read is never awaited, nor one picked up or settled', () => {
+    expect(pickUpReadEvery(t(aged(1, 5_000, { state: 'unknown' as never })), now)).toBeNull();
+    expect(pickUpReadEvery(t(aged(1, 5_000, { state: 'picked-up', deliveredAt: T0, pickedUpAt: T0 })), now)).toBeNull();
+    expect(pickUpReadEvery(t(aged(1, 5_000, { state: 'settled', deliveredAt: T0, pickedUpAt: T0, settledAt: T0, settledBy: 'acknowledge' })), now)).toBeNull();
+    expect(pickUpReadEvery(t(), now)).toBeNull();
+  });
+  it('two messages of different ages: the younger decides, and an old one alone reads nothing', () => {
+    expect(pickUpReadEvery(t(aged(1, 300_000), aged(2, 5_000)), now)).toBe(CHAT_READ_EVERY_MS);
+    expect(pickUpReadEvery(t(aged(1, 5_000), aged(2, 300_000)), now)).toBe(CHAT_READ_EVERY_MS);
+    expect(pickUpReadEvery(t(aged(1, 900_000), aged(2, 300_000)), now)).toBe(PICK_UP_READ_LATER_MS);
+    expect(pickUpReadEvery(t(aged(1, 900_000), aged(2, 700_000)), now)).toBeNull();
+  });
+});
+
+describe('the thread\'s trouble before any read (review F7) and the older messages line (review F2)', () => {
+  it('a first read that fails never says "as last read": nothing was read', () => {
+    expect(threadTroubleWords({ kind: 'no-answer' }, false)).toBe('No answer from the server; the conversation could not be read yet.');
+    expect(threadTroubleWords({ kind: 'off-shape' }, false)).toBe("This server's answer could not be read; the conversation could not be read yet.");
+    expect(threadTroubleWords({ kind: 'no-answer' }, true)).toBe(THREAD_NO_ANSWER_WORDS);
+    expect(threadTroubleWords({ kind: 'off-shape' }, true)).toBe(THREAD_OFF_SHAPE_WORDS);
+    expect(threadTroubleWords({ kind: 'ceiling' }, false)).toBe(READ_CEILING_WORDS);
+    expect(threadTroubleWords({ kind: 'refused', words: 'Sign in again.' }, false)).toBe('Sign in again.');
+    for (const read of [true, false]) expect(threadTroubleWords({ kind: 'no-answer' }, read)).not.toBe('');
+  });
+  it('the older messages line names the page\'s bound, in closed words', () => {
+    expect(CHAT_PAGE_ROWS).toBe(100);
+    expect(OLDER_MESSAGES_WORDS).toBe('Older messages are in the record; this shows the newest 100.');
+  });
+});
+
+describe('earlierPageOf: what an earlier page answer becomes, and what comes next (review F10)', () => {
+  const scope = { kind: 'overlord', id: 'session:lane-a-overlord', project: null, families: [], families_total: 0, transcripts: 1 } as const;
+  const item = (uuid: unknown) => ({ kind: 'entry', role: 'assistant', text: 'x', trust: 'untrusted', uuid }) as never;
+  const page = (items: unknown[], shown: number, total: number) =>
+    ({ ok: true as const, gen: { term: 1, n: 1 }, page: { outcome: 'rows' as const, exit: 0 as const, items: items as never[], shown, total, scope } });
+  it('rows with more answer the first item\'s uuid as next; the last page, or a first item with no uuid, answers none', () => {
+    expect(earlierPageOf(page([item('u-1'), item('u-2')], 2, 5))).toMatchObject({ kind: 'rows', next: 'u-1' });
+    expect(earlierPageOf(page([item('u-1')], 1, 1))).toMatchObject({ kind: 'rows', next: null });
+    expect(earlierPageOf(page([item(7)], 1, 3))).toMatchObject({ kind: 'rows', next: null });
+    expect(earlierPageOf(page([], 0, 3))).toMatchObject({ kind: 'rows', next: null });
+  });
+  it('every other answer is unreachable with its cause', () => {
+    expect(earlierPageOf('no-answer')).toEqual({ kind: 'unreachable', cause: 'no-answer' });
+    expect(earlierPageOf('off-shape')).toEqual({ kind: 'unreachable', cause: 'off-shape' });
+    expect(earlierPageOf({ ok: false, error: 'history-unreachable', cause: 'no-agent' })).toEqual({ kind: 'unreachable', cause: 'no-agent' });
+    expect(earlierPageOf({ ok: false, error: 'bad-request', detail: 'not-pageable' })).toEqual({ kind: 'unreachable', cause: 'not-pageable' });
+    expect(earlierPageOf({ ok: false, error: 'read-ceiling' })).toEqual({ kind: 'unreachable', cause: 'read-ceiling' });
+    expect(earlierPageOf({ ok: true, gen: { term: 1, n: 1 }, page: { outcome: 'busy' } })).toEqual({ kind: 'unreachable', cause: 'busy' });
+  });
+  it('the send with no Overlord says so in the words module', () => {
+    expect(NOBODY_TO_SEND_WORDS).toBe('No Overlord is started, so there is nobody to send to.');
   });
 });

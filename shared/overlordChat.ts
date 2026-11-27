@@ -97,6 +97,9 @@ export interface GenerationKey { readonly term: number; readonly n: number }
 const ENTRY_KIND_MAP = { message: true, 'server-line': true, divider: true } as const;
 export type ChatEntryKind = keyof typeof ENTRY_KIND_MAP;
 export const CHAT_ENTRY_KINDS = Object.keys(ENTRY_KIND_MAP) as ChatEntryKind[];
+/** The thread door's page of messages: the newest this many. One bound for the door that reads them and the console that says
+ *  how many it shows when older ones exist. */
+export const CHAT_PAGE_ROWS = 100;
 
 const EARLIER_MAP = { readable: 'its earlier pages can be read', 'not-pageable': 'it is read in ccrc history only' } as const;
 export type EarlierWord = keyof typeof EARLIER_MAP;
