@@ -112,7 +112,7 @@ const CELL = String.raw`['"](?:allow|refuse|proposal|armed|by-grant)['"]`;
 const CELL_MAP = new RegExp(String.raw`\{\s*chat:\s*${CELL}\s*,\s*advise:\s*${CELL}\s*,\s*full:\s*${CELL}\s*,?\s*\}`);
 const CLASS_COVERS_MAP = /\bO[1-6]\s*:\s*\[\s*(?:\]|['"](?:grant|command|operator-request|stated-entry)['"])/;
 /** The catalogue's kinds that are not plain words, so a list of three of them is a list of act kinds. */
-const DISTINCT_KINDS = new Set(OVERLORD_ACT_KIND_LIST.filter((k) => k.includes('-')));
+const DISTINCT_KINDS = new Set<string>(OVERLORD_ACT_KIND_LIST.filter((k) => k.includes('-')));
 const hasKindList = (text: string): boolean =>
   [...text.matchAll(literalList(','))].some(([list]) =>
     new Set([...list.matchAll(/(['"])(.*?)\1/g)].map((m) => m[2]).filter((w) => DISTINCT_KINDS.has(w!))).size >= 3);

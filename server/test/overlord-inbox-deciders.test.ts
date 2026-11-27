@@ -30,7 +30,8 @@ describe('acknowledgeVerdict: settle, already or absent', () => {
 });
 describe('inboxWakeVerdict: the holds in their order, then the rows with no nudge of their own', () => {
   for (const [name, run] of Object.entries(inboxWakeVerdictCases(inbox))) it(name, run);
-  it('the gate words the cases walk are the gate\'s own fourteen', () => { expect(GATE_WORD_LIST).toHaveLength(14); });
+  // W2 act catalogue A adds the fifteenth, `act-ceiling` (gate step 10's ceiling half).
+  it('the gate words the cases walk are the gate\'s own fifteen', () => { expect(GATE_WORD_LIST).toHaveLength(15); });
 });
 
 describe('isOverlordInboxKebab: the words this piece spells, and no others', () => {

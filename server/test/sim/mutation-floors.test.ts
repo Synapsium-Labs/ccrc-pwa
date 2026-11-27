@@ -64,6 +64,7 @@ import { PLAN_EPIC_WAVES_MUTANT_SETS } from './planEpicWavesSets.js';
 import { WORK_MAP_MUTANT_SETS } from './workMapSets.js';
 import { DONE_TEST_MUTANT_SETS } from './doneTestSets.js';
 import { LADDER_MUTANT_SETS } from './ladderSets.js';
+import { ACT_CATALOGUE_MUTANT_SETS } from './actCatalogueSets.js';
 import { SEQUENCE_MUTANT_SETS } from './sequenceSets.js';
 import { INVARIANT_MUTANT_SETS } from './invariantSets.js';
 import { READINESS_MUTANT_SETS } from './readinessSets.js';
@@ -306,6 +307,7 @@ const MUTANT_SETS: Record<string, MutantSet<never>> = {
   ...WORK_MAP_MUTANT_SETS,
   ...DONE_TEST_MUTANT_SETS,
   ...LADDER_MUTANT_SETS,
+  ...ACT_CATALOGUE_MUTANT_SETS,
   ...SEQUENCE_MUTANT_SETS,
   ...INVARIANT_MUTANT_SETS,
   ...READINESS_MUTANT_SETS,
