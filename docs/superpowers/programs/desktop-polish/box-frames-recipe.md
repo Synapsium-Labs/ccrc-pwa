@@ -155,5 +155,7 @@ fails) and was replaced by `v in map`, which the own-property cases kill.
 - **Not run here:** the pin suite whose name names the approval signing (the approval-surface guard refuses a command
   naming it), and the test projects' compile guard (it needs the console's packages, not installed in this tree). Both
   are read from the exact head's CI run.
+- **Load-bound here, read from CI:** `retire-executors-pin.test.ts` timed out on this box under load, on this branch and
+  on a clean checkout of main alike (#3484); a hosted run passes it. Its result on the exact head is read from CI by name.
 - **Packets:** one went to each holder of a file this wave edits (`send.ts`, `agent-protocol.ts`, the coordination store,
   port and schema, the gate and its suite, `server.ts`), and three to the capture owner. Each edit followed its yes.
