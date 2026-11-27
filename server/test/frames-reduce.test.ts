@@ -11,7 +11,7 @@ import { framesScan } from '../../shared/framesScan.mjs';
 import { FRAMES_NUDGE_TEXT, FRAMES_RECIPE_VERSION, framesOurs } from '../../shared/framesCapture.js';
 import { FRAMES_PARTS, frameSize, FRAMES_VERSION_SHAPE } from '../../shared/framesResult.js';
 import {
-  FRAMES_DECORATION, FRAMES_REPLACED, FRAMES_STATUS_TEXT, FRAMES_WIDE_RANGES, PATH_LIKE, checkReducedFrame, credentialShaped, frameCellWidth, isRuleRow, reduceFrame,
+  FRAMES_DECORATION, FRAMES_REPLACED, FRAMES_STATUS_TEXT, FRAMES_WIDE_KEPT, FRAMES_WIDE_RANGES, PATH_LIKE, checkReducedFrame, credentialShaped, frameCellWidth, isRuleRow, reduceFrame,
   reducerFingerprint, rowIsOurs, runsToTheEdge, statusRowOf, type FramesScan,
 } from '../../shared/framesReduce.js';
 
@@ -207,8 +207,37 @@ describe('the wide table is the Unicode East Asian Width table (review 4109, R1,
     for (let i = 0; i < items.length; i += 8) lines.push(`  ${items.slice(i, i + 8).join(', ')},\n`);
     return lines.join('');
   };
-  /** What the function answers for a character the table does not list: the engine's two classes (ruling 2). */
-  const besideTheTable = (c: string): 1 | 2 => (/\p{Emoji_Presentation}|\p{Cn}/u.test(c) ? 2 : 1);
+  /** What the function answers for a character the table does not list: the stated addition, and the engine's two classes
+   *  (ruling 2). */
+  const inKept = (cp: number): boolean => FRAMES_WIDE_KEPT.some(([a, b]) => cp >= a && cp <= b);
+  const besideTheTable = (c: string): 1 | 2 => (inKept(c.codePointAt(0)!) || /\p{Emoji_Presentation}|\p{Cn}/u.test(c) ? 2 : 1);
+  /** THE RULE ON MAIN at 86b2c2d6e2, as data: its hand list's ranges, and an emoji drawn as one. */
+  const MAIN_RANGES: readonly (readonly [number, number])[] = [
+    [0x1100, 0x115f], [0x2e80, 0x303e], [0x3041, 0x33ff], [0x3400, 0x4dbf], [0x4e00, 0x9fff], [0xa000, 0xa4cf], [0xac00, 0xd7a3],
+    [0xf900, 0xfaff], [0xfe30, 0xfe4f], [0xff00, 0xff60], [0xffe0, 0xffe6], [0x20000, 0x3fffd],
+  ];
+  const onMain = (cp: number, c: string): 1 | 2 => (MAIN_RANGES.some(([a, b]) => cp >= a && cp <= b) || /\p{Emoji_Presentation}/u.test(c) ? 2 : 1);
+
+  it('no code point counts narrower than it did on main: the one stated addition keeps the eight ambiguous ones main counted wide (the coordinator\'s ruling on wave 195)', () => {
+    const narrower: string[] = [];
+    let wider = 0;
+    for (let cp = 0; cp <= 0x10ffff; cp++) {
+      if (cp >= 0xd800 && cp <= 0xdfff) continue;
+      const c = String.fromCodePoint(cp);
+      const [was, now] = [onMain(cp, c), frameCellWidth(c)];
+      if (now < was) narrower.push(cp.toString(16));
+      else if (now > was) wider++;
+    }
+    expect(narrower).toEqual([]);
+    expect(wider).toBe(767047);
+    // The addition is exactly U+3248 to U+324F, none of them in the data file's W or F lines, each two cells.
+    expect(FRAMES_WIDE_KEPT.map(([a, b]) => [a, b])).toEqual([[0x3248, 0x324f]]);
+    const ranges = fromFixture();
+    for (let cp = 0x3248; cp <= 0x324f; cp++) {
+      expect(ranges.some(([a, b]) => cp >= a && cp <= b), cp.toString(16)).toBe(false);
+      expect(frameCellWidth(String.fromCodePoint(cp)), cp.toString(16)).toBe(2);
+    }
+  });
 
   it('the fixture carries its data file\'s own name and date lines, and the shared file names the same file', () => {
     expect(FIXTURE.split('\n').slice(0, 2)).toEqual(['# EastAsianWidth-17.0.0.txt', '# Date: 2025-07-24, 00:12:54 GMT']);
@@ -563,14 +592,14 @@ describe('rule 10, and the receiver\'s check', () => {
   it('the version folds in the reducer\'s probe answers', () => {
     expect(FRAMES_RECIPE_VERSION).toMatch(FRAMES_VERSION_SHAPE);
   });
-  it('the probe table answers for a bare quote, a wide character at the edge, a row at the probe\'s width and a straddle (review 4109, F9)', () => {
-    // The four probes after the eighteen of round 2, each drawn in its box: a change in what the reducer does with any of
+  it('the probe table answers for a bare quote, a wide character at the edge, a row at the probe\'s width, a straddle and the stated addition at the edge (review 4109, F9)', () => {
+    // The five probes after the eighteen of round 2, each drawn in its box: a change in what the reducer does with any of
     // them moves the version.
     const answers = JSON.parse(reducerFingerprint()) as { kind: string; refusal?: string; text?: string }[];
-    expect(answers).toHaveLength(25);
+    expect(answers).toHaveLength(26);
     expect(answers[18]).toMatchObject({ kind: 'reduced' });
     expect(answers[18]!.text).toContain('› stashed');
-    for (const i of [19, 20, 21]) expect(answers[i], String(i)).toEqual({ kind: 'refused', refusal: 'private-shape' });
+    for (const i of [19, 20, 21, 22]) expect(answers[i], String(i)).toEqual({ kind: 'refused', refusal: 'private-shape' });
   });
 });
 

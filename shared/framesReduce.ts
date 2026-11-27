@@ -162,14 +162,21 @@ export const FRAMES_WIDE_RANGES: readonly (readonly [number, number])[] = Object
  *  one cell (the data file gives it A). An engine on an older Unicode version reads more code points as unassigned and so
  *  counts them wider, the safe direction; a case holds that the engine is not newer than the table's version. */
 const WIDE_CLASS = /\p{Emoji_Presentation}|\p{Cn}/u;
-/** How many screen cells one character (one code point) takes: two when the table lists it, when it is an emoji drawn as
- *  one, or when it is unassigned; one otherwise. One-cell characters include the ambiguous-width ones (A), which a
- *  terminal draws in one cell outside an East Asian locale (the frames driver runs under `LANG=C.UTF-8`, read in
- *  `agent/src/testbox/captureFramesRun.ts`; how the terminal draws them is inferred, not measured), and every combining
- *  or zero-width mark, which counts one though it is drawn in none: a row is read as wider than it is drawn there, never
- *  narrower. */
+/** THE ONE STATED ADDITION to the generated table (the coordinator's ruling on wave 195: no code point counts narrower
+ *  than it did on main): U+3248 to U+324F, circled numbers on black squares. The data file gives them A (ambiguous
+ *  width), so the table does not list them; the hand list on main counted them two cells (its range U+3041 to U+33FF took
+ *  them in). They stay two cells, because a terminal that draws an ambiguous character wide draws them in two, and
+ *  over-counting only refuses. A case holds that, over every code point, nothing counts narrower than on main. */
+export const FRAMES_WIDE_KEPT: readonly (readonly [number, number])[] = Object.freeze([[0x3248, 0x324F]]);
+/** How many screen cells one character (one code point) takes: two when the table lists it, when it is the stated
+ *  addition, when it is an emoji drawn as one, or when it is unassigned; one otherwise. One-cell characters include the
+ *  other ambiguous-width ones (A), which a terminal draws in one cell outside an East Asian locale (the frames driver runs
+ *  under `LANG=C.UTF-8`, read in `agent/src/testbox/captureFramesRun.ts`; how the terminal draws them is inferred, not
+ *  measured), and every combining or zero-width mark, which counts one though it is drawn in none: a row is read as wider
+ *  than it is drawn there, never narrower. */
 export function frameCellWidth(c: string): 1 | 2 {
   const cp = c.codePointAt(0) ?? 0;
+  if (FRAMES_WIDE_KEPT.some(([a, b]) => cp >= a && cp <= b)) return 2;
   let lo = 0;
   let hi = FRAMES_WIDE_RANGES.length - 1;
   while (lo <= hi) {
@@ -370,6 +377,8 @@ export function reducerFingerprint(): string {
     // a row at the probe's own width, and a straddle (a row one cell short, the next beginning with a wide character).
     '› stashed · Restart to update', String.fromCodePoint(0xAC00).repeat(17) + 'xy /ab\ncd rest',
     'x'.repeat(35) + ' /pro\nject rest', 'x'.repeat(35) + ' /pr\n' + String.fromCodePoint(0x6F22) + 'ject rest',
+    // The coordinator's ruling on wave 195: a row reaching the edge through the stated addition (U+3248, kept two cells).
+    'x'.repeat(35) + ' /p' + String.fromCodePoint(0x3248) + '\nq rest',
   ];
   // Each probe drawn as a box draws it: between two rules, the capture's status row under the lower one (rule 8). And the
   // status rule's own probes: no rule, another status text, the text twice.
