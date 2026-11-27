@@ -3,7 +3,7 @@
 // `strace -f`; the fixtures the parts share are in `ccrc-doctorFixture.ts`.
 import { describe, it, expect } from 'vitest';
 import { spawnSync } from 'node:child_process';
-import { writeFileSync, readFileSync, mkdirSync, rmSync, chmodSync } from 'node:fs';
+import { writeFileSync, readFileSync, mkdirSync, rmSync, chmodSync, copyFileSync } from 'node:fs';
 import path, { join } from 'node:path';
 import { mkTmp, removeTmpFixturesEachTest } from './tmpHelpers.js';
 import { fixtureSecretLine } from './authFixtures.js';
@@ -92,6 +92,11 @@ describe('ccrc doctor: auth — the gate, and the passphrase it needs', () => {
     rmSync(join(home, '.ccrc', 'Caddyfile'), { force: true });
     rmSync(sysCaddyfile(home), { force: true });
     writeCcrcEnv(home, env);
+    // Wave 190 A4: the helper that offers `ccrc auth` asks whether the installed unit is the tree's file, so the box
+    // carries what the installer lands: the tree's deploy/ccrc.service and the same bytes installed.
+    mkdirSync(join(home, 'ccrc', 'deploy'), { recursive: true });
+    copyFileSync(join(REPO, 'deploy', 'ccrc.service'), join(home, 'ccrc', 'deploy', 'ccrc.service'));
+    if (process.platform !== 'darwin') copyFileSync(join(REPO, 'deploy', 'ccrc.service'), join(unitDirOf(home), 'ccrc.service'));
     return home;
   };
 
@@ -170,6 +175,25 @@ describe('ccrc doctor: auth — the gate, and the passphrase it needs', () => {
     expect(line).toContain('CCRC_AUTH=on');
     expect(line).not.toContain('ccrc auth on');
   });
+
+  // Wave 190 A4: the helper asks the installer's-unit proof's compare half (it needs no service manager), so where the
+  // installed unit is not provably the tree's file, the verb, which refuses there, is not offered. One row per reason.
+  itLinux.each([
+    ['the installed ccrc.service edited by hand', (h: string): void => {
+      const u = join(unitDirOf(h), 'ccrc.service');
+      writeFileSync(u, readFileSync(u, 'utf8').replace('RestartSec=3', 'RestartSec=4'));
+    }],
+    ["the tree's own deploy/ccrc.service missing", (h: string): void => rmSync(join(h, 'ccrc', 'deploy', 'ccrc.service'), { force: true })],
+  ] as const)('wave 190: where the installed unit is not provably the installer\'s, the dark remedy does not offer ccrc auth: %s',
+    (_name, plant) => {
+      const home = unexposedBox('ccrc-doctor-auth-notown-');
+      rmSync(join(home, '.ccrc', 'auth.scrypt'), { force: true });
+      plant(home);
+      const line = authLine(runDoctor(home).stdout);
+      expect(line).toMatch(/^PASS auth: /);
+      expect(line).toContain('CCRC_AUTH=on');
+      expect(line).not.toContain('ccrc auth on');
+    });
 
   it('FAILS when the gate is ARMED and there is no passphrase — the fail-shut state, made visible', () => {
     // `readAuthSecret` returning null with the flag on is Task 5's fail-SHUT

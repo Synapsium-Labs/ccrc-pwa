@@ -58,6 +58,18 @@ const restarts = (home: string): string[] => {
   return existsSync(f) ? readFileSync(f, 'utf8').split('\n').filter((l) => /^--user restart /.test(l)) : [];
 };
 const bytes = (p: string): string | null => (existsSync(p) ? readFileSync(p, 'latin1') : null);
+/** A directory of links to every command of the real PATH but `name`, so nothing else a run needs goes missing. */
+function pathWithout(home: string, name: string): string {
+  const bin = join(home, `path-without-${name}`);
+  mkdirSync(bin);
+  for (const d of (process.env['PATH'] ?? '').split(':').filter((x) => x && existsSync(x))) {
+    for (const f of readdirSync(d)) {
+      if (f === name || existsSync(join(bin, f))) continue;
+      try { symlinkSync(join(d, f), join(bin, f)); } catch { /* a name two directories share: the first wins */ }
+    }
+  }
+  return bin;
+}
 
 // ── the console, played by this process ────────────────────────────────────
 let server: http.Server;
@@ -95,25 +107,38 @@ const SYSTEMCTL_STUB = [
   '      if grep -qx "CCRC_AUTH=on" "$HOME/.ccrc/ccrc.env" 2>/dev/null; then next=armed; else next=off; fi',
   '    fi',
   '    printf \'%s\\n\' "$next" > "$HOME/server-state"; exit 0 ;;',
-  // What systemd loaded for the unit, and its manager's own environment (the reach proof's other sources, review 3934
-  // F2): the two known EnvironmentFile= lines unless `<home>/sd-envfiles` replaces them, and `<home>/sd-dropins`,
-  // `<home>/sd-environment`, `<home>/sd-manager-env` when a case plants them; `<home>/sd-show-fails` makes either fail.
-  '  "--user show ccrc.service -p DropInPaths -p EnvironmentFiles -p Environment -p PassEnvironment")',
-  '    [ ! -e "$HOME/sd-show-fails" ] || exit 1',
-  '    printf \'DropInPaths=%s\\n\' "$(cat "$HOME/sd-dropins" 2>/dev/null)"',
-  '    printf \'Environment=%s\\n\' "$(cat "$HOME/sd-environment" 2>/dev/null)"',
-  '    if [ -e "$HOME/sd-envfiles" ]; then cat "$HOME/sd-envfiles"; else',
-  '      printf \'EnvironmentFiles=%s (ignore_errors=yes)\\n\' "$HOME/.ccrc/ccrc.env" "$HOME/.ccrc/exposure.env"; fi',
-  '    printf \'PassEnvironment=\\n\'; exit 0 ;;',
+  // `systemctl --user show ccrc.service -p …`: one line per property asked, in systemd's own order and not the order
+  // asked (measured on systemd 259: FragmentPath, SourcePath, DropInPaths, NeedDaemonReload, then the service's
+  // Environment, EnvironmentFiles, PassEnvironment), an empty one printed as `Name=`, as systemd prints a property asked
+  // by name. What systemd loaded for the unit (the reach proof's other sources, review 3934 F2): the two known
+  // EnvironmentFile= lines unless `<home>/sd-envfiles` replaces them, and `<home>/sd-dropins`, `<home>/sd-environment`
+  // when a case plants them; `<home>/sd-show-fails` makes a read that asks DropInPaths fail, and the manager's own
+  // environment too. Which file systemd loaded and whether as it is now (review 3971 R1, wave 190 F1): the user unit
+  // directory's own file unless `<home>/sd-fragment` holds the whole answer (its lines, or nothing for no line),
+  // `<home>/sd-sourcepath` a SourcePath, `<home>/sd-needreload` the reload answer (no by default);
+  // `<home>/sd-needreload-fails` makes a read that asks NeedDaemonReload fail.
+  '  "--user show ccrc.service -p "*)',
+  '    want=" $* "',
+  '    case "$want" in *" -p DropInPaths "*) [ ! -e "$HOME/sd-show-fails" ] || exit 1 ;; esac',
+  '    case "$want" in *" -p NeedDaemonReload "*) [ ! -e "$HOME/sd-needreload-fails" ] || exit 1 ;; esac',
+  '    for p in FragmentPath SourcePath DropInPaths NeedDaemonReload Environment EnvironmentFiles PassEnvironment; do',
+  '      case "$want" in *" -p $p "*) ;; *) continue ;; esac',
+  '      case $p in',
+  '        FragmentPath) if [ -e "$HOME/sd-fragment" ]; then cat "$HOME/sd-fragment"; else',
+  '          printf \'FragmentPath=%s\\n\' "$HOME/.config/systemd/user/ccrc.service"; fi ;;',
+  '        SourcePath) printf \'SourcePath=%s\\n\' "$(cat "$HOME/sd-sourcepath" 2>/dev/null)" ;;',
+  '        DropInPaths) printf \'DropInPaths=%s\\n\' "$(cat "$HOME/sd-dropins" 2>/dev/null)" ;;',
+  '        NeedDaemonReload) printf \'NeedDaemonReload=%s\\n\' "$(cat "$HOME/sd-needreload" 2>/dev/null || echo no)" ;;',
+  '        Environment) printf \'Environment=%s\\n\' "$(cat "$HOME/sd-environment" 2>/dev/null)" ;;',
+  '        EnvironmentFiles) if [ -e "$HOME/sd-envfiles" ]; then cat "$HOME/sd-envfiles"; else',
+  '          printf \'EnvironmentFiles=%s (ignore_errors=yes)\\n\' "$HOME/.ccrc/ccrc.env" "$HOME/.ccrc/exposure.env"; fi ;;',
+  '        PassEnvironment) printf \'PassEnvironment=\\n\' ;;',
+  '      esac',
+  '    done; exit 0 ;;',
   '  "--user show-environment")',
   '    [ ! -e "$HOME/sd-show-fails" ] && [ ! -e "$HOME/sd-manager-env-fails" ] || exit 1',
   '    if [ -e "$HOME/sd-manager-env" ]; then cat "$HOME/sd-manager-env"; else printf \'HOME=%s\\nLANG=C.UTF-8\\n\' "$HOME"; fi',
   '    exit 0 ;;',
-  // Whether systemd loaded the unit file as it is now (review 3971 R1): `<home>/sd-needreload` holds the answer (no by
-  // default), and `<home>/sd-needreload-fails` makes the query fail.
-  '  "--user show ccrc.service -p NeedDaemonReload")',
-  '    [ ! -e "$HOME/sd-needreload-fails" ] || exit 1',
-  '    printf \'NeedDaemonReload=%s\\n\' "$(cat "$HOME/sd-needreload" 2>/dev/null || echo no)"; exit 0 ;;',
   '  "--user is-active ccrc.service")',
   '    if [ "$(cat "$HOME/server-state" 2>/dev/null)" = down ]; then echo failed; exit 3; fi',
   '    echo active; exit 0 ;;',
@@ -517,6 +542,40 @@ describe.skipIf(IS_DARWIN)('ccrc auth off', () => {
 
   // Review 3934 A1: a non-zero restart never reads as restarted, even when the old server already answers the asked
   // mode (here: CCRC_AUTH=on in the file, a server never restarted onto it, so it answers off).
+  // Wave 190 A6: a restore that fails, both shapes. With no file before the run (the restarts both fail, so no server is
+  // asked), the one this run wrote cannot be removed: it is named as this run's, never as a "previous" file. With a file
+  // before it, the copy cannot be moved back while the re-proof passes: the server answers as before, on this run's lines.
+  it('a failed proof whose removal of the file this run created fails: named as this run\'s, kept, exit 1', async () => {
+    const b = box('ccrc-auth-created-rmfails-', '');
+    spawnSync('rm', ['-f', envFile(b.home)]);
+    writeFileSync(join(b.home, 'restart-plan'), 'fail\nfail\n');
+    mkdirSync(join(b.home, '.local', 'bin'), { recursive: true });
+    writeFileSync(join(b.home, '.local', 'bin', 'rm'), '#!/bin/sh\ncase "$*" in *"/.ccrc/ccrc.env") exit 1 ;; esac\nexec /usr/bin/rm "$@"\n',
+      { mode: 0o755 });
+    const r = await runTty(b.home, ['auth', 'on']);
+    expect(r.code, r.out).toBe(1);
+    expect(r.out).toMatch(/the restarted console did not prove the change: the restart command failed/);
+    expect(r.out).toMatch(/ccrc\.env, which this run created, was NOT removed: it still holds this run's lines/);
+    expect(r.out).not.toMatch(/previous|old file/);
+    expect(bytes(envFile(b.home))).toBe(ON_LINES(7788));
+    expect(restarts(b.home)).toEqual([RESTART, RESTART]);
+  });
+
+  it('a failed proof whose copy cannot be moved back, with the re-proof passing: "on this run\'s lines, not on its old file"', async () => {
+    const b = box('ccrc-auth-copyback-mvfails-', portLines());
+    writeFileSync(join(b.home, 'restart-plan'), 'down\noff\n');
+    mkdirSync(join(b.home, '.local', 'bin'), { recursive: true });
+    writeFileSync(join(b.home, '.local', 'bin', 'mv'), '#!/bin/sh\ncase "$*" in *ccrc.env.auth-restore.*) exit 1 ;; esac\nexec /usr/bin/mv "$@"\n',
+      { mode: 0o755 });
+    const r = await runTty(b.home, ['auth', 'on']);
+    expect(r.code, r.out).toBe(1);
+    expect(r.out).toMatch(/The previous .*ccrc\.env was NOT put back: the previous file is kept at .*ccrc\.env\.auth-restore\.\d+, and .*ccrc\.env still holds this run's lines/);
+    expect(r.out).toMatch(/it answers with sign-in off as before this run, though on this run's lines, not on its old file/);
+    expect(bytes(envFile(b.home))).toBe(`${portLines()}${ON_LINES(PORT)}`);
+    expect(leftovers(b.home).filter((f) => f.includes('.auth-restore.'))).toHaveLength(1);
+    expect(restarts(b.home)).toEqual([RESTART, RESTART]);
+  });
+
   it('takes a failed restart as a failed proof: the file goes back, exit 1', async () => {
     const b = box('ccrc-auth-restart-fails-', `${portLines()}${ON_LINES(PORT)}`);
     const before = bytes(envFile(b.home));
@@ -635,7 +694,10 @@ describe.skipIf(IS_DARWIN)('ccrc auth: the installed unit is the installer\'s, a
       for (const sub of ['on', 'off']) {
         const r = await runTty(b.home, ['auth', sub]);
         await expectRefused(b, r, before, /ccrc\.service is not the unit file ccrc installs \(.*\/ccrc\/deploy\/ccrc\.service\), and this verb acts only on its own/);
-        expect(r.out).toMatch(/ccrc install, or an update, puts the shipped file back; or set the keys by hand \(the README's 'The session gate'\)/);
+        // Wave 190 A3: an update leaves a box already on its version alone, so it is no way on; ccrc install always
+        // lands the tree's file and reloads systemd.
+        expect(r.out).toMatch(/To go on: ccrc install puts the shipped file back and reloads systemd \(an update does not, on a box already on its version\); or set the keys by hand \(the README's 'The session gate'\)/);
+        expect(r.out).not.toMatch(/or an update, puts/);
         expect(r.out).not.toMatch(/0\.0\.0\.0|RestartSec/);
       }
     });
@@ -655,6 +717,59 @@ describe.skipIf(IS_DARWIN)('ccrc auth: the installed unit is the installer\'s, a
       /systemctl --user show did not say whether systemd loaded .*ccrc\.service as it is now \(NeedDaemonReload\), so what the restart would apply was not measured/);
   });
 
+  // Wave 190 F1: the compare and the reload answer say nothing of WHICH file systemd loaded. A unit of the same name
+  // earlier on the user search path (measured on systemd 259: the control directories, the runtime transient directory
+  // and the early generators come before ~/.config/systemd/user) passes both, so the read that asks NeedDaemonReload
+  // asks FragmentPath and SourcePath too, and the verb acts only when systemd names the user unit directory's own file.
+  const loadedElsewhere: [string, (h: string) => string][] = [
+    ['the user control directory (~/.config/systemd/user.control)', (h) => join(h, '.config', 'systemd', 'user.control', 'ccrc.service')],
+    ['the runtime transient directory (/run/user/<uid>/systemd/transient)', () => '/run/user/1000/systemd/transient/ccrc.service'],
+  ];
+  for (const [name, frag] of loadedElsewhere) {
+    it(`refuses on and off: systemd loaded ccrc.service from ${name}, naming both files`, async () => {
+      const b = box('ccrc-auth-frag-', portLines());
+      writeFileSync(join(b.home, 'sd-fragment'), `FragmentPath=${frag(b.home)}\n`);
+      const before = bytes(envFile(b.home));
+      for (const sub of ['on', 'off']) {
+        const r = await runTty(b.home, ['auth', sub]);
+        await expectRefused(b, r, before, /systemd loaded ccrc\.service from .*, not from .*\/\.config\/systemd\/user\/ccrc\.service, the file this verb read/);
+        expect(r.out).toContain(frag(b.home));
+        expect(r.out).toMatch(/To go on: take that unit away .*run systemctl --user daemon-reload, then re-run/);
+      }
+    });
+  }
+
+  it('refuses on and off: a unit systemd made from another source (SourcePath), naming it', async () => {
+    const b = box('ccrc-auth-frag-source-', portLines());
+    writeFileSync(join(b.home, 'sd-sourcepath'), '/etc/init.d/ccrc');
+    for (const sub of ['on', 'off']) {
+      const r = await runTty(b.home, ['auth', sub]);
+      await expectRefused(b, r, bytes(envFile(b.home)), /systemd made ccrc\.service from \/etc\/init\.d\/ccrc \(SourcePath\)/);
+    }
+  });
+
+  it('refuses as not measured an empty FragmentPath answer, and no FragmentPath line at all', async () => {
+    for (const answer of ['FragmentPath=\n', '']) {
+      const b = box('ccrc-auth-frag-unsaid-', portLines());
+      writeFileSync(join(b.home, 'sd-fragment'), answer);
+      for (const sub of ['on', 'off']) {
+        await expectRefused(b, await runTty(b.home, ['auth', sub]), bytes(envFile(b.home)),
+          /systemctl --user show did not say which file systemd loaded for ccrc\.service \(FragmentPath\), so what the restart would apply was not measured/);
+      }
+    }
+  });
+
+  it('passes when systemd names the user unit directory\'s own file, asked in the same read as the reload answer', async () => {
+    const b = box('ccrc-auth-frag-own-', portLines());
+    const r = await runTty(b.home, ['auth', 'on']);
+    expect(r.code, r.out).toBe(0);
+    expect(r.out).toMatch(/sign-in is on/);
+    const asks = readFileSync(join(b.home, 'systemctl-argv'), 'utf8').split('\n').filter((l) => / -p NeedDaemonReload\b/.test(l));
+    expect(asks).toHaveLength(1);
+    expect(asks[0]).toMatch(/ -p FragmentPath\b/);
+    expect(asks[0]).toMatch(/ -p SourcePath\b/);
+  });
+
   it('refuses as not measured when the tree\'s own unit file cannot be read', async () => {
     const b = box('ccrc-auth-own-notree-', portLines());
     spawnSync('rm', ['-f', join(b.home, 'ccrc', 'deploy', 'ccrc.service')]);
@@ -671,29 +786,54 @@ describe.skipIf(IS_DARWIN)('ccrc auth: the installed unit is the installer\'s, a
 // cases with it (the task note's section 10).
 describe('ccrc auth: on a Mac the verb refuses with the hand route, and is not offered (review 3971 R1(d))', () => {
   /** A loopback server box (ccrc.env, the installed unit), then `body` run in a bash that sourced ccrc with `os` set. */
-  function asFunction(os: 'linux' | 'darwin', body: string): { rc: number; err: string; env: string | null; calls: string } {
+  function asFunction(os: 'linux' | 'darwin', body: string,
+    opts: { path?: (dir: string) => string; plant?: (dir: string) => void } = {}):
+  { rc: number; err: string; env: string | null; calls: string; lock: boolean } {
     const dir = mkTmp('ccrc-auth-mac-');
     const bin = join(dir, 'bin');
     mkdirSync(bin);
     mkdirSync(join(dir, '.ccrc'), { recursive: true });
     writeFileSync(join(dir, '.ccrc', 'ccrc.env'), 'CCRC_HOST=127.0.0.1\nCCRC_PORT=7788\n', { mode: 0o600 });
+    // What the installer lands (wave 190 A4: the helper asks the compare half): the tree's unit file, and its copy.
+    mkdirSync(join(dir, 'ccrc', 'deploy'), { recursive: true });
+    copyFileSync(SHIPPED_UNIT_SRC, join(dir, 'ccrc', 'deploy', 'ccrc.service'));
     mkdirSync(join(dir, '.config', 'systemd', 'user'), { recursive: true });
     copyFileSync(SHIPPED_UNIT_SRC, join(dir, '.config', 'systemd', 'user', 'ccrc.service'));
     for (const m of ['launchctl', 'systemctl']) {
       writeFileSync(join(bin, m), `#!/bin/sh\nprintf '%s %s\\n' ${m} "$*" >> "$HOME/calls"; exit 90\n`, { mode: 0o755 });
     }
+    opts.plant?.(dir);
     const script = [`. ${JSON.stringify(CCRC_SRC)}`, `CCD_OS=${os}`, body].join('\n');
-    const r = spawnSync(BASH, ['-c', script], { encoding: 'utf8', env: { HOME: dir, PATH: `${bin}:${process.env['PATH'] ?? '/usr/bin:/bin'}` } });
+    const PATH = opts.path ? `${bin}:${opts.path(dir)}` : `${bin}:${process.env['PATH'] ?? '/usr/bin:/bin'}`;
+    const r = spawnSync(BASH, ['-c', script], { encoding: 'utf8', env: { HOME: dir, PATH } });
     const calls = existsSync(join(dir, 'calls')) ? readFileSync(join(dir, 'calls'), 'utf8') : '';
-    return { rc: r.status ?? -1, err: r.stderr, env: bytes(join(dir, '.ccrc', 'ccrc.env')), calls };
+    return { rc: r.status ?? -1, err: r.stderr, env: bytes(join(dir, '.ccrc', 'ccrc.env')), calls,
+      lock: existsSync(join(dir, '.ccrc', 'update.lock')) };
   }
-  // The operator-only checks pass by stub: what is asked here is the platform's refusal right after them.
-  const verb = (sub: string): string => `_ccrc_operator_only() { :; }\ncmd_auth ${sub}`;
+  // The operator-only checks pass by stub: what is asked here is the platform's refusal right after them. Wave 190 F2:
+  // the box is planted so that a run that went past the refusal meets later ones with words of their own (review 3971's
+  // survivor: the two refusals turned into printed lines left these cases green, because with no job file the "not
+  // installed" refusal ended the run with the same checks satisfied). The job the installer's writer prints is in the
+  // unit directory, so that refusal passes; a copy a killed run left stands beside ccrc.env, which the leftover-copy
+  // refusal would name; and the lock would be taken (update.lock made). Each case asserts the run stopped AT the Mac
+  // refusal: its exit, its words, no later refusal's words, no lock and no copy named, so its place is pinned before the
+  // lock, the leftover-copy check and the reach read.
+  const verb = (sub: string): string => [
+    '_ccrc_operator_only() { :; }',
+    'd="$HOME/.config/systemd/user"',
+    '_inst_plist_server "$(_svc_label ccrc.service)" "$HOME/ccrc.log" > "$d/$(_box_unit_file ccrc.service)"',
+    ': > "$HOME/.ccrc/ccrc.env.auth-restore.4242"',
+    `cmd_auth ${sub}`,
+  ].join('\n');
+  const LATER = /is not installed|runs no console|update\.lock|auth-restore|did not finish|reached from elsewhere|loopback|not measured/;
 
   it('on refuses on a Mac before any read of the box, naming the four lines, the file and the launchd restart', () => {
     const r = asFunction('darwin', verb('on'));
-    expect(r.rc).not.toBe(0);
+    expect(r.rc, r.err).toBe(1);
     expect(r.err).toMatch(/auth on: this verb does not act on a Mac yet/);
+    expect(r.err).not.toMatch(LATER);
+    expect(r.err.trim().split('\n')).toHaveLength(1);
+    expect(r.lock).toBe(false);
     expect(r.err).toMatch(/put CCRC_AUTH=on, CCRC_RP_ID=localhost, CCRC_ORIGIN=http:\/\/localhost:<port> and CCRC_COOKIE_INSECURE=on in .*\/\.ccrc\/ccrc\.env/);
     expect(r.err).toMatch(/then restart: launchctl kickstart -k gui\/\d+\/app\.ccrc\.ccrc/);
     expect(r.err).toMatch(/Nothing was changed/);
@@ -703,8 +843,11 @@ describe('ccrc auth: on a Mac the verb refuses with the hand route, and is not o
 
   it('off refuses on a Mac the same way, naming the lines to remove and the launchd restart', () => {
     const r = asFunction('darwin', verb('off'));
-    expect(r.rc).not.toBe(0);
+    expect(r.rc, r.err).toBe(1);
     expect(r.err).toMatch(/auth off: this verb does not act on a Mac yet/);
+    expect(r.err).not.toMatch(LATER);
+    expect(r.err.trim().split('\n')).toHaveLength(1);
+    expect(r.lock).toBe(false);
     expect(r.err).toMatch(/remove the CCRC_AUTH, CCRC_RP_ID, CCRC_ORIGIN and CCRC_COOKIE_INSECURE lines that arm it in .*\/\.ccrc\/ccrc\.env, then restart: launchctl kickstart -k/);
     expect(r.err).toMatch(/Nothing was changed/);
     expect(r.calls).toBe('');
@@ -713,6 +856,30 @@ describe('ccrc auth: on a Mac the verb refuses with the hand route, and is not o
   // The helper's declines on the platform: the same box fits on Linux and not on a Mac. On darwin the unit directory
   // also holds the launchd job the installer's writer prints, so the platform is the only reason left to decline.
   // Doctor's `auth` line and install's gate line ask only this helper, so it decides for both surfaces.
+  // Wave 190 A4: the helper asks the installer's-unit proof's compare half, which needs no service manager, so doctor and
+  // install no longer offer the verb on a Linux box whose installed unit is not the tree's file. One row per reason it
+  // declines there; the untouched unit is the control.
+  it.each([
+    ['the installed unit edited by hand', (d: string): void => {
+      const u = join(d, '.config', 'systemd', 'user', 'ccrc.service');
+      writeFileSync(u, readFileSync(u, 'latin1').replace('RestartSec=3', 'RestartSec=4'));
+    }],
+    ["the tree's own unit file missing", (d: string): void => { spawnSync('rm', ['-f', join(d, 'ccrc', 'deploy', 'ccrc.service')]); }],
+    ['cmp exiting 2 (the compare failed)', (d: string): void => {
+      writeFileSync(join(d, 'bin', 'cmp'), '#!/bin/sh\nexit 2\n', { mode: 0o755 });
+    }],
+  ] as const)('the helper that offers the verb, on linux, answers 1 for %s', (_name, plant) => {
+    const r = asFunction('linux', '_auth_fits_here "$HOME/.config/systemd/user"; echo "rc=$?" >&2', { plant });
+    expect(r.err).toContain('rc=1');
+    expect(r.calls).toBe('');
+  });
+
+  it('the helper that offers the verb, on linux, answers 1 with no cmp on PATH', () => {
+    const r = asFunction('linux', '_auth_fits_here "$HOME/.config/systemd/user"; echo "rc=$?" >&2',
+      { path: (d) => pathWithout(d, 'cmp') });
+    expect(r.err).toContain('rc=1');
+  });
+
   it.each([['linux', 0], ['darwin', 1]] as const)('the helper that offers the verb, on %s, answers %i', (os, want) => {
     const r = asFunction(os, [
       'd="$HOME/.config/systemd/user"',
@@ -813,7 +980,7 @@ describe.skipIf(IS_DARWIN)('ccrc auth: a signal in the proof window (review 3934
 // with a recording restart: the reviewer's measurement, red on the handler that read the state word alone. Bash only,
 // so it runs on every platform.
 describe('ccrc auth: the proof window\'s signal handler, line by line (review 3971 R4)', () => {
-  function handler(o: { state: string; keep: 0 | 1; dest: string | null; copy: string | null }):
+  function handler(o: { state: string; keep: 0 | 1; dest: string | null; copy: string | null; had?: 0 | 1 }):
   { rc: number; err: string; dest: string | null; copy: string | null; restarts: number } {
     const dir = mkTmp('ccrc-auth-handler-');
     const dest = join(dir, 'ccrc.env');
@@ -823,7 +990,7 @@ describe('ccrc auth: the proof window\'s signal handler, line by line (review 39
     const script = [
       `. ${JSON.stringify(CCRC_SRC)}`, `HOME=${JSON.stringify(dir)}`,
       '_svc_restart() { printf "%s\\n" "$*" >> "$HOME/restarts"; }',
-      `AUTH_SIG_SUB=on; AUTH_SIG_DEST=${JSON.stringify(dest)}; AUTH_BAK=${JSON.stringify(copy)}; AUTH_SIG_MODE=640; AUTH_SIG_HAD=1`,
+      `AUTH_SIG_SUB=on; AUTH_SIG_DEST=${JSON.stringify(dest)}; AUTH_BAK=${JSON.stringify(copy)}; AUTH_SIG_MODE=640; AUTH_SIG_HAD=${o.had ?? 1}`,
       `AUTH_KEEP_BAK=${o.keep}; AUTH_SIG_STATE=${o.state}`,
       '_auth_on_signal',
     ].join('\n');
@@ -840,11 +1007,28 @@ describe('ccrc auth: the proof window\'s signal handler, line by line (review 39
     expect(r.err).toMatch(/is back on its old file, byte for byte, and ccrc\.service was restarted once on it\. That was not proven/);
   });
 
+  // Wave 190 A2: the handler cannot see the old file, only that the copy is gone, so it says what it infers and why.
   it('H2 written, the copy already moved back (just after the failed proof\'s restore): no copy named, one restart', () => {
     const r = handler({ state: 'written', keep: 0, dest: OLD, copy: null });
     expect(r).toMatchObject({ rc: 130, dest: OLD, copy: null, restarts: 1 });
-    expect(r.err).toMatch(/is back on its old file/);
-    expect(r.err).not.toMatch(/could NOT|auth-restore/);
+    expect(r.err).toMatch(/the copy this run kept of .*ccrc\.env is gone, which only this run's own restore does, so .*ccrc\.env is taken to be back on its old file, and ccrc\.service was restarted once on it\. That was not proven/);
+    expect(r.err).not.toMatch(/could NOT|auth-restore|byte for byte/);
+  });
+
+  // Wave 190 A2: with no file before the run there is no old file to be back on.
+  it('H5 written, no file before this run: the one this run wrote is removed, one restart, and no old file is named', () => {
+    const r = handler({ state: 'written', keep: 0, dest: NEW, copy: null, had: 0 });
+    expect(r).toMatchObject({ rc: 130, dest: null, copy: null, restarts: 1 });
+    expect(r.err).toMatch(/is gone again, as before this run, which found no such file, and ccrc\.service was restarted once on it\. That was not proven/);
+    expect(r.err).not.toMatch(/old file/);
+  });
+
+  // Wave 190 A5: the kept-copy arm for a file this run created (its removal failed earlier in the run).
+  it('H6 written, after a removal that failed of a file this run created: never said to be gone, no restart', () => {
+    const r = handler({ state: 'written', keep: 1, dest: NEW, copy: null, had: 0 });
+    expect(r).toMatchObject({ rc: 130, dest: NEW, copy: null, restarts: 0 });
+    expect(r.err).toMatch(/after .*ccrc\.env, which this run created, could NOT be removed: it still holds this run's lines\. Remove it, then restart/);
+    expect(r.err).not.toMatch(/old file|gone again/);
   });
 
   it('H3 written, after a restore that failed (the copy kept): never said to be back, the copy named, no restart', () => {
@@ -973,6 +1157,20 @@ describe.skipIf(IS_DARWIN)('ccrc auth: every refusal before the write (review 39
     mkdirSync(join(b.home, '.ccrc', 'update.lock'));
     await expectRefused(b, await runTty(b.home, ['auth', 'on']), bytes(envFile(b.home)),
       /update\.lock could not be taken or measured, so a running update could not be ruled out/);
+  });
+
+  // Wave 190 A5: the installer's-unit compare's two unmeasured arms.
+  it('refuses as not measured with no cmp on PATH, and when cmp fails with another exit', async () => {
+    const a = box('ccrc-auth-nocmp-', portLines());
+    await expectRefused(a, await runTty(a.home, ['auth', 'on'], { PATH: `${join(a.home, '.local', 'bin')}:${pathWithout(a.home, 'cmp')}` }),
+      bytes(envFile(a.home)), /cmp is not on PATH, so whether .*\/ccrc\.service is .*\/deploy\/ccrc\.service was not measured/);
+    const c = box('ccrc-auth-cmp2-', portLines());
+    mkdirSync(join(c.home, '.local', 'bin'), { recursive: true });
+    writeFileSync(join(c.home, '.local', 'bin', 'cmp'), '#!/bin/sh\nexit 2\n', { mode: 0o755 });
+    for (const sub of ['on', 'off']) {
+      await expectRefused(c, await runTty(c.home, ['auth', sub]), bytes(envFile(c.home)),
+        /ccrc\.service could not be compared with .*\/deploy\/ccrc\.service, so whether it is that file was not measured/);
+    }
   });
 
   it("refuses when only the user manager's environment does not answer (systemctl --user show-environment)", async () => {
