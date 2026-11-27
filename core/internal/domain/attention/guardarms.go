@@ -154,7 +154,10 @@ var guardTools = map[string]bool{"Bash": true, "Write": true, "Edit": true, "Mul
 // text in deny mode; the envelope, or "".
 func AccountDeny(in PreIn, rd PreReads) string {
 	apf := in.Payload
-	child := !in.Miss && rd.Exists(in.ID+".child")
+	// A lookup miss is asked as a child is, the refusing side (Task 9c, D-TBD-go-hook-lookup-miss): a child whose tmux
+	// lookup timed out runs with permissions bypassed. The child's prefilter already passes every account row, and the
+	// approval surface alone is asked again in account mode below (a coordinator rules approvals).
+	child := in.Miss || rd.Exists(in.ID+".child")
 	if in.Tool == "Bash" && strings.ContainsAny(apf, `'"\`) && (child || Chars(apf, in.UTF8) <= apfStripMax) {
 		apf = strings.ReplaceAll(apf, `\\\n`, "")
 		apf = strings.NewReplacer("'", "", `"`, "", `\`, "").Replace(apf)
@@ -192,6 +195,12 @@ func AccountDeny(in PreIn, rd PreReads) string {
 		return ""
 	}
 	afw = cmdSubst(afw + "\n")
+	if in.Miss && strings.HasPrefix(afw, "surface\t") { // a miss reading as the surface is asked again as any session is
+		if afw, ok = Forbidden(in.V, "account", nil, &home); !ok {
+			return ""
+		}
+		afw = cmdSubst(afw + "\n")
+	}
 	cat, why, _ := strings.Cut(afw, "\t")
 	if !strings.Contains(afw, "\t") {
 		return ""
@@ -218,6 +227,9 @@ func AccountDeny(in PreIn, rd PreReads) string {
 	}
 	if r == "" {
 		return ""
+	}
+	if in.Miss && (cat == "verb" || cat == "build") {
+		r += " The hook could not match this call to a session's registry row, so it refused it as it refuses a dispatched child's."
 	}
 	return DenyJSON(r)
 }

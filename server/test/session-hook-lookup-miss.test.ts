@@ -2,14 +2,15 @@
  * A PreToolUse whose session lookup misses fails closed (Go core wave 2, Task 9c; the controller's ruling "the spine's
  * misses"). The miss is no session matched: a pane whose tmux session is not `cc-<id>`, a job directory whose session
  * id no registry row's `.uuid` holds, or neither. Until this task both hooks ended there and skipped every deny arm. Now
- * the arms run with every session fact read as absent, so each arm that needs no session fact refuses as it does in
- * every session (the account, quiz and prune rows, the `--admin` and `gh api` bypass, the role skill, Fable, the
- * fan-out pin, the `wrapped` test route, a reader's write door), and the rows that need one are left as an unknown
- * session has them (the wave's merge, the child's rows, the `heavy` test route, a joined reader, the readers' bound).
- * The graph gate and the landing advisory do not run, and nothing reads or writes a row: the fixture plants decoys at
- * the names an empty id would reach (`$REG/.child`, `.hold`, `.project`, `.generation`, `.joined`), so a stage or an arm
- * that ran with the empty id would deny what is left, allow what is refused, or leave a file, and every case asserts
- * the HOME's files unchanged. Every case runs the bash hook and the Go hook (hookBoth), which must answer the same.
+ * the arms run without reading a row: each arm that needs no session fact refuses as it does in every session (the
+ * account, quiz and prune rows, the `--admin` and `gh api` bypass, the role skill, Fable, the fan-out pin, the
+ * `wrapped` test route, a reader's write door), and each row that needs one takes its refusing side (the child's verb
+ * and build rows, the `heavy` test route on Linux, a subagent's door write), except a coordinator's own acts, which are
+ * left (the wave's plain merge, the approval surface). The graph gate and the landing advisory do not run, and nothing
+ * reads or writes a row: the fixture plants decoys at the names an empty id would reach (`$REG/.child`, `.hold`,
+ * `.project`, `.generation`, `.joined`), so a stage or an arm that ran with the empty id would deny what is left, allow
+ * what is refused, or leave a file, and every case asserts the HOME's files unchanged. Every case runs the bash hook and
+ * the Go hook (hookBoth), which must answer the same.
  */
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import fs from 'node:fs';
@@ -86,7 +87,12 @@ const denial = (out: string): string => {
   return String(j.hookSpecificOutput.permissionDecisionReason);
 };
 
-// The arms that need no session fact: each refuses on a miss, in every shape of miss.
+// A heavy test is a fleet box's question, Linux only: there a miss takes the refusing side; elsewhere no box refuses it.
+const HEAVY = pre('Bash', { command: 'npx vitest run' });
+const LINUX = process.platform === 'linux';
+
+// Each refuses on a miss, in every shape of miss: the arms that need no session fact, and the refusing side of the
+// rows that need one.
 const REFUSED: [string, object, RegExp][] = [
   ['the --admin bypass, its allowance unprovable', pre('Bash', { command: 'gh pr merge 5 --admin' }), /merges are refused in every session/],
   ['the account row', pre('Bash', { command: 'ccrc account remove --id lane-x' }), /an account-management act no fleet session runs/],
@@ -96,16 +102,19 @@ const REFUSED: [string, object, RegExp][] = [
   ['a fan-out that names no model', pre('Agent', { prompt: 'x' }), /names no model/],
   ['a wrapped test run', pre('Bash', { command: 'systemd-run --user --scope npx vitest run' }), /never under a systemd-run of your own/],
   ['a reader\'s write door', pre('mcp__door__write', { x: 1 }, { agent_id: 'agent-2', agent_type: 'Explore' }), /a reader holds no write door/],
+  ['a child\'s verb row', pre('Bash', { command: 'ccd ws-rm lane-a' }), /ws-rm.*which a dispatched child never runs.*could not match this call to a session's registry row/],
+  ['a child\'s build row', pre('Bash', { command: 'claude update' }), /installing or updating a Claude Code build.*could not match this call/],
+  ['a subagent\'s door write, its join unread', pre('mcp__door__write', { x: 1 }, { agent_id: 'agent-1' }), /a reader holds no write door/],
+  ...(LINUX ? [['a heavy test run', HEAVY, /starts a heavy test or typecheck outside `ccrc test`/] as [string, object, RegExp]] : []),
 ];
 
-// The rows that need a session fact: left on a miss, as an unknown session has them.
+// Left on a miss: a coordinator's own acts, the gate whose bound is the session's, and advice.
 const LEFT: [string, object][] = [
   ['a plain merge: a coordinator lands PRs, and the wave\'s hold is unread', pre('Bash', { command: 'gh pr merge 5' })],
-  ['a child\'s verb row: a top-level session runs it after asking', pre('Bash', { command: 'ccd ws-rm lane-a' })],
-  ['a heavy test: not a fleet session\'s', pre('Bash', { command: 'npx vitest run' })],
-  ['a joined reader\'s door: the join record is the session\'s', pre('mcp__door__write', { x: 1 }, { agent_id: 'agent-1' })],
+  ['the approval surface: a coordinator rules approvals', pre('Bash', { command: 'ccrc-api approvals list' })],
   ['a search: the graph gate\'s bound is the session\'s counter', pre('Grep', { pattern: 'x' })],
   ['a sync: the landing advisory is a nudge, never a deny', pre('Bash', { command: 'git merge origin/main' })],
+  ...(LINUX ? [] : [['a heavy test: no fleet box here', HEAVY] as [string, object]]),
 ];
 
 describe('a PreToolUse whose session lookup misses runs the deny arms that need no session fact', () => {

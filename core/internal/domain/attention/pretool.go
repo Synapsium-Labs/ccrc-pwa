@@ -32,8 +32,10 @@ type PreIn struct {
 	Force, SubagentModel string // CLAUDE_CODE_SUBAGENT_MODEL_FORCE and CLAUDE_CODE_SUBAGENT_MODEL
 	ID                   string // the session id
 	Home                 string // HOME, as the guard's jq reads $ENV.HOME
-	// Miss is a session lookup that matched no session (Task 9c, D-TBD-go-hook-lookup-miss): ID is empty, no session
-	// fact is read, and every arm that needs one reads it as absent; the graph gate and the landing advisory do not run.
+	// Miss is a session lookup that matched no session (Task 9c, D-TBD-go-hook-lookup-miss): ID is empty and no session
+	// fact is read. A row that needs one takes its refusing side (the child's rows, the heavy route, a subagent's door
+	// write, the admin-merge allowance unproved), except a coordinator's own acts (the wave's plain merge, the approval
+	// surface); the graph gate and the landing advisory do not run.
 	Miss bool
 }
 
@@ -241,7 +243,8 @@ func PreToolArms(in PreIn, rd PreReads) PreOut {
 
 	// ── Tests run through `ccrc test` (D-7298) ──
 	if !denied(pre) && tool == "Bash" {
-		fleet := ostypeLinux(in.GOOS, in.OSType, in.OSTypeSet) && !in.Miss && rd.Generation()
+		// a lookup miss takes the refusing side: `ccrc test` is on PATH whenever this arm asks, so a heavy run has a way through
+		fleet := ostypeLinux(in.GOOS, in.OSType, in.OSTypeSet) && (in.Miss || rd.Generation())
 		task := false
 		switch {
 		case strings.Contains(p, "systemd-run"):
@@ -277,7 +280,7 @@ func PreToolArms(in PreIn, rd PreReads) PreOut {
 		switch {
 		case tool == "mcp__door__read":
 		case strings.HasPrefix(tool, "mcp__door__") && len(tool) > len("mcp__door__"):
-			if in.Tmsub || nonEmptyAgentType(in.V) {
+			if in.Tmsub || in.Miss && in.Paid || nonEmptyAgentType(in.V) {
 				rdn = "ccrc: a reader holds no write door (C55): a subagent here may call only the read tool, `mcp__door__read`. Hand anything else back to the main thread in your answer."
 			}
 		case tool == "Agent" || tool == "Task":

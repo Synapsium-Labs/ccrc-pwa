@@ -97,9 +97,10 @@ func TestPreToolArmsOrder(t *testing.T) {
 	}
 }
 
-// A lookup miss (Task 9c) asks for no session fact: the arms that need none refuse as everywhere, and the rows that need
-// one are left (the wave's merge, the child's rows, the heavy test route, a joined reader) or not run (the graph gate,
-// the landing advisory). Every row read fails the test if asked.
+// A lookup miss (Task 9c) asks for no session fact: the arms that need none refuse as everywhere, the rows that need one
+// take their refusing side (the child's rows, the heavy test route, a subagent's door write), except a coordinator's own
+// acts (the wave's plain merge, the approval surface), and the graph gate and the landing advisory do not run. Every row
+// read fails the test if asked; the deny file is the box's, not a row.
 func TestPreToolArmsOnALookupMiss(t *testing.T) {
 	asked := func(what string) { t.Helper(); t.Errorf("a miss asked for %s", what) }
 	g := func(string) bool { asked("the graph"); return false }
@@ -109,7 +110,7 @@ func TestPreToolArmsOnALookupMiss(t *testing.T) {
 		Reg:          func(n string) ([]byte, int) { asked(n); return []byte("program:p wave:1"), 0 },
 		Exists:       func(n string) bool { asked(n); return true },
 		AdminAllowed: func(string) bool { asked("the allowance"); return true },
-		DenyFile:     func() ([]byte, bool) { asked("the deny file"); return nil, false },
+		DenyFile:     func() ([]byte, bool) { return nil, false },
 		HasCcrc:      func() bool { return true },
 		ScriptStat:   func(string) (bool, int64) { return false, 0 }, ScriptText: func(string) string { return "" },
 	}
@@ -128,12 +129,15 @@ func TestPreToolArmsOnALookupMiss(t *testing.T) {
 		{"a plain merge: the wave's row is left", "Bash", `{"command":"gh pr merge 5"}`, "", false, ""},
 		{"the account row", "Bash", `{"command":"ccrc account remove --id lane-x"}`, "", false, "ccrc account remove"},
 		{"the prune row", "Bash", `{"command":"git worktree prune"}`, "", false, "git worktree prune"},
-		{"a child's verb row is left", "Bash", `{"command":"ccd ws-rm lane-a"}`, "", false, ""},
+		{"a child's verb row", "Bash", `{"command":"ccd ws-rm lane-a"}`, "", false, "could not match this call to a session's registry row"},
+		{"a child's build row", "Bash", `{"command":"claude update"}`, "", false, "installing or updating a Claude Code build"},
+		{"the approval surface is left: a coordinator rules approvals", "Bash", `{"command":"ccrc-api approvals list"}`, "", false, ""},
 		{"the role skill from a subagent", "Skill", `{"skill":"ccrc-worker"}`, "", true, "loads the `ccrc-worker` skill"},
 		{"Fable", "Agent", `{"model":"fable","prompt":"x"}`, "", false, "names a Fable model"},
 		{"a fan-out with no model", "Agent", `{"prompt":"x"}`, "", false, "names no model"},
 		{"a wrapped test", "Bash", `{"command":"systemd-run --user --scope npx vitest run"}`, "wrapped", false, "never under a systemd-run of your own"},
-		{"a heavy test: not a fleet session's", "Bash", `{"command":"npx vitest run"}`, "heavy", false, ""},
+		{"a heavy test", "Bash", `{"command":"npx vitest run"}`, "heavy", false, "starts a heavy test or typecheck outside"},
+		{"a subagent's door write", "mcp__door__write", `{"x":1}`, "", true, "a reader holds no write door"},
 		{"a search: the graph gate is off", "Grep", `{"pattern":"x"}`, "", false, ""},
 		{"a sync: the advisory is off", "Bash", `{"command":"git merge origin/main"}`, "", false, ""},
 	} {

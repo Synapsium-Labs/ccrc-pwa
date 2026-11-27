@@ -3128,12 +3128,13 @@ fi
 # THE LOOKUP MISS FAILS CLOSED (Go core wave 2, Task 9c; the controller's ruling "the spine's misses"). No session
 # matched this event: no pane named `cc-<id>`, no registry row whose `.uuid` is this session's, or a name off the id
 # class (the regex rejects the empty string too). Every event but a PreToolUse still ends here, as it always has. A
-# PreToolUse goes on with `hook_miss` set and the id empty: the deny arms run with every session fact read as absent
-# (not a child, no wave hold, no admin-merge allowance, not a fleet session, no joined subagent), so each arm that needs
-# no session fact refuses as it does everywhere. Nothing that reads or writes a session's row runs: the stages between
-# the parse and the arms are skipped, and the miss ends before the mail hold (`@hook-miss-end`). The prefilter is a
-# builtin, so every other miss forks nothing. Which rows refuse on a miss, and why the others are left: the wave 2
-# plan's `D-TBD-go-hook-lookup-miss` (docs/superpowers/plans/2026-11-24-ccrc-go-core-w2-hook.md).
+# PreToolUse goes on with `hook_miss` set and the id empty, and the deny arms run without reading a row: an arm that
+# needs no session fact refuses as it does everywhere, and one that does takes its refusing side (a child's rows, a fleet
+# session's heavy test route, a joined reader's door, an admin-merge allowance unprovable), except where refusing would
+# stop a coordinator's own act (the wave's plain merge, the approval surface). Nothing that reads or writes a session's
+# row runs: the stages between the parse and the arms are skipped, and the miss ends before the mail hold
+# (`@hook-miss-end`). The prefilter is a builtin, so every other miss forks nothing. Which rows refuse on a miss, and why
+# the others are left: the wave 2 plan's `D-TBD-go-hook-lookup-miss` (docs/superpowers/plans/2026-11-24-ccrc-go-core-w2-hook.md).
 hook_miss=""
 if [[ ! "$id" =~ ^[A-Za-z0-9._-]+$ ]]; then
   [[ "$payload" == *PreToolUse* ]] || exit 0
@@ -5864,11 +5865,15 @@ if [[ "$event" == PreToolUse && "$pre_json" != *'"permissionDecision":"deny"'* ]
   # The strip is quadratic in bash on a quote- or backslash-dense payload, so on a session that is not a child it runs
   # only under APF_ACCT_STRIP_MAX bytes; over that the account arm's prefilter reads the payload as written (a verb
   # split by quotes inside a longer payload is a residual of the accident guard, D-6202). A child's arm is as before.
+  # A LOOKUP MISS (Task 9c) is asked as a child is, the refusing side: a child whose tmux lookup timed out runs with
+  # permissions bypassed, and this deny is all that stops its verb or build row. The child's prefilter already passes
+  # every account row (a child is refused those too), and the approval surface alone is asked again in account mode below
+  # (a coordinator rules approvals).
   if [[ "${tool:-}" == Bash && "$apf" == *[\'\"\\]* ]] \
-     && { [[ -n "$id" && -e "$REG/$id.child" ]] || (( ${#apf} <= APF_ACCT_STRIP_MAX )); }; then
+     && { [[ -n "$hook_miss" || ( -n "$id" && -e "$REG/$id.child" ) ]] || (( ${#apf} <= APF_ACCT_STRIP_MAX )); }; then
     apf=${apf//\\\\\\n/}; apf=${apf//[\'\"\\]/}
   fi
-  if [[ -n "$id" && -e "$REG/$id.child" ]]; then
+  if [[ -n "$hook_miss" || ( -n "$id" && -e "$REG/$id.child" ) ]]; then
     amode=deny
     [[ "$apf" == *ccd* || "$apf" == *ccrc* || "$apf" == *approval* \
        || "$apf" == *install* || "$apf" == *update* || "$apf" == *upgrade* || "$apf" == *respawn* \
@@ -5910,6 +5915,10 @@ if [[ -n "$apf" ]]; then
         [[ -n "$APF_DENY" ]] && adeny=(--arg deny "$APF_DENY")
       fi
       afw=$(jq -r --arg q "'" --arg mode "$amode" "${adeny[@]}" "$APPROVAL_FORBIDDEN_JQ" <<<"$payload" 2>/dev/null) || afw=""
+      # A miss that reads as the approval surface is asked again as any session is (a coordinator rules approvals).
+      if [[ -n "$hook_miss" && "$afw" == surface$'\t'* ]]; then
+        afw=$(jq -r --arg q "'" --arg mode account "$APPROVAL_FORBIDDEN_JQ" <<<"$payload" 2>/dev/null) || afw=""
+      fi
       areason=""
       case "$afw" in
         verb$'\t'*)
@@ -5930,6 +5939,9 @@ if [[ -n "$apf" ]]; then
           areason="ccrc: this call is ${afw#*$'\t'}, which a dispatched child never does: rolling, installing and selecting a Claude Code build are the operator's acts and ccrc's own (CLAUDE.md's SAFETY section; spec 2026-10-18 §7.6; D-5696)."
           areason+=" Report what you need to your coordinator instead." ;;
       esac
+      if [[ -n "$hook_miss" && ( "$afw" == verb$'\t'* || "$afw" == build$'\t'* ) ]]; then
+        areason+=" The hook could not match this call to a session's registry row, so it refused it as it refuses a dispatched child's."
+      fi
       if [[ -n "$areason" ]] && ajson=$(_hook_deny_json "$areason"); then pre_json=$ajson; fi ;;
   esac
 fi
@@ -5977,7 +5989,8 @@ fi
 # the tmux question above when a bound is on PATH.
 if [[ "$event" == PreToolUse && "$pre_json" != *'"permissionDecision":"deny"'* && "${tool:-}" == Bash ]]; then
   tfleet=0
-  [[ "${OSTYPE:-}" == linux* && -n "$id" && -f "$REG/$id.generation" ]] && tfleet=1
+  # a lookup miss (Task 9c) takes the refusing side: `ccrc test` is on PATH whenever this arm asks, so a heavy run has a way through
+  [[ "${OSTYPE:-}" == linux* && ( -n "$hook_miss" || ( -n "$id" && -f "$REG/$id.generation" ) ) ]] && tfleet=1
   task=0
   case "$payload" in
     *systemd-run*) task=1 ;;
@@ -6004,7 +6017,7 @@ if [[ "$event" == PreToolUse && "$pre_json" != *'"permissionDecision":"deny"'* ]
   rd=""
   case "${tool:-}" in
     mcp__door__read) ;;
-    mcp__door__?*) { [[ -n "$tmsub" ]] || jq -e '(.agent_type | type) == "string" and .agent_type != ""' <<<"$payload" >/dev/null 2>&1; } \
+    mcp__door__?*) { [[ -n "$tmsub" || ( -n "$hook_miss" && -n "$paid" ) ]] || jq -e '(.agent_type | type) == "string" and .agent_type != ""' <<<"$payload" >/dev/null 2>&1; } \
       && rd="ccrc: a reader holds no write door (C55): a subagent here may call only the read tool, \`mcp__door__read\`. Hand anything else back to the main thread in your answer." ;;
     Agent|Task)
       [[ -z "$paid" && "${CCRC_DOOR_NONCE_SHA256-}" =~ ^[0-9a-f]{64}$ ]] && (( $(jq 'length' <<<"$subs" 2>/dev/null || echo 0) >= 3 )) \
