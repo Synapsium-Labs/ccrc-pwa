@@ -200,10 +200,90 @@ const fiveLine = (): Line => ({
 });
 const NOTICE = { word: 'landing-withdrawn', entryId: 1004, kind: 'queued', toId: 'lane-a-project-a', mailId: 1, deliveryId: 2 };
 
+/** Wave 192 fix round 1 (F2): the disclosure's computed ground, the block's, and the two tokens BareRow's press ground
+ *  reads, each resolved by the page itself to the colour it paints. */
+const groundsOf = (page: Page, project: string) => page.evaluate((p) => {
+  const block = [...document.querySelectorAll<HTMLElement>(`section.landing-line[aria-label="Landing line of ${p}"]`)].find((el) => el.offsetParent !== null)!;
+  const title = block.querySelector<HTMLElement>(':scope > .landing-line-title')!;
+  const resolve = (token: string): string => {
+    const probe = document.createElement('span');
+    probe.style.backgroundColor = `var(${token})`;
+    block.appendChild(probe);
+    const v = getComputedStyle(probe).backgroundColor;
+    probe.remove();
+    return v;
+  };
+  // Any colour syntax the page computes (`color-mix()` resolves to `color(srgb …)`), as 8-bit sRGB through a canvas.
+  const rgbaOf = (css: string): [number, number, number, number] => {
+    const c = document.createElement('canvas');
+    c.width = 1; c.height = 1;
+    const x = c.getContext('2d')!;
+    x.clearRect(0, 0, 1, 1);
+    x.fillStyle = css;
+    x.fillRect(0, 0, 1, 1);
+    const d = x.getImageData(0, 0, 1, 1).data;
+    return [d[0]!, d[1]!, d[2]!, d[3]! / 255];
+  };
+  const ink = getComputedStyle(title).color;
+  const titleBg = getComputedStyle(title).backgroundColor;
+  const blockBg = getComputedStyle(block).backgroundColor;
+  return {
+    title: titleBg, block: blockBg, hover: resolve('--bg-hover'), pressed: resolve('--bg-pressed'),
+    rgba: { ink: rgbaOf(ink), title: rgbaOf(titleBg), block: rgbaOf(blockBg) },
+  };
+}, project);
+const TRANSPARENT = 'rgba(0, 0, 0, 0)';
+type Rgba = [number, number, number, number];
+/** `top` painted over an opaque `under`, as the page composites it. */
+const over = (top: Rgba, under: Rgba): Rgba => {
+  const a = top[3];
+  return [0, 1, 2].map((i) => top[i]! * a + under[i]! * (1 - a)).concat(1) as Rgba;
+};
+const luminance = ([r, g, b]: Rgba): number => {
+  const lin = (c: number): number => { const s = c / 255; return s <= 0.04045 ? s / 12.92 : ((s + 0.055) / 1.055) ** 2.4; };
+  return 0.2126 * lin(r) + 0.7152 * lin(g) + 0.0722 * lin(b);
+};
+/** WCAG's ratio of the title's ink on the ground painted under it: the title's own ground over the block's. */
+const titleContrast = ({ rgba: g }: { rgba: { ink: Rgba; title: Rgba; block: Rgba } }): number => {
+  const ground = over(g.title, g.block);
+  const ink = over(g.ink, ground);
+  const [hi, lo] = [luminance(ink), luminance(ground)].sort((x, y) => y - x) as [number, number];
+  return (hi + 0.05) / (lo + 0.05);
+};
+
 const WIDTHS = [360, 390, 1280, 1470, 1920];
 for (const skin of [REFINED, INSTRUMENT]) {
   for (const theme of ['light', PHOSPHOR]) {
     describe(`the landing line, ${skin} ${theme}`, () => {
+      // Fix round 1, F2: the disclosure keeps @ccrc/ui's BareRow grounds, as the card's four other disclosures do. A real
+      // mouse over it and a real press, at a desk width (Tailwind's hover is gated on a pointer that hovers).
+      it('the disclosure\'s grounds: the block\'s at rest, BareRow\'s hover ground under the mouse, its pressed ground while held', async () => {
+        const { ctx, page, errors } = await open(skin, theme, 1280, fiveLine());
+        try {
+          const t = toggleOf(page, 'project-a');
+          const rest = await groundsOf(page, 'project-a');
+          expect(rest.hover, 'the hover token is a ground of its own').not.toBe(rest.block);
+          expect(rest.pressed, 'the pressed token is a ground of its own').not.toBe(rest.block);
+          expect([TRANSPARENT, rest.block], 'at rest the disclosure shows the block\'s ground').toContain(rest.title);
+          // The title's ink on each ground it shows, as painted (the gate measures it on the block's ground only).
+          const ratios: Record<string, number> = { rest: titleContrast(rest) };
+          await t.hover();
+          await expect.poll(async () => (await groundsOf(page, 'project-a')).title, { timeout: 5_000 }).toBe(rest.hover);
+          ratios['hover'] = titleContrast(await groundsOf(page, 'project-a'));
+          await page.mouse.down();
+          await expect.poll(async () => (await groundsOf(page, 'project-a')).title, { timeout: 5_000 }).toBe(rest.pressed);
+          ratios['pressed'] = titleContrast(await groundsOf(page, 'project-a'));
+          console.log(`title contrast ${skin} ${theme}: ${JSON.stringify(Object.fromEntries(Object.entries(ratios).map(([k, v]) => [k, Number(v.toFixed(2))])))}`);
+          for (const [state, ratio] of Object.entries(ratios)) expect(ratio, `the title's ink ${state}`).toBeGreaterThanOrEqual(4.5);
+          await page.mouse.up();
+          await expect.poll(() => t.getAttribute('aria-expanded')).toBe('true');
+          await page.mouse.move(0, 0);
+          await expect.poll(async () => (await groundsOf(page, 'project-a')).title, { timeout: 5_000 }).toBe(rest.title);
+          expect(errors).toEqual([]);
+        } finally {
+          await ctx.close();
+        }
+      });
       for (const width of WIDTHS) {
         it(`at ${width}px: the line as read, its fit, the pause round trip, Cancel's and Done's focus`, async () => {
           const c = fiveLine();

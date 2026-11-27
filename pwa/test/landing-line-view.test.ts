@@ -251,7 +251,13 @@ describe('landingLineHoldPart rolled up (wave 192)', () => {
     expect(landingLineHoldPart(line(many(13)), true)).toBe('13r');
   });
   it('a change of a row\'s role, wrapped text only, keeps the part (R8)', () => {
-    const moved = view({ entries: [E101, e(102, { state: 'ejected', ejectionKind: 'conflict', ejections: 2 }), E104, E107, E109] });
+    // #104 goes from in line to sent back (fix round 1, A1): its row changes role and the summary gains its short word,
+    // which may wrap the summary, and the rolled-up part stays the same (the note's "Not claimed" names that height).
+    const moved = view({ entries: [E101, E102, e(104, { afterIds: [1001], state: 'ejected', ejectionKind: 'new-head', ejections: 1 }), E107, E109] });
+    expect(card(view()).rows.find((r) => r.pr === 104)?.role).toBe('in-line');
+    expect(card(moved).rows.find((r) => r.pr === 104)?.role).toBe('ejected');
+    expect(card(moved).summary).not.toBe(card(view()).summary);
+    expect(card(moved).summary).toContain('#104 (sent back)');
     expect(landingLineHoldPart(line(moved), false)).toBe(landingLineHoldPart(line(), false));
   });
 });
@@ -271,6 +277,14 @@ describe('the rolled-up summary (wave 192)', () => {
     expect(card(only(pinned(13))).summary)
       .toBe('13 in line: #301, #302, #303, #304, #305, #306, #307, #308, #309, #310, #311, #312 and 1 more');
     expect(card(only(pinned(20))).summary?.endsWith('#312 and 8 more')).toBe(true);
+  });
+  it('exactly twelve entries: all twelve named, and no tail (fix round 1, R2)', () => {
+    expect(card(only(pinned(12))).summary)
+      .toBe('12 in line: #301, #302, #303, #304, #305, #306, #307, #308, #309, #310, #311, #312');
+  });
+  it('forty entries: the first twelve, then the count of the other twenty-eight (fix round 1, R2)', () => {
+    expect(card(only(pinned(40))).summary)
+      .toBe('40 in line: #301, #302, #303, #304, #305, #306, #307, #308, #309, #310, #311, #312 and 28 more');
   });
   it('section 5\'s line: the waiting, the sent-back and the set-aside entry each carry their word; the head and the one in line none', () => {
     expect(card(view()).summary)

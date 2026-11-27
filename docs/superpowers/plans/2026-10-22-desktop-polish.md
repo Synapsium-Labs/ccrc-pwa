@@ -5993,7 +5993,12 @@ C1's move of B4's limiter into `server/src/bounded.ts` stays under D-6388. Issue
   disclosure, the status, the stale sentence, then rolled up one summary line naming every open entry, or open the
   pause button, its alert and the rows; the stylesheet still places the pause button on the title row by grid
   placement, through the body drawn with `display: contents`. Tab order follows what is seen: disclosure, pause, rows.
-  The choice is kept per project in memory for the page's life (`foldState.ts`), never in the browser. Task note:
+  The choice is kept per project in memory for the page's life (`foldState.ts`), never in the browser. Focus, which
+  the console plan's rules set: after Done it goes to the pause button, else the disclosure, else the card (the plan
+  had the pause button, else the card); after Cancel to the row's Withdraw, else the pause button, else the
+  disclosure, else the card. The effect that puts focus back after a read removes the control that held it also runs
+  when the block opens or closes, with the same fallback, and still moves focus only when focus has fallen to the page
+  and the block holds a record of the control that had it. Task note:
   `docs/superpowers/programs/desktop-polish/landing-line-rolled-up.md`.
 
 ## Out of scope

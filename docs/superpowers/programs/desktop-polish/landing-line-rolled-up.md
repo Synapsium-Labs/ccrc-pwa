@@ -11,7 +11,10 @@ wherever the brief and its seven additions (mail 39468) did not change them.
 
 - **The disclosure (ruling 1; D-9153).** The block's title is a button, `@ccrc/ui`'s `BareRow` (the card's own Released
   and Archived disclosures use it), carrying the title and a `▸`/`▾` mark hidden from assistive tech, with `aria-expanded` and `aria-controls` naming the open body. A native button, so a tap, Enter and Space all
-  work (Enter and Space measured in Chrome by the browser file). Only its tap opens or closes the block.
+  work (Enter and Space measured in Chrome by the browser file). Only its tap opens or closes the block. It keeps
+  BareRow's grounds (fix round 1, F2): the title's rule paints no ground and sets no ink, its ink is set through the
+  block's own rule (`.landing-line > .landing-line-title`), so at rest it shows the block's ground and, as the card's
+  four other disclosures do, lifts to `--bg-hover` under the mouse and sinks to `--bg-pressed` while held.
 - **Rolled up (rulings 2 and 3).** In document order: the disclosure, the status sentence (unchanged words, still the
   live region), the stale sentence when the last read failed, and one summary line, for example
   `6 in line: #101, #104, #107 (waiting on a withdrawn entry), #110, #102 (sent back), #109 (set aside)`. Nothing else:
@@ -53,14 +56,21 @@ wherever the brief and its seven additions (mail 39468) did not change them.
 - **Not touched (ruling 8 and "what must not move").** The rows' design, the sheet, the doors, the read, the hook, the
   server, every wire field, `fleet.css`, `ui/` and `ProjectCard.tsx`. `landing-line.css` gains the body, the
   disclosure's flex row and the summary's ink beside its ground (`--ink-secondary` on `--bg-surface`, tokens only; the
-  contrast gate passes).
+  contrast gate passes). The title's ink, `--ink-secondary` as on main, moved from the title's own rule (which also
+  painted `--bg-surface`) into `.landing-line > .landing-line-title`: a rule that names a self-grounded ancestor, so
+  the gate measures it on `.landing-line`'s ground (12 pairs, one per theme, lowest 7.14 against the 4.5 floor; not in
+  the uncovered census) and `pwa/test/contrast.test.ts` needs no edit.
 
 ## D-9153
 
 Issued by the coordinator (mail 39468) and defined in `docs/superpowers/plans/2026-10-22-desktop-polish.md`, "Deviations
 found", after D-9141, on the head commit with its `Ledger-Edit` trailer: the block starts rolled up behind a disclosure
 button on its title row, a second control there beside the pause button, where the console plan's sections 5 and 11
-had one. The source comments in `LandingLine.tsx` and `landing-line.css` name it.
+had one. The source comments in `LandingLine.tsx` and `landing-line.css` name it. Fix round 1 (F1) added the focus
+rules it changes to the same entry, under a `Ledger-Edit` trailer on the commit that edits it: after Done the pause
+button, else the disclosure, else the card (the console plan had the pause button, else the card); after Cancel the
+row's Withdraw, else the pause button, else the disclosure, else the card; and the effect that puts focus back after
+a read also runs when the block opens or closes.
 
 ## Existing assertions changed, and why
 
@@ -92,7 +102,14 @@ had one. The source comments in `LandingLine.tsx` and `landing-line.css` name it
   nobody sees rolled up keeps the key; the choice kept across a re-read, the card folding and unfolding, and the block
   going and coming back; kept when the cards unmount and mount again.
 - `pwa/test/landing-line-view.test.ts`: the rolled-up hold part (letters, `c0p`, `c12`, `c12+`, a role change keeping
-  it) and the summary (one, six, thirteen and twenty entries, section 5's line, a paused line, none for an empty one).
+  it) and the summary (one, six, twelve, thirteen, twenty and forty entries, section 5's line, a paused line, none for
+  an empty one). The role-change case was rewritten in fix round 1 (A1): as first written it changed only #102's
+  ejection kind and count, #102 already sent back, so the summary's text did not change and the case could not go red.
+  Now #104 goes from in line to sent back; the case asserts that its role changed and that the summary gained
+  `#104 (sent back)`, and still that the rolled-up part stays the same. On the mutant that makes the rolled-up key
+  count the short words (`A1-rolled-key-follows-words`), the old case stays green (measured against the old file) and
+  the new case goes red. The twelve-entry case (all twelve named, no tail) and the forty-entry case (twelve, then
+  `and 28 more`) are fix round 1's R2.
 - `pwa/test/landing-words.test.ts`: the four new entries pinned byte for byte.
 - `pwa/test/foldState.test.ts`: rolled up until toggled, per project; the choice outlives the hook that read it; a
   toggle writes nothing to local or session storage; a reload (the module evaluated afresh) starts rolled up.
@@ -103,62 +120,99 @@ had one. The source comments in `LandingLine.tsx` and `landing-line.css` name it
   disclosure, the pause button, five Withdraws, one list of five items under the region, through the contents box);
   Enter opens and Space closes with focus kept on the disclosure; kept open across a re-read; Instrument's Status and
   back; a reload rolls every block up.
+- The same browser file, fix round 1 (F2), one case per skin and theme at 1280 wide (Tailwind's hover is gated on a
+  pointer that hovers): the disclosure's computed ground at rest is transparent or the block's own; under a real mouse
+  (`hover()`) it becomes the colour `--bg-hover` resolves to on that page, and while a real press is held
+  (`mouse.down()`) the colour `--bg-pressed` resolves to; both tokens differ from the block's ground, so the case
+  cannot pass on a painted ground; released, the block opens, and with the mouse gone it is back at rest. In each state
+  the case also reads the title's computed ink and the ground painted under it (the title's own over the block's, each
+  converted to sRGB by the page's canvas), computes WCAG's ratio and asserts at least 4.5, because the gate measures
+  the title on the block's ground only. Measured, by skin and theme (rest / hover / pressed): Refined light and
+  Instrument light 7.41 / 6.73 / 6.20; Refined phosphor and Instrument phosphor 8.67 / 7.71 / 6.89. The lowest per
+  state: rest 7.41, hover 6.73, pressed 6.20, all in light; the rest figures are the gate's own pairs (7.41 light,
+  8.67 dark).
 
 ## Mutation rows
 
-Each row replaced one string in one file, ran the named suites through `ccrc test --local`, and restored the file; the
-diff of the tree was byte-identical before and after the whole run. A driver in the session's scratch did it, one mutant
-at a time. Every row went red, each in the case named for its rule (count of red cases in brackets).
+Each row replaces one string in one file, runs suites through `ccrc test --local` and restores the file. A driver in
+the session's scratch did it, one mutant at a time; each mutated file's sha256 was equal to its committed bytes after
+the whole run (listed below). Every row went red, each in the case named for its rule (the driver checks that case by
+name, and a row whose named case stays green is reported as such; none was).
 
-| Row | Mutation | Red |
-|---|---|---|
-| R1-open-by-default | the block starts open | 27 |
-| R1-no-aria-expanded | no `aria-expanded` | 9 |
-| R1-no-aria-controls | no `aria-controls` | 1 |
-| R1-opened-by-a-failed-read | a stale read opens it | 3 |
-| W-body-present-rolled-up | the body (pause, rows) drawn rolled up | 13 |
-| R4-summary-drawn-open | the summary drawn open too | 1 |
-| R4-status-remounted-per-state | the status keyed by the state | 1 |
-| R4-stale-remounted-per-state | the stale sentence keyed by the state | 1 |
-| R6-summary-a-live-region | `aria-live` on the summary | 1 |
-| R6-summary-inside-status | the summary inside the status element | 5 |
-| R2-no-waits-word, -ejected-, -unknown- | one short word dropped | 3 each |
-| R2-cut-at-thirteen | the cut at 13 | 3 |
-| R2-order-reversed | the list reversed | 10 |
-| R2-count-of-named-only | the count of the named entries only | 2 |
-| R2-no-more-tail | no `and <n> more` | 2 |
-| R2-one-said-as-number | `1 in line` | 2 |
-| R7-rolled-part-is-open-part | the rolled-up part is the open part | 4 |
-| R7-rolled-part-uncapped | the named count not capped | 1 |
-| R7-fleet-key-ignores-open | `FleetCards` passes open always | 1 |
-| R7-fleet-key-memo-stale | the set left out of the memo | 2 |
-| R5-stored-in-the-browser | the set also written to local storage | 1 |
-| R5-forgotten-when-the-cards-unmount | the set cleared when its last reader goes | 2 |
-| R5-forgotten-when-the-block-goes | rolled up when the state is `none` | 1 |
-| R5-forgotten-on-a-re-read | rolled up on a new state | 2 |
-| R6-done-without-disclosure | Done's chain without the disclosure | 1 |
-| R6-cancel-without-disclosure | Cancel's chain without the disclosure | 1 |
-| R6-cancel-disclosure-before-row | the disclosure before the row on Cancel | 5 |
-| R6-read-removal-without-disclosure | the effect's chain without the disclosure | 2 |
-| R6-effect-not-run-on-open-or-close | `open` left out of the effect | 2 |
-| R6-no-record-moves-focus | the early return for no record removed | 2 |
-| R6-focus-elsewhere-moved | the "focus fell to the page" check removed | 2 |
+Replayable as written (fix round 1, A3), every row measured again on the round's tip, two ways:
 
-The landing programme's four rows (addition 4), measured again on this tip with the existing cases opened first, each
-as wave 5m measured it:
+- **Suites named, Red there:** the row's own suites, the ones named in its column, all in one run.
+- **Red on the six:** the six landing suites, `foldState`, `landing-line-hold`, `landing-words` in one run and
+  `landing-line-rolled-up`, `landing-line-view`, `landing-line` in the other, the failures added up. (Two runs of three,
+  because a run of four files or more is a heavy run and waits for one of the box's two heavy slots.)
 
-- **X-door** (the sheet's confirm returns before its door, `|| true` on its guard): 11 red, the same eleven: both
-  unmount cases, the only-entry withdrawal, the terminal entry, the refusal followed by an empty read, both Done cases,
-  the one-re-read-per-answer case, Cancel in flight, Escape in flight, and the sheet opened again.
-- **FR8** (the wrapper's generation check removed): 2 red, both unmount cases.
-- **NOREC** (the section's `onFocus` record removed): 4 red: Cancel in flight, Resume on a line with no entries then an
-  empty read, the blur to nowhere, and the control case.
-- **M-noheld** (no early return without a record): 1 red, the fix round's case; R6-no-record-moves-focus is the same
-  mutation, read by both files (2 red).
+The first table this note carried had no suite column, and the reviewer's replay over the landing suites found six
+counts higher than written. All of those rows are in the "Red on the six" column now, and every row still goes red.
+Several "Red there" counts are higher than the first table's too. The R2 rows gain the twelve- and forty-entry cases
+and the rewritten role case (R2-no-ejected-word, -cut-at-thirteen, -order-reversed, -count-of-named-only and
+-no-more-tail). R3-body-drawn-rolled-up is gone: it was the same mutation as W-body-present-rolled-up and no longer
+matched once the body moved.
 
-Restored sha256 at the measured tip, each equal to the committed bytes:
-`LandingLine.tsx` a4921080d637fa9cf1d1982d48694925e68255cf99798fdccc47f952e84ba21a (after the full suite's fix; every row
-re-measured there with the same counts),
+| Row | Mutation | Suites named | Red there | Red on the six |
+|---|---|---|---|---|
+| R1-open-by-default | the block starts open | landing-line-rolled-up, landing-line-hold | 27 | 53 |
+| R1-no-aria-expanded | no `aria-expanded` | landing-line-rolled-up | 9 | 12 |
+| R1-no-aria-controls | no `aria-controls` | landing-line-rolled-up | 1 | 1 |
+| R1-opened-by-a-failed-read | a stale read opens it | landing-line-rolled-up | 3 | 3 |
+| R4-summary-drawn-open | the summary drawn open too | landing-line-rolled-up | 1 | 2 |
+| R4-status-remounted-per-state | the status keyed by the state | landing-line-rolled-up | 1 | 1 |
+| R4-stale-remounted-per-state | the stale sentence keyed by the state | landing-line-rolled-up | 1 | 1 |
+| R6-done-without-disclosure | Done's chain without the disclosure | landing-line-rolled-up | 1 | 1 |
+| R6-cancel-without-disclosure | Cancel's chain without the disclosure | landing-line-rolled-up | 1 | 1 |
+| R6-cancel-disclosure-before-row | the disclosure before the row on Cancel | landing-line-rolled-up, landing-line | 5 | 5 |
+| R2-no-waits-word | one short word dropped | landing-line-rolled-up, landing-line-view | 3 | 3 |
+| R2-no-ejected-word | one short word dropped | landing-line-rolled-up, landing-line-view | 4 | 4 |
+| R2-no-unknown-word | one short word dropped | landing-line-rolled-up, landing-line-view | 3 | 3 |
+| R2-cut-at-thirteen | the cut at 13 | landing-line-rolled-up, landing-line-view | 4 | 4 |
+| R2-order-reversed | the list reversed | landing-line-rolled-up, landing-line-view | 12 | 12 |
+| R2-count-of-named-only | the count of the named entries only | landing-line-rolled-up, landing-line-view | 3 | 3 |
+| R2-no-more-tail | no `and <n> more` | landing-line-rolled-up, landing-line-view | 3 | 3 |
+| R2-one-said-as-number | `1 in line` | landing-line-rolled-up, landing-words | 2 | 3 |
+| R7-rolled-part-is-open-part | the rolled-up part is the open part | landing-line-view, landing-line-hold | 4 | 4 |
+| R7-rolled-part-uncapped | the named count not capped | landing-line-view | 1 | 1 |
+| R7-fleet-key-ignores-open | `FleetCards` passes open always | landing-line-hold | 1 | 1 |
+| R7-fleet-key-memo-stale | the set left out of the memo | landing-line-hold | 2 | 2 |
+| R5-stored-in-the-browser | the set also written to local storage | foldState | 1 | 1 |
+| R5-forgotten-when-the-cards-unmount | the set cleared when its last reader goes | foldState, landing-line-hold | 2 | 2 |
+| R5-forgotten-when-the-block-goes | rolled up when the state is `none` | landing-line-hold | 1 | 1 |
+| R5-forgotten-on-a-re-read | rolled up on a new state | landing-line-hold | 2 | 8 |
+| R6-read-removal-without-disclosure | the effect's chain without the disclosure | landing-line-rolled-up | 2 | 2 |
+| R6-effect-not-run-on-open-or-close | `open` left out of the effect | landing-line-rolled-up | 2 | 2 |
+| R6-no-record-moves-focus | the early return for no record removed | landing-line-rolled-up, landing-line | 2 | 2 |
+| R6-focus-elsewhere-moved | the "focus fell to the page" check removed | landing-line-rolled-up, landing-line | 2 | 2 |
+| R6-summary-a-live-region | `aria-live` on the summary | landing-line-rolled-up | 1 | 1 |
+| R6-summary-inside-status | the summary inside the status element | landing-line-rolled-up | 5 | 5 |
+| W-body-present-rolled-up | the body (pause, rows) drawn rolled up | landing-line-rolled-up | 13 | 13 |
+| X-door | the sheet's confirm returns before its door (`\|\| true` on its guard) | landing-line | 11 | 13 |
+| FR8 | the wrapper's generation check removed | landing-line | 2 | 2 |
+| NOREC | the section's `onFocus` record removed | landing-line | 4 | 7 |
+| M-noheld | no early return without a record | landing-line | 1 | 2 |
+| A1-rolled-key-follows-words | the rolled-up key counts the short words (fix round 1) | landing-line-view | 4 | 5 |
+| R2-cut-at-eleven | the cut at 11 (fix round 1) | landing-line-view | 4 | 5 |
+| R2-more-capped-at-eight | `and <n> more` capped at 8 (fix round 1) | landing-line-view | 1 | 1 |
+
+F2-title-ground-back, the one row measured in Chrome: it puts `background: var(--bg-surface)` back into
+`.landing-line-title`. Measured on `browser/landing-line.browser.test.ts` with `-t grounds` (the four ground cases,
+one per skin and theme), the build rebuilt with the mutant: 4 red, all four ground cases by name (at rest the title painted the surface, which equals the block's ground and passes; under the mouse it stayed there instead of the hover token).
+
+The landing programme's four rows (addition 4 of the first round, and again in fix round 1), each by its case name, on
+`landing-line.test.tsx` alone as wave 5m measured them:
+
+- **X-door**: 11 red, the same eleven (both unmount cases, the only-entry withdrawal, the terminal entry, the refusal
+  followed by an empty read, both Done cases, the one-re-read-per-answer case, Cancel in flight, Escape in flight, and
+  the sheet opened again); 13 on the six.
+- **FR8**: 2 red, both unmount cases; 2 on the six.
+- **NOREC**: 4 red (Cancel in flight, Resume on a line with no entries then an empty read, the blur to nowhere, and the
+  control case); 7 on the six.
+- **M-noheld**: 1 red, the fix round's case; 2 on the six (R6-no-record-moves-focus is the same mutation).
+
+Restored sha256 at the round's tip, each equal to the committed bytes (this round changed none of them):
+`LandingLine.tsx` a4921080d637fa9cf1d1982d48694925e68255cf99798fdccc47f952e84ba21a,
 `LandingWithdrawSheet.tsx` 858910ec7141c30383f5927e9c266c7a194258d6496dd7556e3c6ede2a329a03,
 `landingLineView.ts` db524f938cade87780b8b808b59d58894e0a507526ed5954cc8db630f67294d4,
 `landingWords.ts` 4f4178325449e3f39094a116ea02b7f2bda71e6849febd9ebcc108617b53a2fb,
@@ -336,15 +390,49 @@ Under `docs/design/2026-10-22-desktop-polish/landing-line-rolled-up/`, every fix
 wide. Each shows four cards: six entries with each kind of word, thirteen entries, one entry, and a line paused by the
 operator. The phone's tab bar and the New button were hidden for the picture only.
 
+Fix round 1 (F2) re-took the sixteen after pictures on the round's code into scratch, and again on the code before the
+round, with the mouse moved off the last disclosure it pressed so the open pictures show the block at rest. Decoded in
+Chrome and compared pixel by pixel, the round's pictures differ from the pre-round re-take in 12 of 16. The four open
+pictures at 1440 differ in 69 to 156 pixels; the other eight differ in 5 to 86. Every changed pixel is off by 1, or at
+most 2, levels of 255, on the rows of text and edges. That is the size of the run-to-run noise: the pre-round re-take
+itself differs from the committed pictures in 9 of 16, by up to 1 level. Nothing seen changed: the title shows the same
+ink on the same ground at rest. So no committed picture was replaced. The hover and pressed grounds are measured by the
+browser case, not pictured.
+
 ## Probes
 
 - `git merge-tree` of this head against `origin/main` (7d2c9aecb3): clean, exit 0; nothing absorbed.
 - Against #3281's head (0eeaaa092b): exit 1 on `pwa/src/fleet/fleetTree.ts`, which this branch does not touch; main
   itself conflicts with that head on the same file. This branch does not edit `ProjectCard.tsx`.
+- Fix round 1: `git merge-tree` of the round's head against `origin/main` (5576023f25): clean, exit 0; nothing
+  absorbed.
+
+## Fix round 1, on the head merged with main
+
+The round's head merged with `origin/main` (5576023f25) in a scratch tree, never pushed. Each file was run alone with
+`ccrc test --local`:
+
+- The six landing suites: `foldState` 16, `landing-line-hold` 5, `landing-words` 45, `landing-line-rolled-up` 26,
+  `landing-line-view` 47, `landing-line` 29, all passed.
+- The contrast suite, 375 passed, and the three boundary guards: `control-census` 13, `design-system-boundary` 15,
+  `ui-package-boundary` 24, all passed. The census first failed to load in the scratch tree, which had no server
+  packages (its parser is the server's); with the worktree's server packages linked in, it passed.
+- The tests that name a file this round changes. For the plan: `ask-inline` 135, `ask-structured` 75,
+  `plain-words` 65, `command-layer` 63, `command-registry` 29, `session-entries` 12, `build-and-spend` 7,
+  `chat-marks-negation` 142, and on the server side `deviation-refs` 35, `drawer-mask-screen` 13 and
+  `watcher-quiet-census` 4, all passed. For the sheet, `contrast` (above). For the view and browser test files, the
+  files themselves.
+- `browser/landing-line.browser.test.ts`: 104 of 104, the four ground cases included.
 
 ## Not claimed
 
 - Enter, Space and the accessibility tree are measured in Chrome only; this suite drives no other engine, and WebKit
   has dropped roles under a `display: contents` box before.
-- The disclosure keeps the title's ground, so it shows no hover lift (the card's own fold button shows none either).
+- Corrected in fix round 1: this line said the disclosure keeps the title's ground and shows no hover lift, "the card's
+  own fold button shows none either". That was wrong for the card's four other BareRow disclosures
+  (`.proj-released-toggle` and its siblings in `fleet.css`), which paint no ground and keep BareRow's hover and pressed
+  grounds. The disclosure now does the same (F2, above).
+- The rolled-up hold key's two residuals stay by design (fix round 1 ruling): a short word that wraps the summary onto
+  another line changes no key, and a line growing from five entries to six on a summary that stays one line changes
+  the key and fires the hold.
 - The rolled-up hold key does not follow wrapped text, as R8 ruled for the rows.

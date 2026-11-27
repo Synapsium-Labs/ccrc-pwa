@@ -27,16 +27,22 @@
 .landing-line-body {
   display: contents;
 }
+/* The title's ink is set here, through the block, and its ground is the block's: the gate measures it on .landing-line's
+   --bg-surface by the selector, so the title paints no ground of its own and BareRow's hover and pressed grounds show
+   (wave 192 fix round 1). */
 .landing-line > .landing-line-title {
   grid-column: 1;
   grid-row: 1;
+  color: var(--ink-secondary);
 }
 .landing-line-body > .landing-line-pause {
   grid-column: 2;
   grid-row: 1;
   justify-self: end;
 }
-/* The title is the block's disclosure (wave 192): `BareRow`'s tap floor and focus ring, its mark before the words. */
+/* The title is the block's disclosure (wave 192): `BareRow`'s tap floor, focus ring and press grounds, its mark before the
+   words. No ink and no ground here: a ground would beat BareRow's (an app sheet beats a utility), as the card's four
+   other disclosures (fleet.css) leave theirs. */
 .landing-line-title {
   display: flex;
   align-items: center;
@@ -45,8 +51,6 @@
   padding: 0;
   font-size: var(--fs-sm);
   font-weight: 600;
-  color: var(--ink-secondary);
-  background: var(--bg-surface);
 }
 /* Rolled up: every open entry by its PR, wrapping inside the card and never widening it. */
 .landing-line-summary {
