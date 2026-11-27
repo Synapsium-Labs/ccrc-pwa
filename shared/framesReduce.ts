@@ -126,12 +126,19 @@ function privateAcross(a: string, b: string, privates: readonly string[]): boole
  *  holds a `/`. */
 const pathTail = (row: string): boolean => (/^\S+/u.exec(spans(row).content)?.[0] ?? '').includes('/');
 
-/** Whether a row's text runs to its last column: it is the pane's full width and its last character is neither a space,
- *  the decoration nor a rule's `─`. */
+/** A character a terminal draws two cells wide: the East Asian wide and fullwidth blocks and an emoji drawn as one
+ *  (`Emoji_Presentation`). Every other character counts one cell, a combining mark included, so a row is never read as
+ *  narrower than it is drawn. */
+const WIDE_CHAR = /[ᄀ-ᅟ⺀-〾ぁ-㏿㐀-䶿一-鿿ꀀ-꓏가-힣豈-﫿︰-﹏＀-｠￠-￦\u{20000}-\u{3FFFD}]|\p{Emoji_Presentation}/u;
+/** A row's width in screen cells. */
+const cellsOf = (cps: readonly string[]): number => cps.reduce((n, c) => n + (WIDE_CHAR.test(c) ? 2 : 1), 0);
+
+/** Whether a row's text runs to its last column: it fills the pane's width in screen cells, two for a wide character
+ *  (review 4086's F-B), and its last character is neither a space, the decoration nor a rule's `─`. */
 function runsToTheEdge(row: string, pane: FramesPane): boolean {
   const cps = Array.from(row);
   const last = cps[cps.length - 1];
-  return cps.length === pane.cols && last !== undefined && !DECOR.has(last) && !/[\s─]/u.test(last);
+  return cellsOf(cps) >= pane.cols && last !== undefined && !DECOR.has(last) && !/[\s─]/u.test(last);
 }
 
 /** THE FULL-WIDTH RULE, on both hosts (review 4069's F2): a token holding a `/` that runs to a full-width row's last
@@ -144,26 +151,43 @@ function pathOffTheEdge(a: string, b: string, pane: FramesPane): boolean {
   return tail !== '' && (head + tail).includes('/');
 }
 
+/** Each token less its opening quote (what follows a `‹`), and less its closing quote (what precedes a `›`). */
+const AFTER_OPEN: readonly string[] = TOKENS.map((t) => t.slice(1));
+const BEFORE_CLOSE: readonly string[] = TOKENS.map((t) => t.slice(0, -1));
+/** How many code units of `s` follow `plain` from `i` on, and precede it up to `j`. */
+const leadOf = (plain: string, i: number, s: string): number => { let k = 0; while (k < s.length && plain[i + k] === s[k]) k++; return k; };
+const trailOf = (plain: string, j: number, s: string): number => { let k = 0; while (k < s.length && plain[j - 1 - k] === s[s.length - 1 - k]) k++; return k; };
+
 /** THE SHAPE CHECKS ON A REDUCED TEXT, on both hosts, so the server, which has none of the box's strings, refuses by shape
- *  what a wrap left (review 4069's F2, the reviewer's two measured frames and their class): a replacement token cut
- *  anywhere (a `‹` that starts none of the tokens, or a `›` that ends none), and a path's tail at the start of the row
- *  after a row that ends in a replacement token. A path's tail after a row run to the edge is the full-width rule's,
- *  which runs on both hosts too. A row too narrow for its whole token leaves a cut token, so it is refused here too: a
- *  token is never cut short to fit. */
+ *  what a wrap left (review 4069's F2, the reviewer's two measured frames and their class): a replacement token cut, and a
+ *  path's tail at the start of the row after a row that ends in a replacement token. A path's tail after a row run to the
+ *  edge is the full-width rule's, which runs on both hosts too.
+ *
+ *  The cut is EXACT (the coordinator's ruling on review 4086's F-A): the opening quote followed by a non-empty part of the
+ *  start of a token's name that does not go on to the whole token, or a non-empty part of the end of a name followed by the
+ *  closing quote and not preceded by the rest of the token. The quotes are Claude Code's own glyphs too (it draws a held
+ *  stash as a row that begins `› stashed`), so a bare quote, with no part of a token's name against it, is kept. The
+ *  token names begin with three different letters and end with three different letters, so at most one name is against a
+ *  quote. A row too narrow for its whole token is refused where it would be replaced (`reduceFrame`). */
 function cutToken(plain: string): boolean {
-  for (let i = plain.indexOf('‹'); i !== -1; i = plain.indexOf('‹', i + 1)) if (!TOKENS.some((t) => plain.startsWith(t, i))) return true;
-  for (let i = plain.indexOf('›'); i !== -1; i = plain.indexOf('›', i + 1)) if (!TOKENS.some((t) => plain.slice(0, i + 1).endsWith(t))) return true;
+  for (let i = plain.indexOf('‹'); i !== -1; i = plain.indexOf('‹', i + 1)) {
+    if (AFTER_OPEN.some((s) => { const k = leadOf(plain, i + 1, s); return k > 0 && k < s.length; })) return true;
+  }
+  for (let j = plain.indexOf('›'); j !== -1; j = plain.indexOf('›', j + 1)) {
+    if (BEFORE_CLOSE.some((s) => { const k = trailOf(plain, j, s); return k > 0 && k < s.length; })) return true;
+  }
   return false;
 }
 const endsInToken = (row: string): boolean => TOKENS.some((t) => lessTail(row).endsWith(t));
 
-/** A row with its content replaced by `token`, padded with spaces or cut to the content's width, its two decoration spans
- *  kept, its SGR gone with its content: every row keeps its width. */
-function replaced(plainRow: string, token: string): string {
+/** A row with its content replaced by `token`, padded with spaces to the content's width, its two decoration spans kept,
+ *  its SGR gone with its content: every row keeps its width. `null` when the content is narrower than the token: a token is
+ *  never cut short to fit (review 4069's F2), so the frame is refused. */
+function replaced(plainRow: string, token: string): string | null {
   const s = spans(plainRow);
   const w = Array.from(s.content).length;
-  const t = Array.from(token).slice(0, w).join('');
-  return s.lead + t + ' '.repeat(w - Array.from(t).length) + s.tail;
+  const t = Array.from(token).length;
+  return w < t ? null : s.lead + token + ' '.repeat(w - t) + s.tail;
 }
 
 /** RULE 9's private shapes, on rows not ours, after reduction: an absolute path under a home or a mount, a home-relative
@@ -202,6 +226,9 @@ export function reduceFrame(
   const count = { cwd: 0, path: 0, model: 0, account: 0 };
   const scanned: string[] = [];
   let ruleLeak = false;
+  let narrow = false;
+  /** `replaced`, with a row too narrow for its token marked, so the frame is refused below. */
+  const replace = (plain: string, token: string): string => { const r = replaced(plain, token); if (r === null) { narrow = true; return plain; } return r; };
   const drawn = frame.split('\n');
   const plains = drawn.map(stripFrameSgr);
   // Rule 8: the status position holds exactly the capture's status text, which is then ours; anything else refuses whole.
@@ -221,7 +248,7 @@ export function reduceFrame(
       // Rule 7: a rule row's label is kept byte for byte, unless it holds a private string. A label rules 4 to 6 would
       // catch is never kept and never rewritten: the frame is refused (below), so a cut-short path, a model or a plan
       // cannot ride a rule row out of the box (the security review of F3).
-      if (hasPrivate) { count.cwd++; return replaced(plain, FRAMES_REPLACED.cwd); }
+      if (hasPrivate) { count.cwd++; return replace(plain, FRAMES_REPLACED.cwd); }
       if (PATH_LIKE.test(plain) || MODEL_WORD.test(plain) || ACCOUNT_WORD.test(plain)) ruleLeak = true;
       scanned.push(plain);
       return row;
@@ -229,15 +256,17 @@ export function reduceFrame(
     // Rule 2: our rows stay byte for byte.
     if (ourRow[i]) return row;
     let out: string | null = null;
-    if (hasPrivate) { count.cwd++; out = replaced(plain, FRAMES_REPLACED.cwd); } // rule 3
-    else if (PATH_LIKE.test(plain)) { count.path++; out = replaced(plain, FRAMES_REPLACED.cwd); } // rule 4
-    else if (MODEL_WORD.test(plain)) { count.model++; out = replaced(plain, FRAMES_REPLACED.model); } // rule 5
-    else if (ACCOUNT_WORD.test(plain)) { count.account++; out = replaced(plain, FRAMES_REPLACED.account); } // rule 6
+    if (hasPrivate) { count.cwd++; out = replace(plain, FRAMES_REPLACED.cwd); } // rule 3
+    else if (PATH_LIKE.test(plain)) { count.path++; out = replace(plain, FRAMES_REPLACED.cwd); } // rule 4
+    else if (MODEL_WORD.test(plain)) { count.model++; out = replace(plain, FRAMES_REPLACED.model); } // rule 5
+    else if (ACCOUNT_WORD.test(plain)) { count.account++; out = replace(plain, FRAMES_REPLACED.account); } // rule 6
     // Rule 8 judged the status row above (it is ours once it is exactly the capture's text). Any other row below the box
     // is read by rules 3 to 6 like any other.
     scanned.push(out ?? plain);
     return out ?? row;
   });
+  // A row too narrow for its whole token: the frame is refused, never a token cut short.
+  if (narrow) return { kind: 'refused', refusal: 'private-shape' };
   const text = rows.join('\n');
   // The shape checks on the reduced rows: no cut token, no path's tail after a token.
   const outPlain = rows.map(stripFrameSgr);

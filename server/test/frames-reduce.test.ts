@@ -34,6 +34,24 @@ const reduced = (f: string, privates: readonly string[] = [], ours: readonly str
   return r.text;
 };
 const width = (row: string): number => Array.from(row.replace(/\x1b\[[0-9;:]*m/g, '')).length;
+const plainOf = (row: string): string => row.replace(/\x1b\[[0-9;:]*m/g, '');
+/** The recorded panes (each holds SGR only, measured). */
+const PANES = path.join(path.dirname(fileURLToPath(import.meta.url)), 'fixtures', 'panes');
+/** A recorded pane's real size, measured as the reader measures it: its rows and its widest row. */
+const realPane = (recorded: string): { cols: number; rows: number } => {
+  const s = frameSize(recorded);
+  return { cols: s.width, rows: s.rows };
+};
+/** A recorded pane as the recipe meets it (review 4086, F-H): under the capture's settings the status row is drawn directly
+ *  under the lowest rule (rule 8), a NEW row, so the pane's top row scrolls off and the frame keeps the pane's real height.
+ *  Every other row the build drew is kept. Every recorded pane has a rule row (pinned below), so none is left as it is. */
+const asTheRecipeMeetsIt = (recorded: string): string => {
+  const rows = recorded.split('\n');
+  let low = -1;
+  rows.forEach((l, i) => { if (isRuleRow(plainOf(l))) low = i; });
+  if (low < 1) throw new Error('a recorded pane with no rule row under its top row');
+  return [...rows.slice(1, low + 1), STATUS, ...rows.slice(low + 1)].join('\n');
+};
 
 describe('rule 1: the shape gate', () => {
   it('refuses a frame with a hyperlink, never strips it', () => {
@@ -116,6 +134,87 @@ describe('a wrap through a private string or a path (review 4069, F2, the coordi
   it('a whole token with no path after it, and a path row after a row of ours, pass the receiver', () => {
     expect(checkReducedFrame(frame(`  ${FRAMES_REPLACED.model}  `, '  ? for shortcuts'), PANE, OURS, NONE)).toEqual({ ok: true });
     expect(checkReducedFrame(frame(`> ${FRAMES_NUDGE_TEXT.slice(0, 60)}`, `  ${FRAMES_NUDGE_TEXT.slice(60, 120)}`), PANE, OURS, NONE)).toEqual({ ok: true });
+  });
+  it('our own text wrapped at exactly the pane\'s width inside a path is ours on both rows, and reduces unchanged (review 4086, F-G)', () => {
+    // The mail notice holds `~/.local/bin/…`; a turn of ours wrapped inside that path runs to the last column, and the row
+    // under it goes on with the path. Both rows are ours, so the full-width rule does not read them as a wrapped path.
+    const k = FRAMES_NUDGE_TEXT.indexOf('~/.local/bin/') + 5;
+    const a = `${' '.repeat(PANE.cols - k - 2)}> ${FRAMES_NUDGE_TEXT.slice(0, k)}`;
+    const b = `  ${FRAMES_NUDGE_TEXT.slice(k, k + 150)}`;
+    expect([Array.from(a).length, a.endsWith('~/.lo'), b.trimStart().startsWith('cal/bin/')]).toEqual([PANE.cols, true, true]);
+    expect(reduced(frame(a, b))).toBe(frame(a, b));
+    expect(checkReducedFrame(frame(a, b), PANE, OURS, NONE)).toEqual({ ok: true });
+  });
+});
+
+describe('the full-width rule counts screen cells, two for a wide character (review 4086, F-B, the coordinator\'s ruling)', () => {
+  const P = { cols: 40, rows: 8 };
+  const boxed = (...rows: string[]): string => raw(...rows, '─'.repeat(P.cols), STATUS);
+  const both = (f: string): unknown[] => [reduceFrame(f, P, [], [], NONE), checkReducedFrame(f, P, [], NONE)];
+  const REFUSED = [{ kind: 'refused', refusal: 'private-shape' }, { ok: false, refusal: 'private-shape' }];
+  it('the reviewer\'s frame: a row that reaches the last column with a wide character, a path going on below, refuses on both hosts', () => {
+    const edge = `🎯${'x'.repeat(33)} /pro`;
+    expect(Array.from(edge)).toHaveLength(P.cols - 1); // 39 code points, 40 cells
+    expect(both(boxed(edge, 'ject-x rest'))).toEqual(REFUSED);
+  });
+  it('an ASCII row run to the last column still refuses', () => {
+    const edge = `${'x'.repeat(35)} /pro`;
+    expect(Array.from(edge)).toHaveLength(P.cols);
+    expect(both(boxed(edge, 'ject-x rest'))).toEqual(REFUSED);
+  });
+  it('a row of wide characters one cell short of the edge is not run to it, and reduces unchanged', () => {
+    const short = `${'漢'.repeat(17)} /pro`; // 39 cells
+    const f = boxed(short, 'ject-x rest');
+    expect(both(f)).toEqual([{ kind: 'reduced', text: f, replaced: { cwd: 0, path: 0, model: 0, account: 0 } }, { ok: true }]);
+  });
+});
+
+describe('a bare quote is Claude Code\'s own glyph, and a cut token is exact (review 4086, F-A, the coordinator\'s ruling)', () => {
+  const NAMES = Object.values(FRAMES_REPLACED).map((t) => Array.from(t).slice(1, -1).join(''));
+  const both = (f: string): unknown[] => [reduceFrame(f, PANE, OURS, [], NONE), checkReducedFrame(f, PANE, OURS, NONE)];
+  const KEPT = (f: string): unknown[] => [{ kind: 'reduced', text: f }, { ok: true }];
+  const REFUSED = [{ kind: 'refused', refusal: 'private-shape' }, { ok: false, refusal: 'private-shape' }];
+  it('the two recorded held-stash panes, as the recipe meets them at their real size, reduce and keep the stash notice row byte for byte, on both hosts', () => {
+    for (const f of ['stash-held-with-text.ansi', 'stash-held-during-turn.ansi']) {
+      const recorded = readFileSync(path.join(PANES, 'box', f), 'utf8');
+      const pane = realPane(recorded);
+      expect(pane, f).toEqual({ cols: 220, rows: 50 });
+      const text = asTheRecipeMeetsIt(recorded);
+      const r = reduceFrame(text, pane, [], [], NONE);
+      expect(r.kind, f).toBe('reduced');
+      if (r.kind !== 'reduced') continue;
+      const rows = text.split('\n');
+      const notice = rows.findIndex((l) => plainOf(l).trim().startsWith('› stashed'));
+      expect(notice, f).toBeGreaterThan(0);
+      expect(r.text.split('\n')[notice], f).toBe(rows[notice]);
+      // The one row replaced is the header's model and plan row, rule 5's, measured.
+      expect(r.replaced, f).toEqual({ cwd: 0, path: 0, model: 1, account: 0 });
+      expect(checkReducedFrame(r.text, pane, [], NONE), f).toEqual({ ok: true });
+    }
+  });
+  it('a bare closing quote at a row\'s start, in mid-row and at its end is kept, and so is a bare opening quote', () => {
+    for (const row of ['  › stashed · ✔ Update installed · Restart to update', '  one › two', '  it ends here ›', '  ›', '  ‹ opens here', '  a ‹ b › c']) {
+      expect(both(frame(row)), row).toMatchObject(KEPT(frame(row)));
+    }
+  });
+  it('each proper prefix of each name after the opening quote, and each proper suffix before the closing one, refuses on both hosts', () => {
+    const rows = (head: string, tail: string): string[] => [`  see ${head} here`, `  ${head}`, `  x ${tail} and more`, `  ${tail}`];
+    for (const n of NAMES) {
+      const cps = Array.from(n);
+      for (let k = 1; k < cps.length; k++) {
+        for (const row of rows(`‹${cps.slice(0, k).join('')}`, `${cps.slice(cps.length - k).join('')}›`)) expect(both(frame(row)), row).toEqual(REFUSED);
+      }
+    }
+    // The whole name with its other quote missing is a cut too: it is what a row too narrow for its token would leave. (A row
+    // holding the whole word `account` is rule 6's, which replaces it on the box, so that name is not among these.)
+    for (const n of NAMES.filter((x) => x !== 'account')) for (const row of rows(`‹${n}`, `${n}›`)) expect(both(frame(row)), row).toEqual(REFUSED);
+  });
+  it('a complete token is kept: alone, and, for the two no word rule reads, between words and twice in a row', () => {
+    // `‹account›` holds the word rule 6 reads, so a row holding more than that token is that rule's, as before this round.
+    for (const t of Object.values(FRAMES_REPLACED)) expect(both(frame(`  ${t}${' '.repeat(30)}`)), t).toMatchObject(KEPT(frame(`  ${t}${' '.repeat(30)}`)));
+    for (const t of [FRAMES_REPLACED.cwd, FRAMES_REPLACED.model]) {
+      for (const row of [`  see ${t} here and more`, `  ${t}${t}${' '.repeat(10)}`]) expect(both(frame(row)), row).toMatchObject(KEPT(frame(row)));
+    }
   });
 });
 
@@ -309,9 +408,8 @@ describe('rule 10, and the receiver\'s check', () => {
 });
 
 describe('over-replacement on the recorded 2.1.300 panes (the coordinator\'s condition 3, measured and pinned)', () => {
-  const dir = path.join(path.dirname(fileURLToPath(import.meta.url)), 'fixtures', 'panes');
+  const dir = PANES;
   const files = readdirSync(dir).filter((f) => f.startsWith('cc300'));
-  const BIG = { cols: 1000, rows: 1000 };
   /** What the 61 recorded panes hold directly under their lowest rule, measured: each was drawn with no status line set. */
   const UNDER_THE_LOWEST_RULE = [
     '4. Chat about this', '5. Chat about this', 'paste again to expand',
@@ -320,22 +418,15 @@ describe('over-replacement on the recorded 2.1.300 panes (the coordinator\'s con
     '←  ☒ Pets  ☐ Size  ☒ Mode  ✔ Submit  →', '←  ☒ Tools  ☒ Sizes  ✔ Submit  →', '←  ☒ Tools  ✔ Submit  →',
     '⏵⏵ auto mode on (shift+tab to cycle)', '⏵⏵ auto mode on (shift+tab to cycle) · ← for agents', '❯ 4. Chat about this',
   ];
-  /** A recorded pane as our settings would draw it: the capture's status row put directly under its lowest rule (rule 8),
-   *  every row it drew kept. A pane with no rule row is left as it is. */
-  const underOurSettings = (text: string): string => {
-    const rows = text.split('\n');
-    let low = -1;
-    rows.forEach((l, i) => { if (isRuleRow(l.replace(/\x1b\[[0-9;:]*m/g, ''))) low = i; });
-    return low < 0 ? text : [...rows.slice(0, low + 1), STATUS, ...rows.slice(low + 1)].join('\n');
-  };
-  it('ALTERED: each pane with the status row added as a NEW row under its lowest rule, every row it drew kept: replaces 38 model rows, 0 account rows and 5 path rows in 61 panes, never a box, rule or chip row, and keeps every width', () => {
-    // The panes were not drawn under the capture's settings, so each gets the status row ours would draw (above); the
-    // counts are the rules' over every row the build drew, as they were before rule 8.
+  it('ALTERED: each pane as the recipe meets it at its real size, the status row a NEW row under its lowest rule: replaces 38 model rows, 0 account rows and 5 path rows in 61 panes, never a box, rule or chip row, and keeps every width', () => {
+    // The panes were not drawn under the capture's settings, so each gets the status row ours would draw
+    // (`asTheRecipeMeetsIt`), at the pane's own width and height (review 4086, F-H), so the full-width rule runs too.
     const total = { cwd: 0, path: 0, model: 0, account: 0 };
     let boxReplaced = 0;
     for (const f of files) {
-      const text = underOurSettings(readFileSync(path.join(dir, f), 'utf8'));
-      const r = reduceFrame(text, BIG, [], [], NONE);
+      const recorded = readFileSync(path.join(dir, f), 'utf8');
+      const text = asTheRecipeMeetsIt(recorded);
+      const r = reduceFrame(text, realPane(recorded), [], [], NONE);
       expect(r.kind, f).toBe('reduced');
       if (r.kind !== 'reduced') continue;
       for (const k of Object.keys(total) as (keyof typeof total)[]) total[k] += r.replaced[k];
@@ -356,18 +447,17 @@ describe('over-replacement on the recorded 2.1.300 panes (the coordinator\'s con
     expect(total).toEqual({ cwd: 0, path: 5, model: 38, account: 0 });
     expect(boxReplaced).toBe(0);
   });
-  it('as recorded, every pane with a rule row is refused status-row: none holds the capture\'s status text under its lowest rule', () => {
+  it('as recorded, at its real size, every pane is refused status-row: none holds the capture\'s status text under its lowest rule', () => {
     const under = new Map<string, number>();
     let ruled = 0;
     for (const f of files) {
       const text = readFileSync(path.join(dir, f), 'utf8');
-      const plain = text.split('\n').map((l) => l.replace(/\x1b\[[0-9;:]*m/g, ''));
+      const plain = text.split('\n').map(plainOf);
       let low = -1;
       plain.forEach((l, i) => { if (isRuleRow(l)) low = i; });
-      const r = reduceFrame(text, BIG, [], [], NONE);
-      if (low < 0) { expect(r.kind, f).toBe('reduced'); continue; }
+      expect(low, `${f} has a rule row`).toBeGreaterThan(0);
       ruled++;
-      expect(r, f).toEqual({ kind: 'refused', refusal: 'status-row' });
+      expect(reduceFrame(text, realPane(text), [], [], NONE), f).toEqual({ kind: 'refused', refusal: 'status-row' });
       const row = (plain[low + 1] ?? '').trim();
       under.set(row, (under.get(row) ?? 0) + 1);
     }
@@ -386,6 +476,25 @@ describe('over-replacement on the recorded 2.1.300 panes (the coordinator\'s con
     const unruled = [...files.map((f) => path.join(dir, f)), ...boxFiles.map((f) => path.join(boxDir, f))]
       .filter((f) => !readFileSync(f, 'utf8').split('\n').some((l) => isRuleRow(l.replace(/\x1b\[[0-9;:?]*[a-zA-Z]/g, ''))));
     expect(unruled).toEqual([]);
+  });
+  it('every recorded pane of the box folder, as the recipe meets it at its real size, reduces on both hosts (review 4086, F-H)', () => {
+    // Each is reduced with the status row in place, at the pane's own width and height, so every rule runs as on a real
+    // frame; any that does not reduce is named with its word. One limit, pinned: the third stash pane's notice row also
+    // carries a path, so the path rule replaces the whole row and the notice is not in the stored frame.
+    const boxDir = path.join(dir, 'box');
+    const missed: string[] = [];
+    const pathRows: string[] = [];
+    for (const f of readdirSync(boxDir).filter((n) => n.endsWith('.ansi'))) {
+      const recorded = readFileSync(path.join(boxDir, f), 'utf8');
+      const pane = realPane(recorded);
+      const r = reduceFrame(asTheRecipeMeetsIt(recorded), pane, [], [], NONE);
+      if (r.kind !== 'reduced') { missed.push(`${f}: ${r.refusal}`); continue; }
+      const c = checkReducedFrame(r.text, pane, [], NONE);
+      if (!c.ok) missed.push(`${f}: the server's check, ${c.refusal}`);
+      if (r.replaced.path > 0) pathRows.push(f);
+    }
+    expect(missed).toEqual([]);
+    expect(pathRows).toContain('stash-after-cs.ansi');
   });
   it('the frame size of a recorded pane is measured as the reader measures it', () => {
     expect(frameSize(readFileSync(path.join(dir, files[0]!), 'utf8')).rows).toBeGreaterThan(0);
