@@ -3,13 +3,13 @@
 // public, and no fixture carries a key.
 import { describe, expect, it } from 'vitest';
 import {
-  DECISION_HELD_CAUSES, DECISION_HOST_KINDS, DECISION_QUESTIONS, DECISION_ROW_MODES, type DecisionRowSide, type DecisionRowView,
+  DECISION_HELD_CAUSES, DECISION_HOST_KINDS, DECISION_QUESTIONS, DECISION_ROW_MODES, readDecisionModelView, type DecisionRowSide, type DecisionRowView,
 } from '../../shared/decisionModel';
 import { DECISION_MODEL_REFUSALS } from '../../shared/refusal';
 import { ApiError, DECISION_MODEL_REFUSAL_TEXT, OVERLORD_SETTINGS_REFUSAL_TEXT as ST, overlordSettingsRefusalText } from '../src/lib/api';
 import {
   DECISION_HELD_TEXT, DECISION_HOST_KIND_LABELS, DECISION_MODE_LABELS, DECISION_WORDS as W, ceilingOf, decisionRowLine, decisionViewOf,
-  keyAnswerWords, keyRemoveWords, rowAnswerOf, rowAnswerWords,
+  decisionViewDetail, keyAnswerWords, keyRemoveWords, rowAnswerOf, rowAnswerWords, withRowAnswer,
 } from '../src/overlord/decisionModelWords';
 
 const SIDE: DecisionRowSide = { mode: 'shadow', ceiling: 600, armedLine: null, held: false };
@@ -81,10 +81,17 @@ describe('a row is drawn from the read (SQ3)', () => {
 
 describe('a door\'s answer (SQ4)', () => {
   it('the side the door installed is read; an off the journal refused is "held, not off" with its cause', () => {
-    expect(rowAnswerOf({ ok: true, row: 'programme.pick', side: SIDE, heldWhy: null })).toEqual({ side: SIDE, offRefused: false, cause: null });
+    expect(rowAnswerOf({ ok: true, row: 'programme.pick', side: SIDE, heldWhy: null })).toEqual({ side: SIDE, offRefused: false, cause: null, heldWhy: null });
     expect(rowAnswerWords({ ok: true, row: 'programme.pick', side: SIDE, heldWhy: null })).toEqual([W.saved]);
     const held = { ok: true, row: 'scope.widens', side: { ...SIDE, mode: 'armed', held: true }, state: 'held', offRefused: true, cause: 'journal incoherent' };
     expect(rowAnswerWords(held)).toEqual(['Held, not off: the authority journal could not record the change (journal incoherent). Nothing is asked while it is held.']);
+  });
+  it('the answer\'s heldWhy is a cause of the shared list, null, or undefined when absent or not a known cause', () => {
+    for (const c of DECISION_HELD_CAUSES) expect(rowAnswerOf({ ok: true, row: 'programme.pick', side: SIDE, heldWhy: c })?.heldWhy, c).toBe(c);
+    expect(rowAnswerOf({ ok: true, row: 'programme.pick', side: SIDE, heldWhy: null })?.heldWhy).toBeNull();
+    expect(rowAnswerOf({ ok: true, row: 'programme.pick', side: SIDE })?.heldWhy).toBeUndefined();
+    expect(rowAnswerOf({ ok: true, row: 'programme.pick', side: SIDE, heldWhy: 'zz-unknown' })?.heldWhy).toBeUndefined();
+    expect(rowAnswerOf({ ok: true, row: 'programme.pick', side: SIDE, heldWhy: 7 })?.heldWhy).toBeUndefined();
   });
   it('an answer it cannot read says nothing, never a refusal', () => {
     expect(rowAnswerOf('unreadable')).toBeNull();
@@ -96,6 +103,54 @@ describe('a door\'s answer (SQ4)', () => {
     expect(keyAnswerWords({ ok: true, held: ['scope.widens'] })).toEqual([W.saved, 'Held: scope.widens.']);
     expect(keyRemoveWords({ ok: true, held: ['scope.widens', 'relay.method'] })).toEqual([W.keyRemoved, 'Held: scope.widens, relay.method.']);
     expect(keyAnswerWords('unreadable')).toEqual([]);
+  });
+});
+
+describe('an answer is installed in the view (A5)', () => {
+  const OTHER = row({ id: 'programme.any', side: { ...SIDE, mode: 'off' } });
+  const VIEW2 = decisionViewOf({ ...VIEW, rows: [row({ heldWhy: 'drift', side: { ...SIDE, held: true } }), OTHER] })!;
+  const NEW_SIDE: DecisionRowSide = { mode: 'armed', ceiling: 900, armedLine: { id: 3, line: 0.9 }, held: false };
+
+  it('replaces that row\'s side and its heldWhy when the answer carries one, and nothing else', () => {
+    const before = JSON.stringify(VIEW2);
+    const a = rowAnswerOf({ ok: true, row: 'programme.pick', side: NEW_SIDE, heldWhy: null })!;
+    const next = withRowAnswer(VIEW2, 'programme.pick', a);
+    expect(next.rows[0]!.side).toEqual(NEW_SIDE);
+    expect(next.rows[0]!.heldWhy).toBeNull();
+    expect(next.rows[1]).toEqual(VIEW2.rows[1]);
+    expect(next.rows[0]!.id).toBe('programme.pick');
+    expect(next.rows[0]!.today).toEqual(VIEW2.rows[0]!.today);
+    expect(next.fleetToday).toBe(VIEW2.fleetToday);
+    expect(next.fleetCap).toBe(VIEW2.fleetCap);
+    expect(next.host).toEqual(VIEW2.host);
+    expect(next.key).toEqual(VIEW2.key);
+    expect(JSON.stringify(VIEW2), 'the view it was given is unchanged').toBe(before);
+    const held = withRowAnswer(VIEW2, 'programme.pick', rowAnswerOf({ ok: true, row: 'programme.pick', side: NEW_SIDE, heldWhy: 'canary' })!);
+    expect(held.rows[0]!.heldWhy).toBe('canary');
+  });
+  it('keeps the row\'s heldWhy when the answer carries none', () => {
+    const a = rowAnswerOf({ ok: true, row: 'programme.pick', side: NEW_SIDE })!;
+    expect(a.heldWhy).toBeUndefined();
+    const next = withRowAnswer(VIEW2, 'programme.pick', a);
+    expect(next.rows[0]!.side).toEqual(NEW_SIDE);
+    expect(next.rows[0]!.heldWhy).toBe('drift');
+  });
+});
+
+describe('a view the shared reader refuses names its fault (F4)', () => {
+  it('decisionViewDetail is the shared reader\'s detail for a refused body, and null for one it reads', () => {
+    const bad = { ...VIEW, rows: [{ ...row(), id: 'zz.unknown' }] };
+    const r = readDecisionModelView(bad);
+    expect(r.ok).toBe(false);
+    expect(decisionViewDetail(bad)).toBe((r as { ok: false; detail: string }).detail);
+    expect(typeof decisionViewDetail(bad)).toBe('string');
+    expect(decisionViewDetail('unreadable')).toBe((readDecisionModelView('unreadable') as { ok: false; detail: string }).detail);
+    expect(decisionViewDetail(VIEW)).toBeNull();
+  });
+  it('the words: the host-only final, the lost key, Reload and the unreadable sentence with its detail', () => {
+    for (const s of [W.stepUpFinalHost, W.keyGone, W.reload]) expect(typeof s === 'string' && s.length > 0).toBe(true);
+    expect(W.stepUpFinalHost).not.toBe(W.stepUpFinal);
+    expect(W.unreadable('a fault')).toContain('a fault');
   });
 });
 

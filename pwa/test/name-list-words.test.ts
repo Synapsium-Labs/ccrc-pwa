@@ -2,11 +2,11 @@
 // `nameListWords.ts` (L1). Synthetic names only (`zz-alpha`, `zq-bravo-x9`): the repository is public, and no real name is a
 // fixture.
 import { describe, expect, it } from 'vitest';
-import { NAME_LIST_ROW_REFUSALS, NAME_LIST_STATES, NAME_LIST_UNREADABLE } from '../../shared/privateNames';
+import { NAME_LIST_MODES, NAME_LIST_ROW_REFUSALS, NAME_LIST_STATES, NAME_LIST_UNREADABLE } from '../../shared/privateNames';
 import { ApiError, OVERLORD_SETTINGS_REFUSAL_TEXT as ST, overlordSettingsRefusalText } from '../src/lib/api';
 import {
-  NAME_LIST_ROW_TEXT, NAME_LIST_UNREADABLE_TEXT, NAME_LIST_WORDS as W, nameListRefusalText, nameListRowsOf, nameListStatusOf,
-  uploadAnswerWords,
+  NAME_LIST_MODE_WORDS, NAME_LIST_ROW_TEXT, NAME_LIST_UNREADABLE_TEXT, NAME_LIST_WORDS as W, nameListKeepsText, nameListRefusalText,
+  nameListRowsOf, nameListStatusOf, uploadAnswerWords,
 } from '../src/overlord/nameListWords';
 
 const refused = (status: number, error: string, extra: Record<string, unknown> = {}): ApiError => new ApiError(status, { ok: false, error, ...extra });
@@ -83,6 +83,41 @@ describe('a refused row names its line, never its text', () => {
       .toBe(`${ST['write-failed']} (the list could not be stored; upload it again)`);
     expect(refusal(refused(503, 'slot-busy'), [])).toBe(ST['slot-busy']);
   });
+});
+
+describe('the fix round\'s words', () => {
+  it('the new sentences are strings', () => {
+    expect(typeof W.namesGone).toBe('string');
+    expect(typeof W.clearFinal).toBe('string');
+    expect(typeof W.listEmpty('today')).toBe('string');
+    expect(W.listEmpty('today')).toContain('today');
+    expect(typeof W.stepUpFinal).toBe('string');
+  });
+  it('each mode has its word, both ways, and the sentences that list the modes name every one', () => {
+    expect(Object.keys(NAME_LIST_MODE_WORDS).sort()).toEqual([...NAME_LIST_MODES].sort());
+    for (const w of Object.values(NAME_LIST_MODE_WORDS)) {
+      expect(W.format).toContain(w);
+      expect(W.badMode(3)).toContain(w);
+      expect(NAME_LIST_ROW_TEXT.mode).toContain(w);
+    }
+  });
+});
+
+describe('which refusals keep the text in the box', () => {
+  it.each<[string, unknown]>([
+    ['a refused row', refused(400, 'bad-request', { row: 2, reason: NAME_LIST_ROW_REFUSALS[0] })],
+    ['a refused cap (no row)', refused(400, 'bad-request', { detail: 'at most 1000 rows' })],
+    ['oversize', refused(413, 'oversize')],
+  ])('%s: kept', (_n, err) => { expect(nameListKeepsText(err)).toBe(true); });
+  it.each<[string, unknown]>([
+    ['write-failed', refused(503, 'write-failed')],
+    ['auth-off', refused(409, 'auth-off')],
+    ['slot-busy', refused(503, 'slot-busy')],
+    ['an unknown word', refused(500, 'zz-newer-word')],
+    ['a 401', refused(401, 'unauthenticated')],
+    ['a plain Error', new Error('zz')],
+    ['a non-error value', 'zz'],
+  ])('%s: emptied', (_n, err) => { expect(nameListKeepsText(err)).toBe(false); });
 });
 
 describe('the upload\'s answer', () => {

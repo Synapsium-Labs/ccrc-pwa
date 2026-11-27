@@ -4,11 +4,12 @@
 // the console to following it. A row is drawn from the read (its checked mode is the stored one, never a tap's); the key lives
 // only in the accounts' secret field and is never in the markup, a store or a console call. The api object is spied; neutral
 // names and a synthetic key only: the repository is public.
+import { useState, type ReactNode } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import {
-  DECISION_QUESTIONS, DECISION_ROW_IDS, type DecisionHeldCause, type DecisionModelView, type DecisionRowId, type DecisionRowSide,
-  type DecisionRowView,
+  DECISION_QUESTIONS, DECISION_ROW_IDS, readDecisionModelView, type DecisionHeldCause, type DecisionModelView, type DecisionRowId,
+  type DecisionRowSide, type DecisionRowView,
 } from '../../shared/decisionModel';
 import type { DesignationView } from '../../shared/overlord-designation';
 import { ApiError, DECISION_MODEL_REFUSAL_TEXT, OVERLORD_SETTINGS_REFUSAL_TEXT, api } from '../src/lib/api';
@@ -123,7 +124,59 @@ beforeEach(() => {
     navigate('/settings/overlord');
   });
 });
-afterEach(() => { cleanup(); vi.restoreAllMocks(); });
+afterEach(() => {
+  cleanup();
+  vi.restoreAllMocks();
+  Object.defineProperty(document, 'visibilityState', { value: 'visible', configurable: true });
+});
+
+/** The page hidden or shown again: the key field's own rule empties it on hidden. */
+const setVisibility = (state: 'hidden' | 'visible'): void => {
+  act(() => {
+    Object.defineProperty(document, 'visibilityState', { value: state, configurable: true });
+    document.dispatchEvent(new Event('visibilitychange'));
+  });
+};
+const hostFinal = (): HTMLElement | null => card('decision-host').querySelector<HTMLElement>('[data-settings-refusal="decision-host-final"]');
+const hostInputs = (): HTMLElement[] => ['decision-kind', 'decision-endpoint', 'decision-model-id']
+  .map((n) => card('decision-host').querySelector<HTMLElement>(`[data-settings-input="${n}"]`)!);
+
+// The key is never in React props or state: the walk of `settings-private-names.test.tsx`, over every fiber of the tree.
+const SKIP = new Set(['return', 'child', 'sibling', 'alternate', 'stateNode', '_owner', '_debugOwner', '_debugStack', '_debugTask', '_debugInfo', '_store']);
+function holds(root: unknown, needle: string, seen = new WeakSet<object>()): boolean {
+  if (typeof root === 'string') return root.includes(needle);
+  if (typeof root !== 'object' || root === null || seen.has(root)) return false;
+  if (typeof Node !== 'undefined' && root instanceof Node) return false;
+  seen.add(root);
+  try {
+    for (const k of Object.keys(root)) {
+      if (SKIP.has(k)) continue;
+      if (k.includes(needle)) return true;
+      if (holds((root as Record<string, unknown>)[k], needle, seen)) return true;
+    }
+  } catch { /* a getter that throws holds nothing */ }
+  return false;
+}
+interface FiberLike { return: FiberLike | null; child: FiberLike | null; sibling: FiberLike | null; memoizedProps: unknown; memoizedState: unknown }
+function fiberOf(el: Element): FiberLike {
+  const key = Object.keys(el).find((k) => k.startsWith('__reactFiber'));
+  if (key === undefined) throw new Error('no React fiber on the element');
+  return (el as unknown as Record<string, FiberLike>)[key]!;
+}
+function allFibers(el: Element): FiberLike[] {
+  let root = fiberOf(el);
+  while (root.return !== null) root = root.return;
+  const out: FiberLike[] = [];
+  const stack: FiberLike[] = [root];
+  while (stack.length > 0) {
+    const f = stack.pop()!;
+    out.push(f);
+    if (f.sibling !== null) stack.push(f.sibling);
+    if (f.child !== null) stack.push(f.child);
+  }
+  return out;
+}
+const fiberHolds = (el: Element, needle: string): boolean => allFibers(el).some((f) => holds(f.memoizedProps, needle) || holds(f.memoizedState, needle));
 
 describe('the rows card: a row is drawn from the read', () => {
   it('1a. each row\'s checked radio is the read\'s mode: off, shadow and armed', async () => {
@@ -247,12 +300,19 @@ describe('the rows card: the console follows the door', () => {
   interface Move { name: string; id: DecisionRowId; act: () => void; spy: () => Mock }
   const MOVES: Move[] = [
     { name: 'shadow from off (a widening)', id: 'programme.pick', act: () => pick('programme.pick', 'Shadow'), spy: () => vi.spyOn(api, 'armDecisionRow') as unknown as Mock },
+    { name: 'armed from off (a widening)', id: 'scope.widens', act: () => pick('scope.widens', 'Armed'), spy: () => vi.spyOn(api, 'armDecisionRow') as unknown as Mock },
     { name: 'off from shadow (a narrowing)', id: 'programme.any', act: () => pick('programme.any', 'Off'), spy: () => vi.spyOn(api, 'offDecisionRow') as unknown as Mock },
+    { name: 'Resume on a held row', id: 'relay.method', act: () => fireEvent.click(control(rowEl('relay.method'), 'decision-resume')), spy: () => vi.spyOn(api, 'armDecisionRow') as unknown as Mock },
+    { name: 'Approve on an armed gate offered a newer line', id: 'readback.omits', act: () => fireEvent.click(control(rowEl('readback.omits'), 'decision-approve')), spy: () => vi.spyOn(api, 'armDecisionRow') as unknown as Mock },
     { name: 'a raised ceiling', id: 'programme.pick', act: () => { typeCeiling('programme.pick', 900); fireEvent.click(ceilingSave('programme.pick')); }, spy: () => vi.spyOn(api, 'setDecisionCeiling') as unknown as Mock },
     { name: 'a lowered ceiling', id: 'programme.pick', act: () => { typeCeiling('programme.pick', 300); fireEvent.click(ceilingSave('programme.pick')); }, spy: () => vi.spyOn(api, 'setDecisionCeiling') as unknown as Mock },
   ];
   const THREE = (): DecisionModelView => viewOf({
-    rows: [rowOf('programme.pick'), rowOf('programme.any', { side: sideOf({ mode: 'shadow' }) }), rowOf('scope.widens')],
+    rows: [
+      rowOf('programme.pick'), rowOf('programme.any', { side: sideOf({ mode: 'shadow' }) }), rowOf('scope.widens'),
+      rowOf('relay.method', { side: sideOf({ mode: 'shadow', held: true }), heldWhy: 'drift' }),
+      rowOf('readback.omits', { side: sideOf({ mode: 'armed', armedLine: { id: 4, line: 0.85 } }), offered: { id: 9, line: 0.9 } }),
+    ],
   });
   /** The move's second press: the ceiling's Save again (its field kept the number), a radio's tap again. */
   const again = (m: Move): void => {
@@ -409,6 +469,43 @@ describe('the rows card: a held row, an offered line and the answers', () => {
     expect(await within(rowEl('programme.pick')).findByText(DECISION_MODEL_REFUSAL_TEXT['bad-ceiling'])).toBeTruthy();
     expect(rowEl('programme.any').querySelector('[data-settings-refusal]')).toBeNull();
   });
+
+  it('9. a bad ceiling draws the door\'s detail beside its sentence in that row\'s refusal line', async () => {
+    vi.spyOn(api, 'setDecisionCeiling').mockRejectedValue(refused(400, 'bad-ceiling', { detail: 'the ceiling is 1 to 100000' }));
+    await open();
+    typeCeiling('programme.pick', 99999);
+    fireEvent.click(ceilingSave('programme.pick'));
+    await waitFor(() => expect(rowEl('programme.pick').querySelector('[data-settings-refusal]')).not.toBeNull());
+    const line = rowEl('programme.pick').querySelector('[data-settings-refusal]')!.textContent!;
+    expect(line).toContain(DECISION_MODEL_REFUSAL_TEXT['bad-ceiling']);
+    expect(line).toContain('the ceiling is 1 to 100000');
+  });
+
+  it('8. the answer is installed: the row shows the mode the door answered, though the read that follows fails', async () => {
+    const answer = { ok: true, row: 'programme.pick', side: sideOf({ mode: 'shadow' }), heldWhy: null };
+    vi.spyOn(api, 'armDecisionRow').mockResolvedValue(answer);
+    decisionSpy.mockResolvedValueOnce(viewOf()).mockRejectedValue(new ApiError(503, { ok: false, error: 'unavailable' }));
+    show();
+    await settle();
+    expect(checkedOf('programme.pick')).toEqual(['Off']);
+    pick('programme.pick', 'Shadow');
+    await waitFor(() => expect(decisionSpy).toHaveBeenCalledTimes(2));
+    await settle();
+    expect(checkedOf('programme.pick')).toEqual(['Shadow']);
+    expect(rowEl('programme.pick').getAttribute('data-decision-mode')).toBe('shadow');
+  });
+
+  it('8. an answer whose side is held draws its cause\'s sentence, though the read that follows fails', async () => {
+    const answer = { ok: true, row: 'programme.pick', side: sideOf({ mode: 'shadow', held: true }), heldWhy: 'canary' };
+    vi.spyOn(api, 'armDecisionRow').mockResolvedValue(answer);
+    decisionSpy.mockResolvedValueOnce(viewOf()).mockRejectedValue(new ApiError(503, { ok: false, error: 'unavailable' }));
+    show();
+    await settle();
+    pick('programme.pick', 'Shadow');
+    await waitFor(() => expect(decisionSpy).toHaveBeenCalledTimes(2));
+    await settle();
+    expect(rowEl('programme.pick').querySelector('[data-decision-hold]')!.textContent).toContain(DECISION_HELD_TEXT.canary);
+  });
 });
 
 describe('the cards\' reads', () => {
@@ -435,7 +532,41 @@ describe('the cards\' reads', () => {
   it('11. an answer the one reader refuses is an unread read, not a partial card', async () => {
     await open({ rows: 'not a list' } as unknown as DecisionModelView);
     expect(card('decision-rows')).toBeNull();
-    expect(card('decision-host').querySelector('[data-settings-unread="decision-host"]')!.textContent).toContain(W.unread('unreadable answer'));
+    // Review 4139 F4: the shared reader's own detail, and the reload a console older than its server needs.
+    expect(card('decision-host').querySelector('[data-settings-unread="decision-host"]')!.textContent).toContain(W.unreadable('rows'));
+  });
+
+  const UNREADABLE = { ...viewOf(), rows: [{ ...rowOf('programme.pick'), id: 'zz.unknown' }] };
+  const detailOf = (body: unknown): string => {
+    const r = readDecisionModelView(body);
+    if (r.ok) throw new Error('the fixture must be refused by the shared reader');
+    return r.detail;
+  };
+
+  it('11. a view the shared reader refuses draws its detail and a Reload control, and no Read again, Save, Remove or rows card', async () => {
+    await open(UNREADABLE as unknown as DecisionModelView);
+    const host = card('decision-host');
+    expect(host.querySelector('[data-settings-unread="decision-host"]')!.textContent).toContain(W.unreadable(detailOf(UNREADABLE)));
+    expect(control(host, 'decision-host-reload').textContent).toBe(W.reload);
+    expect(within(host).queryByRole('button', { name: 'Read again' })).toBeNull();
+    expect(control(host, 'decision-host-save')).toBeNull();
+    expect(control(host, 'decision-key-remove')).toBeNull();
+    expect(card('decision-rows')).toBeNull();
+  });
+
+  it('11. a view refused after a good one: the rows stay drawn from the first view, beside the unreadable sentence and its Reload', async () => {
+    vi.spyOn(api, 'offDecisionRow').mockResolvedValue(answerOf('programme.any', sideOf()));
+    decisionSpy.mockResolvedValueOnce(viewOf({ rows: [rowOf('programme.any', { side: sideOf({ mode: 'shadow' }) })] })).mockResolvedValue(UNREADABLE as unknown as DecisionModelView);
+    show();
+    await settle();
+    pick('programme.any', 'Off');
+    await waitFor(() => expect(decisionSpy).toHaveBeenCalledTimes(2));
+    await settle();
+    const host = card('decision-host');
+    expect(host.querySelector('[data-settings-unread="decision-host"]')!.textContent).toContain(W.unreadable(detailOf(UNREADABLE)));
+    expect(control(host, 'decision-host-reload').textContent).toBe(W.reload);
+    expect(rowEl('programme.any')).not.toBeNull();
+    expect(card('decision-rows')).not.toBeNull();
   });
 
   it('11. a view with no rows says so, and the host card still draws', async () => {
@@ -521,7 +652,7 @@ describe('the host card', () => {
     nowhere('after a final refusal');
   });
 
-  it('15. a step-up keeps the key in its field; the second Save sends the same key and only that ok answer empties it', async () => {
+  it('15. a step-up keeps the key and locks the host; the confirm sends the same key again by itself, and only that ok answer empties the field', async () => {
     const save = vi.spyOn(api, 'setDecisionKey').mockRejectedValueOnce(stepUpRequired()).mockResolvedValue({ ok: true });
     await open();
     typeKey();
@@ -531,39 +662,146 @@ describe('the host card', () => {
     expect(save).toHaveBeenCalledTimes(1);
     expect(save.mock.calls[0]![0].key).toBe(KEY);
     expect(keyField().value).toBe(KEY);
+    expect(hostSave().disabled).toBe(true);
+    for (const el of hostInputs()) expect((el as HTMLInputElement).disabled, el.getAttribute('data-settings-input')!).toBe(true);
+    expect(control(card('decision-host'), 'decision-key-remove').disabled).toBe(false);
     nowhere('the step showing');
     await confirmStep();
-    await waitFor(() => expect(document.querySelector('[data-step-up]')).toBeNull());
-    await settle();
-    expect(keyField().value).toBe(KEY);
-    expect(save).toHaveBeenCalledTimes(1);
-    nowhere('after the confirm');
-    fireEvent.click(hostSave());
     await waitFor(() => expect(save).toHaveBeenCalledTimes(2));
     expect(save.mock.calls[1]![0].key).toBe(KEY);
     await waitFor(() => expect(keyField().value).toBe(''));
+    await settle();
     expect(save).toHaveBeenCalledTimes(2);
+    expect(document.querySelector('[data-step-up]')).toBeNull();
     nowhere('after the retry');
   });
 
-  it('16. a second step-up-required on the retry is final: the field is empty and the sentence says so', async () => {
+  it('16. a second step-up-required on the retry is final: the field is empty, no step shows and the sentence says so', async () => {
     const save = vi.spyOn(api, 'setDecisionKey').mockRejectedValue(stepUpRequired());
     await open();
     typeKey();
     fireEvent.click(hostSave());
     await waitFor(() => expect(card('decision-host').querySelector('[data-step-up]')).not.toBeNull());
     expect(keyField().value).toBe(KEY);
-    expect(card('decision-host').querySelector('[data-settings-refusal="decision-host-final"]')).toBeNull();
+    expect(hostFinal()).toBeNull();
     await confirmStep();
-    await waitFor(() => expect(document.querySelector('[data-step-up]')).toBeNull());
-    await settle();
-    expect(keyField().value).toBe(KEY);
-    fireEvent.click(hostSave());
     await waitFor(() => expect(save).toHaveBeenCalledTimes(2));
     await waitFor(() => expect(keyField().value).toBe(''));
-    expect(await within(card('decision-host')).findByText(W.stepUpFinal)).toBeTruthy();
+    await waitFor(() => expect(hostFinal()).not.toBeNull());
+    expect(hostFinal()!.textContent).toBe(W.stepUpFinal);
+    expect(document.querySelector('[data-step-up]')).toBeNull();
+    await settle();
     expect(save).toHaveBeenCalledTimes(2);
     nowhere('after a final step-up');
+  });
+
+  it('16. with the step showing, Save is disabled and a click on it sends nothing', async () => {
+    const save = vi.spyOn(api, 'setDecisionKey').mockRejectedValue(stepUpRequired());
+    await open();
+    typeKey();
+    fireEvent.click(hostSave());
+    await waitFor(() => expect(card('decision-host').querySelector('[data-step-up]')).not.toBeNull());
+    expect(hostSave().disabled).toBe(true);
+    fireEvent.click(hostSave());
+    await settle();
+    expect(save).toHaveBeenCalledTimes(1);
+  });
+
+  it('16. another card\'s answer hides the step; Save again is a first send, and the confirm after it retries by itself', async () => {
+    const save = vi.spyOn(api, 'setDecisionKey').mockRejectedValueOnce(stepUpRequired()).mockRejectedValueOnce(stepUpRequired()).mockResolvedValue({ ok: true });
+    const off = vi.spyOn(api, 'offDecisionRow').mockResolvedValue({ ok: true, row: 'programme.any', side: sideOf({ mode: 'off' }), heldWhy: null });
+    await open(viewOf({ rows: [rowOf('programme.any', { side: sideOf({ mode: 'shadow' }) })] }));
+    typeKey();
+    fireEvent.click(hostSave());
+    await waitFor(() => expect(card('decision-host').querySelector('[data-step-up]')).not.toBeNull());
+    pick('programme.any', 'Off');
+    await waitFor(() => expect(off).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(card('decision-host').querySelector('[data-step-up]')).toBeNull());
+    expect(keyField().value).toBe(KEY);
+    expect(hostSave().disabled).toBe(false);
+    fireEvent.click(hostSave());
+    await waitFor(() => expect(save).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(card('decision-host').querySelector('[data-step-up]')).not.toBeNull());
+    expect(hostFinal()).toBeNull();
+    await confirmStep();
+    await waitFor(() => expect(save).toHaveBeenCalledTimes(3));
+    expect(save.mock.calls[2]![0].key).toBe(KEY);
+    await waitFor(() => expect(keyField().value).toBe(''));
+    expect(hostFinal()).toBeNull();
+    await settle();
+    expect(save).toHaveBeenCalledTimes(3);
+  });
+
+  it('16. a retry never sends less than the first send: a key lost while the step showed is not retried, and its sentence says so', async () => {
+    const save = vi.spyOn(api, 'setDecisionKey').mockRejectedValueOnce(stepUpRequired()).mockResolvedValue({ ok: true });
+    await open();
+    typeKey();
+    fireEvent.click(hostSave());
+    await waitFor(() => expect(card('decision-host').querySelector('[data-step-up]')).not.toBeNull());
+    setVisibility('hidden');
+    expect(keyField().value).toBe('');
+    setVisibility('visible');
+    await confirmStep();
+    await waitFor(() => expect(hostFinal()).not.toBeNull());
+    expect(hostFinal()!.textContent).toBe(W.keyGone);
+    await settle();
+    expect(save).toHaveBeenCalledTimes(1);
+  });
+
+  it('16. a host-only Save has no key to lose: the retry after the page was hidden is sent, with no key', async () => {
+    const save = vi.spyOn(api, 'setDecisionKey').mockRejectedValueOnce(stepUpRequired()).mockResolvedValue({ ok: true });
+    await open();
+    fireEvent.change(card('decision-host').querySelector('[data-settings-input="decision-model-id"]')!, { target: { value: 'model-b' } });
+    fireEvent.click(hostSave());
+    await waitFor(() => expect(card('decision-host').querySelector('[data-step-up]')).not.toBeNull());
+    setVisibility('hidden');
+    setVisibility('visible');
+    await confirmStep();
+    await waitFor(() => expect(save).toHaveBeenCalledTimes(2));
+    expect(save.mock.calls[1]![0]).toEqual({ kind: 'local', endpoint: ENDPOINT, modelId: 'model-b' });
+    expect(Object.keys(save.mock.calls[1]![0])).not.toContain('key');
+  });
+
+  it('16. a host-only Save whose retry is answered step-up again is final in the host\'s own words', async () => {
+    const save = vi.spyOn(api, 'setDecisionKey').mockRejectedValue(stepUpRequired());
+    await open();
+    fireEvent.change(card('decision-host').querySelector('[data-settings-input="decision-model-id"]')!, { target: { value: 'model-b' } });
+    fireEvent.click(hostSave());
+    await waitFor(() => expect(card('decision-host').querySelector('[data-step-up]')).not.toBeNull());
+    await confirmStep();
+    await waitFor(() => expect(save).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(hostFinal()).not.toBeNull());
+    expect(hostFinal()!.textContent).toBe(W.stepUpFinalHost);
+    expect(hostFinal()!.textContent).not.toBe(W.stepUpFinal);
+  });
+
+  it('16. no fiber of the tree holds the key: typed, with the step showing, after the automatic retry and after the ok answer', async () => {
+    const save = vi.spyOn(api, 'setDecisionKey').mockRejectedValueOnce(stepUpRequired()).mockResolvedValue({ ok: true });
+    await open();
+    typeKey();
+    await settle();
+    expect(keyField().value).toBe(KEY);
+    expect(allFibers(keyField()).length).toBeGreaterThan(20);
+    expect(fiberHolds(keyField(), KEY), 'typed').toBe(false);
+    fireEvent.click(hostSave());
+    await waitFor(() => expect(card('decision-host').querySelector('[data-step-up]')).not.toBeNull());
+    expect(fiberHolds(keyField(), KEY), 'the step showing').toBe(false);
+    await confirmStep();
+    await waitFor(() => expect(save).toHaveBeenCalledTimes(2));
+    expect(fiberHolds(keyField(), KEY), 'after the retry').toBe(false);
+    await waitFor(() => expect(keyField().value).toBe(''));
+    await settle();
+    expect(fiberHolds(keyField(), KEY), 'after the ok answer').toBe(false);
+  });
+
+  it('16. the fiber walk sees a key mirrored into state (a control for the case above)', () => {
+    function Mirrored(): ReactNode {
+      const [t, setT] = useState('');
+      return <input aria-label="mirrored" value={t} onChange={(e) => setT(e.currentTarget.value)} />;
+    }
+    render(<Mirrored />);
+    fireEvent.change(screen.getByLabelText('mirrored'), { target: { value: KEY } });
+    expect(fiberHolds(screen.getByLabelText('mirrored'), KEY)).toBe(true);
   });
 
   it('17. the key is never in the markup, a store, a console call or a refusal line, from typing to a refusal that follows a retried step-up', async () => {
@@ -581,10 +819,9 @@ describe('the host card', () => {
     nowhere('step showing');
     await confirmStep();
     await waitFor(() => expect(document.querySelector('[data-step-up]')).toBeNull());
+    await waitFor(() => expect(save).toHaveBeenCalledTimes(2));
     await settle();
     nowhere('confirmed');
-    fireEvent.click(hostSave());
-    await waitFor(() => expect(save).toHaveBeenCalledTimes(2));
     await within(card('decision-host')).findByText(/The server refused that endpoint/);
     nowhere('refused');
     expect(keyField().value).toBe('');

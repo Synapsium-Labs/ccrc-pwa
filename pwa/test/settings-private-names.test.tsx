@@ -198,7 +198,7 @@ describe('Upload', () => {
     expect(box().value).toBe('zz-alpha\nexat: zq-bravo-x9');
   });
 
-  it('the step-up: shown inside this card only, the text kept, the same rows sent again after the confirm; only the ok answer empties the box', async () => {
+  it('the step-up: shown inside this card only, Upload disabled while it shows, the confirm sends the same rows again by itself; only the ok answer empties the box', async () => {
     upload.mockRejectedValueOnce(stepUpRequired()).mockResolvedValue(OK);
     show();
     await settle();
@@ -208,20 +208,23 @@ describe('Upload', () => {
     expect(document.querySelectorAll('[data-step-up]')).toHaveLength(1);
     expect(upload).toHaveBeenCalledTimes(1);
     expect(box().value).toBe(TEXT);
-    await confirmStep();
-    await waitFor(() => expect(document.querySelector('[data-step-up]')).toBeNull());
-    // Confirming sends nothing, and the text is still there.
-    expect(upload).toHaveBeenCalledTimes(1);
-    expect(box().value).toBe(TEXT);
+    // While the step shows, Upload is disabled and a click sends nothing.
+    const up = document.querySelector<HTMLButtonElement>('[data-settings-control="names-upload"]')!;
+    expect(up.disabled).toBe(true);
     press('names-upload');
+    await settle();
+    expect(upload).toHaveBeenCalledTimes(1);
+    // The confirm starts the retry: no press.
+    await confirmStep();
     await waitFor(() => expect(upload).toHaveBeenCalledTimes(2));
     expect(upload).toHaveBeenNthCalledWith(1, { rows: ROWS });
     expect(upload).toHaveBeenNthCalledWith(2, { rows: ROWS });
     await waitFor(() => expect(box().value).toBe(''));
+    await settle();
     expect(upload).toHaveBeenCalledTimes(2);
   });
 
-  it('a second step-up-required on the retry is final: the box is emptied and the sentence says nothing was uploaded', async () => {
+  it('a step-up-required on the automatic retry is final: the box is emptied, no step shows, and the sentence says nothing was uploaded', async () => {
     upload.mockRejectedValue(stepUpRequired());
     show();
     await settle();
@@ -230,12 +233,111 @@ describe('Upload', () => {
     await waitFor(() => expect(card()!.querySelector('[data-step-up]')).not.toBeNull());
     expect(box().value).toBe(TEXT);
     await confirmStep();
-    await waitFor(() => expect(document.querySelector('[data-step-up]')).toBeNull());
-    press('names-upload');
     await waitFor(() => expect(upload).toHaveBeenCalledTimes(2));
     await waitFor(() => expect(refusalText('private-names-local')).toBe(W.stepUpFinal));
     expect(box().value).toBe('');
+    expect(document.querySelector('[data-step-up]')).toBeNull();
+    await settle();
     expect(upload).toHaveBeenCalledTimes(2);
+  });
+
+  it('a press is always a first send, and the mark is per act: Clear after Upload\'s step shows its own step, then retries its own body', async () => {
+    status.mockResolvedValue({ state: 'list', rows: 3, uploadedAt: AT });
+    upload.mockRejectedValueOnce(stepUpRequired()).mockRejectedValueOnce(stepUpRequired()).mockResolvedValue({ ok: true, rows: 0, entries: 0, uploadedAt: AT });
+    show();
+    await settle();
+    type(TEXT);
+    press('names-upload');
+    await waitFor(() => expect(card()!.querySelector('[data-step-up]')).not.toBeNull());
+    const up = (): HTMLButtonElement => document.querySelector<HTMLButtonElement>('[data-settings-control="names-upload"]')!;
+    const clr = (): HTMLButtonElement => document.querySelector<HTMLButtonElement>('[data-settings-control="names-clear"]')!;
+    expect(up().disabled).toBe(true);
+    expect(clr().disabled).toBe(false);
+    press('names-clear');
+    expect(await screen.findByText(W.clearTitle(3))).toBeTruthy();
+    fireEvent.click(document.querySelector('.qc-actions .btn-danger')!);
+    await waitFor(() => expect(upload).toHaveBeenCalledTimes(2));
+    expect(upload).toHaveBeenNthCalledWith(2, { rows: [], clear: true });
+    // Clear's first send: the step shows again, and no final sentence.
+    await waitFor(() => expect(clr().disabled).toBe(true));
+    expect(card()!.querySelector('[data-step-up]')).not.toBeNull();
+    expect(refusalText('private-names-local')).toBeUndefined();
+    expect(card()!.textContent).not.toContain(W.stepUpFinal);
+    expect(card()!.textContent).not.toContain(W.clearFinal);
+    await confirmStep();
+    await waitFor(() => expect(upload).toHaveBeenCalledTimes(3));
+    expect(upload).toHaveBeenNthCalledWith(3, { rows: [], clear: true });
+    expect(await screen.findByText(W.cleared)).toBeTruthy();
+    expect(upload).toHaveBeenCalledTimes(3);
+    expect(upload.mock.calls.filter((c) => (c[0] as { clear?: boolean }).clear !== true)).toHaveLength(1);
+  });
+
+  it('Clear\'s step-up on the automatic retry is final, in Clear\'s own words', async () => {
+    status.mockResolvedValue({ state: 'list', rows: 3, uploadedAt: AT });
+    upload.mockRejectedValue(stepUpRequired());
+    show();
+    await settle();
+    press('names-clear');
+    expect(await screen.findByText(W.clearTitle(3))).toBeTruthy();
+    fireEvent.click(document.querySelector('.qc-actions .btn-danger')!);
+    await waitFor(() => expect(card()!.querySelector('[data-step-up]')).not.toBeNull());
+    await confirmStep();
+    await waitFor(() => expect(upload).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(refusalText('private-names-local')).toBe(W.clearFinal));
+    expect(card()!.textContent).not.toContain(W.stepUpFinal);
+    expect(document.querySelector('[data-step-up]')).toBeNull();
+    await settle();
+    expect(upload).toHaveBeenCalledTimes(2);
+  });
+
+  it('another card\'s answer that hides this card\'s step resets it: the next press is a first send again', async () => {
+    vi.spyOn(api, 'renewalBackstop').mockResolvedValue({ ok: true, hour: 4, zone: 'UTC', isDefault: true, setAt: null });
+    vi.spyOn(api, 'setRenewalBackstop').mockResolvedValue({ ok: true, hour: 5, zone: 'UTC', isDefault: false, setAt: AT });
+    upload.mockRejectedValueOnce(stepUpRequired()).mockRejectedValueOnce(stepUpRequired()).mockResolvedValue(OK);
+    show();
+    await settle();
+    type(TEXT);
+    press('names-upload');
+    await waitFor(() => expect(card()!.querySelector('[data-step-up]')).not.toBeNull());
+    fireEvent.change(document.querySelector('[data-settings-input="hour"]')!, { target: { value: '5' } });
+    press('backstop-save');
+    await waitFor(() => expect(card()!.querySelector('[data-step-up]')).toBeNull());
+    await settle();
+    expect(upload).toHaveBeenCalledTimes(1);
+    press('names-upload');
+    await waitFor(() => expect(upload).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(card()!.querySelector('[data-step-up]')).not.toBeNull());
+    expect(refusalText('private-names-local')).toBeUndefined();
+    expect(card()!.textContent).not.toContain(W.stepUpFinal);
+    await confirmStep();
+    await waitFor(() => expect(upload).toHaveBeenCalledTimes(3));
+    await waitFor(() => expect(box().value).toBe(''));
+    expect(upload).toHaveBeenNthCalledWith(3, { rows: ROWS });
+    expect(upload).toHaveBeenCalledTimes(3);
+  });
+
+  it('the retry never sends less than the first send: a box emptied while the step showed sends nothing and says the names are gone', async () => {
+    upload.mockRejectedValueOnce(stepUpRequired()).mockResolvedValue(OK);
+    show();
+    await settle();
+    type(TEXT);
+    press('names-upload');
+    await waitFor(() => expect(card()!.querySelector('[data-step-up]')).not.toBeNull());
+    act(() => {
+      Object.defineProperty(document, 'visibilityState', { value: 'hidden', configurable: true });
+      document.dispatchEvent(new Event('visibilitychange'));
+    });
+    expect(box().value).toBe('');
+    act(() => {
+      Object.defineProperty(document, 'visibilityState', { value: 'visible', configurable: true });
+      document.dispatchEvent(new Event('visibilitychange'));
+    });
+    await confirmStep();
+    // A sentence, never undefined: an undefined on both sides would pass with no line drawn at all.
+    expect(W.namesGone).toMatch(/hidden/);
+    await waitFor(() => expect(refusalText('private-names-local')).toBe(W.namesGone));
+    await settle();
+    expect(upload).toHaveBeenCalledTimes(1);
   });
 
   it('a refused row is worded by the line it came from, and the text is kept', async () => {
@@ -260,7 +362,7 @@ describe('Upload', () => {
     expect(box().value).toBe(TEXT);
   });
 
-  it('oversize and a failed write draw their sentences, and keep the text', async () => {
+  it('oversize draws its sentence and keeps the text; a failed write draws its sentence and empties the box', async () => {
     upload.mockRejectedValueOnce(new ApiError(413, { ok: false, error: 'oversize' }))
       .mockRejectedValueOnce(new ApiError(503, { ok: false, error: 'write-failed', detail: 'the store is busy' }));
     show();
@@ -271,18 +373,61 @@ describe('Upload', () => {
     expect(box().value).toBe(TEXT);
     press('names-upload');
     await waitFor(() => expect(refusalText()).toBe(`${OVERLORD_SETTINGS_REFUSAL_TEXT['write-failed']} (the store is busy)`));
-    expect(box().value).toBe(TEXT);
+    expect(box().value).toBe('');
     expect(upload).toHaveBeenCalledTimes(2);
   });
 
-  it('sign-in off draws its own sentence', async () => {
+  it('sign-in off draws its own sentence and empties the box', async () => {
     upload.mockRejectedValue(new ApiError(409, { ok: false, error: 'auth-off' }));
     show();
     await settle();
     type(TEXT);
     press('names-upload');
     await waitFor(() => expect(refusalText()).toBe(OVERLORD_SETTINGS_REFUSAL_TEXT['names-auth-off']));
+    expect(box().value).toBe('');
+  });
+
+  it('a 401 empties the box', async () => {
+    upload.mockRejectedValue(new ApiError(401, { ok: false, error: 'unauthenticated' }));
+    show();
+    await settle();
+    type(TEXT);
+    press('names-upload');
+    await waitFor(() => expect(upload).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(box().value).toBe(''));
+  });
+
+  it('an answer with a word this build does not know empties the box', async () => {
+    upload.mockRejectedValue(new ApiError(500, { ok: false, error: 'zz-newer-word' }));
+    show();
+    await settle();
+    type(TEXT);
+    press('names-upload');
+    await waitFor(() => expect(upload).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(box().value).toBe(''));
+  });
+
+  it('a first step-up keeps the box, as a refused row and a refused cap do', async () => {
+    upload.mockRejectedValueOnce(stepUpRequired());
+    show();
+    await settle();
+    type(TEXT);
+    press('names-upload');
+    await waitFor(() => expect(card()!.querySelector('[data-step-up]')).not.toBeNull());
     expect(box().value).toBe(TEXT);
+  });
+});
+
+describe('a list read back with no names', () => {
+  it('says it is empty with its date, draws no count and offers no Clear', async () => {
+    status.mockResolvedValue({ state: 'list', rows: 0, uploadedAt: AT });
+    show();
+    await settle();
+    const said = card()!.querySelector('[data-names-state="empty"]');
+    expect(said).not.toBeNull();
+    expect(said!.textContent).toBe(W.listEmpty(dateOf(AT)));
+    expect(card()!.textContent).not.toContain('0 names');
+    expect(document.querySelector('[data-settings-control="names-clear"]')).toBeNull();
   });
 });
 
@@ -407,6 +552,24 @@ describe('the text is never in React props or state', () => {
     // The walk reaches the card's own components, not only the box's ancestors.
     expect(fibers.length).toBeGreaterThan(20);
     for (const n of NAMES) expect(fiberHolds(box(), n), n).toBe(false);
+  });
+
+  it('with the step showing after an Upload answered step-up, and after the retry\'s ok answer, no fiber holds a name', async () => {
+    upload.mockRejectedValueOnce(stepUpRequired()).mockResolvedValue(OK);
+    show();
+    await settle();
+    type(`${NAMES[0]}\n${NAMES[1]}\nexact: ${NAMES[2]}`);
+    press('names-upload');
+    await waitFor(() => expect(card()!.querySelector('[data-step-up]')).not.toBeNull());
+    await settle();
+    expect(box().value).toContain(NAMES[0]);
+    expect(allFibers(box()).length).toBeGreaterThan(20);
+    for (const n of NAMES) expect(fiberHolds(box(), n), `step showing, ${n}`).toBe(false);
+    await confirmStep();
+    await waitFor(() => expect(upload).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(box().value).toBe(''));
+    await settle();
+    for (const n of NAMES) expect(fiberHolds(box(), n), `after the retry, ${n}`).toBe(false);
   });
 
   it('the walk itself sees a text mirrored into state, and a text passed as a controlled value (a control for the case above)', () => {
