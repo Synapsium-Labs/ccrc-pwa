@@ -14,6 +14,7 @@
 // specifier that is not one, or misses one. Neither moves a wall: a rewrite only replaces the content between a string's
 // quotes with `#mockup/<n>`, and the policy, not this scan, is what stops a page reaching anything.
 import { resolveDocRef, type DocSectionSlug } from '../../../../shared/docs';
+import { utf8Bytes } from '../../../../shared/utf8';
 import { MOCKUP_FETCH_MIME, MOCKUP_IMPORT_MAP_MAX_ENTRIES, MOCKUP_SCRIPT_MAX_REFS, MOCKUP_SCRIPT_SCAN_BYTES } from './policy';
 import type { MockupBase, MockupRef } from './ports';
 
@@ -49,17 +50,12 @@ const DYNAMIC_TEXT_UNITS = 120;
 /** Keywords after which a `/` opens a regular expression. */
 const REGEX_AFTER = new Set(['return', 'typeof', 'instanceof', 'in', 'of', 'new', 'delete', 'void', 'throw', 'case', 'do', 'else', 'yield', 'await']);
 
-/** The UTF-8 length of `text`, or a number above the bound as soon as it is passed (a linear count that stops early). */
+/** Whether `text` is longer than `bound` bytes as UTF-8: by its length alone when that decides it (a code unit is one to
+ *  three bytes), else by the one UTF-8 counter (`shared/utf8.ts`), over a text of at most `bound` code units. */
 function utf8Over(text: string, bound: number): boolean {
   if (text.length > bound) return true;
   if (text.length * 3 <= bound) return false;
-  let n = 0;
-  for (let i = 0; i < text.length; i += 1) {
-    const c = text.charCodeAt(i);
-    n += c < 0x80 ? 1 : c < 0x800 ? 2 : c >= 0xd800 && c <= 0xdbff ? 4 : c >= 0xdc00 && c <= 0xdfff ? 0 : 3;
-    if (n > bound) return true;
-  }
-  return false;
+  return utf8Bytes(text) > bound;
 }
 
 /** One script's text scanned (see `ScriptScan`). Linear: every character is read a bounded number of times. A text past
