@@ -121,7 +121,7 @@ describe('the table itself', () => {
   });
   it('the rows on landing include the ratify and designation C Settings doors already on main', () => {
     expect(rows.map(([k]) => k)).toEqual([
-      'designate', 'retire', 'rebind', 'restart', 'designation', 'model', 'account-set', 'ladder', 'readiness',
+      'designate', 'retire', 'rebind', 'restart', 'designation', 'model', 'account-set', 'ladder', 'readiness', 'chat', 'chat-earlier',
       // The operator's read of the invariant monitor (W1 sequence C).
       'invariants',
       'rung', 'pause', 'latch-clear', 'witness',

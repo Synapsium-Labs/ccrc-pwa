@@ -1,7 +1,7 @@
 // The Overlord's place (Overlord W1 home B, Task 4; spec 2026-11-09 §4, Table 4a): L4. One column, read from the top, in
 // Table 4a's order: the readiness word with Pause and the Overlord's own controls (part 1, with the ladder beside Pause),
-// "Since you were last here" (2), the portfolio strip (4) and the capacity line (5). Parts 3, 6 and 7 come from W3, W2 and
-// the chat piece, which mounts below them; none is drawn here.
+// "Since you were last here" (2), the portfolio strip (4), the capacity line (5) and the chat (7, `ChatPart`, below them). Parts
+// 3 and 6 come from W3 and W2; neither is drawn here.
 //
 // It is drawn only under `overlord-v1`: `OverlordRoute` replaces the address with the Fleet's otherwise (plan question 9).
 //
@@ -19,6 +19,7 @@ import { useStepUp, type StepUpDeps } from '../accounts/useStepUp';
 import { useDesignationState, useOverlordStore } from '../stores/overlord';
 import { BodyPart } from './BodyPart';
 import { CapacityLine } from './CapacityLine';
+import { ChatPart } from './ChatPart';
 import { FacePart } from './FacePart';
 import { designationWordOf } from './homePlace';
 import { LadderPart } from './LadderPart';
@@ -54,6 +55,7 @@ export function OverlordPlace({ stepUpDeps = NO_STEP_UP_DEPS }: { readonly stepU
         <SincePart />
         <PortfolioStrip />
         <CapacityLine />
+        <ChatPart sessionId={state.kind === 'bound' ? state.sessionId : null} />
         <ConfirmItsYou stepUp={stepUp} subject="Confirm it's you to change the Overlord" />
       </div>
     </PageScaffold>

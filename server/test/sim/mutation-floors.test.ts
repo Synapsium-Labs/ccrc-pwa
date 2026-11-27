@@ -77,6 +77,7 @@ import { APPROVAL_PARK_MUTANT_SETS } from './approvalParkSets.js';
 import { PROGRAMME_HEALTH_MUTANT_SETS } from './programmeHealthSets.js';
 import { WITNESS_MUTANT_SETS } from './witnessSets.js';
 import { ISOLATION_MUTANT_SETS } from './isolationSets.js';
+import { CHAT_MUTANT_SETS } from './chatSets.js';
 import { REQUEST_MUTANT_SETS } from './requestSets.js';
 import { simulate } from './run.js';
 import {
@@ -319,6 +320,7 @@ const MUTANT_SETS: Record<string, MutantSet<never>> = {
   ...PROGRAMME_HEALTH_MUTANT_SETS,
   ...WITNESS_MUTANT_SETS,
   ...ISOLATION_MUTANT_SETS,
+  ...CHAT_MUTANT_SETS,
   ...ACCOUNT_LOAD_MUTANT_SETS,
   ...REQUEST_MUTANT_SETS,
 };

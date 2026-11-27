@@ -189,3 +189,24 @@ Why a suite of another store counts this database's slots: the case winds a fixt
 before limit samples and reopens it, so every later migration replays. A table a later migration created and the case
 did not drop makes that replay's `CREATE TABLE` fail, so each later migration's undo is listed there. Only this
 migration's own three tables were added (their indexes go with them).
+
+## 9. The second merge of `main`, after the chat's PR
+
+On the coordinator's word, once #3488 had landed, this branch merged `main` once more, at `07e8cc51e1`, with the fix
+round above already committed. The two land in one push.
+
+- **Hand resolutions (two).**
+  - The mail routes suite's kebab-token census: the board guard, then the chat's three (`isChatDoorKebab`, `isReadDoor`,
+    `isGenerationRead`), then this piece's two. The message ends "board word, chat word, read-ledger word or request
+    record word", as chat A and this piece agreed beforehand.
+  - The mutation floors suite's imports: the chat's set first, then the request set.
+- **Merged by git, without a hand, and read:**
+  - `mutation-floors.json`: the chat's fifteen rows sit beside this piece's eight.
+  - The writers map: the chat's two single-writer column checks for the private store sit beside this piece's three
+    tables.
+- **Figures on the merged tree.**
+  - The migration count is unchanged: `main` holds 134 entries and this branch 135. The slot stays 135, so no version
+    pin moves.
+  - The gate's count lines stay at `main`'s, since this piece adds no route: 345 scanned, 342 HTTP, 222 gated, 120 exempt,
+    over 34 route files. This piece changes no route file and registers no route. The auth gate suite asserts the 345
+    and states the other four in its comments.

@@ -417,6 +417,45 @@ export function liveGenerationOfIdentity(db: DatabaseSync, identity: string): { 
   }
 }
 
+/** One generation of an identity, text-free, as the chat reads it (the chat plan, question 12). */
+export interface IdentityGeneration {
+  readonly term: number;
+  readonly n: number;
+  readonly sessionId: string;
+  readonly startReportedAt: number;
+  /** `state <> 'ended'`. */
+  readonly live: boolean;
+  /** The start's `uuid` (`continuity_starts.uuid` through `startId`): the conversation this generation began. */
+  readonly conversation: string;
+}
+
+/** Every generation of `identity`, across terms, in `(term, n)` order, text-free: the chat's dividers (the chat plan, question 12).
+ *  One statement over the identity's rows, each joined to its start for the conversation's uuid (a LEFT join, so a generation
+ *  whose start row is gone fails the read below rather than vanishing from the list). ALL-OR-FAILURE as `liveGenerations` is: a
+ *  row whose term, n or startReportedAt is not a safe integer, whose sessionId or uuid is not a non-empty string, or whose state
+ *  is not a string fails the whole read naming its id, so the chat never draws a thread with a silent hole. A throw (a closed
+ *  database) is `ok: false`. */
+export function generationsOf(db: DatabaseSync, identity: string): { ok: true; rows: IdentityGeneration[] } | { ok: false; detail: string } {
+  try {
+    const raws = stmt(db, 'SELECT g.id AS id, g.term AS term, g.n AS n, g.sessionId AS sessionId, g.startReportedAt AS startReportedAt, '
+      + 'g.state AS state, s.uuid AS uuid FROM continuity_generations g LEFT JOIN continuity_starts s ON s.id = g.startId '
+      + 'WHERE g.identity = ? ORDER BY g.term, g.n').all(identity) as Record<string, unknown>[];
+    const rows: IdentityGeneration[] = [];
+    for (const raw of raws) {
+      const { term, n, startReportedAt, sessionId, uuid, state } = raw;
+      const whole = (v: unknown): v is number => typeof v === 'number' && Number.isSafeInteger(v);
+      const word = (v: unknown): v is string => typeof v === 'string' && v !== '';
+      if (!whole(term) || !whole(n) || !whole(startReportedAt) || !word(sessionId) || !word(uuid) || typeof state !== 'string') {
+        return { ok: false, detail: `continuity_generations row ${String(raw.id)}: not a generation this build can read` };
+      }
+      rows.push({ term, n, sessionId, startReportedAt, live: state !== 'ended', conversation: uuid });
+    }
+    return { ok: true, rows };
+  } catch (e) {
+    return { ok: false, detail: `continuity_generations read failed: ${e instanceof Error ? e.message : String(e)}` };
+  }
+}
+
 /** How many generations of `identity` were minted (started) at or after `sinceMs` whose predecessor in the same term ended with
  *  an outcome `RESTART_OUTCOME_MAP` names `restart` (the readiness plan's question 3). Completed restarts only:
  *  the one in progress is the decider's. A predecessor whose outcome is missing or a word this build does not know is

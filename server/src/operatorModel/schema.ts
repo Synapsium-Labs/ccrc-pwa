@@ -60,6 +60,10 @@ export const OPERATOR_MODEL_MIGRATIONS: readonly string[] = [
     n    INTEGER NOT NULL CHECK (n >= 1),
     mode TEXT NOT NULL
   );`,
+  // Migration 3 (Overlord W1, the chat, Task 2, question 4): the chat's off-the-record toggle (spec §9.4 rule 9). A message sent
+  // under it is still recorded and answered, but no feed learns from it. A row written before the column reads 0, which is right:
+  // no toggle existed. One writer, `recordMessage`'s insert (`single-definition/writers-map.test.ts`).
+  'ALTER TABLE operator_messages ADD COLUMN offRecord INTEGER NOT NULL DEFAULT 0 CHECK (offRecord IN (0, 1));',
 ];
 
 /** Derived, never hand-edited beside the array. */
