@@ -14,22 +14,30 @@ import { MockupView } from '../src/docs/MockupView';
 import { createFetchQueue } from '../src/docs/fetchQueue';
 import type { RangeLoader } from '../src/docs/range/readRange';
 import { DOCS_VIEW_TEXT, MOCKUP_TEXT, MOCKUP_VERDICT_SENTENCE, fillSentence, kib, mockupVerdictSentence } from '../src/docs/docsText';
-import { loaderOverBudget, originsOf } from '../src/docs/mockup/census';
+import { loaderOverBudget, loaderUnfit, originsOf } from '../src/docs/mockup/census';
 import {
-  buildMockupSrcdoc, extractMockupRefs, loadMockupAssets, mockupAssetReader, type MockupBuild, type MockupExtract,
+  buildMockupSrcdoc, extractMockupRefs, loadMockupAssets, mockupAssetReader, planMockupPage, type MockupBuild, type MockupExtract,
 } from '../src/docs/mockup/load';
-import { graphKeysBelow, readImportMap, scanScript, scriptJson } from '../src/docs/mockup/modules';
+import { graphKeysBelow, readImportMap, scanScript, scanScriptBytes, scriptChildRefs, scriptJson } from '../src/docs/mockup/modules';
+import { scriptTextOrigins } from '../src/docs/mockup/origins';
 import { parseMockup } from '../src/docs/mockup/parse';
 import { planMockupAssets } from '../src/docs/mockup/plan';
 import {
-  MOCKUP_CLICK_GUARD, MOCKUP_CSP, MOCKUP_MAX_ASSET_BYTES, MOCKUP_MAX_ASSETS, MOCKUP_MODULE_MAX_DEPTH, MOCKUP_SANDBOX_SCRIPTED,
-  MOCKUP_SCRIPT_MAX_REFS, MOCKUP_SCRIPT_SCAN_BYTES, metaFor,
+  MOCKUP_CLICK_GUARD, MOCKUP_CSP, MOCKUP_IMPORT_MAP_MAX_ENTRIES, MOCKUP_MAX_ASSET_BYTES, MOCKUP_MAX_ASSETS, MOCKUP_MAX_SRCDOC_CHARS,
+  MOCKUP_MODULE_MAX_DEPTH, MOCKUP_SANDBOX_SCRIPTED, MOCKUP_SCRIPT_MAX_REFS, MOCKUP_SCRIPT_SCAN_BYTES, metaFor,
 } from '../src/docs/mockup/policy';
 import { MOCKUP_FETCH_SHIM_MARK } from '../src/docs/mockup/shim';
 import type {
   HttpsOrigin, MockupAssetPlan, MockupAssetReader, MockupContext, MockupRangeRead, MockupReadAnswer,
 } from '../src/docs/mockup/ports';
 import { COMMIT_A, entry, fakeLoaders, holder, treeOk } from './docsFixtures';
+
+// The build's module scan, observed (fix round 1 of review 4066, F1): every call goes to the real function, and the scan
+// count case reads how many times the build asked it.
+vi.mock('../src/docs/mockup/modules', async (importOriginal) => {
+  const real = await importOriginal<typeof import('../src/docs/mockup/modules')>();
+  return { ...real, scriptChildRefs: vi.fn(real.scriptChildRefs) };
+});
 
 afterEach(() => {
   cleanup();
@@ -68,6 +76,10 @@ function fakeReader(files: Files) {
 
 interface Run {
   readonly ex: MockupExtract;
+  /** The page's map rows as the first plan decided them, before a refused map was planned again (D-9152). */
+  readonly first: MockupAssetPlan;
+  /** The loaded plan, before the build. */
+  readonly loaded: MockupAssetPlan;
   readonly plan: MockupAssetPlan;
   readonly build: MockupBuild;
   readonly page: string;
@@ -75,18 +87,42 @@ interface Run {
   readonly calls: { path: string; range: MockupRangeRead | undefined }[];
 }
 
-/** The page through the real pipeline: parse, extract, plan, load, build. `sizes` overrides a listed size. */
-async function run(html: string, files: Files, opts: { sizes?: Record<string, number>; extra?: readonly HttpsOrigin[] } = {}): Promise<Run> {
+/** The page through the real pipeline, as the viewer runs it: parse, `planMockupPage`, load, build. `sizes` overrides a
+ *  listed size. */
+async function run(
+  html: string, files: Files, opts: { sizes?: Record<string, number>; extra?: readonly HttpsOrigin[]; beforeBuild?: () => void } = {},
+): Promise<Run> {
   const parsed = parseMockup(html);
   if (!parsed.ok) throw new Error('refused by the pre-scan');
-  const ex = extractMockupRefs(parsed.doc, PAGE_BASE);
   const entries = Object.entries(files).map(([p, f]) => sized(p, opts.sizes?.[p] ?? bytesOfFile(f).byteLength));
-  const plan0 = planMockupAssets(ex.refs, ctxOf(entries));
+  const ctx = ctxOf(entries);
+  const first = planMockupAssets(extractMockupRefs(parsed.doc, PAGE_BASE).refs, ctx);
+  const { extract: ex, plan: plan0 } = planMockupPage(parsed.doc, PAGE_BASE, ctx);
   const { reader, calls } = fakeReader(files);
   const result = await loadMockupAssets(plan0, reader, signal());
+  opts.beforeBuild?.();
   const build = buildMockupSrcdoc(parsed.doc, result, opts.extra ?? [], true);
   const page = build.ok ? build.page : '';
-  return { ex, plan: build.plan, build, page, out: new DOMParser().parseFromString(page, 'text/html'), calls };
+  return { ex, first, loaded: result.plan, plan: build.plan, build, page, out: new DOMParser().parseFromString(page, 'text/html'), calls };
+}
+
+/** The view over `html`, its siblings read from `files` by path, each listed at its byte length or `sizes`' value; the
+ *  reader's calls recorded. */
+function renderView(html: string, files: Files, sizes: Record<string, number> = {}) {
+  const entries = Object.entries(files).map(([p, f]) => sized(p, sizes[p] ?? bytesOfFile(f).byteLength));
+  const { reader, calls } = fakeReader(files);
+  const assets: DocsAssetContextValue = { loaders: fakeLoaders().loaders, queue: createFetchQueue(), onDraftAsset: () => {} };
+  const page: DocsPageLocation & { kind: 'path' } = {
+    kind: 'path', project: 'demo', section: 'specs', path: 'm.html', dirSlash: false, ref: null, at: null, view: 'effective', frame: 'inline',
+  };
+  const show: DocsShowOk = {
+    v: 1, verb: 'docs-show', ok: true, elapsedMs: 1, source: 'committed', section: 'specs', path: 'm.html', size: enc(html).byteLength,
+    sha256: 'c'.repeat(64), encoding: 'utf8', text: html, commit: COMMIT_A,
+  };
+  const download = createElement('button', { type: 'button' }, 'Download');
+  const { container } = render(createElement(DocsAssetContext, { value: assets },
+    createElement(MockupView, { show, context: ctxOf(entries), reader, page, relist: () => {}, download })));
+  return { container, calls };
 }
 
 const rowOf = (r: Run, raw: string) => r.plan.rows.find((x) => x.ref.raw === raw)!;
@@ -210,6 +246,10 @@ describe('X2 P6.2 the plan\'s seven cases', () => {
     expect(container.querySelector('iframe')).toBeNull();
     expect(screen.getByRole('button', { name: DOCS_VIEW_TEXT.source })).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Download' })).toBeTruthy();
+    // Stop scripts stays, and takes the reader back to the static frame (fix round 1 of review 4066, A13).
+    fireEvent.click(screen.getByRole('button', { name: MOCKUP_TEXT.stopScripts }));
+    expect(await screen.findByRole('button', { name: MOCKUP_TEXT.runScripts })).toBeTruthy();
+    expect(container.querySelector('iframe')).not.toBeNull();
   });
 
   it('loader: MOCKUP_SANDBOX_SCRIPTED, MOCKUP_CSP and the click guard unchanged', () => {
@@ -244,7 +284,10 @@ const c = await import('https://cdn.example/x.js');
     expect(dyn).toEqual(['./lazy.js', 'import(name)']);
     expect(r.calls).toEqual([]);
     expect(r.plan.rows.map((x) => x.ref.raw)).not.toContain('https://cdn.example/x.js');
-    expect(r.ex.scriptTexts.join('\n')).toContain("import('https://cdn.example/x.js')");
+    // The script-text census offers its origin, from the page's script text, as the viewer reads it (review 4066, A11).
+    const scriptOrigins = [...new Set(r.ex.scriptTexts.flatMap((t) => scriptTextOrigins(t)))];
+    expect(scriptOrigins).toEqual(['https://cdn.example']);
+    expect(originsOf(r.plan.rows, scriptOrigins, 'console.example').offered.map((o) => o.origin)).toEqual(['https://cdn.example']);
   });
 
   it('a module, a map key and a fetched JSON holding a closing script tag, a comment opener, a line separator or a NUL change nothing that runs', async () => {
@@ -263,7 +306,9 @@ const c = await import('https://cdn.example/x.js');
       MOCKUP_CLICK_GUARD.slice('<script>'.length, '<script>'.length + 12), MOCKUP_FETCH_SHIM_MARK.slice(0, 12), 'importmap', 'module',
       "fetch('data.",
     ]);
-    expect(r.out.title).toBe('');
+    // The hostile markup is nowhere in the page as markup: a parse of it can make no element of it (review 4066, A11).
+    expect(r.page).not.toContain("</script><script>document.title='owned'");
+    expect(r.out.querySelectorAll('script')).toHaveLength(5);
     // The key's text stays in the map, inert inside a JSON string, its angle brackets escaped.
     const map = mapsOf(r.out)[0]!.textContent ?? '';
     expect(map).toContain('k\\u003c/script\\u003e\\u003cscript\\u003edocument.title=');
@@ -273,14 +318,16 @@ const c = await import('https://cdn.example/x.js');
     for (const s of scripts) expect(s.textContent ?? '').not.toMatch(/<\/script|<!--|\u2028|\u0000/i);
   });
 
-  it('an inline module whose text holds <!-- is left as written: its imports are unreadable, and no hidden markup goes live', async () => {
+  it('an inline module whose text holds <!-- is left as written: its imports are html-comment, and no hidden markup goes live', async () => {
     const html = `<!doctype html><html><head><script type="module">import "./a.js"; //<!--<script>
 </script><script type="importmap">{"imports":{"x":"data:text/javascript,1"}}</script> --></script></head><body></body></html>`;
     const r = await run(html, { 'a.js': 'export default 1;' });
     const original = parseMockup(html);
     if (!original.ok) throw new Error('refused');
     const text = original.doc.querySelector('script[type="module"]')!.textContent;
-    expect(verdictOf(r, './a.js')).toEqual({ v: 'unsupported', why: 'unreadable' });
+    // Its own word and sentence, not the escape one (review 4066, A7).
+    expect(verdictOf(r, './a.js')).toEqual({ v: 'unsupported', why: 'html-comment' });
+    expect(mockupVerdictSentence(verdictOf(r, './a.js'), false)).toBe(MOCKUP_VERDICT_SENTENCE.unsupported['html-comment']);
     expect(r.calls).toEqual([]);
     expect(mapsOf(r.out)).toHaveLength(0);
     expect([...r.out.querySelectorAll('script[type="module"]')].map((s) => s.textContent)).toEqual([text]);
@@ -372,6 +419,26 @@ describe('X2 P6.2 the scan\'s bounds', () => {
     expect(over.specifiers).toEqual([]);
   });
 
+  it('scanScriptBytes decides its bound on the byte length alone: high bytes at the bound are read, one byte more is refused (review 4066, F2)', () => {
+    const head = enc("import './z.js';\nconst s = '");
+    const tail = enc("';\n");
+    const fill = MOCKUP_SCRIPT_SCAN_BYTES - head.length - tail.length;
+    const at = new Uint8Array(MOCKUP_SCRIPT_SCAN_BYTES);
+    at.set(head, 0);
+    // Two-byte UTF-8 (U+00E9) throughout, so every byte of the fill is above 0x7f; an odd fill ends in one ASCII byte.
+    for (let i = 0; i + 1 < fill; i += 2) { at[head.length + i] = 0xc3; at[head.length + i + 1] = 0xa9; }
+    if (fill % 2 === 1) at[head.length + fill - 1] = 0x78;
+    at.set(tail, head.length + fill);
+    expect(at.length).toBe(MOCKUP_SCRIPT_SCAN_BYTES);
+    const read = scanScriptBytes(at);
+    expect(read.over).toBe(false);
+    expect(read.specifiers.map((s) => s.raw)).toEqual(['./z.js']);
+    const more = new Uint8Array(MOCKUP_SCRIPT_SCAN_BYTES + 1);
+    more.set(at, 0);
+    more[MOCKUP_SCRIPT_SCAN_BYTES] = 0x20;
+    expect(scanScriptBytes(more)).toEqual({ specifiers: [], dynamic: [], literals: [], over: true });
+  });
+
   it('a module of MOCKUP_SCRIPT_MAX_REFS imports gives each its row; one more is one scan-limit row', async () => {
     const n = MOCKUP_SCRIPT_MAX_REFS;
     const at = await run('<!doctype html><html><head><script type="module" src="main.js"></script></head><body></body></html>', {
@@ -440,7 +507,27 @@ describe('X2 P6.2 the scan\'s bounds', () => {
     expect(s.dynamic).toEqual([]);
   });
 
-  it('readImportMap refuses an unreadable map, another top-level key, a non-string value, a sibling prefix and too many entries', () => {
+  it('readImportMap reads MOCKUP_IMPORT_MAP_MAX_ENTRIES entries, and refuses one more (review 4066, F4)', () => {
+    const map = (n: number): string => JSON.stringify({ imports: Object.fromEntries(Array.from({ length: n }, (_, i) => [`k${i}`, `./m${i}.js`])) });
+    const at = readImportMap(map(MOCKUP_IMPORT_MAP_MAX_ENTRIES));
+    expect(at.ok).toBe(true);
+    expect(at.ok && at.entries).toHaveLength(MOCKUP_IMPORT_MAP_MAX_ENTRIES);
+    expect(at.ok && at.entries.at(-1)).toEqual([`k${MOCKUP_IMPORT_MAP_MAX_ENTRIES - 1}`, `./m${MOCKUP_IMPORT_MAP_MAX_ENTRIES - 1}.js`]);
+    expect(readImportMap(map(MOCKUP_IMPORT_MAP_MAX_ENTRIES + 1))).toEqual({ ok: false });
+  });
+
+  it('an empty import map is read, kept in the page, and refuses nothing (review 4066, A12)', async () => {
+    expect(readImportMap('{"imports":{}}')).toEqual({ ok: true, entries: [] });
+    const r = await run(`<!doctype html><html><head><script type="importmap">{"imports":{}}</script>
+<script type="module" src="main.js"></script></head><body></body></html>`, { 'main.js': "import './b.js';\n", 'b.js': 'export default 1;\n' });
+    expect(r.ex.unsupported.map((u) => u.element)).not.toContain('script[type=importmap]');
+    expect(r.plan.importMapRefused).toBeUndefined();
+    expect(mapsOf(r.out)).toHaveLength(1);
+    expect(Object.keys(importsOf(r.out))).toHaveLength(1);
+    expect(verdictOf(r, './b.js')).toMatchObject({ v: 'inline' });
+  });
+
+  it('readImportMap refuses an unreadable map, another top-level key, a non-string value and a sibling prefix', () => {
     expect(readImportMap('{"imports":{"a":"./a.js","b":"https://cdn.example/b.js","c/":"https://cdn.example/c/"}}')).toEqual({
       ok: true, entries: [['a', './a.js'], ['b', 'https://cdn.example/b.js'], ['c/', 'https://cdn.example/c/']],
     });
@@ -450,6 +537,12 @@ describe('X2 P6.2 the scan\'s bounds', () => {
     ]) {
       expect(readImportMap(bad), bad).toEqual({ ok: false });
     }
+  });
+
+  it('the scan keeps, and the byte scan decodes, only the literals a fetch could name (review 4066, F1)', () => {
+    const text = "const a = ''; const b = 'x'; const c = `t.json`; const d = 'pts.json?v=1'; const e = 'é.png'; const f = 'm.glb';";
+    expect(scanScript(text).literals.map((l) => l.raw)).toEqual(['t.json', 'pts.json?v=1', 'm.glb']);
+    expect(scanScriptBytes(enc(text)).literals.map((l) => l.raw)).toEqual(['t.json', 'pts.json?v=1', 'm.glb']);
   });
 
   it('scriptJson cannot end a script, open a comment or break a line in it', () => {
@@ -545,6 +638,14 @@ describe('X2 P6.2 budgets and the range seam', () => {
     const answer: MockupReadAnswer = await reader.read(pin, signal(), range);
     expect(answer).toEqual({ kind: 'ok', bytes });
     expect(prepare).toHaveBeenCalledWith({ project: 'demo', pin, range: range.pin, size: bytes.length }, expect.anything());
+    // A frame whose bytes are not its digest's fails the read with that word, and no bytes (review 4066, A11).
+    const lying = vi.fn<RangeLoader['frame']>(async (_t, snapshot, offset, length) => {
+      const part = bytes.subarray(offset, offset + length);
+      return { s: 'ok', value: { snapshot, offset, bytesB64: Buffer.from(part).toString('base64'), digest: 'f'.repeat(64), total: bytes.length } };
+    });
+    const checked = mockupAssetReader('demo', { ...f.loaders, range: { prepare, frame: lying } }, createFetchQueue());
+    expect(await checked.read(pin, signal(), range)).toEqual({ kind: 'failed', failure: 'range-frame-digest' });
+    expect(lying).toHaveBeenCalled();
     const none = mockupAssetReader('demo', { file: f.loaders.file, raster: f.loaders.raster }, createFetchQueue());
     expect(await none.read(pin, signal(), range)).toEqual({ kind: 'failed', failure: 'range-unavailable' });
   });
@@ -580,6 +681,117 @@ describe('X2 P6.2 budgets and the range seam', () => {
     }, { sizes: { 'a.png': 2 * MIB, 'b.png': 2 * MIB, 'c.png': 2 * MIB } });
     expect(verdictOf(r, 'c.png')).toEqual({ v: 'skipped', why: 'over-budget' });
     expect(loaderOverBudget(r.plan.rows)).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------------------------------------------
+describe('X2 P6.2 fix round 1 (review 4066)', () => {
+  /** `n` bytes of a module: `head`, then a line comment filling it out. */
+  const sizedModule = (head: string, n: number): string => `${head}//${'x'.repeat(n - head.length - 3)}\n`;
+
+  it('the build scans each module once, however many roots the cut refuses (F1)', async () => {
+    const roots = 20;
+    // Seven uses of one 1 MiB image pass the page cap at the seventh: every module root after them is refused by the cut.
+    const imgs = '<img src="i.png">'.repeat(7);
+    const mods = Array.from({ length: roots }, (_, i) => `<script type="module">import './s${i}.js';</script>`).join('');
+    const files: Files = { 'i.png': new Uint8Array(MIB).fill(7), 'a.js': 'export default 1;\n' };
+    for (let i = 0; i < roots; i += 1) files[`s${i}.js`] = "import './a.js';\n";
+    const scans = vi.mocked(scriptChildRefs);
+    const r = await run(`<!doctype html><html><head></head><body>${imgs}${mods}</body></html>`, files, { beforeBuild: () => scans.mockClear() });
+    expect(r.build.ok).toBe(true);
+    for (let i = 0; i < roots; i += 1) expect(verdictOf(r, `./s${i}.js`)).toEqual({ v: 'skipped', why: 'over-budget' });
+    // One scan for each module the cut walks below (s0 to s19, and a.js once), never one per root.
+    expect(scans.mock.calls).toHaveLength(roots + 1);
+  });
+
+  const refusals: readonly [string, string, unknown][] = [
+    ['root-relative', '/x.js', { v: 'refused', why: 'root-relative' }],
+    ['a climb out of the root', '../../../../x.js', { v: 'refused', why: 'above-root' }],
+    ['out of the section', '../plans/x.js', { v: 'missing', why: 'absent-at-commit' }],
+    ['a backslash form', './sub\\x.js', { v: 'refused', why: 'malformed' }],
+  ];
+  for (const [label, value, verdict] of refusals) {
+    it(`an import map whose entry is ${label}, which the planner refuses, is refused whole and removed, as an unreadable one is (F3, D-9152)`, async () => {
+      const map = JSON.stringify({ imports: { lib: './lib.js', bad: value } });
+      const r = await run(`<!doctype html><html><head><script type="importmap">${map}</script>
+<script type="module">import 'lib';</script></head><body></body></html>`, { 'lib.js': 'export default 1;', 'x.js': 'export default 2;' });
+      // The first plan's verdict on the entry: neither inline nor an https offer.
+      expect(r.first.rows.find((x) => x.ref.mapKey === 'bad')!.verdict).toEqual(verdict);
+      expect(r.plan.importMapRefused).toBe(true);
+      expect(r.ex.unsupported.map((u) => u.element)).toContain('script[type=importmap]');
+      expect(r.plan.rows.filter((x) => x.ref.spec === 'map')).toEqual([]);
+      expect(verdictOf(r, 'lib')).toEqual({ v: 'unsupported', why: 'bare' });
+      expect(mapsOf(r.out)).toHaveLength(0);
+      expect(r.calls).toEqual([]);
+    });
+  }
+
+  it('an import map element with a src is refused whole (A3)', async () => {
+    const r = await run(`<!doctype html><html><head><script type="importmap" src="m.json">{"imports":{"lib":"./lib.js"}}</script>
+<script type="module">import 'lib';</script></head><body></body></html>`, { 'lib.js': 'export default 1;' });
+    expect(r.ex.unsupported.map((u) => u.element)).toContain('script[type=importmap]');
+    expect(verdictOf(r, 'lib')).toEqual({ v: 'unsupported', why: 'bare' });
+    expect(mapsOf(r.out)).toHaveLength(0);
+  });
+
+  it('a map after a module script, in the body, is moved to the head ahead of every module script (A5)', async () => {
+    const r = await run(`<!doctype html><html><head><script type="module" src="main.js"></script></head><body>
+<script type="importmap">{"imports":{"lib":"./lib.js"}}</script></body></html>`, {
+      'main.js': "import 'lib';\nimport './b.js';\n", 'lib.js': 'export default 1;\n', 'b.js': 'export default 2;\n',
+    });
+    const scripts = [...r.out.querySelectorAll('script')];
+    const map = scripts.findIndex((s) => s.getAttribute('type') === 'importmap');
+    const firstModule = scripts.findIndex((s) => s.getAttribute('type') === 'module');
+    expect(map).toBeGreaterThanOrEqual(0);
+    expect(map).toBeLessThan(firstModule);
+    expect(r.out.head.contains(scripts[map]!)).toBe(true);
+    expect(Object.keys(importsOf(r.out))).toEqual(['lib', expect.stringMatching(ID_RE)]);
+  });
+
+  it('a diamond: a module two others import is written once (A8)', async () => {
+    const r = await run('<!doctype html><html><head><script type="module" src="main.js"></script></head><body></body></html>', {
+      'main.js': "import './b.js';\nimport './c.js';\n",
+      'b.js': "import './d.js';\nexport const b = 1;\n",
+      'c.js': "import './d.js';\nexport const c = 1;\n",
+      'd.js': "export const d = 'D';\n",
+    });
+    const values = Object.values(importsOf(r.out)).map(decode);
+    expect(values).toHaveLength(3);
+    expect(values.filter((t) => t === "export const d = 'D';\n")).toHaveLength(1);
+    expect(count(r.page, JS_PREFIX)).toBe(4);
+  });
+
+  it('a page within the budget whose modules pass the page cap is told why, not framed with a script silently not loaded (A1)', async () => {
+    const big = 2 * MIB - 50_000;
+    const files: Files = {
+      'a.js': sizedModule("import './b.js';\n", big),
+      'b.js': sizedModule("import './c.js';\n", big),
+      'c.js': sizedModule('export default 1;\n', MOCKUP_MAX_ASSET_BYTES - 2 * big - 1000),
+    };
+    const html = '<!doctype html><html><head><script type="module" src="a.js"></script><script type="module" src="b.js"></script><script type="module" src="c.js"></script></head><body></body></html>';
+    const r = await run(html, files);
+    expect(r.loaded.reservedBytes).toBeLessThanOrEqual(MOCKUP_MAX_ASSET_BYTES);
+    expect(r.build.ok).toBe(true);
+    expect(verdictOf(r, 'a.js')).toMatchObject({ v: 'inline' });
+    expect(verdictOf(r, 'b.js')).toEqual({ v: 'skipped', why: 'over-budget' });
+    expect(loaderOverBudget(r.loaded.rows)).toBe(false);
+    expect(loaderUnfit(r.loaded.rows, r.plan.rows)).toBe('page');
+    // The view: with scripts run it says why and does not frame; Stop scripts takes it back to the static frame.
+    const v = renderView(html, files);
+    fireEvent.click(await screen.findByRole('button', { name: MOCKUP_TEXT.runScripts }));
+    expect(await screen.findByText(fillSentence(MOCKUP_TEXT.overPageCap, { chars: MOCKUP_MAX_SRCDOC_CHARS.toLocaleString('en-US') }))).toBeTruthy();
+    expect(v.container.querySelector('iframe')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: MOCKUP_TEXT.stopScripts }));
+    expect(await screen.findByRole('button', { name: MOCKUP_TEXT.runScripts })).toBeTruthy();
+    expect(v.container.querySelector('iframe')).not.toBeNull();
+  }, 60_000);
+
+  it('the view passes a range read through for a fetched sibling above 2 MiB (A9)', async () => {
+    const v = renderView("<!doctype html><html><head><script>fetch('big.glb');</script></head><body></body></html>", {
+      'big.glb': new Uint8Array([1, 2, 3]),
+    }, { 'big.glb': 3 * MIB });
+    await vi.waitFor(() => expect(v.calls).toHaveLength(1));
+    expect(v.calls[0]).toMatchObject({ path: 'big.glb', range: { size: 3 * MIB, pin: { kind: 'blob' } } });
   });
 });
 

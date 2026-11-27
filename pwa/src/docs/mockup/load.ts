@@ -24,12 +24,13 @@ import { showBytes } from '../objectUrls';
 import { readRange, type RangeReadFailure } from '../range/readRange';
 import { refsFromTokens, rewriteCss, rewriteCssBytes, scanCss, scanCssBytesRefs } from './css';
 import { graphKeysBelow, readImportMap, scanScript, scriptChildRefs, scriptJson, scriptRefs, type ScriptString } from './modules';
-import { extendMockupAssetPlan } from './plan';
+import { extendMockupAssetPlan, importMapRefusedBy, planMockupAssets } from './plan';
 import {
   MOCKUP_CLICK_GUARD, MOCKUP_MAX_CSS_DEPTH, MOCKUP_MAX_SRCDOC_CHARS, metaFor, mockupCsp, type MockupAssetKind,
 } from './policy';
 import type {
-  HttpsOrigin, MockupAssetPlan, MockupAssetReader, MockupAssetResult, MockupAssetRow, MockupBase, MockupReadAnswer, MockupRef,
+  HttpsOrigin, MockupAssetPlan, MockupAssetReader, MockupAssetResult, MockupAssetRow, MockupBase, MockupContext, MockupReadAnswer,
+  MockupRef,
 } from './ports';
 import { MOCKUP_FETCH_SHIM_BASE_CHARS, mockupFetchShim, shimFileChars, shimNameChars, type ShimFile } from './shim';
 
@@ -116,7 +117,7 @@ export function parseSrcset(text: string): { candidates: SrcsetCandidate[]; drop
 /** The page's references in DOM order (base 5.6.3's element table), without adopting a node into the live document: it
  *  only reads `doc`, and `apply` writes only into that same `doc`. Keys are `r<n>` in discovery order, so the same page
  *  gives the same keys, a clone of it too. `a` and `area` are never references. */
-export function extractMockupRefs(doc: Document, page: MockupBase): MockupExtract {
+export function extractMockupRefs(doc: Document, page: MockupBase, opts: { readonly refuseMap?: boolean } = {}): MockupExtract {
   const refs: MockupRef[] = [];
   const unsupported: { key: string; element: string }[] = [];
   const scriptTexts: string[] = [];
@@ -134,10 +135,13 @@ export function extractMockupRefs(doc: Document, page: MockupBase): MockupExtrac
     return key;
   };
   // The import maps first (X2 P6.2): a page's one map that `readImportMap` accepts is read; every map of a page with more
-  // than one, and a map it refuses, is refused whole, as every map was before this loader.
+  // than one, and a map it refuses, is refused whole, as every map was before this loader. So is a map with a `src`, which
+  // the browser registers no map for (fix round 1 of review 4066, A3), and a map whose entries the plan refused
+  // (`refuseMap`, D-9152: `planMockupPage`).
   const typeOf = (el: Element): string => (el.getAttribute('type') ?? '').trim().toLowerCase();
   const maps = [...doc.querySelectorAll('script')].filter((s) => s.namespaceURI === HTML_NS && typeOf(s) === 'importmap');
-  const read = maps.length === 1 ? readImportMap(maps[0]!.textContent ?? '') : { ok: false as const };
+  const readable = maps.length === 1 && opts.refuseMap !== true && !maps[0]!.hasAttribute('src');
+  const read = readable ? readImportMap(maps[0]!.textContent ?? '') : { ok: false as const };
   const accepted = read.ok ? maps[0]! : null;
   const mapEntries = read.ok ? read.entries : [];
   const mapKeys = mapEntries.map(([k]) => k);
@@ -152,10 +156,10 @@ export function extractMockupRefs(doc: Document, page: MockupBase): MockupExtrac
     // A script whose text holds `<!--` was parsed through the HTML script escape states, where `<script`, `-->` and the
     // text around them decide where the element ends: a rewrite inside it could move that end when the built page is parsed
     // again, and make markup live that this extraction never saw (review of the P6.2 build, finding 3). Its imports are left
-    // as written and reported `unreadable`; nothing in it is rewritten.
+    // as written and reported `html-comment` (their own word, fix round 1 of review 4066, A7); nothing in it is rewritten.
     const escaping = /<!--/.test(text);
     const found = escaping
-      ? scanned.refs.map((r, i) => (scanned.sites[i] === null ? r : { ...r, unread: 'unreadable' as const }))
+      ? scanned.refs.map((r, i) => (scanned.sites[i] === null ? r : { ...r, unread: 'html-comment' as const }))
       : scanned.refs;
     const sites = escaping ? scanned.sites.map(() => null) : scanned.sites;
     refs.push(...found);
@@ -313,6 +317,10 @@ export function extractMockupRefs(doc: Document, page: MockupBase): MockupExtrac
       if (loader === undefined) return;
       for (const m of refusedMaps) m.remove();
       const head = doc.head ?? doc.documentElement;
+      // The page's own map is moved to the head's start, ahead of every module script: a map after a module script, or in
+      // the body, is one the browser may not register, and the build's names would then resolve nowhere (fix round 1 of
+      // review 4066, A5: moved rather than refused, the smaller change). Only the shim goes before it.
+      if (accepted !== null) head.prepend(accepted);
       if (loader.mapText !== null) {
         if (accepted !== null) {
           accepted.textContent = loader.mapText;
@@ -330,6 +338,18 @@ export function extractMockupRefs(doc: Document, page: MockupBase): MockupExtrac
       }
     },
   };
+}
+
+/** One attempt's references and their plan (X2 P6.2, D-9152): the page extracted and planned; when the plan refuses the
+ *  page's import map whole (`importMapRefusedBy`), the page extracted again with the map refused, as an unreadable map is
+ *  (listed, removed from the built page, its names unmapped), planned again, and marked `importMapRefused` so the build and
+ *  Export extract it the same way. Throws what `planMockupAssets` throws. */
+export function planMockupPage(doc: Document, page: MockupBase, ctx: MockupContext): { readonly extract: MockupExtract; readonly plan: MockupAssetPlan } {
+  const extract = extractMockupRefs(doc, page);
+  const plan = planMockupAssets(extract.refs, ctx);
+  if (!importMapRefusedBy(plan.rows)) return { extract, plan };
+  const refused = extractMockupRefs(doc, page, { refuseMap: true });
+  return { extract: refused, plan: { ...planMockupAssets(refused.refs, ctx), importMapRefused: true } };
 }
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -677,7 +697,7 @@ export function buildMockupSrcdoc(
   const { plan } = assets;
   const { section, path } = plan.context.pin;
   const clone = doc.cloneNode(true) as Document;
-  const extract = extractMockupRefs(clone, `${section}/${path}`);
+  const extract = extractMockupRefs(clone, `${section}/${path}`, { refuseMap: plan.importMapRefused === true });
   const body = clone.documentElement.outerHTML;
 
   const rowByKey = new Map<string, MockupAssetRow>(plan.rows.map((r) => [r.ref.key, r]));
@@ -725,8 +745,17 @@ export function buildMockupSrcdoc(
     const row = rowByKey.get(r.key);
     return row !== undefined && row.verdict.v === 'inline' && assetOf(unitKeyOf(row.ref)) !== null ? row : undefined;
   };
-  /** A loaded module's imports, as the loader found them (the same call, so the keys agree), with their sites. */
-  const importsOf = (loaded: { row: InlineRow; bytes: Uint8Array<ArrayBuffer> }) => scriptChildRefs(loaded.bytes, loaded.row.ref, pageBase, mapKeys);
+  /** A loaded module's imports, as the loader found them (the same call, so the keys agree), with their sites: scanned ONCE
+   *  per file for the whole build, so neither the cut's walks below each refused root nor the bottom-up build scans a file
+   *  twice (fix round 1 of review 4066, F1). */
+  const scanned = new Map<string, ReturnType<typeof scriptChildRefs>>();
+  const importsOf = (fileKey: string, loaded: { row: InlineRow; bytes: Uint8Array<ArrayBuffer> }): ReturnType<typeof scriptChildRefs> => {
+    const known = scanned.get(fileKey);
+    if (known !== undefined) return known;
+    const found = scriptChildRefs(loaded.bytes, loaded.row.ref, pageBase, mapKeys);
+    scanned.set(fileKey, found);
+    return found;
+  };
   /** The keys of every loaded reference below a stylesheet used at `depth`, to the depth the build nests to; for a module,
    *  every loaded module below it in the graph. */
   const keysBelow = (fileKey: string, depth: number): string[] => {
@@ -740,7 +769,7 @@ export function buildMockupSrcdoc(
       for (const k of graphKeysBelow(fileKey, (file) => {
         const at = assetOf(file);
         if (at === null || at.row.verdict.kind !== 'module') return [];
-        return importsOf(at).refs.flatMap((ref): [string, string][] => {
+        return importsOf(file, at).refs.flatMap((ref): [string, string][] => {
           const child = childRow(ref);
           return child !== undefined && child.verdict.v === 'inline' && child.verdict.kind === 'module' ? [[child.ref.key, unitKeyOf(child.ref)]] : [];
         });
@@ -801,7 +830,7 @@ export function buildMockupSrcdoc(
     const before = total;
     const logStart = log.length;
     const idStart = idEntries.length;
-    const { refs, sites } = importsOf(loaded);
+    const { refs, sites } = importsOf(fileKey, loaded);
     const names = refs.map((ref, i): string | null => {
       if (sites[i] === null || cut) return null;
       const child = childRow(ref);

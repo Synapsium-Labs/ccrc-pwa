@@ -883,6 +883,10 @@ export const MOCKUP_TEXT = {
   /** X2 P6.2: a page whose modules or fetched files do not fit the asset budget (spec 4.8; `MOCKUP_MAX_ASSETS` and
    *  `MOCKUP_MAX_ASSET_BYTES`). It does not run, and Source and Download stay. */
   overBudget: 'Not rendered: the modules and files this page loads are over the limit of {n} files and {size} in all. Use Download to open it outside Docs.',
+  /** X2 P6.2 (fix round 1 of review 4066, A1): with scripts run, a script, module or fetched file the page loads would make
+   *  the built page longer than Docs frames (`MOCKUP_MAX_SRCDOC_CHARS`, `{chars}`). It does not run, and Source and Download
+   *  stay. */
+  overPageCap: 'Not rendered: with its scripts and files written in, this page would be longer than the {chars} characters Docs renders. Use Download to open it outside Docs.',
   embeds: 'embeds {k} uncommitted asset{s}',
   scriptsOff: 'scripts off',
   notLoaded: '{n} not loaded',
@@ -943,6 +947,7 @@ export const MOCKUP_VERDICT_SENTENCE = {
     'unreadable': 'a module name written with an escape, which Docs does not read',
     'bare': "a module name the page's import map does not name",
     'scan-limit': 'past the most a script may name that Docs reads',
+    'html-comment': 'in a script holding an HTML comment opener (<!--), which Docs leaves as written',
   },
   skipped: {
     'too-large': 'its listed size is over the limit for its kind',

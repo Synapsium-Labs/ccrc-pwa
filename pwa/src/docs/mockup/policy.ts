@@ -98,8 +98,12 @@ export const MOCKUP_MODULE_MAX_DEPTH = 8;
 export const MOCKUP_IMPORT_MAP_MAX_ENTRIES = 256;
 
 /** What a fetched sibling is answered as, by lowered extension (X2 P6.2, spec 4.8): a JSON file, a glTF model and its binary
- *  buffer. Kept apart from `MOCKUP_ASSET_MIME`, because a fetched file is never written into the page as a `data:` URL and so
- *  never enters `MOCKUP_MAX_SRCDOC_CHARS`'s derivation; the type is always this table's, never a response's. */
+ *  buffer; the type is always this table's, never a response's. Kept apart from `MOCKUP_ASSET_MIME`, so the prefixes
+ *  `MOCKUP_MAX_SRCDOC_CHARS`'s derivation counts stay as they were: a fetched file is never a `data:` URL. Its bytes are
+ *  written into the page all the same, as base64 in the fetch shim's table, and each addition is charged against the cap as
+ *  it is made. The derivation counts the budget's bytes once and not the shim's own text (or a module written both as a
+ *  page `src` and as a map entry), so a page within the budget can still pass the cap; with scripts run it is then told so,
+ *  and does not run (`census.ts#loaderUnfit`; corrected in fix round 1 of review 4066, A1). */
 export const MOCKUP_FETCH_MIME: Readonly<Record<string, string>> = {
   json: 'application/json',
   glb: 'model/gltf-binary',
@@ -166,9 +170,11 @@ export const MOCKUP_SANDBOX_STATIC = '';
  *  do not depend on the mode; the sandbox carries it. */
 export const MOCKUP_SANDBOX_SCRIPTED = 'allow-scripts';
 
-/** The base policy a mockup's frame is held to (base 5.6.4), verbatim. `connect-src`, `frame-src`, `worker-src`,
- *  `object-src` and `manifest-src` fall back to `default-src 'none'`; `'self'` never appears, because from a srcdoc it
- *  would mean the console's own origin. */
+/** The base policy a mockup's frame is held to (base 5.6.4), verbatim. `connect-src`, `object-src` and `manifest-src` fall
+ *  back to `default-src 'none'`, and `frame-src` reaches it through `child-src`. `worker-src` does not: under CSP3 it falls
+ *  back through `child-src` to `script-src`, which allows `data:`, so this policy does not refuse a `data:` worker by that
+ *  directive (corrected in fix round 1 of review 4066, A2; a comment only, the policy is unchanged). `'self'` never appears,
+ *  because from a srcdoc it would mean the console's own origin. */
 export const MOCKUP_CSP = "default-src 'none'; script-src 'unsafe-inline' data:; style-src 'unsafe-inline' data:; img-src data: blob:; font-src data:; media-src data: blob:; base-uri 'none'; form-action 'none'";
 
 /** The four directives a confirmed origin is appended to, and no other (base 5.6.4; ruling U2). */

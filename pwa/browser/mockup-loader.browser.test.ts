@@ -1,6 +1,5 @@
 // X2 P6.2 (plan 2026-11-18-native-docs-parity, Task P6.2; spec 4.8): the in-walls page loader in a real Chromium. Each row
-// builds its page the way the viewer does (the real pre-scan and parse, `extractMockupRefs`, `planMockupAssets`,
-// `loadMockupAssets` over a fake reader that answers each sibling's bytes, `buildMockupSrcdoc`), puts it in the production
+// builds its page the way the viewer does (the real pre-scan and parse, `planMockupPage`, `loadMockupAssets` over a fake reader that answers each sibling's bytes, `buildMockupSrcdoc`), puts it in the production
 // frame (`MockupFrame`, scripted: `sandbox="allow-scripts"`) on a host page under the shell's `frame-src 'none'`, and reads
 // what the page's own script wrote into `document.body.dataset`. Every fixture is synthetic; the hosts are loopback names
 // under `site.localhost` (`harness.ts`).
@@ -12,7 +11,8 @@
 //   JSON fetch         `fetch('data.json')` answers the sibling's JSON, typed `application/json`
 //   model              `fetch('model.glb')` of a model under the budget answers its bytes and `model/gltf-binary`
 //   outside the set    on the same page, a fetch of another origin, of an unplanned sibling and of a `data:` URL each fail with
-//                      a TypeError and the other origin logs no request; CONTROL: the planned sibling on that page answers
+//                      a TypeError, the other origin logs no request, and the policy reports a `connect-src` violation for
+//                      each; CONTROL: the planned sibling on that page answers, with no report
 //
 // Run: `( cd pwa && CCRC_CHROME=<a Chrome or Chromium binary> ./node_modules/.bin/vitest run --config vitest.browser.config.ts
 // browser/mockup-loader.browser.test.ts )`, through `ccrc test`.
@@ -22,9 +22,8 @@ import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { chromium, type Browser, type BrowserContext, type Frame } from 'playwright-core';
 import { DOC_SECTION_SLUGS, type DocPin } from '../../shared/docs';
 import { MockupFrame, mockupFrameProps } from '../src/docs/MockupFrame';
-import { buildMockupSrcdoc, extractMockupRefs, loadMockupAssets } from '../src/docs/mockup/load';
+import { buildMockupSrcdoc, loadMockupAssets, planMockupPage } from '../src/docs/mockup/load';
 import { parseMockup } from '../src/docs/mockup/parse';
-import { planMockupAssets } from '../src/docs/mockup/plan';
 import type { MockupContext } from '../src/docs/mockup/ports';
 import { BLOB_1, COMMIT_A, entry, treeOk } from '../test/docsFixtures';
 import { resolveChrome, startOrigins, type OriginHit, type Origins } from './harness';
@@ -79,7 +78,7 @@ async function build(html: string, files: ReadonlyMap<string, Uint8Array<ArrayBu
   const pin: DocPin = { kind: 'committed', commit: COMMIT_A, servedRef: 'refs/remotes/origin/main', section: SECTION, path: 'm.html' };
   const entries = [entry(SECTION, 'm.html'), ...[...files].map(([p, b]) => entry(SECTION, p, { committed: { kind: 'file', blob: BLOB_1, size: b.byteLength } }))];
   const context: MockupContext = { project: 'demo', pin, tree: treeOk({ entries }) };
-  const plan = planMockupAssets(extractMockupRefs(parsed.doc, `${SECTION}/m.html`).refs, context);
+  const { plan } = planMockupPage(parsed.doc, `${SECTION}/m.html`, context);
   const reader = {
     read: async (p: DocPin) => {
       const b = files.get(p.path);
@@ -172,11 +171,17 @@ describe('X2 P6.2 the in-walls page loader in Chromium', () => {
   it('outside the set: another origin, an unplanned sibling and a data: URL fail; CONTROL: the planned sibling answers', async () => {
     const from = origins.hits.length;
     const target = `${origins.b}/beacon.json?row=outside`;
+    // The page also records the policy's own violation reports, so the row proves that the policy refused each request,
+    // not only that the shim handed it on (fix round 1 of review 4066, A10). Reports are queued as tasks, so it waits one.
     const page = await build(PAGE(`<script>
+const vio = [];
+document.addEventListener('securitypolicyviolation', (e) => { vio.push({ d: e.effectiveDirective, u: e.blockedURI }); });
 const out = (p) => p.then((r) => r.text().then((t) => 'ok:' + t), (e) => 'failed:' + e.name);
 const other = 'oth' + 'er.json';
 Promise.all([out(fetch('data.json')), out(fetch(${JSON.stringify(target)})), out(fetch(other)), out(fetch('data:application/json,{}'))])
-  .then(([c, x, s, d]) => { Object.assign(document.body.dataset, { control: c, origin: x, sibling: s, data: d, done: '1' }); });
+  .then(([c, x, s, d]) => setTimeout(() => {
+    Object.assign(document.body.dataset, { control: c, origin: x, sibling: s, data: d, vio: JSON.stringify(vio), done: '1' });
+  }, 200));
 </script>`), new Map([
       ['data.json', enc('{"n":1}')],
       ['other.json', enc('{"n":2}')],
@@ -188,5 +193,12 @@ Promise.all([out(fetch('data.json')), out(fetch(${JSON.stringify(target)})), out
     expect(d['data']).toBe('failed:TypeError');
     const reached = origins.hits.slice(from).filter((h: OriginHit) => h.origin === 'b');
     expect(reached).toEqual([]);
+    // Each of the three was refused by the policy's connect-src (its fallback to default-src 'none'), and the control by none.
+    // Measured: Chromium dispatches each report twice here, so the distinct reports are compared.
+    const vio = JSON.parse(d['vio'] ?? '[]') as { d: string; u: string }[];
+    expect(vio.length).toBeGreaterThan(0);
+    expect([...new Set(vio.map((v) => `${v.d} ${v.u}`))].sort()).toEqual([
+      `connect-src ${target}`, `connect-src ${origins.a}/other.json`, 'connect-src data',
+    ].sort());
   });
 });

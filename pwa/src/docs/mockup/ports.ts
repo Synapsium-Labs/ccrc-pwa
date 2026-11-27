@@ -44,8 +44,10 @@ export interface MockupRef {
 
 /** Why the in-walls loader does not follow what a script names (X2 P6.2, spec 4.8): a dynamic `import()` whose argument is not
  *  a literal `https` URL (`dynamic`), a specifier holding an escape the scan does not decode (`unreadable`), a bare name no
- *  import map entry names (`bare`), and what lies past the scan's bound (`scan-limit`). Each is "not loaded", never guessed. */
-export type MockupUnread = 'dynamic' | 'unreadable' | 'bare' | 'scan-limit';
+ *  import map entry names (`bare`), what lies past the scan's bound (`scan-limit`), and an import in an inline script whose
+ *  text holds the HTML comment opener, which is left as written (`html-comment`, fix round 1 of review 4066, A7). Each is
+ *  "not loaded", never guessed. */
+export type MockupUnread = 'dynamic' | 'unreadable' | 'bare' | 'scan-limit' | 'html-comment';
 
 /** Why the planner refuses a reference: `resolveDocRef`'s refused reasons, `repo` for a file outside the Docs sections, and
  *  `scheme` for a non-web scheme (`scheme` is also one of `resolveDocRef`'s own). Derived from `resolveDocRef`'s answer, so the
@@ -107,6 +109,10 @@ export interface MockupAssetPlan {
   readonly admitted: ReadonlyMap<string, number>;
   readonly rows: readonly MockupAssetRow[];
   readonly reservedBytes: number;
+  /** X2 P6.2 (D-9152): the page's import map was readable but an entry's verdict was neither `inline` nor an `https` offer,
+   *  so the map is refused whole and these rows are the page's extracted with it refused. Every later extraction of the
+   *  page for this plan (the build's, Export's) passes it on, so its keys are the plan's. */
+  readonly importMapRefused?: true;
 }
 
 /** What one read answered: the bytes of the pin, or the failure word the Docs loaders gave (a 401's own word, a moved

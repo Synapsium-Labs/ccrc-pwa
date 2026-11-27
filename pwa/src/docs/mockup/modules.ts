@@ -32,8 +32,10 @@ export interface ScriptDynamic {
   readonly text: string;
 }
 
-/** What one script's scan found, each list in text order. `over`: the text is past `MOCKUP_SCRIPT_SCAN_BYTES`, and nothing
- *  was scanned. */
+/** What one script's scan found, each list in text order. `literals` holds only the plain string literals whose final
+ *  extension is one the fetch shim answers (`hasFetchExtension`): no other literal can become a fetch name, so no other is
+ *  kept or decoded (fix round 1 of review 4066, F1). `over`: the text is past `MOCKUP_SCRIPT_SCAN_BYTES`, and nothing was
+ *  scanned. */
 export interface ScriptScan {
   readonly specifiers: readonly ScriptString[];
   readonly dynamic: readonly ScriptDynamic[];
@@ -58,11 +60,19 @@ function utf8Over(text: string, bound: number): boolean {
   return utf8Bytes(text) > bound;
 }
 
+/** The scan of a text whose bound is already decided. */
+const OVER: ScriptScan = { specifiers: [], dynamic: [], literals: [], over: true };
+
 /** One script's text scanned (see `ScriptScan`). Linear: every character is read a bounded number of times. A text past
  *  `MOCKUP_SCRIPT_SCAN_BYTES` (as UTF-8) is not scanned. An unterminated comment, string, template or regular expression
  *  ends the scan where it starts. */
 export function scanScript(text: string): ScriptScan {
-  if (utf8Over(text, MOCKUP_SCRIPT_SCAN_BYTES)) return { specifiers: [], dynamic: [], literals: [], over: true };
+  return utf8Over(text, MOCKUP_SCRIPT_SCAN_BYTES) ? OVER : lex(text);
+}
+
+/** The lexer itself, with no bound of its own: each entry point decides its text's bound once, in its own unit (a string's
+ *  UTF-8 length, or a byte array's length), so no text is counted twice (fix round 1 of review 4066, F2). */
+function lex(text: string): ScriptScan {
   const n = text.length;
   const specifiers: ScriptString[] = [];
   const dynamic: ScriptDynamic[] = [];
@@ -143,7 +153,7 @@ export function scanScript(text: string): ScriptScan {
     if (c === 0x27 || c === 0x22) {
       const q = quoted(i);
       if (q === null) break;
-      if (!q.escaped) literals.push(q.s);
+      if (!q.escaped && hasFetchExtension(q.s.raw)) literals.push(q.s);
       i = q.next;
       regexOk = false;
       prevDot = false;
@@ -152,7 +162,10 @@ export function scanScript(text: string): ScriptScan {
     if (c === 0x60) {
       const t = templateText(i + 1);
       if (t === null) break;
-      if (t.closed && !t.escaped) literals.push({ start: i + 1, end: t.next - 1, raw: text.slice(i + 1, t.next - 1) });
+      if (t.closed && !t.escaped) {
+        const raw = text.slice(i + 1, t.next - 1);
+        if (hasFetchExtension(raw)) literals.push({ start: i + 1, end: t.next - 1, raw });
+      }
       if (!t.closed) templates.push(depth);
       i = t.next;
       regexOk = !t.closed;
@@ -290,10 +303,13 @@ function byteString(bytes: Uint8Array): string {
 /** `scanScript` over bytes: spans are byte offsets, and each string's `raw` is decoded as UTF-8. Every byte above 0x7f is
  *  read as an identifier character (what it is inside a name, and harmless inside a string or a comment), but for 0xA0, which
  *  `scanScript` reads as a no-break space: a UTF-8 continuation byte of that value inside a name then splits the name in two,
- *  which can only make the scan miss or find a specifier, never move a wall. */
+ *  which can only make the scan miss or find a specifier, never move a wall. The bound is the byte length alone, decided
+ *  once here: the lexer runs over the bytes as one character each, never counted again as UTF-8 (fix round 1 of review 4066,
+ *  F2). A literal is kept, and decoded, only when its final extension is a fetch one: those bytes are ASCII, which decoding
+ *  keeps as they are, so the test over the raw bytes answers what it would over the decoded text. */
 export function scanScriptBytes(bytes: Uint8Array): ScriptScan {
-  if (bytes.length > MOCKUP_SCRIPT_SCAN_BYTES) return { specifiers: [], dynamic: [], literals: [], over: true };
-  const s = scanScript(byteString(bytes));
+  if (bytes.length > MOCKUP_SCRIPT_SCAN_BYTES) return OVER;
+  const s = lex(byteString(bytes));
   const fix = (x: ScriptString): ScriptString => ({ ...x, raw: x.raw.startsWith('\\') ? x.raw : rawDecoder.decode(bytes.subarray(x.start, x.end)) });
   return {
     specifiers: s.specifiers.map(fix),
@@ -320,6 +336,13 @@ export function mapNames(keys: readonly string[], name: string): boolean {
 export function fetchCandidate(raw: string): boolean {
   if (raw.length === 0 || raw.length > 1024) return false;
   if (/^[A-Za-z][A-Za-z0-9+.-]*:/.test(raw) || /^[/#?]/.test(raw) || /[\s\\'"`<>]/.test(raw)) return false;
+  return hasFetchExtension(raw);
+}
+
+/** Whether `raw`'s file name (its last segment before any `?` or `#`) has an extension, after a non-empty stem, that
+ *  `MOCKUP_FETCH_MIME` holds. The first test of `fetchCandidate`, and the lexer's filter on the literals it keeps. */
+function hasFetchExtension(raw: string): boolean {
+  if (raw.length < 3) return false;
   const cut = raw.search(/[?#]/);
   const path = cut < 0 ? raw : raw.slice(0, cut);
   const name = path.slice(path.lastIndexOf('/') + 1);
