@@ -17,7 +17,8 @@
 // - nothing scrolls sideways, and the page throws nothing;
 // - every control of the place is at least 44 px tall and 44 px wide at every phone width (a radio or a checkbox is measured
 //   by its label, the hit area);
-// - the readiness word's status label reads at 4.5:1 or better on the ground drawn behind it, measured in the page.
+// - the readiness word's status label is drawn in every state, with the state's own word (home C's carried 4b), and reads at
+//   4.5:1 or better on the ground drawn behind it, measured in the page; the settle waits for the word itself.
 // At 320 and 360 px: the portfolio strip's rank control reorders the strip with no sideways scroll, and it is reachable and
 // usable by keyboard alone (Tab to a Move button, Enter).
 //
@@ -69,6 +70,11 @@ const READINESS: Readonly<Record<BodyState, unknown>> = {
   none: { ...READY, word: 'absent', since: 0 },
   'failed-start': { ...READY, word: 'absent', since: 0 },
   pending: { ...READY, word: 'absent', since: 0 },
+};
+/** The readiness word each state's label reads (home C's carried 4b): asserted in every state, so a state that loses its label,
+ *  or draws another state's word, is red rather than measured as nothing. */
+const WORD: Readonly<Record<BodyState, string>> = {
+  bound: 'ready', restartable: 'dead', none: 'absent', 'failed-start': 'absent', pending: 'absent',
 };
 /** The control each state must draw (a `data-overlord-control` hook), or the pending line's hook. */
 const DRAWS: Readonly<Record<BodyState, readonly string[]>> = {
@@ -173,7 +179,8 @@ const measure = (phosphor: string): {
         name: el.getAttribute('aria-label') ?? target.textContent?.trim() ?? el.tagName, w: box.width, h: box.height, left: box.left, right: box.right,
       };
     });
-  const word = document.querySelector('[data-readiness-word]');
+  // The place's own label: the one-line form beside the Fleet's BuildLine carries the same hook, and comes first on a desk.
+  const word = place.querySelector('[data-readiness-word]');
   return {
     controls,
     vw: document.documentElement.clientWidth,
@@ -186,6 +193,9 @@ const sideways = (): number => document.documentElement.scrollWidth - document.d
 
 async function settle(page: Page, drawn: readonly string[]): Promise<void> {
   await page.waitForSelector('[data-overlord-place] [data-readiness-part]', { timeout: 20_000 });
+  // The readiness word itself, not only its part (carried 4b): the part draws "Loading…" before the read lands.
+  await page.waitForFunction(() => (document.querySelector('[data-overlord-place] [data-readiness-word]')?.textContent ?? '') !== '',
+    undefined, { timeout: 20_000 });
   await page.waitForSelector('[data-overlord-place] [data-portfolio-row]', { timeout: 20_000 });
   await page.waitForSelector('[data-overlord-place] [data-rung]', { timeout: 20_000 });
   for (const sel of drawn) await page.waitForSelector(`[data-overlord-place] ${sel}`, { timeout: 20_000 });
@@ -218,7 +228,9 @@ async function check(page: Page, theme: string, width: number, errors: readonly 
       expect(c.w, `"${c.name}" is at the tap floor`).toBeGreaterThanOrEqual(44);
     }
   }
-  if (m.label !== null) expect(m.label.ratio, `the readiness label "${m.label.text}"`).toBeGreaterThanOrEqual(4.5);
+  // The label is drawn in every state (carried 4b), so its contrast is measured in every one, never skipped.
+  expect(m.label, 'the readiness label is drawn').not.toBeNull();
+  expect(m.label!.ratio, `the readiness label "${m.label!.text}"`).toBeGreaterThanOrEqual(4.5);
   expect(errors).toEqual([]);
 }
 
@@ -231,10 +243,8 @@ describe.each(SKINS)('the Overlord place in %s', (skin) => {
           try {
             const shots = process.env['CCRC_SHOTS'];
             if (shots !== undefined && shots !== '') await page.screenshot({ path: `${shots}/overlord-place-${skin}-${state}-${theme}-${width}.png`, fullPage: true });
-            if (state === 'bound') {
-              const m = await page.evaluate(measure, PHOSPHOR);
-              expect(m.label, 'a bound Overlord draws its readiness word').not.toBeNull();
-            }
+            // Every state draws its readiness word, by the text its read answers (carried 4b).
+            expect((await page.evaluate(measure, PHOSPHOR)).label?.text, `${state} draws its readiness word`).toBe(WORD[state]);
             if (state === 'none' || state === 'failed-start') {
               const boxes = await page.$$eval('[data-overlord-account-set] label', (ls) => ls.map((l) => l.textContent?.trim() ?? ''));
               expect(boxes, 'the account set draws both long pool names and untagged').toEqual([...LONG_POOLS, 'Untagged accounts']);

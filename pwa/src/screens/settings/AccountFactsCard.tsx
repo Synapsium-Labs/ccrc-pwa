@@ -10,14 +10,15 @@
 // every answer. Clear (`POST /api/continuity/account-holds/:lane/clear`) asks no step-up: a hold only narrows, so its clear widens
 // back to the set the operator chose, which the door rules. It is drawn only for a lane the holds read names, and it is sent once.
 //
-// `AccountHoldClear` is also mounted on the hold item's detail (`ItemView.tsx`, plan F17), so the item and the card share one
-// control.
-import { useEffect, useRef, useState, type ReactNode } from 'react';
+// `AccountHoldClear` (its own file) is also mounted on the hold item's detail (`ItemView.tsx`, plan F17), so the item and the
+// card share one control.
+import type { ReactNode } from 'react';
 import { Button, Section } from '@ccrc/ui';
 import type { RosterWire } from '../../../../shared/api';
 import { SETTINGS_CARDS } from '../../fleet/settingsText';
-import { ApiError, accountFactRefusalText, api, overlordSettingsRefusalText } from '../../lib/api';
+import { accountFactRefusalText, api } from '../../lib/api';
 // `refreshAccounts` is the fleet store's one roster read: every fact answer, `outcome-unknown` included, reads it again.
+import { AccountHoldClear } from '../../overlord/AccountHoldClear';
 import {
   FACT_WORDS, OVERLORD_SETTINGS_WORDS as W, billingWordOf, continuityWordOf, holdLineOf, holdsOf, type StandingHold,
 } from '../../overlord/overlordSettingsWords';
@@ -26,44 +27,6 @@ import { DoorLines, useCardDoor, useCardRead, type SectionCtx } from './overlord
 
 const CARD = SETTINGS_CARDS.overlord.accounts;
 const dateOf = (ms: number): string => new Date(ms).toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
-
-/** Clear one standing hold, once. Drawn only for a lane a hold names (the card's holds read, or the item's own title). */
-export function AccountHoldClear({ lane, onCleared }: { readonly lane: string; readonly onCleared?: () => void }): ReactNode {
-  const [state, setState] = useState<'ready' | 'busy' | 'cleared' | 'gone'>('ready');
-  const [refusal, setRefusal] = useState<string | null>(null);
-  const inFlight = useRef(false);
-  const mounted = useRef(true);
-  useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
-  const clear = async (): Promise<void> => {
-    if (inFlight.current) return;
-    inFlight.current = true;
-    setState('busy');
-    setRefusal(null);
-    try {
-      await api.clearAccountHold(lane);
-      if (mounted.current) setState('cleared');
-    } catch (err) {
-      if (err instanceof ApiError && err.status === 401) { if (mounted.current) setState('ready'); return; }
-      // `not-found`: no hold stands any more, so the control goes with it; any other refusal leaves it to be pressed again.
-      const said = overlordSettingsRefusalText(err, 'hold-clear', true);
-      if (mounted.current) { setRefusal(said); setState(err instanceof ApiError && err.status === 404 ? 'gone' : 'ready'); }
-    } finally {
-      inFlight.current = false;
-      onCleared?.();
-    }
-  };
-  if (state === 'cleared') return <p className="ovs-note" role="status" data-hold-cleared={lane}>{FACT_WORDS.cleared}</p>;
-  return (
-    <>
-      {state !== 'gone' && (
-        <Button variant="ghost" size="fit" data-hold-clear={lane} disabled={state === 'busy'} onClick={() => { void clear(); }}>
-          {state === 'busy' ? FACT_WORDS.clearing : FACT_WORDS.clear}
-        </Button>
-      )}
-      {refusal !== null && <p className="ovs-refusal" role="alert" data-hold-refusal={lane}>{refusal}</p>}
-    </>
-  );
-}
 
 function FactRow({ ctx, account, hold, onHoldCleared }: {
   readonly ctx: SectionCtx; readonly account: RosterWire; readonly hold: StandingHold | null; readonly onHoldCleared: () => void;

@@ -59,6 +59,8 @@ import { SpecLink } from './GoalsPanel';
 import { linkRuns } from './ledgerLinks';
 import { ItemControls, useItemActs, type ItemActs } from './ItemActs';
 import { MigrationBody } from './MigrationBody';
+import { AccountHoldClear } from '../overlord/AccountHoldClear';
+import { holdLaneOfItem } from '../overlord/overlordSettingsWords';
 import { ageWords, closedItemWords, itemNumber, itemPills, KIND_WORD, NOT_CURRENT_ACTS_WORD, RECOMMENDED_WORD, RECOMMENDED_WHY_HEADING } from './ledgerWords';
 import './ledgers.css';
 
@@ -469,12 +471,15 @@ function Panel({ item, programmeLive, onTick, onDismiss, saveSecret = saveItemSe
   const mayTick = open && programmeLive && item.kind !== 'secret' && !acting;
   const secretOpen = open && programmeLive && item.kind === 'secret' && !unreadable;
   const removable = item.kind === 'secret' && stored !== null && item.secretSlot !== null;
+  // The Overlord's account hold (home C, plan F17; ruled call 1684): an open hold item's Clear, for the lane its title names.
+  const holdLane = holdLaneOfItem(item);
   // Why the acts are off on a saved copy, said once, and only where there is an act to be off.
   const notCurrent = !current && (mayTick || ended || secretOpen || removable);
   return (
     <section className="wi-card wi-act" aria-label="Your move" {...(stuck ? { 'data-sticky': 'foot' } : {})}>
       {closed !== null && <p className="wi-status" data-closed={item.state}>{closed}</p>}
       {ended && <p className="wi-hint">{WAITS_ON_WORDS.ended}</p>}
+      {holdLane !== null && <div className="wi-hold" data-item-hold={holdLane}><AccountHoldClear lane={holdLane} /></div>}
       {mayTick && decide && (
         <>
           {/* The reasons come BEFORE the choices and describe them, so they are read before the pick; nothing is picked for
