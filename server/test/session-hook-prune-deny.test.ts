@@ -382,10 +382,23 @@ describe('the linearity verdict is the median of the per-round differences (D-91
 // invocation (startup included). The coordinator's FD8 ruling accepts fixed jq startup cost and pinned both historical
 // cost and doubling-size scaling against the original; it does not permit an amortized stream comparison. What is
 // pinned now (D-9141): the four linearity rows pin doubling-size scaling against the original; the four 64 KB cost rows
-// pin cost against the hook's program at the gate; no row bounds cost against the original any more. `ROW_BASELINE`
-// says which row reads which, `programsOf` and `pairCells` carry it to the measuring cases, and cases that measure
-// nothing pin all three and the call sites. The CI follow-up uses 32/64 KB only for quotes/deny, whose inherited
-// normalization otherwise outlives its case.
+// pin cost against the hook's program at the gate; no row bounds cost against the original any more. The CI follow-up
+// uses 32/64 KB only for quotes/deny, whose inherited normalization otherwise outlives its case.
+//
+// What holds each row's wiring (review 4024 M1). `ROW_BASELINE` says which row reads which program. Between its row's
+// programs and its assertion a measuring case does one thing: it calls `costReading` or `linearityReading`, pure but
+// for the programs and the timing function it is handed, and `timed` is `timedBy` on the real child runner. HELD BY A
+// CASE that burns no CPU: the table; that the file registers one measuring case per row of it, eight, and that the
+// loop's shape and mode lists cross to its rows; `rowPrograms`; the reader (it returns the bytes it hashed and refuses
+// a wrong hash); `timedBy` (it runs the program, mode and payload it is given); for all eight rows through stand-ins,
+// which program each reading came from, the cell it landed in, the order and the count of calls; and the bound of the
+// four cost rows, quotes/deny, quotes/class, dqsub/deny and dqsub/class. HELD BY THE SCAN, which reads text: that each
+// measuring case's body is that one call on the real `programsOf` and `timed`, with the linearity case's two timeout
+// literals and the cost case's one; that the five lines composing the hook's path, the hook's program, the reader,
+// `programsOf` and `timed` are the real ones; and that each name in its table is written a fixed number of times, so a
+// second binding of one reds. NOT HELD: the crossings measured as still passing every case, listed with who measured
+// them in the note's §9, among them a `childCpu` that runs another program when keyed on something its own cases do
+// not exercise. That list is what was measured, not a claim that nothing else passes.
 //
 // What each row can see. The rules are here; the figures are in the task note,
 // docs/superpowers/programs/desktop-polish/hook-cost-row.md, by section, so that each figure has one source.
@@ -393,7 +406,9 @@ describe('the linearity verdict is the median of the per-round differences (D-91
 //   A deny row's bound is 1.5x its baseline, today's program (D-9141), with FD8's 25 ms floor: it catches a cost of
 //   ANY shape on the deny path once that path costs about 1.5x the baseline. On a loaded box a quadratic deny step is
 //   sure red near +90% of the gated cost and is decided by the baseline sample's own spread between about +28% and
-//   +50%; hosted, where the two samples agree to under 1%, the edge is near +50% (note §8).
+//   +50%; hosted, where the two samples agree to under 1%, the edge is near +50%. Those step sizes are scaled by 1/k²
+//   from review 4009's reading of (n/7.6)², +94% of the gated cost on its box; on the note's own +80% for that step
+//   each is 0.85 times as large (note §8).
 // - A class row's bound is its baseline plus the 100 ms class floor (`COST_FLOOR_MS`), the owner's: a class cost row
 //   misses a class step dearer by less than the floor (note §8 and §9 hold the readings and the +80 ms / +120 ms
 //   mutants).
@@ -443,16 +458,23 @@ describe('the forbidden program\'s cost on quote-dense payloads naming worktree 
     gate: { fixture: 'forbidden-jq-06aed21ff.jq', sha256: COST_BASELINE_SHA256, edited: 'the vendored cost baseline was edited' },
   } as const;
   type Baseline = keyof typeof BASELINES;
-  /** A vendored program: a missing, unreadable or edited fixture throws here, inside the case that reads it. */
-  const readVendored = (b: Baseline): string => {
-    const bytes = fs.readFileSync(path.join(FIX, BASELINES[b].fixture));
-    expect(createHash('sha256').update(bytes).digest('hex'), BASELINES[b].edited).toBe(BASELINES[b].sha256);
+  /** Each vendored program's fixture, its hash and the message a wrong hash refuses with, as `BASELINES` holds them. */
+  type Baselines = Readonly<Record<Baseline, { readonly fixture: string; readonly sha256: string; readonly edited: string }>>;
+  /** A reader of the vendored programs: `read` gives a fixture's bytes, and the reader returns those same bytes as text
+   * once their sha256 is the one `table` pins; a missing, unreadable or edited fixture throws here, inside the case that
+   * reads it. Pure but for `read`, so a case feeds it stand-in bytes and pins both halves (review 4024 M1). */
+  const vendoredReader = (read: (file: string) => Buffer, table: Baselines) => (b: Baseline): string => {
+    const bytes = read(path.join(FIX, table[b].fixture));
+    expect(createHash('sha256').update(bytes).digest('hex'), table[b].edited).toBe(table[b].sha256);
     return bytes.toString('utf8');
   };
-  type Row = `${'quotes' | 'dqsub'}/${'deny' | 'class'} ${'cost' | 'linearity'}`;
+  const readVendored = vendoredReader((file) => fs.readFileSync(file), BASELINES);
+  type Shape = 'quotes' | 'dqsub';
+  type Mode = 'deny' | 'class';
+  type Row = `${Shape}/${Mode} ${'cost' | 'linearity'}`;
   /** Which baseline each of the eight rows reads. A case that measures nothing pins it, so an edit of this table that
-   * moves a row to the other program reds there (review 4009 F2). That the measuring cases read their programs only
-   * through it (`programsOf`), each by its own row, is held by the scan case below (review 4016 F1). */
+   * moves a row to the other program reds there (review 4009 F2); the stand-in cases of `costReading` and
+   * `linearityReading` read it through `rowPrograms` too, so each row's wiring is pinned against it. */
   const ROW_BASELINE: Record<Row, Baseline> = {
     'quotes/deny cost': 'gate', 'quotes/class cost': 'gate', 'dqsub/deny cost': 'gate', 'dqsub/class cost': 'gate',
     'quotes/deny linearity': 'original', 'quotes/class linearity': 'original',
@@ -472,6 +494,93 @@ describe('the forbidden program\'s cost on quote-dense payloads naming worktree 
    * green (the header above). The owner's rule for the value: on hosted runs each class row's reading less its own
    * baseline stays at or under 50 ms, half the floor; were one over, the floor would be 150 ms. */
   const COST_FLOOR_MS = { deny: 25, class: 100 } as const;
+  /** The two payload shapes: a unit repeated to the size, and whether the command quotes it. */
+  const SHAPES: Readonly<Record<Shape, { unit: string; quoted: boolean }>> = {
+    quotes: { unit: 'a "b c" \'d\' \\e ', quoted: false },
+    dqsub: { unit: '$(x) `y` ', quoted: true },
+  };
+  /** Where one sample is taken: the payload's shape and size, and the program's mode. */
+  type At = { shape: Shape; mode: Mode; kb: number };
+  /** Times one program text once at `at`, and answers its CPU ms. */
+  type Time = (text: string, at: At) => number;
+  /** A child runner of `childCpu`'s shape, so a case can hand `timedBy` a recording one. */
+  type Runner = (argv: readonly string[], input: string) => CpuRun;
+  /** One sample's input: a Bash call naming worktree and prune, the shape's unit repeated to `kb` KB. */
+  const payloadOf = ({ shape, kb }: At): string => {
+    const { unit, quoted } = SHAPES[shape];
+    const dense = unit.repeat(Math.floor((kb * 1024) / unit.length));
+    const command = `git worktree list --porcelain; echo prune ${quoted ? `"${dense}"` : dense}`;
+    return JSON.stringify({ tool_name: 'Bash', tool_input: { command } });
+  };
+  /** The timing function on `run`: the program text it is given, in `at`'s mode, on `at`'s payload, once; a run that
+   * fails or prints refuses. Pure but for `run`, so a case with a recording runner proves it runs what it is given
+   * (review 4024 M1, its O3). */
+  const timedBy = (run: Runner): Time => (text, at) => {
+    const r = run(['jq', '-r', '--arg', 'q', "'", '--arg', 'mode', at.mode, text], payloadOf(at));
+    expect(r.status, r.stderr).toBe(0);
+    expect(r.stdout.trim()).toBe('');
+    return r.cpuMs;
+  };
+  const timed = timedBy(childCpu);
+  /** A linearity row's two sizes: 32 and 64 KB on the quote-dense deny shape, 64 and 128 KB on the others. */
+  const linearityKb = (shape: Shape, mode: Mode): [number, number] => {
+    const small = shape === 'quotes' && mode === 'deny' ? 32 : 64;
+    return [small, small * 2];
+  };
+  /** A 64 KB cost row, from its row's programs to the figures its assertion reads (review 4024 M1): the baseline from
+   * the table and the hook's program, each timed once at 64 KB in the row's shape and mode, the baseline first, in two
+   * pairs; each cell the faster of its two samples (D-8334); the bound max(1.5 x baseline, baseline + the mode's
+   * floor). Pure but for `programs` and `time`, so a case runs every cost row on stand-ins and pins which text each
+   * reading came from, its cell, the order and the count, with no CPU measured. */
+  const costReading = (shape: Shape, mode: Mode, programs: (row: Row) => Programs, time: Time):
+  { referenceMs: number; currentMs: number; bound: number; measured: string } => {
+    const { original: reference, current } = programs(`${shape}/${mode} cost`);
+    expect(reference).not.toBe('');
+    expect(current).not.toBe('');
+    const at: At = { shape, mode, kb: 64 };
+    const pairs = [0, 1].map(() => [time(reference, at), time(current, at)]);
+    const referenceMs = Math.min(...pairs.map((p) => p[0] as number));
+    const currentMs = Math.min(...pairs.map((p) => p[1] as number));
+    const bound = Math.max(1.5 * referenceMs, referenceMs + COST_FLOOR_MS[mode]);
+    const measured = `${shape}/${mode} 64 KB: current ${currentMs} cpu ms, baseline ${referenceMs} cpu ms, bound ${bound} cpu ms`;
+    return { referenceMs, currentMs, bound, measured };
+  };
+  /** A linearity row, from its row's programs to the verdict its assertion reads (review 4024 M1): LINEARITY_ROUNDS
+   * rounds, each a pair at the small size then a pair at the large one, each pair through `pairCells` (D-9118), so each
+   * sample lands in its own program's cell; then `linearityVerdict`. Pure but for `programs` and `time`, so a case runs
+   * every linearity row on stand-ins and pins which text each sample came from, its size, its cell, the order and the
+   * count, with no CPU measured. */
+  const linearityReading = (shape: Shape, mode: Mode, programs: (row: Row) => Programs, time: Time):
+  { rounds: Round[]; verdict: ReturnType<typeof linearityVerdict>; measured: string } => {
+    const both = programs(`${shape}/${mode} linearity`);
+    expect(both.original).not.toBe('');
+    expect(both.current).not.toBe('');
+    const [smallKb, largeKb] = linearityKb(shape, mode);
+    // D-9118: each pair of samples back to back, the first program alternating by round (`pairCells`).
+    const pair = (i: number, kb: number): [number, number] => pairCells(i, both, (text) => time(text, { shape, mode, kb }));
+    const rounds = Array.from({ length: LINEARITY_ROUNDS }, (_, i): Round => [...pair(i, smallKb), ...pair(i, largeKb)]);
+    const minima = [0, 1, 2, 3].map((i) => Math.min(...rounds.map((r) => r[i])));
+    // The coordinator's follow-up rules inherited super-linearity separately: retain 2.5x if the original is
+    // below it; otherwise allow the original ratio plus the explicitly accepted 0.5 measurement margin.
+    const verdict = linearityVerdict(rounds);
+    const measured = `${shape}/${mode}: original ${verdict.referenceRatio}x, current ${verdict.currentRatio}x, bound ${verdict.bound}x; cpu ms ${minima.join(', ')}; `
+      + `per-round differences ${verdict.differences.map((d) => d.toFixed(3)).join(', ')}`;
+    return { rounds, verdict, measured };
+  };
+  const SHAPE_NAMES = ['quotes', 'dqsub'] as const;
+  const MODES = ['deny', 'class'] as const;
+  /** Stand-in program texts: each row's baseline by name, and the hook's program. */
+  const standInPrograms = rowPrograms((b) => `the vendored ${b} program`, 'the hook\'s program');
+  const STAND_IN = { original: 'the vendored original program', gate: 'the vendored gate program', hook: 'the hook\'s program' } as const;
+  /** A recording timing function. Its answer is derived from the text it is given (1, 2 or 3 million for the original,
+   * the gate's program and the hook's; 9 million for any other), plus the size times 1000, plus 100 less the call's
+   * place: a later sample of the same program reads faster, so a reading that keeps an earlier sample over the faster
+   * one reds. */
+  const recordingTime = (calls: Array<[string, At]>): Time => (text, at) => {
+    calls.push([text, { ...at }]);
+    const code = text === STAND_IN.original ? 1 : text === STAND_IN.gate ? 2 : text === STAND_IN.hook ? 3 : 9;
+    return code * 1_000_000 + at.kb * 1000 + 100 - calls.length;
+  };
   it('the cost baseline is the hook\'s forbidden program at 06aed21ff7, held by its hash, and is not the original (D-9141)', () => {
     const cost = readVendored('gate');
     expect(cost).not.toBe('');
@@ -486,89 +595,191 @@ describe('the forbidden program\'s cost on quote-dense payloads naming worktree 
     expect(Object.keys(ROW_BASELINE).sort(), 'one entry for each of the eight rows').toEqual([...rows].sort());
     for (const row of rows) expect(ROW_BASELINE[row], row).toBe(row.endsWith(' cost') ? 'gate' : 'original');
   });
+  it('the file registers one measuring case for each row of the table, eight in all, and the loop\'s shape and mode lists cross to the table\'s rows', ({ task }) => {
+    expect(SHAPE_NAMES.flatMap((s) => MODES.flatMap((m) => [`${s}/${m} cost`, `${s}/${m} linearity`])).sort(),
+      'the loop\'s lists, crossed, are the table\'s rows').toEqual(Object.keys(ROW_BASELINE).sort());
+    const measuring = (task.suite?.tasks ?? []).map((t) => t.name)
+      .filter((n) => / stays within the (?:startup-adjusted 06aed21ff bound at 64 KB|inherited-cost bound)$/.test(n));
+    expect(measuring, 'the measuring cases this describe registers, in order').toEqual([
+      'quotes: deny stays within the startup-adjusted 06aed21ff bound at 64 KB',
+      'quotes: deny linearity from 32 to 64 KB stays within the inherited-cost bound',
+      'quotes: class stays within the startup-adjusted 06aed21ff bound at 64 KB',
+      'quotes: class linearity from 64 to 128 KB stays within the inherited-cost bound',
+      'dqsub: deny stays within the startup-adjusted 06aed21ff bound at 64 KB',
+      'dqsub: deny linearity from 64 to 128 KB stays within the inherited-cost bound',
+      'dqsub: class stays within the startup-adjusted 06aed21ff bound at 64 KB',
+      'dqsub: class linearity from 64 to 128 KB stays within the inherited-cost bound',
+    ]);
+  });
   it('each row\'s two programs are its baseline from the table in the original\'s cell and the hook\'s program in the current one (programsOf)', () => {
     const of = rowPrograms((b) => `the vendored ${b} program`, 'the hook\'s program');
     for (const row of Object.keys(ROW_BASELINE) as Row[]) {
       expect(of(row), row).toEqual({ original: `the vendored ${ROW_BASELINE[row]} program`, current: 'the hook\'s program' });
     }
   });
-  // review 4016 F1: a scan of this file's own code (comments taken out), for what the pins above cannot see, the places
-  // that use the table and the cells. It reads text, not behaviour: it cannot see a fixture read some other way than the
-  // one accessor (an alias, a helper of another name, a path built at run time), a measuring case outside the two
-  // bodies it finds by their titles, or code that means the same but is spelt otherwise; what `programsOf`, `pairCells`
-  // and `timed` do is pinned by their own cases and the rows' figures, not here. Its needles are split so that this
-  // case's own text never matches them.
-  it('the measuring cases take their programs only through programsOf, each by its own row, and the linearity rows pair through pairCells (a scan of this file)', () => {
-    const code = fs.readFileSync(path.join(__dirname, 'session-hook-prune-deny.test.ts'), 'utf8')
-      .replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+  it('the reader returns the very bytes it hashed, read from the fixture the table names, and refuses a wrong hash (vendoredReader)', () => {
+    const asked: string[] = [];
+    const read = (file: string): Buffer => { asked.push(file); return Buffer.from(`the bytes of ${path.basename(file)}`); };
+    const sha = (text: string): string => createHash('sha256').update(text).digest('hex');
+    const table: Baselines = {
+      original: { fixture: 'o.jq', sha256: sha('the bytes of o.jq'), edited: 'original edited' },
+      gate: { fixture: 'g.jq', sha256: sha('the bytes of g.jq'), edited: 'gate edited' },
+    };
+    const reader = vendoredReader(read, table);
+    expect(reader('original')).toBe('the bytes of o.jq');
+    expect(reader('gate')).toBe('the bytes of g.jq');
+    expect(asked).toEqual([path.join(FIX, 'o.jq'), path.join(FIX, 'g.jq')]);
+    const wrong = vendoredReader(read, { ...table, gate: { ...table.gate, sha256: sha('other bytes') } });
+    expect(() => wrong('gate'), 'a wrong hash refuses').toThrow('gate edited');
+    expect(wrong('original'), 'the other fixture still reads').toBe('the bytes of o.jq');
+  });
+  it('the timing function runs the program text it is given, in the mode it is given, on the payload of the shape and size it is given, once (timedBy)', () => {
+    const want: Record<Shape, (kb: number) => string> = {
+      quotes: (kb) => 'a "b c" \'d\' \\e '.repeat(Math.floor((kb * 1024) / 15)),
+      dqsub: (kb) => `"${'$(x) `y` '.repeat(Math.floor((kb * 1024) / 9))}"`,
+    };
+    for (const shape of SHAPE_NAMES) for (const mode of MODES) for (const kb of [32, 64, 128]) {
+      const runs: Array<[readonly string[], string]> = [];
+      const time = timedBy((argv, input) => { runs.push([argv, input]); return { status: 0, stdout: '\n', stderr: '', cpuMs: (argv.at(-1) ?? '').length }; });
+      const text = `a program for ${shape} ${mode} at ${kb} KB`;
+      expect(time(text, { shape, mode, kb }), 'it answers the run\'s CPU ms').toBe(text.length);
+      expect(runs.map(([argv]) => argv), `${shape}/${mode} ${kb} KB: the argv`)
+        .toEqual([['jq', '-r', '--arg', 'q', "'", '--arg', 'mode', mode, text]]);
+      const command = (JSON.parse(runs[0]![1]) as { tool_input: { command: string } }).tool_input.command;
+      expect(command, `${shape}/${mode} ${kb} KB: the payload`).toBe(`git worktree list --porcelain; echo prune ${want[shape](kb)}`);
+    }
+    const failing = timedBy(() => ({ status: 3, stdout: '', stderr: 'jq: error', cpuMs: 1 }));
+    expect(() => failing('p', { shape: 'quotes', mode: 'deny', kb: 32 }), 'a failed run refuses').toThrow('jq: error');
+    const printing = timedBy(() => ({ status: 0, stdout: 'deny reason\n', stderr: '', cpuMs: 1 }));
+    expect(() => printing('p', { shape: 'quotes', mode: 'deny', kb: 32 }), 'a run that prints refuses').toThrow();
+  });
+  it('each cost row times its baseline from the table and the hook\'s program once each at 64 KB in its shape and mode, the baseline first, in two pairs, each in its own cell (costReading)', () => {
+    for (const shape of SHAPE_NAMES) for (const mode of MODES) {
+      const row = `${shape}/${mode} cost`;
+      const calls: Array<[string, At]> = [];
+      const r = costReading(shape, mode, standInPrograms, recordingTime(calls));
+      const at: At = { shape, mode, kb: 64 };
+      expect(calls, `${row}: what it ran, where, in which order, how often`)
+        .toEqual([[STAND_IN.gate, at], [STAND_IN.hook, at], [STAND_IN.gate, at], [STAND_IN.hook, at]]);
+      expect({ referenceMs: r.referenceMs, currentMs: r.currentMs }, `${row}: each cell the faster of its own program's two`)
+        .toEqual({ referenceMs: 2_064_097, currentMs: 3_064_096 });
+    }
+  });
+  it('each of the four cost rows\' bound is 1.5x its baseline, or its baseline plus its mode\'s floor where that is more: 25 ms deny, 100 ms class (costReading)', () => {
+    const fixed = (referenceMs: number, currentMs: number): Time => (text) => (text === STAND_IN.hook ? currentMs : referenceMs);
+    const cases: Array<[Mode, number, number]> = [
+      ['deny', 40, 65], ['deny', 1000, 1500], ['class', 40, 140], ['class', 300, 450], ['class', 1000, 1500],
+    ];
+    // The shapes are spelt here, not taken from the loop's list, so a narrowed list does not narrow this case.
+    for (const shape of ['quotes', 'dqsub'] as const) for (const [mode, referenceMs, bound] of cases) {
+      const r = costReading(shape, mode, standInPrograms, fixed(referenceMs, 7));
+      expect(r.bound, `${shape}/${mode} cost, baseline ${referenceMs}`).toBe(bound);
+    }
+    expect(costReading('dqsub', 'class', standInPrograms, fixed(52, 63)).measured)
+      .toBe('dqsub/class 64 KB: current 63 cpu ms, baseline 52 cpu ms, bound 152 cpu ms');
+  });
+  it('each linearity row runs four rounds, each a pair at its small size then its large one, the first program alternating, each sample in its own program\'s cell (linearityReading)', () => {
+    const sizes: Record<string, [number, number]> = {
+      'quotes/deny': [32, 64], 'quotes/class': [64, 128], 'dqsub/deny': [64, 128], 'dqsub/class': [64, 128],
+    };
+    const first = ['original', 'current', 'original', 'current'] as const;
+    expect(LINEARITY_ROUNDS, 'one expected order per round').toBe(first.length);
+    const text = { original: STAND_IN.original, current: STAND_IN.hook } as const;
+    for (const shape of SHAPE_NAMES) for (const mode of MODES) {
+      const row = `${shape}/${mode} linearity`;
+      const calls: Array<[string, At]> = [];
+      const r = linearityReading(shape, mode, standInPrograms, recordingTime(calls));
+      const wantCalls: Array<[string, At]> = [];
+      const wantRounds: number[][] = [];
+      for (let i = 0; i < LINEARITY_ROUNDS; i++) {
+        const round: number[] = [];
+        for (const kb of sizes[`${shape}/${mode}`]!) {
+          const order = first[i] === 'original' ? (['original', 'current'] as const) : (['current', 'original'] as const);
+          const cell: Record<'original' | 'current', number> = { original: 0, current: 0 };
+          for (const p of order) {
+            wantCalls.push([text[p], { shape, mode, kb }]);
+            cell[p] = (p === 'original' ? 1 : 3) * 1_000_000 + kb * 1000 + 100 - wantCalls.length;
+          }
+          round.push(cell.original, cell.current);
+        }
+        wantRounds.push(round);
+      }
+      expect(calls, `${row}: what it ran, where, in which order, how often`).toEqual(wantCalls);
+      expect(r.rounds, `${row}: each round [original small, current small, original large, current large]`).toEqual(wantRounds);
+      const v = linearityVerdict(wantRounds as unknown as Round[]);
+      expect(r.verdict, `${row}: the verdict is linearityVerdict's on those rounds`).toEqual(v);
+      const fastest = [0, 1, 2, 3].map((c) => Math.min(...wantRounds.map((w) => w[c]!)));
+      expect(r.measured, `${row}: the printed line, each cell the fastest of its four`).toBe(`${shape}/${mode}: original ${v.referenceRatio}x, `
+        + `current ${v.currentRatio}x, bound ${v.bound}x; cpu ms ${fastest.join(', ')}; per-round differences ${v.differences.map((d) => d.toFixed(3)).join(', ')}`);
+    }
+  });
+  // review 4016 F1, narrowed by reviews 4024 M1 and 4046 M1': a scan of this file's own code, for what a case that runs
+  // the wiring cannot see, whether the measuring cases use it. It holds three things. Each measuring case's body,
+  // whitespace aside, is its one call of `costReading` or `linearityReading` on the real `programsOf` and `timed`, and
+  // its assertion; each body is found by its title and its timeout literals, so a changed timeout reds too. The five
+  // lines that compose the hook's path, the hook's program, the reader, `programsOf` and `timed` each occur once, as
+  // written. And each name in `uses` below (the seventeen it lists, `expect`, `scaled`, `linearityKb` and the two lists
+  // among them) is written a fixed number of times in the file, test titles included, so a second binding (a shadow in
+  // the loop), a new use or a retitled case reds; a name not in the table is not counted. It reads text: a crossing
+  // spelt so that every line and count stays the same is not seen, and the note's §9 lists the crossings measured as
+  // still passing, not claimed complete. Whitespace aside means runs of whitespace, and a space just inside a
+  // parenthesis: a reflow that adds a trailing comma reds it. Comments are taken out only where they start a line (`//`
+  // or `/*` after indentation): a string or template line that starts with a comment opener would be misread, and a
+  // comment after code is read as code (it reds, loudly); today the file holds neither. Its needles carry a `~`, which
+  // `unsplit` takes out, so this case's own text never matches them.
+  it('a measuring case reaches its programs through the table and nothing else: its body is one call on the real reader and runner, and no name in its table is bound twice (a scan of this file)', () => {
+    const code = fs.readFileSync(__filename, 'utf8').replace(/^\s*\/\*[\s\S]*?\*\//gm, '').replace(/^\s*\/\/.*$/gm, '');
+    const unsplit = (s: string): string => s.split('~').join('');
     const count = (text: string, needle: string): number => text.split(needle).length - 1;
+    const flat = (s: string): string => s.replace(/\s+/g, ' ').replace(/\( /g, '(').replace(/ \)/g, ')').trim();
     const body = (title: string, end: string): string => {
       const at = code.indexOf(title);
       expect(at, `the case titled …${title}`).toBeGreaterThan(-1);
       expect(count(code, title), `one case titled …${title}`).toBe(1);
       const stop = code.indexOf(end, at);
       expect(stop, `the end of the case titled …${title}`).toBeGreaterThan(at);
-      return code.slice(at, stop);
+      return code.slice(at + title.length, stop);
     };
-    const cost = body('stays within the startup-adjusted 06aed21ff bound at 64 KB' + '`', '}, scaled(' + '300_000)');
-    const linearity = body('KB stays within the inherited-cost bound' + '`', '}, scaled(' + 'smallKb');
-    const reader = 'read' + 'Vendored';
-    const vendored = reader + '(';
-    const programsFor = (kind: 'cost' | 'linearity'): string => 'programsOf' + '(`${name}/${mode} ' + kind + '`)';
-    expect(count(code, reader), 'the reader is named in its definition, programsOf and the hash case only').toBe(4);
-    expect(count(code, vendored), 'a vendored program is read directly in the hash case only').toBe(2);
-    expect(count(code, 'const programsOf = rowPrograms(' + reader + ', prog);'), 'programsOf reads the real baselines').toBe(1);
-    for (const [kind, b] of [['cost', cost], ['linearity', linearity]] as const) {
-      expect(count(b, vendored), `the ${kind} case reads no vendored program itself`).toBe(0);
-      expect(count(b, 'programsOf' + '('), `the ${kind} case asks programsOf once`).toBe(1);
-      expect(count(b, programsFor(kind)), `the ${kind} case asks for its own row`).toBe(1);
+    const cost = body(unsplit('stays within the startup-adjusted 06aed21ff bound at 64 KB~`'), unsplit('}, scaled(~300_000)'));
+    const linearity = body(unsplit('KB stays within the inherited-cost bound~`'), unsplit('}, scaled(~smallKb === 32 ? 600_000 : 300_000)'));
+    expect(flat(cost), 'the cost case\'s body').toBe(flat(unsplit(`, () => {
+      const r = cost~Reading(name, mode, programs~Of, tim~ed);
+      console.info(r.measured);
+      expect(r.currentMs, r.measured).toBeLessThanOrEqual(r.bound);`)));
+    expect(flat(linearity), 'the linearity case\'s body').toBe(flat(unsplit(`, () => {
+      const r = linearity~Reading(name, mode, programs~Of, tim~ed);
+      console.info(r.measured);
+      expect(r.verdict.currentRatio, r.measured).toBeLessThanOrEqual(r.verdict.bound);`)));
+    for (const line of ['const HO~OK = path.resolve(__dirname, \'../../ccd/session-hook.sh\');',
+      'const pr~og = extract(fs.readFileSync(HOOK, \'utf8\'));',
+      'const read~Vendored = vendored~Reader((file) => fs.readFileSync(file), BASELINES);',
+      'const programs~Of = row~Programs(read~Vendored, pr~og);', 'const tim~ed = ti~medBy(child~Cpu);']) {
+      expect(count(code, unsplit(line)), `composed once, on the real one: ${unsplit(line)}`).toBe(1);
     }
-    expect(count(cost, 'timed' + '('), 'the cost case times its two programs, nothing else').toBe(2);
-    expect(count(cost, 'timed' + '(reference, mode, 64)') + count(cost, 'timed' + '(current, mode, 64)')).toBe(2);
-    expect(count(linearity, 'pairCells' + '(i, programs, (text) => timed(text, mode, kb))'),
-      'the linearity case pairs through pairCells, its callback running the text it is given').toBe(1);
-    expect(count(linearity, 'timed' + '('), 'the linearity case times nothing outside pairCells').toBe(1);
-  });
-  for (const [name, unit, quoted] of [['quotes', 'a "b c" \'d\' \\e ', false], ['dqsub', '$(x) `y` ', true]] as const) {
-    const timed = (p: string, mode: string, kb: number): number => {
-      const dense = unit.repeat(Math.floor((kb * 1024) / unit.length));
-      const command = `git worktree list --porcelain; echo prune ${quoted ? `"${dense}"` : dense}`;
-      const input = JSON.stringify({ tool_name: 'Bash', tool_input: { command } });
-      const r = childCpu(['jq', '-r', '--arg', 'q', "'", '--arg', 'mode', mode, p], input);
-      expect(r.status, r.stderr).toBe(0);
-      expect(r.stdout.trim()).toBe('');
-      return r.cpuMs;
+    const uses: Record<string, number> = {
+      'programs~Of': 4, 'tim~ed': 3, 'cost~Reading': 7, 'linearity~Reading': 4, 'row~Programs': 4, 'read~Vendored': 4,
+      'vendored~Reader': 5, 'ti~medBy': 6, 'child~Cpu': 6, 'pair~Cells': 4, 'linearity~Verdict': 10, 'pr~og': 2,
+      'exp~ect': 101, 'sca~led': 6, 'linearity~Kb': 3, 'SHAPE~_NAMES': 6, 'MO~DES': 6,
     };
-    for (const mode of ['deny', 'class'] as const) {
+    for (const [split, n] of Object.entries(uses)) {
+      const name = unsplit(split);
+      expect(code.match(new RegExp(`\\b${name}\\b`, 'g'))?.length ?? 0,
+        `${name} is written this many times, test titles included: one more is a second binding (a shadow), a new use or a retitled case; a new use that goes through the table, or a retitle, updates this count`)
+        .toBe(n);
+    }
+  });
+  for (const name of SHAPE_NAMES) {
+    for (const mode of MODES) {
       it(`${name}: ${mode} stays within the startup-adjusted 06aed21ff bound at 64 KB`, () => {
-        const { original: reference, current } = programsOf(`${name}/${mode} cost`);
-        expect(reference).not.toBe('');
-        expect(current).not.toBe('');
-        const pairs = [0, 1].map(() => [timed(reference, mode, 64), timed(current, mode, 64)]);
-        const referenceMs = Math.min(...pairs.map((p) => p[0] as number));
-        const currentMs = Math.min(...pairs.map((p) => p[1] as number));
-        const bound = Math.max(1.5 * referenceMs, referenceMs + COST_FLOOR_MS[mode]);
-        const measured = `${name}/${mode} 64 KB: current ${currentMs} cpu ms, baseline ${referenceMs} cpu ms, bound ${bound} cpu ms`;
-        console.info(measured);
-        expect(currentMs, measured).toBeLessThanOrEqual(bound);
+        const r = costReading(name, mode, programsOf, timed);
+        console.info(r.measured);
+        expect(r.currentMs, r.measured).toBeLessThanOrEqual(r.bound);
       }, scaled(300_000));
-      const smallKb = name === 'quotes' && mode === 'deny' ? 32 : 64;
-      const largeKb = smallKb * 2;
+      const [smallKb, largeKb] = linearityKb(name, mode);
       it(`${name}: ${mode} linearity from ${smallKb} to ${largeKb} KB stays within the inherited-cost bound`, () => {
-        const programs = programsOf(`${name}/${mode} linearity`);
-        expect(programs.original).not.toBe('');
-        expect(programs.current).not.toBe('');
-        // D-9118: each pair of samples back to back, the first program alternating by round (`pairCells`).
-        const pair = (i: number, kb: number): [number, number] => pairCells(i, programs, (text) => timed(text, mode, kb));
-        const rounds = Array.from({ length: LINEARITY_ROUNDS }, (_, i): Round => [...pair(i, smallKb), ...pair(i, largeKb)]);
-        const minima = [0, 1, 2, 3].map((i) => Math.min(...rounds.map((r) => r[i])));
-        // The coordinator's follow-up rules inherited super-linearity separately: retain 2.5x if the original is
-        // below it; otherwise allow the original ratio plus the explicitly accepted 0.5 measurement margin.
-        const v = linearityVerdict(rounds);
-        const measured = `${name}/${mode}: original ${v.referenceRatio}x, current ${v.currentRatio}x, bound ${v.bound}x; cpu ms ${minima.join(', ')}; `
-          + `per-round differences ${v.differences.map((d) => d.toFixed(3)).join(', ')}`;
-        console.info(measured);
-        expect(v.currentRatio, measured).toBeLessThanOrEqual(v.bound);
+        const r = linearityReading(name, mode, programsOf, timed);
+        console.info(r.measured);
+        expect(r.verdict.currentRatio, r.measured).toBeLessThanOrEqual(r.verdict.bound);
       }, scaled(smallKb === 32 ? 600_000 : 300_000));
     }
   }

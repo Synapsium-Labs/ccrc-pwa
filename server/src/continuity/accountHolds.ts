@@ -4,8 +4,10 @@
 // Overlord's ordered list until the operator clears it. One row per lane.
 //
 // TWO WRITERS, each a different move of the one fact (the plan's Global Constraints; `writers-map.test.ts` names both):
-// `holdAccount`, called only by the generations pass behind `holdOfStart`, and `clearAccountHold`, called only by the
-// operator's clear door. `standingHolds` and `accountHolds` are the reads; `CoordStore` keeps one-line delegates of the same
+// `holdAccount`, the hold, and `clearAccountHold`, called only by the operator's clear door. The hold has TWO CALLERS, each
+// behind the one decider `holdOfStart`: the generations pass, for the designated Overlord's start, and the designation store's
+// `failPending`, in the failure's own transaction, for a designate or rebind attempt whose start failed the launch profile check
+// (renewal readings G, ticket first-start-failure-holds-its-account), which the pass never sees. `standingHolds` and `accountHolds` are the reads; `CoordStore` keeps one-line delegates of the same
 // names. Nothing here decides: the pass's decider holds, the door validates, and this file records.
 //
 // A SEPARATE MODULE, beside `continuityStore.ts` (slug holds-store-in-its-own-module): one table and its two writers, so the

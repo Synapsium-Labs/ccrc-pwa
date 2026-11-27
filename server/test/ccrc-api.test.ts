@@ -300,6 +300,8 @@ describe('the closed route table', () => {
     [['overlord', 'history', 'search', '--all', 'deploy'], 'POST', '/api/overlord/history'],
     // The Overlord's cursor read of the sequence (Overlord W1, sequence C): the pane's pair in the query, after the cursor's keys.
     [['overlord', 'sequence', '--after', '7'], 'GET', '/api/overlord/sequence'],
+    // The Overlord's board (Overlord W1, PR B2): no keys of its own, the pane's pair in the query.
+    [['overlord', 'board'], 'GET', '/api/overlord/board'],
   ];
 
   it.each(ROWS)('%s -> %s %s', async (args, method, url, family) => {
@@ -367,7 +369,8 @@ describe('the closed route table', () => {
     // One hundred and one since `overlord.inbox`, `overlord.messages` and `overlord.acknowledge` (Overlord W1, the inbox piece).
     // One hundred and two since `overlord.history` (Overlord W1, PR B1, the history door).
     // One hundred and three since `overlord.sequence` (Overlord W1, sequence C, the cursor read).
-    expect(keys).toHaveLength(103);
+    // One hundred and four since `overlord.board` (Overlord W1, PR B2, the board).
+    expect(keys).toHaveLength(104);
   });
 
   it('states the row count in prose as the number the table actually holds', () => {
@@ -382,7 +385,7 @@ describe('the closed route table', () => {
       43: 'forty-three', 44: 'forty-four', 45: 'forty-five', 46: 'forty-six', 47: 'forty-seven', 48: 'forty-eight',
       49: 'forty-nine', 50: 'fifty', 51: 'fifty-one', 52: 'fifty-two', 53: 'fifty-three', 54: 'fifty-four', 55: 'fifty-five',
       56: 'fifty-six', 57: 'fifty-seven', 58: 'fifty-eight', 59: 'fifty-nine', 60: 'sixty', 61: 'sixty-one', 62: 'sixty-two', 63: 'sixty-three', 64: 'sixty-four', 65: 'sixty-five', 66: 'sixty-six', 67: 'sixty-seven', 68: 'sixty-eight', 69: 'sixty-nine', 70: 'seventy', 71: 'seventy-one', 72: 'seventy-two', 73: 'seventy-three', 74: 'seventy-four', 75: 'seventy-five', 76: 'seventy-six', 77: 'seventy-seven', 78: 'seventy-eight',
-      79: 'seventy-nine', 80: 'eighty', 81: 'eighty-one', 82: 'eighty-two', 83: 'eighty-three', 84: 'eighty-four', 85: 'eighty-five', 86: 'eighty-six', 87: 'eighty-seven', 88: 'eighty-eight', 89: 'eighty-nine', 90: 'ninety', 91: 'ninety-one', 92: 'ninety-two', 93: 'ninety-three', 94: 'ninety-four', 95: 'ninety-five', 96: 'ninety-six', 97: 'ninety-seven', 98: 'ninety-eight', 99: 'ninety-nine', 100: 'one-hundred', 101: 'one-hundred-and-one', 102: 'one-hundred-and-two', 103: 'one-hundred-and-three',
+      79: 'seventy-nine', 80: 'eighty', 81: 'eighty-one', 82: 'eighty-two', 83: 'eighty-three', 84: 'eighty-four', 85: 'eighty-five', 86: 'eighty-six', 87: 'eighty-seven', 88: 'eighty-eight', 89: 'eighty-nine', 90: 'ninety', 91: 'ninety-one', 92: 'ninety-two', 93: 'ninety-three', 94: 'ninety-four', 95: 'ninety-five', 96: 'ninety-six', 97: 'ninety-seven', 98: 'ninety-eight', 99: 'ninety-nine', 100: 'one-hundred', 101: 'one-hundred-and-one', 102: 'one-hundred-and-two', 103: 'one-hundred-and-three', 104: 'one-hundred-and-four',
     };
     const want = WORDS[n];
     expect(want, `the ROUTES table outgrew this test's word list at ${n}`).toBeDefined();
@@ -563,7 +566,7 @@ describe('the four claimant rows send the question door family, and refuse local
       ['note', 'list', 'lane-a-project-a'], ['note', 'handover', 'lane-a-project-a', '--json', '-'],
       ['timer', 'set', '2h', 'check the checks'], ['timer', 'list'], ['timer', 'cancel', '12'],
       ['overlord', 'inbox'], ['overlord', 'messages', '12'], ['overlord', 'acknowledge', '12'], ['overlord', 'history', 'search', '--all', 'deploy'],
-      ['overlord', 'sequence', '--after', '7', '--limit', '50'],
+      ['overlord', 'sequence', '--after', '7', '--limit', '50'], ['overlord', 'board'],
       ['sessions', 'probe', 'lane-a-project-a'], ['probe', 'answer', '--json', '-'],
       ['programme', 'remaining', 'prog-a', '--json', '-'],
       ['quiz', 'record', '--json', '-'], ['quiz', 'confirm', '12', '--json', '-'], ['quiz', 'live', '--json', '-'], ['quiz', 'status', '--json', '-'],
@@ -2358,6 +2361,40 @@ describe('the Overlord sequence row: the cursor\'s two integers, then the pane\'
   });
 });
 
+describe('the Overlord board row: no keys, the pane\'s pair in the query (Overlord W1, PR B2)', () => {
+  const pane = { TMUX_PANE: '%7' };
+  const errorOf = (r: Run): string => (JSON.parse(r.stdout) as { error: string }).error;
+
+  it('the row: a GET with no id and no query key', () => {
+    const r = clientRoutes().find((x) => x.key === 'overlord.board')!;
+    expect([r.method, r.path, r.needsId, r.query]).toEqual(['GET', '/api/overlord/board', false, []]);
+  });
+
+  it('a GET with the pane\'s pair in the query, the token off argv, no body', async () => {
+    plantPane('demo-ws', 'uuid-7');
+    const r = await run(['overlord', 'board'], undefined, pane);
+    expect(r.status, r.stdout + r.stderr).toBe(0);
+    expect(seen).toHaveLength(1);
+    expect([seen[0]!.method, seen[0]!.url, seen[0]!.auth, seen[0]!.body]).toEqual(['GET', '/api/overlord/board?byId=demo-ws&byUuid=uuid-7', TOKEN, '']);
+  });
+
+  it('a typed identity, a flag, an id or a body is refused, unsent', async () => {
+    plantPane('demo-ws', 'uuid-7');
+    for (const a of [['overlord', 'board', '--byId', 'x'], ['overlord', 'board', '--byUuid', 'x'], ['overlord', 'board', '--project', 'project-a']]) {
+      const r = await run(a, undefined, pane);
+      expect([r.status, errorOf(r)], a.join(' ')).toEqual([2, 'unknown-query']);
+    }
+    expect(errorOf(await run(['overlord', 'board', '12'], undefined, pane))).toBe('unexpected-id');
+    expect(seen).toEqual([]);
+  });
+
+  it('a pane with no identity is refused, nothing sent', async () => {
+    const r = await run(['overlord', 'board'], undefined, { TMUX_PANE: undefined, TMUX: undefined });
+    expect(r.status).not.toBe(0);
+    expect(seen).toEqual([]);
+  });
+});
+
 // The Overlord's history read (Overlord W1, PR B1; plan w1-board-history.md Task 5, ruled R7): `overlord history` is the second
 // grammar of one request, so the shared corpus runs through both readers and each case gets one verdict. The pane's pair goes
 // LAST, and a request the reader refuses is refused here, unsent, with the reader's own word.
@@ -2443,14 +2480,24 @@ describe('overlord history: one request, two grammars (the shared corpus, ruled 
     expect(seen).toEqual([]);
   });
 
-  it('an argument that is not valid UTF-8 is refused bad-args here, unsent, not changed to U+FFFD and sent (review 3730 F5)', async () => {
+  // Review 3749 F1: the check converts to UTF-16LE, which refuses the two forms a UTF-8 to UTF-8 pass of glibc's iconv let
+  // through (a code point past U+10FFFF, F4 90 80 80; the old five-byte form, F8 88 80 80 80). Without iconv on PATH the client
+  // cannot tell, and jq changes each to U+FFFD and sends it: the note's known difference, pinned on its own path (R3).
+  const HAS_ICONV = spawnSync('sh', ['-c', 'command -v iconv'], { stdio: 'ignore' }).status === 0;
+  it.each([['a lone FF byte', String.raw`\xff`], ['a code point past U+10FFFF', String.raw`\xf4\x90\x80\x80`], ['the old five-byte form', String.raw`\xf8\x88\x80\x80\x80`]])
+  ('%s: refused bad-args here, unsent, when iconv is on PATH; changed to U+FFFD and sent when it is not (review 3730 F5, review 3749 F1)', async (_n, bytes) => {
     plantPane('demo-ws', 'uuid-7');
-    // Node writes argv as UTF-8, so the raw byte rides a driver script that passes it to the client.
+    // Node writes argv as UTF-8, so the raw bytes ride a driver script that passes them to the client.
     const driver = path.join(home, 'history-non-utf8');
-    fs.writeFileSync(driver, `#!/bin/bash\nexec ${JSON.stringify(CCRC_API)} overlord history search --all $'x\\xffy'\n`, { mode: 0o755 });
+    fs.writeFileSync(driver, `#!/bin/bash\nexec ${JSON.stringify(CCRC_API)} overlord history search --all $'x${bytes}y'\n`, { mode: 0o755 });
     const r = await runClient(home, [], undefined, pane, driver);
-    expect([r.status, errorOf(r)], r.stdout + r.stderr).toEqual([2, 'bad-args']);
-    expect(seen).toEqual([]);
+    if (HAS_ICONV) {
+      expect([r.status, errorOf(r)], r.stdout + r.stderr).toEqual([2, 'bad-args']);
+      expect(seen).toEqual([]);
+    } else {
+      expect(r.status, r.stdout + r.stderr).toBe(0);
+      expect((JSON.parse(seen[0]!.body) as { args: string[] }).args[0]).toContain('\ufffd');
+    }
   });
 
   it('a typed byId is a search word, never the identity: the pane\'s pair goes last', async () => {

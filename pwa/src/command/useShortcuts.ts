@@ -28,10 +28,15 @@
 // stays the shell's kill-line there), the ask sheet's keys (`useAskKeys`), and
 // the palette's own Escape. Listening any earlier would take keys from them.
 //
+// READER MODE HOLDS THE KEYS TOO (X6 XR1.5). While the Docs screen's handle says reader mode is on, ⌘K and Ctrl+K open
+// no palette, and every single key and `g` chord is held except `r`, the key that leaves it.
+//
 // EVERYTHING IS OFF while auth is lost or the build is blocked: the login and
 // block screens cover the app, and a key that navigated behind them would move
 // a page nobody can see.
 import { useEffect, useRef } from 'react';
+import { readerModeHandle } from '../docs/readerModeHandle';
+import { READER_MODE_KEY } from '../docs/reader/readerModeWords';
 import type { Command, CommandContext } from './registry';
 
 /** How long the `g` of a chord waits for its second key. */
@@ -91,13 +96,21 @@ export function useShortcuts({ enabled, commands, context, onPalette }: Shortcut
     const onKey = (e: KeyboardEvent): void => {
       const { commands: list, context: ctx, onPalette: palette } = live.current;
       // ⌘K / Ctrl+K: from anywhere, a text field included. Alt+K is not it.
+      // While reader mode is on the console is hidden and the page is the reader's: no palette opens over it (X6 XR1.5).
       if ((e.metaKey || e.ctrlKey) && !e.altKey && e.key.toLowerCase() === 'k') {
-        e.preventDefault();
         chordAt = null;
+        // The browser's own Ctrl+K (its search bar) must not run over reader mode either, so the default is stopped first.
+        e.preventDefault();
+        if (readerModeHandle()?.on() === true) return;
         palette();
         return;
       }
-      if (e.defaultPrevented || e.isComposing || modified(e) || keepsKey(e.target, e.key) || keysOwnedBySurface(e.target)) {
+      // Reader mode holds every single key and chord but `r`, which leaves it: the console they would move is hidden. A `g`
+      // pressed before reader mode began is forgotten at once, so `r` is always the single key and never the second of `g r`.
+      const readerOn = readerModeHandle()?.on() === true;
+      if (readerOn) chordAt = null;
+      const readerHeld = e.key !== READER_MODE_KEY && readerOn;
+      if (e.defaultPrevented || e.isComposing || modified(e) || keepsKey(e.target, e.key) || keysOwnedBySurface(e.target) || readerHeld) {
         chordAt = null;
         return;
       }

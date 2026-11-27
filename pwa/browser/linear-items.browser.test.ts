@@ -183,7 +183,7 @@ function linkedSheets(html: string): string[] {
 }
 
 /** The reference forms `reached` reads, for the throw's message. */
-const REFERENCE_FORMS = 'page links and scripts as /assets/…, chunk imports as ./…, and preload lists and worker URLs as assets/…, '
+const REFERENCE_FORMS = 'page links and scripts as /assets/…, chunk imports as ./…, preload lists as assets/… and worker URLs as (/)assets/…, '
   + 'each in double quotes, single quotes, backticks or parentheses';
 
 /** Every file under `assets/` one page loads, as `/assets/<name>`: what the page names, then what each script it reaches names,
@@ -480,12 +480,25 @@ describe('the item route draws the body from the migration read', () => {
 });
 
 describe('the shell\'s sheets from the shared build', () => {
-  const linksOf = (file: string): string[] => linkedSheets(readFileSync(path.join(dist!, file), 'utf8'));
-  /** The real build's other pages, and the sheets they link that the index does not, read from the links alone (not the walk). */
-  const foreignOf = (): { others: string[]; foreign: string[] } => {
-    const others = readdirSync(dist!).filter((f) => f.endsWith('.html') && f !== 'index.html');
-    const shell = linksOf('index.html');
-    return { others, foreign: others.flatMap(linksOf).filter((h) => !shell.includes(h)) };
+  /** A tree's other pages, and the sheets their walks reach that the index's walk does not. Read from the walk, not the links,
+   *  so a sheet another page links that a lazily loaded shell chunk also imports is the shell's, never foreign. */
+  const foreignOf = (t: BuiltTree): { others: string[]; foreign: string[] } => {
+    const others = t.pages.filter((p) => p !== 'index.html');
+    const shell = reached(t, 'index.html');
+    return { others, foreign: [...new Set(others.flatMap((p) => [...reached(t, p)]))].filter((h) => h.endsWith('.css') && !shell.has(h)) };
+  };
+  /** Cases 1 and 2's checks on one tree: no foreign sheet among the shell's, and every other sheet kept, the index's links first. */
+  const leavesOutForeign = (t: BuiltTree): void => {
+    const { others, foreign } = foreignOf(t);
+    expect(shellSheets(t).filter((h) => foreign.includes(h)), `pages ${others.join(', ')}`).toEqual([]);
+  };
+  const keepsTheRest = (t: BuiltTree): string[] => {
+    const { foreign } = foreignOf(t);
+    const shell = linkedSheets(t.read('index.html'));
+    const rest = t.assets.filter((f) => f.endsWith('.css')).map((f) => `/assets/${f}`)
+      .filter((h) => !shell.includes(h) && !foreign.includes(h));
+    expect(shellSheets(t)).toEqual([...shell, ...rest]);
+    return rest;
   };
   const page =(sheets: string[], script: string | null): string => `<!doctype html><html><head>${
     script === null ? '' : `<script type="module" crossorigin src="/assets/${script}"></script>`}${
@@ -495,22 +508,37 @@ describe('the shell\'s sheets from the shared build', () => {
     pages: Object.keys(files).filter((f) => !f.includes('/') && f.endsWith('.html')),
     assets: Object.keys(files).filter((f) => f.startsWith('assets/')).map((f) => f.slice('assets/'.length)),
   });
+  /** review.html links b.css and d.css; a lazily loaded shell chunk imports d.css too, so d.css is the shell's. */
+  const sharedSheet = (): BuiltTree => tree({
+    'index.html': page(['a.css'], 'entry.js'),
+    'review.html': page(['b.css', 'd.css'], 'review.js'),
+    'assets/entry.js': 'import{x}from"./shared.js";const m=()=>__vitePreload(()=>import("./lazy.js"),__vite__mapDeps([0,1]));'
+      + 'function __vite__mapDeps(i,m=__vite__mapDeps,d=(m.f||(m.f=["assets/lazy.js","assets/c.css"])))',
+    'assets/lazy.js': 'const n=()=>import("./later.js");export const d=["assets/d.css"];',
+    'assets/later.js': 'export const z=1;',
+    'assets/shared.js': 'export const x=1;',
+    'assets/review.js': 'import{x}from"./shared.js";',
+    'assets/a.css': '', 'assets/b.css': '', 'assets/c.css': '', 'assets/d.css': '',
+  });
 
   it('leave out a sheet that only another entry page links, in the real build', () => {
-    const { others, foreign } = foreignOf();
+    const real = treeAt(dist!);
+    const { others, foreign } = foreignOf(real);
     // Not vacuous: the review page is built, and links a sheet of its own.
     expect(others).toContain('review.html');
-    expect(foreign.length, `sheets only ${others.join(', ')} link`).toBeGreaterThan(0);
-    expect(stylesheets(dist!).filter((h) => foreign.includes(h)), `pages ${others.join(', ')}`).toEqual([]);
+    expect(foreign.length, `sheets only ${others.join(', ')} load`).toBeGreaterThan(0);
+    leavesOutForeign(real);
   });
 
   it('keep every other sheet, in the real build: the index\'s links first, then the rest of the folder in its order', () => {
-    const { foreign } = foreignOf();
-    const shell = linksOf('index.html');
-    const rest = readdirSync(path.join(dist!, 'assets')).filter((f) => f.endsWith('.css')).map((f) => `/assets/${f}`)
-      .filter((h) => !shell.includes(h) && !foreign.includes(h));
-    expect(rest.length, 'the shell loads sheets later, from its chunks').toBeGreaterThan(0);
-    expect(stylesheets(dist!)).toEqual([...shell, ...rest]);
+    expect(keepsTheRest(treeAt(dist!)).length, 'the shell loads sheets later, from its chunks').toBeGreaterThan(0);
+  });
+
+  it('judge a sheet another page links that a lazy shell chunk imports as the shell\'s, in the real-build cases\' checks', () => {
+    const t = sharedSheet();
+    leavesOutForeign(t);
+    expect(keepsTheRest(t)).toEqual(['/assets/c.css', '/assets/d.css']);
+    expect(foreignOf(t).foreign).toEqual(['/assets/b.css']);
   });
 
   it('follow a chunk named only as ./x.js, in quotes or in backticks', () => {
@@ -526,18 +554,7 @@ describe('the shell\'s sheets from the shared build', () => {
   });
 
   it('keep a lazily loaded shell sheet, and one another page links too, and drop the other page\'s own', () => {
-    const t = tree({
-      'index.html': page(['a.css'], 'entry.js'),
-      'review.html': page(['b.css', 'd.css'], 'review.js'),
-      'assets/entry.js': 'import{x}from"./shared.js";const m=()=>__vitePreload(()=>import("./lazy.js"),__vite__mapDeps([0,1]));'
-        + 'function __vite__mapDeps(i,m=__vite__mapDeps,d=(m.f||(m.f=["assets/lazy.js","assets/c.css"])))',
-      'assets/lazy.js': 'const n=()=>import("./later.js");export const d=["assets/d.css"];',
-      'assets/later.js': 'export const z=1;',
-      'assets/shared.js': 'export const x=1;',
-      'assets/review.js': 'import{x}from"./shared.js";',
-      'assets/a.css': '', 'assets/b.css': '', 'assets/c.css': '', 'assets/d.css': '',
-    });
-    expect(shellSheets(t)).toEqual(['/assets/a.css', '/assets/c.css', '/assets/d.css']);
+    expect(shellSheets(sharedSheet())).toEqual(['/assets/a.css', '/assets/c.css', '/assets/d.css']);
   });
 
   it('answer as before with one entry page: its links first, then every other sheet in the folder\'s order', () => {

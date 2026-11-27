@@ -19,6 +19,10 @@ import { DOCS_COMPACT_QUERY, DocsHead, soonUntil, type FreshChipState } from '..
 import { DocsFailureView } from '../docs/DocsFailureView';
 import { DocsIndexView } from '../docs/DocsIndexView';
 import { DocsLeaf } from '../docs/DocsLeaf';
+import { DocsReading } from '../docs/DocsReading';
+import { readerModeHandle, setReaderModeHandle } from '../docs/readerModeHandle';
+import { readerModeDocKey } from '../docs/reader/readerMode';
+import { ReaderModeContext, useReaderMode } from '../docs/useReaderMode';
 import { lazyMountReader, type ReaderDeps } from '../docs/ReaderFrame';
 import { loadReaderImages } from '../docs/reader/images';
 import { DocsPageLink, DocsTreeView } from '../docs/DocsTreeView';
@@ -209,6 +213,15 @@ export function DocsScreen(p: {
   const barSlot = useMemo<ReaderBarSlot>(() => ({ chrome: readerChromeFor(compactWidth), publish: setReaderBar }), [compactWidth]);
   // Leaving the page brings the reader back, on a later return too (refinement (a)); `setTrail`'s effect has this form.
   useEffect(() => { setPlainAt((at) => (at === null || at === here ? at : null)); }, [here]);
+  // Reader mode (X6 XR1.2): the hook is the screen's, so its container wraps the body in every view and the context reaches the
+  // head and the body. The outside door (`r`, the palette) reads it through the handle, which is set while this screen is
+  // mounted and cleared on unmount only if it is still this screen's.
+  const readerMode = useReaderMode({ doc: readerModeDocKey(page, folderPage), plainView: plainAt === here });
+  const readerControls = readerMode.controls;
+  useEffect(() => {
+    setReaderModeHandle(readerControls);
+    return () => { if (readerModeHandle() === readerControls) setReaderModeHandle(null); };
+  }, [readerControls]);
 
   // The default parser's worker is started on mount, so the first leaf does not wait for it (spec 4.3).
   useEffect(() => {
@@ -409,24 +422,29 @@ export function DocsScreen(p: {
   }
   return (
     <DocsAssetContext value={assets}>
-      <div className="docs-screen" data-draft-assets={draftAssets}>
-        {page !== null && (
-          <DocsHead
-            page={page} visit={visit} tree={tree} leafImage={leafImage} exportBody={exportBody} pageStore={pageStore}
-            exportAssets={exportAssets} plainView={plainAt === here} onPlainView={() => setPlainAt(here)}
-            readerBar={readerBar}
-          />
-        )}
-        {note?.at === here && <p className="docs-note docs-redirect-note" role="status">{note.text}</p>}
-        {page !== null && page.kind !== 'index' && tree !== null && (
-          <DocsBanners page={page} tree={tree} file={visit.file} draftAssets={draftAssets} onRelist={visit.retryTree} />
-        )}
-        <ExportBodyContext value={setExportBody}>
-          <ReaderBarContext value={barSlot}>
-            <HighlighterContext value={withPublish}>{body}</HighlighterContext>
-          </ReaderBarContext>
-        </ExportBodyContext>
-      </div>
+      <ReaderModeContext value={readerMode.value}>
+        <div className="docs-screen" data-draft-assets={draftAssets}>
+          {page !== null && (
+            <DocsHead
+              page={page} visit={visit} tree={tree} leafImage={leafImage} exportBody={exportBody} pageStore={pageStore}
+              exportAssets={exportAssets} plainView={plainAt === here} onPlainView={() => setPlainAt(here)}
+              readerBar={readerBar}
+            />
+          )}
+          {note?.at === here && <p className="docs-note docs-redirect-note" role="status">{note.text}</p>}
+          {page !== null && page.kind !== 'index' && tree !== null && (
+            <DocsBanners page={page} tree={tree} file={visit.file} draftAssets={draftAssets} onRelist={visit.retryTree} />
+          )}
+          <ExportBodyContext value={setExportBody}>
+            <ReaderBarContext value={barSlot}>
+              <HighlighterContext value={withPublish}>
+                {/* Always, in every view, with no key: adding the container remounts nothing (spec 4.1). */}
+                <DocsReading reading={readerMode.container}>{body}</DocsReading>
+              </HighlighterContext>
+            </ReaderBarContext>
+          </ExportBodyContext>
+        </div>
+      </ReaderModeContext>
     </DocsAssetContext>
   );
 }

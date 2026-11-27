@@ -3,14 +3,20 @@
 // spring-up panel with r-xl top corners, grabber, safe-area padded. From 900
 // it is a centred dialog instead (D-5933): the same Root, re-placed by CSS.
 import { Drawer } from 'vaul';
-import { useCallback, useEffect, useRef } from 'react';
+import { createContext, useCallback, useContext, useEffect, useRef } from 'react';
 import type { KeyboardEvent as ReactKeyboardEvent, ReactNode, RefObject } from 'react';
 import { cn } from '../lib/cn';
-import { recordModalLayer } from '../lib/modal-layers';
+import { liftHandedAtUnmount, recordModalLayer } from '../lib/modal-layers';
 import { EYEBROW } from '../lib/text';
 import { SHEET_DESK_MOTION_VARS, SHEET_MOTION_VARS, VAUL_MOTION } from '../lib/motion';
 import { useDesk } from '../lib/use-media-query';
 import { CloseButton } from './close-button';
+
+/** Where a `Sheet` draws its portal (reader mode, X6 XR1.2). On a Docs page it is the reading container's portal target, so
+ *  a sheet is drawn inside the element that goes full screen, in the normal view and in reader mode alike, and is never moved
+ *  or remounted as reader mode starts or ends. `null`, the default and everywhere else, keeps the portal on the body as
+ *  Radix does today. */
+export const SheetPortalContext = createContext<HTMLElement | null>(null);
 
 interface SheetBaseProps {
   open: boolean;
@@ -206,7 +212,9 @@ function useSheetFocus(open: boolean, initialFocus: RefObject<HTMLElement | null
  *  answer (`../lib/modal-layers.ts`), read at the panel's mount, before this sheet's Radix marks anything; every other
  *  mark, this sheet's own or another modal's (the palette's, which never lifts its own, or a sheet's closed under this one),
  *  is lifted (review 2334 F1 and F2). Radix's focus guards are left too. Radix's own undo at the unmount then removes what
- *  is left.
+ *  is left, but never an `aria-hidden` it found set. One such node is left: the console reader mode hid as the page's own and
+ *  released while this sheet was open, which stays hidden for the close to lift. A sheet that UNMOUNTS open is no close, so
+ *  its unmount gives that node back once no open dialog stands (`liftHandedAtUnmount`; X6 XR fix round 2, review 4043 F1).
  *
  *  THE READ IS AT THE PANEL'S MOUNT, in its callback ref. Radix mounts a dialog's content at least one commit after `open`
  *  turns true (its portal, and for a Root that mounted closed its presence, mount first), so the ref runs in a layout
@@ -247,6 +255,12 @@ function useHidingFollowsOpen(open: boolean): (el: HTMLElement | null) => void {
     for (const node of marked) node.removeAttribute('aria-hidden');
     lifted.current = marked;
   }, [open]);
+  // THE UNMOUNT'S LIFT (X6 XR fix round 2, review 4043 F1). A sheet that unmounts while open lifts nothing above (`open` never
+  // turns false), and reader mode may have ended behind it, leaving the console hidden for it (`releaseAsPage`). The passive
+  // cleanup runs after the panel has left the document, so this sheet's own dialog no longer counts as open there. StrictMode's
+  // simulated unmount lifts nothing, because the panel is then still in the document and still open, and neither does an
+  // unmount while another dialog is open: the lift looks for no open dialog at all.
+  useEffect(() => liftHandedAtUnmount, []);
   return useCallback((el: HTMLElement | null): void => {
     if (el !== null) pageOwn.current = recordModalLayer(el);
     panel.current = el;
@@ -281,6 +295,7 @@ export function Sheet({
   size = 'md',
   titleScroll = true,
 }: SheetProps): ReactNode {
+  const portalContainer = useContext(SheetPortalContext);
   const focusRef = useSheetFocus(open, initialFocus);
   const hidingRef = useHidingFollowsOpen(open);
   const panelRef = useCallback((el: HTMLElement | null): void => { focusRef(el); hidingRef(el); }, [focusRef, hidingRef]);
@@ -342,7 +357,7 @@ export function Sheet({
         if (!next) onClose();
       }}
     >
-      <Drawer.Portal>
+      <Drawer.Portal container={portalContainer}>
         <Drawer.Overlay
           // The scrim fades on vaul's keyframes at the panel's pace (D-5930).
           className={cn('sheet-scrim fixed inset-0 z-sheet bg-scrim', VAUL_MOTION, SHEET_MOTION_VARS, !full && SHEET_DESK_MOTION_VARS)}
