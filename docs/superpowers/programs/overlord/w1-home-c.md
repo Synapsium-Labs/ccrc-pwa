@@ -213,6 +213,35 @@ through `ccrc test`.
   - **The facts row widened to 520 px:** red in `settings-overlord`'s browser file, 24 of 40 (155 to 225 px sideways at the phone
     widths).
 
+## Fix round 1 (review 4056, ruled call 1709)
+
+Each case was written first and seen red against the code before its fix; the mutants below were then put in by hand, seen red, and
+taken out. Counts are measured, one file at a time through `ccrc test`.
+
+- **F1, Retire while stops are owed.** Red first: `settings-overlord`'s case whose re-read returns the retired row still owing a
+  stop (Retire was gone, `['open-place']`). Mutant, the offer without `stopsOwed`: red in `settings-overlord` (1 of 28) and
+  `overlord-settings-words` (1 of 42).
+- **F2, Clear on a saved copy.** Red first: `item-account-hold`'s saved-copy case (Clear was enabled). Mutant, Clear's `disabled`
+  without `!current`: red, 1 of 8. Mutant, the saved-copy line without the hold: it SURVIVED the first case, because an open hold
+  item already turns the line on through Tick or the ended hint. The case that isolates it is an item that carries an action,
+  where neither draws: red, 1 of 8. The handler's own check of `current` is a second guard no click can reach: React drops a click
+  on a button whose `disabled` prop is set, so its mutant cannot be red.
+- **F6, unread is not absent.** Red first: `settings-overlord`'s cold-load case (each saved pool said "no account carries this
+  pool"). Mutant, `setBoxesOf` ignoring `heard`: red in `settings-overlord` (1 of 28) and `overlord-settings-words` (1 of 42).
+- **F7, Clear's answer after the re-read.** Red first: both of `settings-account-facts`' Clear cases, whose holds mock now answers
+  as the server does. Mutant, the hold block drawn only while a hold stands: red, 2 of 11.
+- **F8, the empty set is sent (ruled).** Red first: `settings-overlord`'s empty-set case (the wait line and a disabled Save).
+  Mutant, Save disabled on an empty set: red, 1 of 28.
+- **F10.** The browser file pins 24 and 15 controls, exactly, and passed 40 of 40 on the merged tree.
+- **F12.** Hold 2 asserts the three asks in order: the moved pair's plain ask, then the equal pair's plain ask and its step-up.
+  Hold 4's second pattern is anchored to the whole line.
+- **F3, F5 and the prose:** the three Settings headers say context K, `section-status` has a direct Overlord case, and the
+  routes comment, the Fleet line's sentence and this note's merge pointer are corrected.
+
+**The one merge of `main`:** `97dd3d303b`, an ordinary merge as the coordinator ruled. Its item screen had not been rebuilt, so
+Clear stays after History, in "Your move" (call 1684). The browser files' dark-palette guard (#3472) came with it, and both of this
+PR's browser files pass under it.
+
 ## What a merge arms
 
 Nothing an operator sees, because no server advertises `overlord-v1` yet:
