@@ -278,6 +278,29 @@ takes no value), and "draw an unknown row with a control" (the shared reader ref
 home C's section, unchanged; its mount case is `settings-decision-model`'s "no step on mount". "Nothing a running session sees changes
 at merge" is held by the section's `overlord-v1` cases in `settings-frame` and by `secret-field-sheets` for the account sheets.
 
+## Fix round 1 and the one merge of main (review 4139, ruled call 1876)
+
+The round is three commits on the reviewed tip `af6b399fdd`: the red cases first, then the build, then this note and the case that
+kills M19. Then the branch took one merge of main, on the coordinator's go once #3488 had landed, never a rebase.
+
+- **Which main:** `07e8cc51e1`, the chat PR #3488's merge; `origin/main` read that sha at the fetch.
+- **Hand resolutions:** none. The probe was clean (exit 0) and git merged every file.
+- **Files both sides touched, merged by git and read:**
+  - `pwa/src/lib/api.ts`. Main added the chat's import block, its `readAnswer` funnel and its three calls after
+    `clearAccountHold`. This branch's eight calls sit after `poolRunway`. Both are kept, and this branch adds 18 lines over main.
+  - `server/test/sim/mutation-floors.json`. Main added fifteen chat floors and this branch two (the two words modules). Both are
+    kept.
+- **The figures, measured on the merged tree:**
+  - The gate's count lines are main's: 345 scanned, 342 HTTP, 222 gated and 120 exempt, over 34 route files. The merged branch
+    changes no `server/src` and no `shared/` file against main, so it adds no route. The gate suite's pin of 345, the box-token
+    census and the other lanes' census all pass (584 cases).
+  - The console's type check is clean, and the growth check passes.
+  - The floors: this branch's two sets and every set main brought are killed (17 sets).
+  - The section's browser file passes 80 of 80, in four states.
+  - The console's whole suite passed 677 of 682 files. The other five were killed by the test slice's shared memory cap (nine
+    kills): `fonts-built`, `reader-built` and `review-built` (each a production build) and `mockup-policy` and
+    `wrap-screen-golden`. Each passes alone: 8, 9, 12, 153 and 1185 cases.
+
 ## What a merge arms
 
 Nothing a running session sees. Every decision-model row ships `off` on the server, and the cards send only on the operator's tap.
