@@ -126,27 +126,87 @@ function privateAcross(a: string, b: string, privates: readonly string[]): boole
  *  holds a `/`. */
 const pathTail = (row: string): boolean => (/^\S+/u.exec(spans(row).content)?.[0] ?? '').includes('/');
 
-/** A character a terminal draws two cells wide: the East Asian wide and fullwidth blocks and an emoji drawn as one
- *  (`Emoji_Presentation`). Every other character counts one cell, a combining mark included, so a row is never read as
- *  narrower than it is drawn. */
-const WIDE_CHAR = /[\u1100-\u115F\u2E80-\u303E\u3041-\u33FF\u3400-\u4DBF\u4E00-\u9FFF\uA000-\uA4CF\uAC00-\uD7A3\uF900-\uFAFF\uFE30-\uFE4F\uFF00-\uFF60\uFFE0-\uFFE6\u{20000}-\u{3FFFD}]|\p{Emoji_Presentation}/u;
+/** THE WIDE TABLE (review 4109's R1, the coordinator's ruling 1 on wave 195): every code point whose East Asian Width is
+ *  W (Wide) or F (Fullwidth) in the Unicode Character Database file EastAsianWidth-17.0.0.txt, adjacent ranges merged, as
+ *  inclusive `[first, last]` pairs in code point order. GENERATED, never edited by hand: the fixture
+ *  `server/test/fixtures/unicode-east-asian-width.txt` holds that file's W and F lines verbatim, and the table case in
+ *  `server/test/frames-reduce.test.ts` parses and merges them, prints this table's source text from them, and fails unless
+ *  this table is that text, so the two cannot drift: a new data file version is a new fixture, and the case's own expected
+ *  text is what goes here. Numbers, not regular expression escapes, so the table is ASCII by construction (a case holds
+ *  that too). The engine's regular expressions have no East Asian Width property, so no property escape can stand in. */
+export const FRAMES_WIDE_RANGES: readonly (readonly [number, number])[] = Object.freeze([
+  [0x1100, 0x115F], [0x231A, 0x231B], [0x2329, 0x232A], [0x23E9, 0x23EC], [0x23F0, 0x23F0], [0x23F3, 0x23F3], [0x25FD, 0x25FE], [0x2614, 0x2615],
+  [0x2630, 0x2637], [0x2648, 0x2653], [0x267F, 0x267F], [0x268A, 0x268F], [0x2693, 0x2693], [0x26A1, 0x26A1], [0x26AA, 0x26AB], [0x26BD, 0x26BE],
+  [0x26C4, 0x26C5], [0x26CE, 0x26CE], [0x26D4, 0x26D4], [0x26EA, 0x26EA], [0x26F2, 0x26F3], [0x26F5, 0x26F5], [0x26FA, 0x26FA], [0x26FD, 0x26FD],
+  [0x2705, 0x2705], [0x270A, 0x270B], [0x2728, 0x2728], [0x274C, 0x274C], [0x274E, 0x274E], [0x2753, 0x2755], [0x2757, 0x2757], [0x2795, 0x2797],
+  [0x27B0, 0x27B0], [0x27BF, 0x27BF], [0x2B1B, 0x2B1C], [0x2B50, 0x2B50], [0x2B55, 0x2B55], [0x2E80, 0x2E99], [0x2E9B, 0x2EF3], [0x2F00, 0x2FD5],
+  [0x2FF0, 0x303E], [0x3041, 0x3096], [0x3099, 0x30FF], [0x3105, 0x312F], [0x3131, 0x318E], [0x3190, 0x31E5], [0x31EF, 0x321E], [0x3220, 0x3247],
+  [0x3250, 0xA48C], [0xA490, 0xA4C6], [0xA960, 0xA97C], [0xAC00, 0xD7A3], [0xF900, 0xFAFF], [0xFE10, 0xFE19], [0xFE30, 0xFE52], [0xFE54, 0xFE66],
+  [0xFE68, 0xFE6B], [0xFF01, 0xFF60], [0xFFE0, 0xFFE6], [0x16FE0, 0x16FE4], [0x16FF0, 0x16FF6], [0x17000, 0x18CD5], [0x18CFF, 0x18D1E], [0x18D80, 0x18DF2],
+  [0x1AFF0, 0x1AFF3], [0x1AFF5, 0x1AFFB], [0x1AFFD, 0x1AFFE], [0x1B000, 0x1B122], [0x1B132, 0x1B132], [0x1B150, 0x1B152], [0x1B155, 0x1B155], [0x1B164, 0x1B167],
+  [0x1B170, 0x1B2FB], [0x1D300, 0x1D356], [0x1D360, 0x1D376], [0x1F004, 0x1F004], [0x1F0CF, 0x1F0CF], [0x1F18E, 0x1F18E], [0x1F191, 0x1F19A], [0x1F200, 0x1F202],
+  [0x1F210, 0x1F23B], [0x1F240, 0x1F248], [0x1F250, 0x1F251], [0x1F260, 0x1F265], [0x1F300, 0x1F320], [0x1F32D, 0x1F335], [0x1F337, 0x1F37C], [0x1F37E, 0x1F393],
+  [0x1F3A0, 0x1F3CA], [0x1F3CF, 0x1F3D3], [0x1F3E0, 0x1F3F0], [0x1F3F4, 0x1F3F4], [0x1F3F8, 0x1F43E], [0x1F440, 0x1F440], [0x1F442, 0x1F4FC], [0x1F4FF, 0x1F53D],
+  [0x1F54B, 0x1F54E], [0x1F550, 0x1F567], [0x1F57A, 0x1F57A], [0x1F595, 0x1F596], [0x1F5A4, 0x1F5A4], [0x1F5FB, 0x1F64F], [0x1F680, 0x1F6C5], [0x1F6CC, 0x1F6CC],
+  [0x1F6D0, 0x1F6D2], [0x1F6D5, 0x1F6D8], [0x1F6DC, 0x1F6DF], [0x1F6EB, 0x1F6EC], [0x1F6F4, 0x1F6FC], [0x1F7E0, 0x1F7EB], [0x1F7F0, 0x1F7F0], [0x1F90C, 0x1F93A],
+  [0x1F93C, 0x1F945], [0x1F947, 0x1F9FF], [0x1FA70, 0x1FA7C], [0x1FA80, 0x1FA8A], [0x1FA8E, 0x1FAC6], [0x1FAC8, 0x1FAC8], [0x1FACD, 0x1FADC], [0x1FADF, 0x1FAEA],
+  [0x1FAEF, 0x1FAF8], [0x20000, 0x2FFFD], [0x30000, 0x3FFFD],
+]);
+/** The engine's own classes that count two cells beside the table: an emoji drawn as one (`Emoji_Presentation`, which
+ *  takes in the regional indicators the table gives N), and an UNASSIGNED code point (`Cn`, the noncharacters included).
+ *
+ *  UNKNOWN IS WIDE ON PURPOSE (ruling 2): the class rule (`FRAME_REFUSED_CHARS`, rule 1) lets an unassigned code point
+ *  through, and nothing can say how a terminal draws one, so it counts two cells, the direction in which the full-width
+ *  rule fires. A PRIVATE-USE code point (`Co`) never reaches the width: rule 1 refuses the frame whole (`not-a-frame`)
+ *  first, as it does a surrogate, a control and a format character. Were it asked, a private-use code point would count
+ *  one cell (the data file gives it A). An engine on an older Unicode version reads more code points as unassigned and so
+ *  counts them wider, the safe direction; a case holds that the engine is not newer than the table's version. */
+const WIDE_CLASS = /\p{Emoji_Presentation}|\p{Cn}/u;
+/** How many screen cells one character (one code point) takes: two when the table lists it, when it is an emoji drawn as
+ *  one, or when it is unassigned; one otherwise. One-cell characters include the ambiguous-width ones (A), which a
+ *  terminal draws in one cell outside an East Asian locale (the frames driver runs under `LANG=C.UTF-8`, read in
+ *  `agent/src/testbox/captureFramesRun.ts`; how the terminal draws them is inferred, not measured), and every combining
+ *  or zero-width mark, which counts one though it is drawn in none: a row is read as wider than it is drawn there, never
+ *  narrower. */
+export function frameCellWidth(c: string): 1 | 2 {
+  const cp = c.codePointAt(0) ?? 0;
+  let lo = 0;
+  let hi = FRAMES_WIDE_RANGES.length - 1;
+  while (lo <= hi) {
+    const mid = (lo + hi) >> 1;
+    const [a, b] = FRAMES_WIDE_RANGES[mid]!;
+    if (cp < a) hi = mid - 1;
+    else if (cp > b) lo = mid + 1;
+    else return 2;
+  }
+  return WIDE_CLASS.test(c) ? 2 : 1;
+}
 /** A row's width in screen cells. */
-const cellsOf = (cps: readonly string[]): number => cps.reduce((n, c) => n + (WIDE_CHAR.test(c) ? 2 : 1), 0);
+const cellsOf = (cps: readonly string[]): number => cps.reduce((n, c) => n + frameCellWidth(c), 0);
 
-/** Whether a row's text runs to its last column: it fills the pane's width in screen cells, two for a wide character
- *  (review 4086's F-B), and its last character is neither a space, the decoration nor a rule's `─`. */
-function runsToTheEdge(row: string, pane: FramesPane): boolean {
-  const cps = Array.from(row);
+/** Whether a row's text runs to its last column (review 4086's F-B, review 4109's R1): measured in screen cells AFTER its
+ *  trailing spaces are dropped, its last character is neither the decoration nor a rule's `─`, and it either fills the
+ *  pane's width, or it ends ONE CELL SHORT and the next row begins with a wide character. That is a STRADDLE: a wide
+ *  character that does not fit in the last cell is wrapped whole to the next row, and the last cell is left blank, which
+ *  a read of the pane may give as a trailing space or as nothing (ruling 3). Measured on the row as drawn, a row that
+ *  keeps that blank cell as a space would read as full but ending in a space, and the rule would keep the path it
+ *  continues: the wrong direction. */
+export function runsToTheEdge(row: string, next: string, pane: FramesPane): boolean {
+  const cps = Array.from(row.replace(/\s+$/u, ''));
   const last = cps[cps.length - 1];
-  return cellsOf(cps) >= pane.cols && last !== undefined && !DECOR.has(last) && !/[\s─]/u.test(last);
+  if (last === undefined || DECOR.has(last) || last === '─') return false;
+  const cells = cellsOf(cps);
+  const first = Array.from(next)[0];
+  return cells >= pane.cols || (cells === pane.cols - 1 && first !== undefined && frameCellWidth(first) === 2);
 }
 
 /** THE FULL-WIDTH RULE, on both hosts (review 4069's F2): a token holding a `/` that runs to a full-width row's last
- *  column and goes on at the start of the next row, which is not ours and not a rule row. The pane wrapped a path:
- *  refused whole. */
+ *  column, or to the cell before a straddling wide character, and goes on at the start of the next row, which is not ours
+ *  and not a rule row. The pane wrapped a path: refused whole. */
 function pathOffTheEdge(a: string, b: string, pane: FramesPane): boolean {
-  if (!runsToTheEdge(a, pane)) return false;
-  const head = /\S+$/u.exec(a)?.[0] ?? '';
+  if (!runsToTheEdge(a, b, pane)) return false;
+  // The head is read where the edge was measured: after the trailing spaces a straddle's blank cell may leave.
+  const head = /\S+$/u.exec(a.replace(/\s+$/u, ''))?.[0] ?? '';
   const tail = /^\S+/u.exec(spans(b).content)?.[0] ?? '';
   return tail !== '' && (head + tail).includes('/');
 }
@@ -181,12 +241,13 @@ function cutToken(plain: string): boolean {
 const endsInToken = (row: string): boolean => TOKENS.some((t) => lessTail(row).endsWith(t));
 
 /** A row with its content replaced by `token`, padded with spaces to the content's width, its two decoration spans kept,
- *  its SGR gone with its content: every row keeps its width. `null` when the content is narrower than the token: a token is
- *  never cut short to fit (review 4069's F2), so the frame is refused. */
+ *  its SGR gone with its content: every row keeps its width on screen, both measured in screen cells (review 4109's F5),
+ *  so a content of wide characters is as wide as it is drawn. `null` when the content is narrower than the token: a token
+ *  is never cut short to fit (review 4069's F2), so the frame is refused. */
 function replaced(plainRow: string, token: string): string | null {
   const s = spans(plainRow);
-  const w = Array.from(s.content).length;
-  const t = Array.from(token).length;
+  const w = cellsOf(Array.from(s.content));
+  const t = cellsOf(Array.from(token));
   return w < t ? null : s.lead + token + ' '.repeat(w - t) + s.tail;
 }
 
@@ -305,6 +366,10 @@ export function reducerFingerprint(): string {
     '❯ ours text here', '│ /work/a/b and more │', 'see …/x/y here', 'Haiku 9 · Claude Max', 'Claude Pro account', '──────────── ↑ 9 more ──',
     'mail a@b.example.com', 'host 10.1.2.3', 'tok ' + 'a'.repeat(32), 'sk-ant-api03-abcdefghij', 'plain row', '\x1b]8;;x\x1b\\',
     'a\u2066b', 'see ‹model here', 'logged as bo now and', 'at /secr\net/x more', '‹model›\nx/y tail', '~/x',
+    // Review 4109's F9: a bare quote (kept), a wide character reaching the edge (a Hangul syllable, which the table lists),
+    // a row at the probe's own width, and a straddle (a row one cell short, the next beginning with a wide character).
+    '› stashed · Restart to update', String.fromCodePoint(0xAC00).repeat(17) + 'xy /ab\ncd rest',
+    'x'.repeat(35) + ' /pro\nject rest', 'x'.repeat(35) + ' /pr\n' + String.fromCodePoint(0x6F22) + 'ject rest',
   ];
   // Each probe drawn as a box draws it: between two rules, the capture's status row under the lower one (rule 8). And the
   // status rule's own probes: no rule, another status text, the text twice.

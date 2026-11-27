@@ -11,7 +11,8 @@ import { framesScan } from '../../shared/framesScan.mjs';
 import { FRAMES_NUDGE_TEXT, FRAMES_RECIPE_VERSION, framesOurs } from '../../shared/framesCapture.js';
 import { FRAMES_PARTS, frameSize, FRAMES_VERSION_SHAPE } from '../../shared/framesResult.js';
 import {
-  FRAMES_DECORATION, FRAMES_REPLACED, FRAMES_STATUS_TEXT, PATH_LIKE, checkReducedFrame, credentialShaped, isRuleRow, reduceFrame, rowIsOurs, statusRowOf, type FramesScan,
+  FRAMES_DECORATION, FRAMES_REPLACED, FRAMES_STATUS_TEXT, FRAMES_WIDE_RANGES, PATH_LIKE, checkReducedFrame, credentialShaped, frameCellWidth, isRuleRow, reduceFrame,
+  rowIsOurs, runsToTheEdge, statusRowOf, type FramesScan,
 } from '../../shared/framesReduce.js';
 
 const ESC = '\x1b';
@@ -171,6 +172,136 @@ describe('the full-width rule counts screen cells, two for a wide character (rev
   });
 });
 
+describe('the wide table is the Unicode East Asian Width table (review 4109, R1, the coordinator\'s rulings 1 and 2 on wave 195)', () => {
+  const FIXTURE = readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), 'fixtures', 'unicode-east-asian-width.txt'), 'utf8');
+  const SHARED = readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..', 'shared', 'framesReduce.ts'), 'utf8');
+  const DATA_LINE = /^([0-9A-F]{4,6})(?:\.\.([0-9A-F]{4,6}))?\s*;\s*([WF])\s+#/;
+  /** The fixture's W and F lines, parsed, sorted and merged where adjacent: what the shared table must be. */
+  const fromFixture = (): [number, number][] => {
+    const lines = FIXTURE.split('\n').filter((l) => l !== '' && !l.startsWith('#'));
+    const raw = lines.map((l) => {
+      const m = DATA_LINE.exec(l);
+      if (m === null) throw new Error(`not a W or F line of the data file: ${l}`);
+      return [parseInt(m[1]!, 16), parseInt(m[2] ?? m[1]!, 16)] as [number, number];
+    });
+    expect(raw).toHaveLength(293);
+    raw.sort((a, b) => a[0] - b[0]);
+    const merged: [number, number][] = [];
+    for (const [a, b] of raw) {
+      const last = merged[merged.length - 1];
+      if (last !== undefined && a <= last[1] + 1) last[1] = Math.max(last[1], b);
+      else merged.push([a, b]);
+    }
+    return merged;
+  };
+  /** The shared file's table as source text, and as the generator writes it from the fixture: eight pairs to a line. */
+  const tableText = (): string => {
+    const open = SHARED.indexOf('export const FRAMES_WIDE_RANGES');
+    const start = SHARED.indexOf('\n', open) + 1;
+    return SHARED.slice(start, SHARED.indexOf(']);', start));
+  };
+  const generated = (ranges: readonly (readonly [number, number])[]): string => {
+    const hex = (n: number): string => `0x${n.toString(16).toUpperCase().padStart(4, '0')}`;
+    const items = ranges.map(([a, b]) => `[${hex(a)}, ${hex(b)}]`);
+    const lines: string[] = [];
+    for (let i = 0; i < items.length; i += 8) lines.push(`  ${items.slice(i, i + 8).join(', ')},\n`);
+    return lines.join('');
+  };
+  /** What the function answers for a character the table does not list: the engine's two classes (ruling 2). */
+  const besideTheTable = (c: string): 1 | 2 => (/\p{Emoji_Presentation}|\p{Cn}/u.test(c) ? 2 : 1);
+
+  it('the fixture names its data file and version, and the shared file names the same', () => {
+    expect(FIXTURE.split('\n')[1]).toContain('EastAsianWidth-17.0.0.txt (Unicode 17.0.0');
+    expect(SHARED).toContain('EastAsianWidth-17.0.0.txt');
+  });
+  it('the shared table is the fixture\'s W and F ranges merged, as the generator writes them: they cannot drift', () => {
+    const want = fromFixture();
+    expect(want).toHaveLength(123);
+    expect(tableText()).toBe(generated(want));
+    expect(FRAMES_WIDE_RANGES.map(([a, b]) => [a, b])).toEqual(want);
+  });
+  it('the shared table\'s source text is ASCII only, byte for byte', () => {
+    const bytes = [...new TextEncoder().encode(tableText())];
+    expect(bytes.length).toBeGreaterThan(1000);
+    expect(bytes.filter((b) => b > 0x7f)).toEqual([]);
+  });
+  it('the engine\'s Unicode version is not newer than the table\'s, so nothing it has assigned is missing from the table', () => {
+    const [maj, min] = (process.versions.unicode ?? '0.0').split('.').map(Number) as [number, number];
+    expect(maj * 100 + (min ?? 0)).toBeLessThanOrEqual(1700);
+  });
+  it('every range of the fixture, first, last and one inside, is two cells; the code point just outside each is what the rest of the function gives', () => {
+    const ranges = fromFixture();
+    const inTable = (cp: number): boolean => ranges.some(([a, b]) => cp >= a && cp <= b);
+    let outside = 0;
+    for (const [a, b] of ranges) {
+      for (const cp of [a, b, a + ((b - a) >> 1)]) expect(frameCellWidth(String.fromCodePoint(cp)), cp.toString(16)).toBe(2);
+      for (const cp of [a - 1, b + 1]) {
+        if (cp < 0 || cp > 0x10ffff || inTable(cp)) continue;
+        const c = String.fromCodePoint(cp);
+        expect(frameCellWidth(c), cp.toString(16)).toBe(besideTheTable(c));
+        outside++;
+      }
+    }
+    expect(outside).toBe(246);
+  });
+  it('the reviewer\'s and the panel\'s unlisted wide characters are two cells now', () => {
+    for (const cp of [0x2329, 0xfe10, 0xa960, 0x16fe0, 0x17000, 0x1b000, 0x1f200, 0xac00, 0xff01]) {
+      expect(frameCellWidth(String.fromCodePoint(cp)), cp.toString(16)).toBe(2);
+    }
+  });
+  it('unknown is wide on purpose: an unassigned code point and a noncharacter count two cells; a private-use one is refused by the shape gate before any width is asked', () => {
+    // Ruling 2: U+0378 is unassigned, U+FDD0 a noncharacter (both Cn, which the class rule lets through); U+E000 is private use (Co).
+    for (const cp of [0x0378, 0xfdd0, 0x1ffff]) expect(frameCellWidth(String.fromCodePoint(cp)), cp.toString(16)).toBe(2);
+    const P = { cols: 20, rows: 8 };
+    const boxed = (...rows: string[]): string => raw(...rows, '─'.repeat(P.cols), STATUS);
+    // Reaching the edge through an unassigned code point refuses a path going on below, on both hosts.
+    const edge = `ab/${'c'.repeat(15)}${String.fromCodePoint(0x0378)}`;
+    expect(reduceFrame(boxed(edge, 'tail rest'), P, [], [], NONE)).toEqual({ kind: 'refused', refusal: 'private-shape' });
+    expect(checkReducedFrame(boxed(edge, 'tail rest'), P, [], NONE)).toEqual({ ok: false, refusal: 'private-shape' });
+    // A private-use code point there is refused whole by rule 1 first, on both hosts; were it asked, it would count one cell.
+    const pua = `ab/${'c'.repeat(16)}${String.fromCodePoint(0xe000)}`;
+    expect(reduceFrame(boxed(pua, 'tail rest'), P, [], [], NONE)).toEqual({ kind: 'refused', refusal: 'not-a-frame' });
+    expect(checkReducedFrame(boxed(pua, 'tail rest'), P, [], NONE)).toEqual({ ok: false, refusal: 'not-a-frame' });
+    expect(frameCellWidth(String.fromCodePoint(0xe000))).toBe(1);
+  });
+});
+
+describe('the capture owner\'s condition: a row truly at the edge is at the edge (review 4109, R1, the coordinator\'s rulings 3 and 4 on wave 195)', () => {
+  // Pane 20 wide, the reviewer's measured frames: `ab/` and filler reach the last column, and `tail` goes on below. No
+  // private string is known, so only the full-width rule can refuse them. Each is refused whole on the box (`reduceFrame`)
+  // and by the server's check (`checkReducedFrame`): the one function.
+  const P = { cols: 20, rows: 8 };
+  const boxed = (...rows: string[]): string => raw(...rows, '─'.repeat(P.cols), STATUS);
+  const both = (f: string): unknown[] => [reduceFrame(f, P, [], [], NONE), checkReducedFrame(f, P, [], NONE)];
+  const REFUSED = [{ kind: 'refused', refusal: 'private-shape' }, { ok: false, refusal: 'private-shape' }];
+  const KEPT = (f: string): unknown[] => [{ kind: 'reduced', text: f, replaced: { cwd: 0, path: 0, model: 0, account: 0 } }, { ok: true }];
+  const WIDE = String.fromCodePoint(0x6f22);
+
+  it('a row reaching the last column through a wide character outside the old hand list, then a continued path tail, refuses on both hosts', () => {
+    for (const cp of [0x2329, 0xfe10, 0xa960, 0x16fe0, 0x17000, 0x1b000, 0x1f200]) {
+      const edge = `ab/${'c'.repeat(15)}${String.fromCodePoint(cp)}`; // 19 code points, 20 cells
+      expect(both(boxed(edge, 'tail rest')), cp.toString(16)).toEqual(REFUSED);
+    }
+  });
+  it('a straddler at the last column, then a continued tail: the row ends one cell short as drawn, with no trailing space, and refuses on both hosts', () => {
+    const short = `ab/${'c'.repeat(16)}`; // 19 cells: the wide character did not fit in the last cell and was wrapped whole
+    expect(both(boxed(short, `${WIDE}tail rest`))).toEqual(REFUSED);
+  });
+  it('the same straddle with the blank last cell read as a trailing space: measured after trailing spaces are dropped, it refuses on both hosts', () => {
+    const drawn = `ab/${'c'.repeat(16)} `; // 20 code points as drawn, 19 cells once the trailing space is dropped
+    expect(both(boxed(drawn, `${WIDE}tail rest`))).toEqual(REFUSED);
+  });
+  it('a row one cell short whose next row begins with a narrow character is a short row, not a wrap, and is kept', () => {
+    // The narrow character would have fitted in the last cell, so the terminal did not wrap there.
+    const short = `ab/${'c'.repeat(16)}`;
+    expect(both(boxed(short, 'tail rest'))).toEqual(KEPT(boxed(short, 'tail rest')));
+  });
+  it('a row two cells short, even with a wide character below, is kept', () => {
+    const short = `ab/${'c'.repeat(15)} `;
+    expect(both(boxed(short, `${WIDE}tail rest`))).toEqual(KEPT(boxed(short, `${WIDE}tail rest`)));
+  });
+});
+
 describe('a bare quote is Claude Code\'s own glyph, and a cut token is exact (review 4086, F-A, the coordinator\'s ruling)', () => {
   const NAMES = Object.values(FRAMES_REPLACED).map((t) => Array.from(t).slice(1, -1).join(''));
   const both = (f: string): unknown[] => [reduceFrame(f, PANE, OURS, [], NONE), checkReducedFrame(f, PANE, OURS, NONE)];
@@ -210,6 +341,17 @@ describe('a bare quote is Claude Code\'s own glyph, and a cut token is exact (re
     // The whole name with its other quote missing is a cut too: it is what a row too narrow for its token would leave. (A row
     // holding the whole word `account` is rule 6's, which replaces it on the box, so that name is not among these.)
     for (const n of NAMES.filter((x) => x !== 'account')) for (const row of rows(`‹${n}`, `${n}›`)) expect(both(frame(row)), row).toEqual(REFUSED);
+  });
+  it('a cut token after an earlier bare quote of the same kind in the same row still refuses on both hosts (review 4109, F3)', () => {
+    // Every quote of a row is examined, not only its first: a bare `›` (or `‹`) before the cut does not hide it.
+    for (const n of NAMES) {
+      const cps = Array.from(n);
+      for (let k = 1; k < cps.length; k++) {
+        const tail = `${cps.slice(cps.length - k).join('')}›`;
+        const head = `‹${cps.slice(0, k).join('')}`;
+        for (const row of [`  one › two ${tail} more`, `  › x ›  ${tail}`, `  a ‹ b ${head} here`, `  ‹ ‹ ${head}`]) expect(both(frame(row)), row).toEqual(REFUSED);
+      }
+    }
   });
   it('a complete token is kept: alone, and, for the two no word rule reads, between words and twice in a row', () => {
     // `‹account›` holds the word rule 6 reads, so a row holding more than that token is that rule's, as before this round.
@@ -282,6 +424,17 @@ describe('rules 3 to 6: a row replaced keeps its width and its border', () => {
     for (const row of ['  …/projects/x', '  ~/work here', '  /a/b', '  Haiku', '  plan']) {
       expect(reduceFrame(frame(row), PANE, OURS, [], NONE), row).toEqual({ kind: 'refused', refusal: 'private-shape' });
     }
+  });
+  it('a replaced row is measured in screen cells: wide content as wide as the token is replaced, and keeps its width on screen (review 4109, F5)', () => {
+    const cells = (row: string): number => Array.from(plainOf(row)).reduce((n, c) => n + frameCellWidth(c), 0);
+    // Ten wide characters and a path: 15 code points but 25 cells, wider than the 19-cell token, so it is replaced, not refused.
+    const row = `  ${'漢'.repeat(10)} /a/b`;
+    const out = reduced(frame(row)).split('\n')[0]!;
+    expect(out.trim()).toBe(FRAMES_REPLACED.cwd);
+    expect(cells(out)).toBe(cells(row));
+    expect(checkReducedFrame(reduced(frame(row)), PANE, OURS, NONE)).toEqual({ ok: true });
+    // Four wide characters and the path are 13 cells, narrower than the token: refused, as before.
+    expect(reduceFrame(frame(`  ${'漢'.repeat(4)} /a/b`), PANE, OURS, [], NONE)).toEqual({ kind: 'refused', refusal: 'private-shape' });
   });
   it('rule 5: a model name, rule 6: an account or a plan', () => {
     expect(reduced(frame('  Haiku 9.9 · whatever')).split('\n')[0]!.trim()).toBe(FRAMES_REPLACED.model);
@@ -497,6 +650,42 @@ describe('over-replacement on the recorded 2.1.300 panes (the coordinator\'s con
     }
     expect(missed).toEqual([]);
     expect(pathRows).toContain('stash-after-cs.ansi');
+  });
+  it('the third stash pane: the row the path rule replaces is the stash notice row, and the notice is not in the stored text (review 4109, F8b)', () => {
+    const recorded = readFileSync(path.join(dir, 'box', 'stash-after-cs.ansi'), 'utf8');
+    const pane = realPane(recorded);
+    const text = asTheRecipeMeetsIt(recorded);
+    const r = reduceFrame(text, pane, [], [], NONE);
+    if (r.kind !== 'reduced') throw new Error(`refused: ${r.refusal}`);
+    const before = text.split('\n');
+    const after = r.text.split('\n');
+    const notice = before.findIndex((l) => plainOf(l).includes('› stashed'));
+    expect(notice).toBeGreaterThan(0);
+    // The one path row is the notice row (it shares its row with the tmux hint's `~/.tmux.conf`), replaced by the token.
+    expect(r.replaced.path).toBe(1);
+    const changed = before.map((l, i) => (after[i] !== l ? i : -1)).filter((i) => i >= 0);
+    expect(changed).toContain(notice);
+    expect(after[notice]!.trim()).toBe(FRAMES_REPLACED.cwd);
+    expect(r.text).not.toContain('stashed');
+  });
+  it('the full-width rule has a candidate row in the recorded frames at their real sizes, at least in the six where it had one before wave 195 (review 4109, F8a)', () => {
+    // A candidate row is one the rule reads as run to the edge (or to a straddle), with a row under it. Counted by frame
+    // over the 61 2.1.300 panes and the box folder's, as the recipe meets them, so a size where the rule cannot fire is noticed.
+    const all = [...files.map((f) => path.join(dir, f)), ...readdirSync(path.join(dir, 'box')).filter((f) => f.endsWith('.ansi')).map((f) => path.join(dir, 'box', f))];
+    const withCandidate: string[] = [];
+    for (const f of all) {
+      const recorded = readFileSync(f, 'utf8');
+      const pane = realPane(recorded);
+      const plains = asTheRecipeMeetsIt(recorded).split('\n').map(plainOf);
+      if (plains.some((p, i) => i + 1 < plains.length && runsToTheEdge(p, plains[i + 1]!, pane))) withCandidate.push(path.basename(f));
+    }
+    expect(all).toHaveLength(90);
+    const BEFORE = [
+      'cc300-ask-freetext-1000.txt', 'cc300-ask-review-4q-100col.txt', 'cc300-ask-wrapped-question-focused.txt', 'cc300-ask-wrapped-question.txt',
+      'box-taller-than-capture.ansi', 'stash-held-during-turn.ansi',
+    ];
+    expect(withCandidate).toEqual(expect.arrayContaining(BEFORE));
+    expect(withCandidate).toHaveLength(6);
   });
   it('the frame size of a recorded pane is measured as the reader measures it', () => {
     expect(frameSize(readFileSync(path.join(dir, files[0]!), 'utf8')).rows).toBeGreaterThan(0);

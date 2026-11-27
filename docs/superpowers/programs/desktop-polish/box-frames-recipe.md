@@ -123,8 +123,9 @@ its cases:**
   end with three different letters, so at most one name stands against a quote.
 - **The full-width rule counts screen cells (F-B).** A wide character (the East Asian wide and fullwidth blocks, an emoji
   drawn as one) counts two cells, so a row that reaches the last column through one is at the edge. A row of wide
-  characters one cell short is not. Every other character counts one cell, a combining mark included, so a row is never
-  read as narrower than it is drawn.
+  characters one cell short is not. Round 2's sentence that a row is never read as narrower than it is drawn was not true:
+  the wide set was a hand list, and a wide character outside it counted one cell (review 4109's R1 and F7). Wave 195
+  replaced the list with the Unicode table and says where a row is still read narrower than it is drawn (section 9).
 - **Recorded panes as the recipe meets them (F-H).** Every recorded pane of the panes' box folder, and every 2.1.300 pane,
   is reduced with the capture's status row a NEW row under its lowest rule, at the pane's real width and height (its rows
   and its widest row, as the reader measures them), so the pane's top row scrolls off and every rule runs as on a real
@@ -161,14 +162,20 @@ its cases:**
   read as a path; the box's exact home and working-directory strings still replace the capture's own paths (review 4086's
   F-E).
 - **A private string split across three rows is not caught.** The wrap rule joins two adjacent rows. A three-row split needs
-  a middle row that is wholly inside the private string, so the string would be longer than a row; the recipe's panes are
-  220 columns wide and the longest of the box's strings, its working directory, is about 70 characters (review 4086's
-  F-C). It goes onto the alarm wave's ticket.
+  a middle row that is wholly inside the private string, so the string would be longer than that row's content. A row's
+  content is not always the pane's width: inside a bordered box drawn narrower than the pane, a row holds only what fits
+  between the borders, so the split needs a string longer than the box's content width, not the pane's 220 columns
+  (review 4109's F7). The longest of the box's strings, its working directory, is about 70 characters: inferred, not
+  measured on a real box (review 4086's F-C). It goes onto the alarm wave's ticket.
 - **Characters the class rule lets through.** Variation selectors, combining marks, unassigned and noncharacter code
   points, the Hangul fillers, the braille blank, the no-break and wide spaces, the object replacement and replacement
   characters and regional indicators pass the shape rule, which is by class as ruled. Placed inside a private string, a
   model word or an account word, one defeats the exact matchers (a private with a U+FE0F inside survives on the box;
-  `Haiku 5.5` with a U+034F inside survives rule 5). No build draws one there. A named residual (review 4086's F-D), on the alarm wave's ticket.
+  `Haiku 5.5` with a U+034F inside survives rule 5). It defeats three shape rules too, which are not exact strings, because
+  a combining mark splits the run each reads (review 4109's R2): the path rule (`PATH_LIKE`, components of `[\w.-]`), the
+  private shapes (`PRIVATE_SHAPES`: a home or mount path, a home-relative path, an email, an IPv4 address, a host name and
+  a long hex run) and the credential shapes (the product masker's `CREDENTIAL_MASKS`, which rule 9 runs on the box). No
+  build draws one there. A named residual (review 4086's F-D), on the alarm wave's ticket.
 - **The third stash pane's notice row is replaced.** In `stash-after-cs.ansi` the stash notice shares its row with the tmux
   hint, which carries `~/.tmux.conf`, so the path rule replaces the whole row and the notice is not in the stored frame
   (pinned). If the first real capture's stash case shows a replacement on that row, that figure goes to the capture owner
@@ -181,8 +188,8 @@ its cases:**
   `status-row`. In the recorded 2.1.291 model-picker pane the build draws its effort mark at that row's right end. The
   first real capture's refused-by-word counts show it if it happens, and they go to the capture owner.
 - **A narrow replaced row refuses.** A row whose content is narrower than its whole token (`‹working directory›`,
-  `‹model›`, `‹account›`) refuses the frame where it would be replaced. None of the 61 recorded 2.1.300 panes and none of
-  the 29 box-folder panes has one.
+  `‹model›`, `‹account›`), both measured in screen cells since wave 195, refuses the frame where it would be replaced.
+  None of the 61 recorded 2.1.300 panes and none of the 29 box-folder panes has one.
 - **What the driver cannot produce** is in the plan's section 3: a macOS box, a real keyboard, a person's Enter, a mouse
   scroll, a new build's exact cap, and anything a real account or model draws.
 
