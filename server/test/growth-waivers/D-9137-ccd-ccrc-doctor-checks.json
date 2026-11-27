@@ -1,0 +1,8 @@
+{
+  "file": "ccd/ccrc-doctor-checks",
+  "maxDelta": 94,
+  "d": "D-9137",
+  "reason": "doctor's `artifacts` check (native docs X5 wave A4.2): the keys judged through ccrc's mirror of the site rule, the second site block found in the generated Caddyfile, the listener asked on loopback once per artifact name, and the two FAILs bound by the coordinator (artifact keys beside an address, beside a sign-in that is not whole), plus `name` resolving every host of its comma list; measured against the merge base, `main` at #3405's merge; kept in the check table because every doctor check lives there and is listed by name",
+  "added": "2026-11-27",
+  "createdAt": "2026-11-27"
+}
