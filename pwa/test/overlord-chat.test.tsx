@@ -480,3 +480,59 @@ describe('the toggle and the retry (review F3, F4)', () => {
     expect(toggle()).toHaveAttribute('aria-pressed', 'false');
   });
 });
+
+describe('the toggle under a send in flight (review 4084 F2)', () => {
+  const live = (): Fake => fakePort({ kind: 'thread', thread: thread([divider(2, 1, 0, { current: true })]) });
+  const toggle = (): HTMLElement => screen.getByRole('button', { name: 'Off the record' });
+
+  it('while a send is in flight the toggle is held, and says so; after the clear it is off and free, and the next message goes off the record', async () => {
+    const port = live();
+    let answer: (a: ChatSendAnswer) => void = () => {};
+    port.send = async (sessionId, text, opts) => {
+      port.sendCalls.push({ sessionId, text, opts });
+      return new Promise<ChatSendAnswer>((r) => { answer = r; });
+    };
+    await mount(port);
+    type('on the record');
+    await send();
+    // The privacy direction: a press during the wait must never be undone by the clear that follows, so the toggle is held.
+    expect(toggle(), 'held while the message is sent').toBeDisabled();
+    expect(toggle()).toHaveAccessibleDescription('Held while the message is sent.');
+    fireEvent.click(toggle());
+    expect(toggle()).toHaveAttribute('aria-pressed', 'false');
+    await act(async () => { answer({ kind: 'recorded', messageId: 9, cut: false, replay: false, offRecord: false }); });
+    await flush();
+    expect(box().value).toBe('');
+    expect(toggle()).toBeEnabled();
+    expect(toggle()).not.toHaveAccessibleDescription('Held while the message is sent.');
+    fireEvent.click(toggle());
+    expect(toggle()).toHaveAttribute('aria-pressed', 'true');
+    type('between us');
+    await send();
+    expect(port.sendCalls.map((c) => c.opts.offRecord)).toEqual([false, true]);
+    await act(async () => { answer({ kind: 'recorded', messageId: 10, cut: false, replay: false, offRecord: true }); });
+    await flush();
+  });
+});
+
+describe('a trigger past a slower pick-up timer reads at the coalescer\'s spacing (review 4084 F1)', () => {
+  beforeEach(() => { vi.useFakeTimers({ now: T0 + 60_000 }); });
+  const tick = async (ms: number): Promise<void> => { await act(async () => { await vi.advanceTimersByTimeAsync(ms); }); };
+
+  it('a message past its first minute sets the 30 s timer; a user turn 3 s after the read is read at 10 s, not 30 s', async () => {
+    let push: (m: SessionStreamMsg) => void = () => {};
+    const port = fakePort({ kind: 'thread', thread: thread([divider(2, 1, 0, { current: true }), message(row(4, -10))]) });
+    await mount(port, [], (f) => { push = f; return () => {}; });
+    expect(port.threadCalls).toBe(1);
+    await tick(3_000);
+    act(() => { push({ type: 'events', uuid: 'u', events: [user('u9', 63, 'a turn')], offset: 0 }); });
+    await tick(6_900);
+    expect(port.threadCalls, 'not before the coalescer\'s spacing').toBe(1);
+    await tick(200);
+    expect(port.threadCalls, 'the trigger replaced the slower timer: read at 10 s').toBe(2);
+    await tick(29_000);
+    expect(port.threadCalls, 'then the 30 s timer again, not before').toBe(2);
+    await tick(1_000);
+    expect(port.threadCalls).toBe(3);
+  });
+});

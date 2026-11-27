@@ -381,6 +381,9 @@ export function pickUpReadEveryCases(m: ChatWordsModule): Record<string, SuiteCa
     'the youngest awaited message decides': () => {
       expect([m.pickUpReadEvery(t(waiting(1, 300_000), waiting(2, 5_000)), NOW), m.pickUpReadEvery(t(waiting(1, 5_000), waiting(2, 300_000)), NOW)]).toEqual([10_000, 10_000]);
     },
+    'a stamp in the console\'s future counts as young': () => {
+      expect([m.pickUpReadEvery(t(waiting(1, -1)), NOW), m.pickUpReadEvery(t(waiting(1, 300_000), waiting(2, -5_000)), NOW)]).toEqual([10_000, 10_000]);
+    },
   };
 }
 
@@ -485,6 +488,7 @@ export const CHAT_MUTANT_SETS: Record<string, MutantSet<never>> = {
     { id: 'P4 no slowdown', old: 'return youngest < 60_000 ? CHAT_READ_EVERY_MS : PICK_UP_READ_LATER_MS;', new: 'return CHAT_READ_EVERY_MS;' },
     { id: 'P5 a pick-up awaited', old: " || e.ticks.lit['picked-up']", new: '' },
     { id: 'P6 a settlement awaited', old: ' || e.ticks.lit.settled) continue;', new: ') continue;' },
+    { id: 'P7 a stamp in the future skipped', old: '    if (age >= PICK_UP_WAIT_MS) continue;\n', new: '    if (age >= PICK_UP_WAIT_MS || age < 0) continue;\n' },
   ]),
   'pwa/src/overlord/chatWords.ts#historyItemsToChat': set<ChatWordsModule>(WORDS, historyItemsCases, [
     { id: 'H1 a user item drawn as the Overlord\'s text', old: "if (typeof text === 'string' && role === 'assistant') return", new: "if (typeof text === 'string') return" },

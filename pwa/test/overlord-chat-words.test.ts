@@ -226,6 +226,13 @@ describe('pickUpReadEvery: the timer reads only for a young message waiting for 
     expect(pickUpReadEvery(t(aged(1, 900_000), aged(2, 300_000)), now)).toBe(PICK_UP_READ_LATER_MS);
     expect(pickUpReadEvery(t(aged(1, 900_000), aged(2, 700_000)), now)).toBeNull();
   });
+  // Review 4084's F3: the age is the console's clock against the server's stamp, so a console behind the server sees a new
+  // message stamped in its future. That message is young (it is awaited at the fast spacing), never skipped (mutant P7).
+  it('a stamp in the console\'s future counts as young: awaited every 10 s, never skipped', () => {
+    expect(pickUpReadEvery(t(aged(1, -1)), now)).toBe(CHAT_READ_EVERY_MS);
+    expect(pickUpReadEvery(t(aged(1, -3_600_000)), now)).toBe(CHAT_READ_EVERY_MS);
+    expect(pickUpReadEvery(t(aged(1, 300_000), aged(2, -5_000)), now)).toBe(CHAT_READ_EVERY_MS);
+  });
 });
 
 describe('the thread\'s trouble before any read (review F7) and the older messages line (review F2)', () => {

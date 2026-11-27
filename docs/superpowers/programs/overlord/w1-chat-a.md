@@ -43,7 +43,7 @@ whose only change is `offRecord: false` on a `recordMessage` fixture, and `pwa/t
 | The chat part: dividers with their earlier pages, operator bubbles with ticks and marks, the server's line, the live transcript merged with the record, a line for every part that could not be read, the composer with the off-the-record toggle | `pwa/src/overlord/OverlordChat.tsx` (new), `overlordChat.css` (new) | L4 |
 | Its pieces: `ChatTicks`, `ChatDivider`, `ChatServerLine`, `PaneTurn` | `pwa/src/overlord/*.tsx` (new) | L4 |
 | The hook: the thread read, one coalescer for every trigger, the earlier pages, the send with its key and term; the port it declares (`OverlordChatPort`: the thread, the earlier page, the send) | `pwa/src/overlord/useOverlordChat.ts` (new) | L4 |
-| The refresh's decisions: `chatReadTrigger` (the allow-list), `nextReadAt` (the spacing and a ceiling's wait), `awaitsPickUp` (the timer reads only then); the part's status words | `pwa/src/overlord/chatWords.ts` | L1 |
+| The refresh's decisions: `chatReadTrigger` (the allow-list), `nextReadAt` (the spacing and a ceiling's wait), `awaitsPickUp` (the timer reads only then; a stage 1b snapshot: fix round 1 replaced it with `pickUpReadEvery`); the part's status words | `pwa/src/overlord/chatWords.ts` | L1 |
 | The composer's opt-in props: `onRecord` (the text kept until the answer, cleared only on `clear`; Send held while one answer is on its way; a draft edited meanwhile never cleared by it) and `leading` (a node before Send); `onSend` is optional beside `onRecord` | `pwa/src/session/Composer.tsx` | L4 |
 | `ChatItemView` exported, so a live transcript row in the chat is drawn by the session view's own renderer | `pwa/src/session/ChatList.tsx` | L4 |
 
@@ -166,6 +166,12 @@ The coordinator ruled on the first five on 2026-11-26 (call 1543): all stand as 
   the census sees the words read inside the door's own handler; a call in `server.ts` would be a call outside every door.
 - **`chat-thread-answer-has-one-reader`** (stage 2): the client's calls hand status and body to L0 readers, so the client imports
   nothing from the console and the hook's port type is the L0 answer type.
+- **`chat-pick-up-wait-ten-minutes`** (fix round 1, review 4070 F1): the plan's pick-up timer had no end; the timer now reads
+  for a message waiting for its pick-up only while it is younger than ten minutes (every 10 s in its first minute, then every
+  30 s). The bound and why are under Fix round 1.
+- **`chat-toggle-follows-the-box`** (fix round 1, review 4070 F4; fix round 2, review 4084 F2): the plan reset the toggle after a
+  recorded send; it resets only when the composer really cleared the box (`onRecordCleared`), and it is held while a send is on
+  its way, so the clear never undoes a press made during the wait.
 - **`chat-visibility-through-the-page-clock`** (stage 1b): the hook hears the page turning visible through
   `lib/pageClock.ts#onPageVisible`, the one owner of that subscription (`pwa-one-owner`), and reads `document.visibilityState`
   itself before each read.
@@ -243,7 +249,7 @@ and every pwa leg were green (the chat's browser file, 36 cases, and the place's
 
 ## Fix round 1 (review 4070, the coordinator's call 1737)
 
-Thirteen findings survived, none critical; eleven were built here, each with its case red first (19 new cases, every one red
+Thirteen findings survived, none critical; eleven were built here. The diff adds 25 cases; 19 is the red-first count (19 new cases, every one red
 before the code: 10 in the words suite, 8 in the part's, 1 in the composer's; then green), and two are known limits below.
 
 | Finding | What changed | Where |
@@ -274,6 +280,27 @@ Door mutations by hand (F8, F9), each red, each reverted, on the fix round's tre
 - D6 no line on a composed refusal (the arm a W1 earlier answer takes): the earlier door's suite 7 red;
 - D7 the thread dropped from `MASKED_GET_ROUTES`: the thread door's suite 1 red (the new mask case).
 
+## Fix round 2 (review 4084, the coordinator's call 1767)
+
+Round 1 held; five items survived, none critical. Three cases were added: one red first (the toggle under a send in flight), two
+pins of behaviour round 1 already had, each proven by a mutant that reds it.
+
+| Item | What changed | Where |
+|---|---|---|
+| F2, the toggle under a send in flight (the privacy direction) | The toggle is HELD while a send is on its way: disabled, and described to a screen reader by `TOGGLE_HELD_WORDS`, "Held while the message is sent.". Chosen over resetting on a clear only when the toggle still holds the value the send carried, because that compare cannot tell a press made twice during the wait (off, then on again for the next message) from no press, and would reset it to on the record. Red first: the part's case pressing the toggle in flight | the part, `chatWords.ts#TOGGLE_HELD_WORDS` |
+| F1, a trigger past a slower pick-up timer | One part case: a message past its first minute sets the 30 s timer, a user turn 3 s after the read is read at 10 s, then the 30 s timer again | the part's suite |
+| F3, a stamp in the future | A words case and a sim case: a message stamped after the console's now is young (every 10 s), never skipped; mutant P7 registered; the clock limit below | the words suite, `sim/chatSets.ts` |
+| F5, prose | The hook's, the part's and the words module's headers say the hook and the part keep the timer's bookkeeping, the view's state and a few guards, never policy; the 19 is the red-first count of round 1's 25 cases; the stage 1b table row naming `awaitsPickUp` is marked a snapshot; the slugs `chat-pick-up-wait-ten-minutes` and `chat-toggle-follows-the-box` under Departures | here, the three headers |
+
+Mutants, each red, each reverted, the part's suite alone (31 cases):
+- K-R1 a sooner ask never replaces a pending timer (`return;` for the comparison): 2 red, the F5 case and the new case;
+- K-R2 the comparison off by the slow spacing (`at > timerAt - 25_000`): 2 red, the same two;
+- K-R3 only an at-once ask replaces a timer (`at >= timerAt || at > now`, the shape the reviewer's mutant took): 1 red, the new case
+  alone, which no case caught before this round;
+- K-T1 the toggle not held in flight (`disabled={!designated}`): 1 red, the new toggle case;
+- P7 a stamp in the future skipped (`age >= PICK_UP_WAIT_MS || age < 0`), registered in `sim/chatSets.ts` under
+  `pickUpReadEvery`'s set: killed; the chat words sets 7 of 7 with every mutant killed.
+
 ## Known limits (so far)
 
 - `chat-thread-shows-the-newest-100` (F2): the thread holds the newest 100 messages; when older ones exist one line says so, and
@@ -285,6 +312,16 @@ Door mutations by hand (F8, F9), each red, each reverted, on the fix round's tre
   designated session; step 7's filter dropped) wait for the arm. Under the not-pageable arm every earlier-door answer is a
   refusal, so that door's ceiling never refuses and its lines are bounded only by the sign-in.
 
+- `chat-pick-up-age-is-the-console-clock` (review 4084 F3): a message's age is the console's clock against the server's stamp,
+  so the timer's read count holds while the two clocks roughly agree; a console far ahead of the server reads nothing on the
+  timer for a new message, and one far behind reads for longer and still stops. Ageing against a server time is an additive wire
+  field, the coordinator's ticket.
+- `chat-at-once-read-waits-for-a-read-in-flight` (review 4084 F4): a read already in flight makes the at-once read wait for the
+  next spacing, since the coalescer marks it to run again after that read rather than at once.
+- `chat-first-read-failure-waits-for-a-trigger`: a first read that fails is retried only by the next trigger (a stream frame, a
+  send, the tab shown again), not on a timer.
+- `chat-part-mounted-mid-turn-misses-its-end`: a part mounted while the Overlord is already busy has no `busy` status before the
+  turn's `idle`, so it can miss that turn's end as a trigger; the next trigger reads.
 - Earlier generations are not paged in W1 (the measured arm); the divider names `ccrc history` instead. The part draws a
   `readable` divider's page and its "Show earlier" (the next page asks `around` the page's first item) for when paging joins.
 - The gate counts were re-derived at this branch's merge of main 9e5f592c24, the board (#3463) on main (the coordinator, calls

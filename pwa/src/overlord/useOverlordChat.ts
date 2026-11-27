@@ -1,8 +1,9 @@
 // The Overlord chat's hook (Overlord W1, the chat, Task 4; plan `docs/superpowers/plans/2026-11-14-overlord-w1/w1-chat.md`,
 // questions 5, 9 and 10).
 //
-// L4: it reads the thread, refreshes it through ONE coalescer, reads earlier pages and sends. Every decision is
-// `chatWords.ts`'s (L1): which stream frames ask for a read (`chatReadTrigger`), when the next read may run (`nextReadAt`),
+// L4: it reads the thread, refreshes it through ONE coalescer, reads earlier pages and sends. It keeps the scheduling's own
+// bookkeeping (the pending timer and when it fires, a read in flight, a hidden tab's missed read) and a few guards (a read after
+// unmount, a send with no thread); every policy is `chatWords.ts`'s (L1): which stream frames ask for a read (`chatReadTrigger`), when the next read may run (`nextReadAt`),
 // whether and how often the pick-up timer reads (`pickUpReadEvery`, which ends it ten minutes after a message), what an earlier
 // page answer becomes and what comes next (`earlierPageOf`), whether a send clears the draft (`draftAfterSend`), and every
 // sentence it sets (`sendNotice`, `NOBODY_TO_SEND_WORDS`). A refusal word's sentence is the shared client's tables'

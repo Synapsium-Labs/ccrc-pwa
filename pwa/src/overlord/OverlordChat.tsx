@@ -7,15 +7,18 @@
 // that could not be read (never an empty conversation), and the composer, with the off-the-record toggle before Send.
 //
 // THE RECORD IS THE ONLY SOURCE OF THE OPERATOR'S WORDS: only an `entry` row holding a `message` is drawn as an operator
-// bubble. L4: every decision is `chatWords.ts`'s, every read and send `useOverlordChat`'s.
+// bubble. L4: what is drawn and every sentence are `chatWords.ts`'s, every read and send `useOverlordChat`'s; the part keeps
+// only the view's own state (the toggle, the scroll pin, whether a send is on its way) and the guards that pick a row's view.
 //
 // What it takes as props, so it imports no file another part owns: the port (the shared client's three calls, built in
 // `ChatPart.tsx`), the current generation's transcript rows (`ChatItem`, `buildChatItems`'s rows, from the place's session
 // stream), and that stream's frames through `subscribe`. The place mounts it through `ChatPart`.
 //
 // THE TOGGLE resets only when the composer really cleared the box (`onRecordCleared`, review F4): a follow-up typed while an
-// off-the-record answer was on its way stays in the box, and stays off the record.
-import { useEffect, useLayoutEffect, useRef, useState } from 'react';
+// off-the-record answer was on its way stays in the box, and stays off the record. It is HELD while a send is on its way
+// (disabled, described by `TOGGLE_HELD_WORDS`; review 4084 F2), so the clear that follows never undoes a press made during the
+// wait: the privacy direction.
+import { useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { Button } from '@ccrc/ui';
 import type { SessionStreamMsg } from '../../../shared/api';
@@ -29,7 +32,7 @@ import { ChatTicks } from './ChatTicks';
 import { PaneTurn } from './PaneTurn';
 import {
   CUT_WORDS, EARLIER_UNREACHABLE_WORDS, GENERATIONS_UNMEASURED_WORDS, MESSAGES_UNMEASURED_WORDS, NO_OVERLORD_WORDS, OFF_RECORD_WORDS,
-  OLDER_MESSAGES_WORDS, READINESS_UNMEASURED_WORDS, READING_WORDS, ccrcLineWords, mergeLive, messageLinkWords, threadTroubleWords,
+  OLDER_MESSAGES_WORDS, READINESS_UNMEASURED_WORDS, READING_WORDS, TOGGLE_HELD_WORDS, ccrcLineWords, mergeLive, messageLinkWords, threadTroubleWords,
   type ChatRow,
 } from './chatWords';
 import { genKey, useOverlordChat, type EarlierState, type OverlordChatPort } from './useOverlordChat';
@@ -120,13 +123,21 @@ export function OverlordChat({ port, live, subscribe }: OverlordChatProps): Reac
     if (el !== null) pinned.current = el.scrollHeight - el.scrollTop - el.clientHeight < 48;
   };
 
-  const record = (text: string): Promise<'clear' | 'keep'> => chat.send(text, offRecord);
+  const [sending, setSending] = useState(false);
+  const heldId = useId();
+  const record = async (text: string): Promise<'clear' | 'keep'> => {
+    setSending(true);
+    try { return await chat.send(text, offRecord); } finally { setSending(false); }
+  };
 
   const toggle = (
-    <Button variant={offRecord ? 'primary' : 'ghost'} size="fit" className="flex-none whitespace-nowrap" aria-pressed={offRecord}
-      disabled={!designated} onClick={() => setOffRecord((v) => !v)}>
-      Off the record
-    </Button>
+    <>
+      <Button variant={offRecord ? 'primary' : 'ghost'} size="fit" className="flex-none whitespace-nowrap" aria-pressed={offRecord}
+        aria-describedby={sending ? heldId : undefined} disabled={!designated || sending} onClick={() => setOffRecord((v) => !v)}>
+        Off the record
+      </Button>
+      {sending && <span id={heldId} className="sr-only">{TOGGLE_HELD_WORDS}</span>}
+    </>
   );
 
   return (

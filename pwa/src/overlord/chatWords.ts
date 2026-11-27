@@ -10,7 +10,8 @@
 // with the text as data. `mergeLive` places the record's messages in the live transcript; `historyItemsToChat` draws an earlier
 // page; `draftAfterSend` keeps the composer's text on every answer but a recorded one. The refresh's three deciders
 // (`chatReadTrigger`, `nextReadAt`, `pickUpReadEvery`), what an earlier page answer becomes (`earlierPageOf`) and every sentence
-// the part says are here too, so the hook and the part decide nothing.
+// the part says are here too, so no policy lives in the hook or the part: they keep only the timer's bookkeeping, the view's
+// own state and a few guards, which is where scheduling belongs.
 //
 // The one harness surface this leans on is Claude Code's transcript (the live generation's stream, and what a pane turn is).
 // It is read only through the readers that already exist (`buildChatItems`, the history door's items), so another harness
@@ -267,6 +268,9 @@ export const READING_WORDS = 'Reading the conversation';
 export const NOBODY_TO_SEND_WORDS = 'No Overlord is started, so there is nobody to send to.';
 /** The thread holds the newest `CHAT_PAGE_ROWS` messages; this line says so when the door answers that older ones exist. */
 export const OLDER_MESSAGES_WORDS = `Older messages are in the record; this shows the newest ${CHAT_PAGE_ROWS}.`;
+/** The off-the-record toggle's description while a message is on its way (review 4084 F2): the toggle is held then, so the clear
+ *  that follows never undoes a press made during the wait. */
+export const TOGGLE_HELD_WORDS = 'Held while the message is sent.';
 
 /** Why the thread could not be read this time. The last thread read is kept beside it, never replaced by an empty one. */
 export type ThreadTrouble =
