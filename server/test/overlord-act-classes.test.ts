@@ -79,7 +79,8 @@ function neverRelaxesViolations(t: Table): string[] {
 
 /** The SAFETY scan (plan question 5): `live-box-act` is O1, uncovered and refused everywhere; no row's `what` names `ccd`
  *  followed by a forbidden verb; the catalogue's source spells none of those verbs as a string literal. */
-const ccdVerb = (what: string): string | null => FORBIDDEN_CCD_VERBS.find((v) => new RegExp(`\\bccd\\s+${v.split(' ')[0]!.replace(/[-]/g, '\\-')}(?![\\w-])`).test(what)) ?? null;
+const reEscape = (s: string): string => s.replace(/[\\^$.*+?()[\]{}|-]/g, '\\$&');
+const ccdVerb = (what: string): string | null => FORBIDDEN_CCD_VERBS.find((v) => new RegExp(`\\bccd\\s+${reEscape(v.split(' ')[0]!)}(?![\\w-])`).test(what)) ?? null;
 function safetyViolations(t: Table, source: string): string[] {
   const out: string[] = [];
   const box = t['live-box-act'];
