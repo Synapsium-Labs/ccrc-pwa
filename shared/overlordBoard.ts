@@ -167,8 +167,10 @@ const BOARD_SETTING_STORED_MAP = {
 export type BoardSettingStored = keyof typeof BOARD_SETTING_STORED_MAP;
 export const BOARD_SETTING_STORED = Object.keys(BOARD_SETTING_STORED_MAP) as BoardSettingStored[];
 /** One switch kept as a settings row, through its owner's own reader (board B3). `stored` is null only where that reader does not
- *  tell a lost row from a written one (the run-close rows). `value` is the word the row's owner reads in force, for a seeded or lost
- *  row too (the idle roll reads its seed as `all`, the stall watch reads a lost row as `follow`); `unknown` where the owner reads no
+ *  tell a lost row from a written one (the run-close rows). `value` is the word the row's owner reads from the row, a seeded or lost
+ *  row given the owner's meaning (the idle roll reads its seed as `all`, the stall watch reads a lost row as `follow`); it never says
+ *  whether the lane the setting feeds is armed, held or stopped (a stored `live` collect lane can still be stopped or shadowed, and
+ *  the stall watch's row is its resolver's chosen level, not the level in effect); `unknown` where the owner reads no
  *  word from a row that stands (never the stored text); null only when no row stands and its owner gives that no word (the collect
  *  lane reads it as unmeasurable, the dispatch abandon arms nothing). The run-close rows never answer `unknown`: their reader reads a
  *  lost row, and any word it does not know, as shadow, which is what the lanes do too. A read that failed is unmeasured. */

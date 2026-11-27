@@ -13,7 +13,8 @@ exactly one of three groups of `brakes`, keyed by its name:
 - `settings` (new, optional on the wire): the ten settings rows, each `measured` with `stored` and `value`, or `unmeasured` with a
   closed reason. `stored` is `row`, `absent` (no row stands; what that means is the owner's) or `seed` (a migration's seed, which no
   operator wrote), and null only for the three run-close rows, whose store reader reads a lost row as shadow and so cannot say.
-  `value` is the word the row's OWNER reads in force (fix round 1, F1), a seeded or lost row included; `unknown` where the owner
+  `value` is the word the row's OWNER reads from the row (fix round 1, F1), a seeded or lost row given the owner's meaning; it is
+  the setting, never whether the lane it feeds is armed, held or stopped (fix round 2; see Known limits); `unknown` where the owner
   reads no word from a row that stands; null only when no row stands and the owner gives that no word. Per row, below.
 - `files` (new, optional): the three files on the fleet host, each `measured` `set` or `clear`, or `unmeasured`.
 
@@ -28,7 +29,8 @@ listed projects root whose own listing failed and which the measured type probe 
 as gone. A plain file is still skipped silently, and so is an entry that vanished. An entry whose type the probe cannot read is
 named, because the walk cannot tell it from a failed read. Those entries leave the walk measured, so the rest of it stands. The
 cache keeps its rule (a measured walk is kept, an unmeasured one is not), and a kept walk keeps its names with it, so a read served
-from the cache names them too (`ProjectWalkCache.keptWalkRead`; `keptWalk` and `keepWalk`'s old call shape are unchanged). The
+from the cache names them too (`ProjectWalkCache.keptWalkRead`). At the first build `keptWalk` and `keepWalk`'s old call shape were
+unchanged; since fix round 1 (A9) `keepWalk` takes the names as a required third argument, and `keptWalk` is still unchanged. The
 board's projects part carries the list (`unreadable`, new and optional). `listProjects`, which every other caller uses, answers
 exactly its old three fields, and the projects route's wire does not change.
 
@@ -119,8 +121,8 @@ kept copy). Before each: 63 green.
 | M5 an unreadable folder makes the walk unmeasured | `lifecycle.ts` | the same 3 red |
 | M6 the cache keeps the walk without its names | `lifecycle.ts` | 1 red (the kept walk keeps the names) |
 | M7 `listProjects` carries the new field | `lifecycle.ts` | 2 red (B2's old-fields case and B3's) |
-| G1 the run-close reader is called once per row | `overlordBoardRead.ts` | 2 red (called once; a throw called once) |
-| G2 a stored word this build does not know rides as its text | `overlordBoardRead.ts` | 1 red (no entered text) |
+| G1 the run-close reader is called once per row | `overlordBoardRead.ts` | 2 red (called once; a throw called once); re-measured at fix round 2, below |
+| G2 (first build) a stored word this build does not know rides as its text | `overlordBoardRead.ts` | 1 red (no entered text); the code it mutated was replaced in fix round 1, so fix round 2 replaces it, below |
 
 **Red first.** The test files, run against main's composer, gatherer and lister (the wire and the switch list kept, so the files
 load): 18 of 63 cases red, every one of them a B3 case or a B2 case whose expectation B3 widened (the field census, the readers'
@@ -160,6 +162,11 @@ declares them as its words (`isBoardKebab`), derived from `settingSwitchNames` a
   stays untouched (A6). They are recorded here only.
 - The projects route still folds the walk's flag and its names (the ticket B2 named); only the board reads them.
 - A settings row carries its own column only (slug `board-setting-row-is-its-column`).
+- A settings row's value is the setting as its owner reads it from the row, never what is in effect for the lane it feeds (fix round
+  2, F1). Whether that lane is armed, held or stopped is not on the board. The collect lane's row carries the stored choice, so a
+  stored `live` reads `live` while the lane's own state can still stop or shadow it. The stall watch's row carries its resolver's
+  chosen level, not the level in effect on the box. The plain sessions' auto memory and the coordinator advisor rows say the
+  setting, not whether their lane acts.
 - The answer mask and the attribution limits of B2 stand unchanged.
 
 ## Fix round 1 (review 4067, call 1731)
@@ -171,7 +178,7 @@ lost row, measured row by row:
 
 | Row | Owner's reader | Seeded or lost row, by its owner | Board before | Board now |
 |---|---|---|---|---|
-| `stall-watch-level` | `resolveStallWatch` over `parseStallSettings` | a lost row, or a row with a field it cannot read, applies nothing: the box's files decide | lost: `absent`, null; a chosen level beside an unreadable quiet time: that level | `follow` for both |
+| `stall-watch-level` | `resolveStallWatch` over `parseStallSettings` | a lost row, or a row with a field it cannot read, applies nothing: the box's files decide | lost: `absent`, null; a chosen level beside an unreadable quiet time: that level | `follow` for both; a row whose level word it cannot read: `unknown` |
 | `collect-lane-choice` | `measureCollectLaneRow` | tells the seed apart; a lost row is unmeasurable (`row-absent`), no word | the seed read `row` | seed `seed` / `off`; lost `absent`, null (no word); malformed `unknown` |
 | `roll-idle-targets` | `rollTargetsOf` | the seed and a lost row read the default, `all` | seed `coordinators`, lost null | `all` for both |
 | `dispatch-abandon-choice` | `dispatchAbandonViewOf` | a lost row arms nothing, no choice word | lost `absent`, null | the same (the owner gives no word) |
@@ -200,6 +207,36 @@ pinned as named unreadable; A8 the size header says 15 percent, the measured byt
 the settings and file groups to the table's names, so it cannot pass on an absent or empty list (the no-store case too); A9 the kept
 walk's names are a required argument (the four cache cases pass an empty list); A10 the switches file's header line is back to main's
 text byte for byte.
+
+## Fix round 2 (review 4072, call 1739)
+
+No behaviour changed in this round. It changed only words and cases.
+
+**F1, what a row says.** Fix round 1 called each row's value "the word its owner reads in force". That holds for the setting, not
+for the lane behind it, so the five sites now say the word the row's owner reads from the row, a seeded or lost row given the owner's
+meaning, and never whether the lane it feeds is armed, held or stopped. The five sites are the wire type's comment, the composer's,
+the gatherer's two, and this note. The per-row table above is unchanged except for the stall watch's cell, which now names both
+answers. A known limit says what the board leaves out.
+
+**F2, two collect lane cases.** The board file gains one fake-store case for the collect lane's lost-row arm (`absent`, no word)
+and one for its malformed-row arm (`unknown`, beside a choice the lane knows). Red first: the reviewer's mutant drops both arms, so
+a lost or malformed row reads as a stored `live`. On it, 2 of 67 red, the two new cases; 67 green on the restored gatherer.
+
+**F3, G1 and G2 at this tip** (each applied with the edit tool, the board file run, the gatherer restored and its sha256 compared
+with the kept copy):
+
+| Mutant | After |
+|---|---|
+| G1 the run-close reader is called once per row (its memo removed) | 2 red (each reader once; a throw called once) |
+| G2 the plain sessions' auto memory row returns its raw column, so an unknown word rides as its text | 2 red (no entered text; the lost row's owner's word) |
+
+**F4.** The kebab census comment in the mail-routes suite now says only the settings row names are spelled as literals (the keys of
+the gatherer's reader table). The file row names come from the switchboard's list and are spelled nowhere in the board. The
+derivation is kept. The file's holder got a packet first and said yes.
+
+**Residues.** The stall watch's cell names both answers. The size comment in the board's sets file says what the exact pin catches
+and what it does not prove. Item 2's line about the kept walk's call shape is dated to the first build, with what fix round 1
+changed.
 
 ## Design rule
 

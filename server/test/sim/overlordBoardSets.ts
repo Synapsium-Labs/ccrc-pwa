@@ -193,8 +193,10 @@ export function bigInputs(n: number): BoardInputs {
 
 /** The measured size of `JSON.stringify(composeBoard(bigInputs(50)))`, asserted exactly, so a change that moves it re-measures
  *  here, and the bound pinned over it (about 15 percent headroom).
- *  It catches a part that grows by a whole new list per programme; a leaked body or note adds too little to cross it at this
- *  scale. What catches those is the sentinel cases (`SENTINEL` above and the board door suite's C44 case). First measured at
+ *  The bound catches a part that grows by a whole new list per programme; a leaked body or note adds too little to cross it at
+ *  this scale. The exact pin (since board B3's fix round 1) reds on any change to what the composer emits for these inputs, a
+ *  leaked body or note included, but it names no cause and is re-measured on every intended change, so it proves no leak: what
+ *  proves that is the sentinel cases (`SENTINEL` above and the board door suite's C44 case). First measured at
  *  81,988 bytes (bound 95,000); re-measured in review 4010's round with the portfolio's measures and what blocks, and the
  *  ladder's latches and conditions: 103,424 bytes, the bound moved to 120,000 (the same 16 percent). Re-measured in board B3 with
  *  the brakes' settings rows and files and the projects walk's unreadable folders: 104,414 bytes, under the same bound (15 percent),

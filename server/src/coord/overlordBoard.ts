@@ -39,7 +39,8 @@ export interface BoardItemIn { readonly id: number; readonly kind: ItemKind; rea
 /** A pending timer as the store holds it: who set it, when it is due, and its note, which comes in and never goes out (§3.3.12):
  *  `timersByProgramme` reads `setter` and `dueAt` only. */
 export interface BoardTimerIn { readonly setter: string; readonly dueAt: number; readonly note?: string }
-/** One settings row, as the gatherer hands it over: closed words only, the word the row's owner reads in force. */
+/** One settings row, as the gatherer hands it over: closed words only, the word the row's owner reads from the row (a seeded or lost
+ *  row given the owner's meaning), never whether the lane it feeds is armed, held or stopped. */
 export interface BoardSettingIn { readonly stored: BoardSettingStored | null; readonly value: BoardSettingWord | 'unknown' | null }
 
 export interface BoardInputs {

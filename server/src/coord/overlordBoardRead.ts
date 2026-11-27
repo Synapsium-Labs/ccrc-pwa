@@ -13,8 +13,9 @@
 // listing (`readSwitches`), each settings row through its store's own reader and that row's own predicate (`SETTING_ROWS`, keyed by
 // the table's names, so a settings row added to the table is a type error here until it has a reader), and the fleet host's files
 // through the Overrides read's own reader (`readCcrcFileSwitches`). A store reader that serves several rows (the run-close row's
-// three columns) is called once per board read. Each row's value is the word its OWNER's reader reads in force, a seeded or lost
-// row included (fix round 1, F1). A stored word this build does not know is `unknown`, never the stored text.
+// three columns) is called once per board read. Each row's value is the word its OWNER's reader reads from the row, a seeded or lost
+// row given the owner's meaning (fix round 1, F1), never whether the lane it feeds is armed, held or stopped (fix round 2). A stored
+// word this build does not know is `unknown`, never the stored text.
 import type { CcrcConfig } from '../config.js';
 import type { FleetIO } from '../io.js';
 import { listProjectsWalked, type ProjectWalkCache } from '../lifecycle.js';
@@ -118,8 +119,9 @@ const runCloseRow = (r: SettingReads, field: 'neverStarted' | 'claimantCrashed' 
   return x.kind === 'row' ? setting(null, x[field]) : fail('read-failed');
 };
 
-/** Each settings row of the switchboard, read through its OWNER's reader, so `value` is the word that owner reads in force: for a
- *  seeded or lost row too, where the owner gives it a meaning other than the raw column (fix round 1, F1). Per row:
+/** Each settings row of the switchboard, read through its OWNER's reader, so `value` is the word that owner reads from the row: for
+ *  a seeded or lost row too, where the owner gives it a meaning other than the raw column (fix round 1, F1). It is the setting, not
+ *  the state of the lane it feeds: whether that lane is armed, held or stopped is not read here (fix round 2). Per row:
  *  - the stall watch: its resolver's chosen level (`resolveStallWatch`); a row that does not apply whole (a lost row, or a field
  *    that cannot be read) applies nothing, so the box's files decide, which is `follow`; a level word it does not know is `unknown`;
  *  - the collect lane: its own measure (`measureCollectLaneRow`), which tells the seed apart; a lost row has no word (the lane

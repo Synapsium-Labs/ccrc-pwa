@@ -495,7 +495,23 @@ describe('the brakes carry every switch of the switchboard: each settings row th
     expect(JSON.stringify(b)).not.toContain(SENTINEL);
   });
 
-  it('a seeded or lost row says the word its owner reads in force, never the raw column (fix round 1, F1)', async () => {
+  it('a lost collect lane row is absent with no word: its owner reads it as unmeasurable, not as a choice (fix round 2, F2)', async () => {
+    const store = fakeStore({ collectLaneRow: vi.fn(() => ({ kind: 'absent' })) });
+    const rows = settingsOf(composeBoard(await gatherBoard(fixturePorts({}, store).ports)));
+    expect(rows['collect-lane-choice']).toEqual({ state: 'measured', stored: 'absent', value: null });
+    expect(store.collectLaneRow).toHaveBeenCalledTimes(1);
+  });
+
+  it('a malformed collect lane row is unknown, even beside a choice its owner knows (fix round 2, F2)', async () => {
+    // `live` is a choice the lane knows, but a fleet node id that is not a string makes the owner's measure read the row as malformed.
+    const store = fakeStore({
+      collectLaneRow: vi.fn(() => ({ kind: 'row', row: { choice: 'live', fleetNodeId: 7, markerRetiredAt: null, generation: 0, updatedAt: 0 } })),
+    });
+    const rows = settingsOf(composeBoard(await gatherBoard(fixturePorts({}, store).ports)));
+    expect(rows['collect-lane-choice']).toEqual({ state: 'measured', stored: 'row', value: 'unknown' });
+  });
+
+  it('a seeded or lost row says the word its owner reads from the row, never the raw column (fix round 1, F1)', async () => {
     const store = fakeStore({
       // A level the stall watch knows, whose quiet time it cannot read: the row does not apply whole, so the box's files decide.
       stallSettings: vi.fn(() => ({ kind: 'row', row: { level: 'alert', quietMs: 'not a duration', updatedAt: 1 } })),
