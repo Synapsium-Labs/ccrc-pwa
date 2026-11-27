@@ -143,6 +143,22 @@ capture with a bare marker row: deliverability parity, the never-blocks lane, de
 record, the timer-line lane, and echo-clock. Each passed whole on the repair, so none of their cases reaches the resume
 Enter, and none is touched.
 
+That search missed one place, because it looked for the sweep's helpers by name. The wave brief suite
+(`server/test/brief-landed.test.ts`) carries its own copy of the sweep's `liveHarness` (its comment says it is copied,
+not imported), and its capture answered the same bare marker row. The exact head's first fast run found it red (shard
+`server 4/12`), and so did a run of the file alone on the repair; it passes whole on `main`'s `send.ts`. Its capture now
+draws the closed box through `boxPane([st.box])` too (the coordinator's yes, mail 38742): one use, and no claim, expected
+answer or key in the file moved. The two cases that had gone red:
+
+16. "an enter-ignored brief on a fresh worker is retried at 5 minutes through the park and lands, our nudge never
+    re-typed": the delivery stayed `queued` where `delivered` is pinned.
+17. "a restart over the same coord.db repeats neither the retry nor the notice": the same, then the case timed out.
+
+A wider search after it, by text, for every capture in the test tree that answers a bare marker row, found five more
+suites. Each passes whole on the repair, alone, and none is touched: clip-any-file (36 cases), run-work-started (9),
+idle-compact-nudge-lane (46), feed-writers-pin (61) and send-echo-clock (17, the echo-clock suite of the six above).
+These, with the six above, are where the old bare shape still lives.
+
 Red on `main`'s `send.ts` too, under the same load, and so not the repair's: "the fallback warns once while it stands",
 the two warn-latch cases and the boot trace. "puts `parkedAt` on the wire for the mail strip" timed out on both send
 modules, so it is unmeasured locally; the exact head's CI decides it.
@@ -206,6 +222,9 @@ once the server carries the status read's delivery standing (merged in #3433).
   that passed are those that must hold on `main` too (the stranded nudge resumes, a rule with no rule characters at its
   ends does not fire, no recorded pane's reading moves). The two cases of our own rule-like lines, added after, are green
   on `main` by design.
+- The test tree's compile check could not finish in this workspace (the test slice's memory cap stopped it twice), so
+  the first fast run was the first to run it (shard `server 10/12`). It found one line of the new file calling an array
+  method the test tree's library setting lacks, now a plain loop.
 - Mutants (measured): each mutant was applied to `send.ts` in place, `send-tall-box.test.ts` and `send.test.ts` were run,
   and the file was restored and compared byte for byte.
 

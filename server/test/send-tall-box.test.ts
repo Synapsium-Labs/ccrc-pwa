@@ -67,7 +67,8 @@ const EMPTY_300 = readFileSync(path.join(here, 'fixtures/panes/cc300-paste-empty
 function strandedNudge300(): string {
   const cut = NUDGE.lastIndexOf(' ', W - 4);
   const lines = EMPTY_300.split('\n');
-  const marker = lines.findLastIndex((l) => l.includes('❯'));
+  let marker = lines.length - 1;
+  while (marker >= 0 && !lines[marker]!.includes('❯')) marker--;
   lines.splice(marker, 1, `\x1b[39m❯ ${NUDGE.slice(0, cut)}`, `  ${NUDGE.slice(cut + 1)}`);
   return lines.join('\n');
 }
