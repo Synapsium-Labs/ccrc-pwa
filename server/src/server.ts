@@ -85,8 +85,8 @@ import { createQuestions, type OperatorDoorDeps, type Questions } from './coord/
 import { heldFor } from './coord/heldFor.js';
 import { registerUpdateRoutes } from './update/routes.js';
 import {
-  composeDocs, readTree, registerDocsFolderReadRoutes, registerDocsFolderRegistryRoutes, registerDocsReadRoutes,
-  registerDocsRefreshRoute, registerDocsSettingsRoutes,
+  composeDocs, readTree, registerDocsArtifactRoutes, registerDocsFolderReadRoutes, registerDocsFolderRegistryRoutes,
+  registerDocsReadRoutes, registerDocsRefreshRoute, registerDocsSettingsRoutes,
 } from './docs/routes.js';
 import { registerReviewOpenRoute, registerReviewPageRoutes } from './review/routes.js';
 import { installDocsRequestPolicy, installDocsResponsePolicy } from './docs/hooks.js';
@@ -95,6 +95,8 @@ import { startReviewSweep } from './review/sweep.js';
 import { createReaderLabRuns } from './readerLab/runs.js';
 import { installReaderLabCounter, registerReaderLabRoutes } from './readerLab/routes.js';
 import { buildArtifactServer, createArtifactListenerState, installConsoleHostFence } from './artifacts/routes.js';
+import { createArtifactStore } from './artifacts/store.js';
+import { sessionLiveness } from './artifacts/liveness.js';
 import { operatorActRoute, servedFleetReads, servedFromWatcher, servedProjectReads, takenAfter } from './servedRead.js';
 import { registerTokenRoutes } from './token/routes.js';
 import { registerLaneModelsRoutes } from './laneModelsRoutes.js';
@@ -138,6 +140,7 @@ import { actKeyFact, advanceCounterGuarded, recordFenceRefusal } from './coord/o
 import { CONTINUITY_LANE } from '../../shared/lane-arm.js';
 import { NO_LADDER_AUTHORITY } from './coord/overlordAuthorityJournal.js';
 import { renewalHostOf } from './continuity/renewalWiring.js';
+import { placeMarkReporter } from './continuity/placeMarkReport.js';
 import { registerResponseRoutes } from './responses/routes.js';
 import { readLinearStore } from './linear/store.js';
 import { trackerIdsIn } from './linking/policy.js';
@@ -614,7 +617,12 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   const artifactCfg = deps.cfg.artifact;
   const artifactApp = artifactCfg.state === 'on' ? buildArtifactServer({ cfg: artifactCfg }) : null;
   app.decorate('artifactServer', artifactApp);
-  app.decorate('artifactListener', artifactApp === null ? null : createArtifactListenerState());
+  const artifactListener = artifactApp === null ? null : createArtifactListenerState();
+  app.decorate('artifactListener', artifactListener);
+  // The one capability store (X5 A2.2), in memory, built beside the listener state when the tier is on and handed to the docs
+  // plugin's mint-side doors below. Its liveness port asks `authStore` with the secret measured afresh on every call: `secretNow`
+  // is declared further down this body and is only called at a request, after it exists.
+  const artifactStore = artifactApp === null ? null : createArtifactStore(Date.now, sessionLiveness(authStore, () => secretNow()));
   if (artifactApp !== null) app.addHook('onClose', async () => { await artifactApp.close(); });
   installConsoleHostFence(app, artifactCfg);
   // The reader lab's door (the reader lab design, section 4): its counter is an onRequest hook added HERE, before the
@@ -2289,7 +2297,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   const consoleActor = (req: FastifyRequest): string =>
     consoleSubject(identity.console(deps.cfg.authEnabled, deps.cfg.authEnabled ? sessionAuth(req).device : null)) ?? 'unmeasured';
   // The ladder's composed read, built once for its doors and the gate.
-  const ladderDeps = deps.coord === undefined ? undefined : { coord: deps.coord, inputs: deps.ladderInputs ?? ladderConditionInputs({ coord: deps.coord, serverCaps: deps.ladderServerCaps ?? SERVER_CAPS, sidecar: (id) => watcher?.currentUsage().get(id), isolation: deps.isolation, accountFacts: () => { const l = watcher?.currentLimits(); return l === null || l === undefined ? null : loadFactsOf(deps.cfg.roster, l.limits, deps.coord!.accountPoolEdges(), Math.floor(deps.time.clock.wall() / 1000)); }, noWitnessSinceBoot: () => deps.overlordAuthorityExchange?.noWitnessSinceBoot() ?? 'unmeasured' }), witness: deps.ladderWitness ?? deps.overlordAuthorityExchange, serverCaps: deps.ladderServerCaps ?? SERVER_CAPS, journal: deps.overlordAuthority ?? NO_LADDER_AUTHORITY };
+  const ladderDeps = deps.coord === undefined ? undefined : { coord: deps.coord, inputs: deps.ladderInputs ?? ladderConditionInputs({ coord: deps.coord, serverCaps: deps.ladderServerCaps ?? SERVER_CAPS, sidecar: (id) => watcher?.currentUsage().get(id), isolation: deps.isolation, accountFacts: () => { const l = watcher?.currentLimits(); return l === null || l === undefined ? null : loadFactsOf(deps.cfg.roster, l.limits, deps.coord!.accountPoolEdges(), Math.floor(deps.time.clock.wall() / 1000), deps.coord!.accountHolds()); }, noWitnessSinceBoot: () => deps.overlordAuthorityExchange?.noWitnessSinceBoot() ?? 'unmeasured' }), witness: deps.ladderWitness ?? deps.overlordAuthorityExchange, serverCaps: deps.ladderServerCaps ?? SERVER_CAPS, journal: deps.overlordAuthority ?? NO_LADDER_AUTHORITY };
   // THE OVERLORD GATE (W1 gates B, §11.2): its one runner, each fact read through its owner's reader. The witness ports are
   // door process B's (`continuity/witnessPorts.ts`): `unmeasured` (502) until the fleet's ccd advertises `door-witness-v1`.
   const noCoord = 'no coordination store';
@@ -2499,6 +2507,13 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
       now: () => deps.time.clock.wall(),
       maskChanges: (answer) => !isDeepStrictEqual((deps.masker ?? SHAPE_ONLY_MASKER).maskDeep(answer), answer),
     });
+    // The artifact tier's five mint-side doors (X5 A2.3): the availability read, the scope read, the mint, Revoke and Revoke all.
+    // The scope read and the mint take the account gate; the mint draws its token again while the answer mask would alter it.
+    registerDocsArtifactRoutes(app, docs.readers, docs.lanes, {
+      gate: accountGate, signIn: folderSignIn, tier: artifactCfg, listener: artifactListener, store: artifactStore,
+      consoleOrigin: deps.cfg.origin,
+      maskChanges: (answer) => !isDeepStrictEqual((deps.masker ?? SHAPE_ONLY_MASKER).maskDeep(answer), answer),
+    });
   });
   registerReaderLabRoutes(app, readerLab);
   // The operator's character choice (the Overlord face plan, Task 6), from its own file: two session-gated routes, no box token.
@@ -2523,6 +2538,8 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   });
   registerResponseRoutes(app, { coord: deps.coord, time: deps.time, gate: accountGate, notice, actorOf: consoleActor });
 
+  // The visible Overlord place's report: a visible frame of the bound session refreshes the @overlord-place mark, at most once a minute.
+  const reportPlaceVisible = placeMarkReporter(deps.coord, () => deps.time.clock.wall());
   app.get('/ws/session/:id', { websocket: true }, (socket, req) => {
     const { id } = req.params as { id: string };
     const q = req.query as { since?: string; sinceFile?: string };
@@ -2545,7 +2562,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
       viewers.touch(token);
       try {
         const m = asSessionClientMsg(JSON.parse(String(raw)));
-        if (m?.type === 'visible') viewers.setVisible(token, m.visible ? id : null);
+        if (m?.type === 'visible') { viewers.setVisible(token, m.visible ? id : null); reportPlaceVisible(id, m.visible); }
         else if (m?.type === 'helper-report') stream.helperReport(m.id);
         else if (m?.type === 'older-page') stream.olderPage(m.continuation);
       } catch { /* a client that sends garbage simply isn't reporting visibility */ }

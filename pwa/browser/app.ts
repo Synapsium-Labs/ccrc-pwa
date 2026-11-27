@@ -10,7 +10,7 @@ import path from 'node:path';
 import { performance } from 'node:perf_hooks';
 import type { Browser, BrowserContext, Page, WebSocketRoute } from 'playwright-core';
 import { inject } from 'vitest';
-import { SKIN_STORAGE_KEY, THEME_STORAGE_KEY } from '@ccrc/ui';
+import { SKIN_STORAGE_KEY, THEME_STORAGE_KEY, resolveTheme } from '@ccrc/ui';
 import type { FleetSession } from '../../shared/api';
 import { fleetSession } from '../test/fleetFixture';
 import { CONSOLE_TAB_MARK } from '../src/lib/tabMark';
@@ -162,6 +162,13 @@ type Unsequenced<E> = E extends HarnessEvent ? Omit<E, 'seq'> : never;
  *  the theme stored before the first paint (the keys the app itself reads), service workers blocked unless `view` allows
  *  them, and the fixture answering `/api` and `/ws`. The page is not navigated yet. */
 export async function openApp(browser: Browser, view: AppView, fixture: AppFixture): Promise<OpenedApp> {
+  // A theme the app does not keep resolves to the system choice, which is light in a context that sets no colour scheme,
+  // so a case that asked for it would measure the light palette under another name (desktop polish wave 188: 'dark' is
+  // not an id; the dark palette is PHOSPHOR). Refused before any context opens: a red case, never a mislabelled one.
+  if (resolveTheme(view.theme) !== view.theme) {
+    throw new Error(`openApp: theme ${JSON.stringify(view.theme)} is not one the app keeps (an id of @ccrc/ui's THEMES, or `
+      + `SYSTEM); the app would draw ${JSON.stringify(resolveTheme(view.theme))} in its place`);
+  }
   const phone = view.width < 900;
   const ctx = await browser.newContext({
     viewport: { width: view.width, height: phone ? 844 : 900 }, hasTouch: phone || view.touch === true, serviceWorkers: view.serviceWorkers ?? 'block',

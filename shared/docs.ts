@@ -1777,6 +1777,24 @@ export const docsApi = {
     apiProjectPath(project) + '/range' + apiQuery([
       ...rangePlace(pin), ['pin', docsRangePinText(range)],
       ['snapshot', snapshot], ['offset', String(offset)], ['length', String(length)]]),
+  // ---- The artifact tier's console doors (X5 A2.3, spec 3.2): five URLs, each built here once. They sit under `/api/docs/artifacts`,
+  // a static prefix, so a project named `artifacts` still reaches its own `/tree`, `/file`, `/history`, `/range` and `/refresh`.
+  /** The availability and list read (GET), and the mint (POST, `artifactMint`). */
+  artifacts: (): string => DOCS_API_PREFIX + '/artifacts',
+  /** The scope read of a pin: `project` is a query key (the route has no project segment), then the file route's pin keys in
+   *  its order; a draft the listing could not fingerprint names `stat=<size>:<mtimeNs>` in place of `fp`. */
+  artifactScope: (project: string, pin: DocListPin): string => {
+    const place: (readonly [string, string])[] = pin.kind === 'committed'
+      ? [['commit', pin.commit], ['servedRef', pin.servedRef], ['section', pin.section], ['path', pin.path]]
+      : [['branch', pin.branch], ['head', pin.head], ['section', pin.section], ['path', pin.path]];
+    if (pin.kind === 'draft') place.push(pin.fp === null ? ['stat', pin.stat.size + ':' + pin.stat.mtimeNs] : ['fp', pin.fp]);
+    return DOCS_API_PREFIX + '/artifacts/scope' + apiQuery([['project', project], ...place]);
+  },
+  artifactMint: (): string => DOCS_API_PREFIX + '/artifacts',
+  /** Revoke one capability by its id (POST). */
+  artifactRevoke: (id: string): string => DOCS_API_PREFIX + '/artifacts/' + encodeURIComponent(id) + '/revoke',
+  /** Revoke every capability on the box (POST). */
+  artifactRevokeAll: (): string => DOCS_API_PREFIX + '/artifacts/revoke-all',
   // ---- Outside folders (X2 P2.3, spec 4.1 and 7): the seven doors' URLs, each built here once. `folders` is the labels-only
   // read (the index and every page) and also the Add door's URL (POST); `folderPaths` is the ONE URL whose answer carries an
   // absolute path, called only from Settings' Docs folders section. A label goes through encodeURIComponent like a project.

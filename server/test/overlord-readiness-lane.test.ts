@@ -22,6 +22,7 @@ import type { FleetSession } from '../../shared/api.js';
 import type { SessionRecord } from '../src/registry.js';
 import type { GenRow } from '../src/continuity/continuityStore.js';
 import type { Candidates } from '../src/accountLoad.js';
+import { heldOutOfList } from '../../shared/renewal-readings.js';
 import { READINESS_DEAF_MS, READINESS_RESTART_BOUND_MS } from '../../shared/overlord-readiness.js';
 import { mkTmp, removeTmpFixtures } from './tmpHelpers.js';
 
@@ -771,5 +772,55 @@ describe('an item raised with the push outbox reach (R4)', () => {
     await h.pass(UP());
     expect(items(h.db)).toHaveLength(1);
     expect(outbox(h.db)).toEqual([]);
+  });
+});
+
+describe('the holds (renewal readings PR H): read once a pass, into the candidates, the word and the items', () => {
+  it('the holds are read once a pass and handed to the candidates as the list\'s holds', async () => {
+    const h = harness();
+    await h.warm();
+    let reads = 0;
+    const handed: unknown[] = [];
+    h.s.holds = { kind: 'read', lanes: ['lane-a'] };
+    const holds = h.port.holds;
+    (h.port as { holds: ReadinessLanePort['holds'] }).holds = () => { reads += 1; return holds(); };
+    (h.port as { candidates: ReadinessLanePort['candidates'] }).candidates = (_d, held) => { handed.push(held); return h.s.candidates; };
+    await h.pass(UP());
+    expect(reads).toBe(1);
+    expect(handed).toEqual([{ ok: true, lanes: ['lane-a'] }]);
+  });
+
+  it('holds that cannot be read reach the word as unmeasured, never as no holds, and the candidates as unread', async () => {
+    const h = harness();
+    await h.warm();
+    const handed: unknown[] = [];
+    (h.port as { candidates: ReadinessLanePort['candidates'] }).candidates = (_d, held) => { handed.push(held); return h.s.candidates; };
+    h.s.holds = { kind: 'unmeasured' };
+    const r = await h.pass(UP());
+    expect([r?.word, r?.why]).toEqual(['unmeasured', 'stranded: holds unread']);
+    expect(handed).toEqual([{ ok: false, detail: 'the holds could not be read' }]);
+  });
+
+  it('a holds read that throws reads as unmeasured too', async () => {
+    const h = harness();
+    await h.warm();
+    (h.port as { holds: ReadinessLanePort['holds'] }).holds = () => { throw new Error('holds boom'); };
+    const r = await h.pass(UP());
+    expect([r?.word, r?.why]).toEqual(['unmeasured', 'stranded: holds unread']);
+  });
+
+  it('a hold that leaves only an account at its ceiling reaches the word as stranded (limited)', async () => {
+    const h = harness();
+    await h.warm();
+    h.s.holds = { kind: 'read', lanes: ['lane-a'] };
+    // the candidates are built from the holds the lane hands over, through L0's one list filter: lane-a serves, lane-b is at its
+    // ceiling, so only a real hold on lane-a leaves the Overlord stranded (F4)
+    const all = [{ id: 'lane-a', limits: undefined, serves: 'yes' }, { id: 'lane-b', limits: undefined, serves: 'at-ceiling' }] as const;
+    (h.port as { candidates: ReadinessLanePort['candidates'] }).candidates = (_d, held) => {
+      const ids = held.ok ? heldOutOfList(all.map((x) => x.id), held.lanes).list : all.map((x) => x.id);
+      return { kind: 'candidates', list: all.filter((x) => ids.includes(x.id)) };
+    };
+    const r = await h.pass(UP());
+    expect([r?.word, r?.why]).toEqual(['stranded', 'limited']);
   });
 });

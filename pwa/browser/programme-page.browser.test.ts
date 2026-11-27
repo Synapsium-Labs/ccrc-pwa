@@ -9,16 +9,17 @@
 //   CCRC_CHROME=<a Chrome or Chromium binary> ./node_modules/.bin/vitest run --config vitest.browser.config.ts browser/programme-page.browser.test.ts
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { chromium, type Browser } from 'playwright-core';
-import { INSTRUMENT, REFINED } from '@ccrc/ui';
+import { INSTRUMENT, PHOSPHOR, REFINED } from '@ccrc/ui';
 import { resolveChrome } from './harness';
 import { openApp, serveDist, sharedDist, type AppFixture, type DistServer } from './app';
+import { expectStampedTheme } from './stampedTheme';
 
 const NOW = Date.now();
 const H = 3_600_000;
 const DAY = 24 * H;
 const WIDTHS = [360, 390, 1280, 1470, 1920] as const;
 const SKINS = [REFINED, INSTRUMENT] as const;
-const THEMES = ['light', 'dark'] as const;
+const THEMES = ['light', PHOSPHOR] as const;
 
 const run = (id: number, over: Record<string, unknown> = {}): object => ({
   id, program: 'prog-a', programTitle: 'Programme A with a title long enough to wrap on a phone', wave: 2, waveOf: 5,
@@ -94,6 +95,7 @@ for (const width of WIDTHS) {
           const { ctx, page, errors } = await openApp(browser!, { skin, theme, width }, FIXTURE);
           try {
             await page.goto(`${server!.origin}/programmes/prog-a`);
+            await expectStampedTheme(page, theme);
             await page.locator('[data-testid="programme-runs"] li.run-row').first().waitFor({ timeout: 30_000 });
             await page.locator('[data-testid="programme-facts"] .pv-resume').waitFor({ timeout: 30_000 });
             await page.locator('[data-fold="closed"] .programme-fold-toggle').waitFor({ timeout: 30_000 });

@@ -124,12 +124,51 @@ describe('ccrc doctor: auth — the gate, and the passphrase it needs', () => {
     // it at boot, because behind `tailscale serve` it never learns the
     // hostname it is reached under. An operator who arms the flag from this
     // line alone would find out one tap at a time.
-    const home = unexposedBox('ccrc-doctor-auth-rpid-');
+    // Wave 181: a box reached from elsewhere (here a wildcard bind) keeps the hand route; a loopback-only server box
+    // is told the verb that writes all three (the next case).
+    const home = unexposedBox('ccrc-doctor-auth-rpid-', 'CCRC_FLEET=local\nCCRC_HOST=0.0.0.0\nCCRC_PORT=7788\n');
     rmSync(join(home, '.ccrc', 'auth.scrypt'), { force: true });
     const line = authLine(runDoctor(home).stdout);
     expect(line).toContain('CCRC_AUTH=on');
     expect(line).toContain('CCRC_RP_ID');
     expect(line).toContain('CCRC_ORIGIN');
+    expect(line).not.toContain('ccrc auth on');
+  });
+
+  it('wave 181: on a loopback-only server box the dark remedy is ccrc auth on, with or without a passphrase', () => {
+    const none = unexposedBox('ccrc-doctor-auth-verb-none-');
+    rmSync(join(none, '.ccrc', 'auth.scrypt'), { force: true });
+    const a = authLine(runDoctor(none).stdout);
+    const set = unexposedBox('ccrc-doctor-auth-verb-set-');
+    const b = authLine(runDoctor(set).stdout);
+    if (process.platform === 'darwin') {
+      // Review 3971 R1(d), ruling B: the verb refuses on a Mac, so doctor gives the hand route there.
+      expect(a).toMatch(/^PASS auth: .*to arm the gate: ccrc passwd, then set CCRC_AUTH=on together with CCRC_RP_ID and CCRC_ORIGIN/);
+      for (const l of [a, b]) expect(l).not.toContain('ccrc auth on');
+      return;
+    }
+    expect(a).toMatch(/^PASS auth: .*to arm the gate: ccrc passwd, then ccrc auth on$/);
+    expect(a).not.toContain('CCRC_RP_ID');
+    expect(b).toMatch(/^PASS auth: .*holds a usable passphrase .*no request is gated yet; to arm it: ccrc auth on$/);
+  });
+
+  // Review 3934 F5 and A5: the helper that says whether `ccrc auth` is this box's remedy declines wherever the verb
+  // refuses — CCRC_ROLE=fleet recorded, no ccrc.service, a CCRC_HOST the unit reader cannot decide, and a CCRC_ORIGIN or
+  // CCRC_RP_ID other than what `on` writes (a gate-off box behind a proxy of its own) — so doctor offers the hand route.
+  it.each([
+    ['CCRC_ROLE=fleet in ccrc.env', 'CCRC_FLEET=local\nCCRC_HOST=127.0.0.1\nCCRC_PORT=7788\nCCRC_ROLE=fleet\n', false],
+    ['no ccrc.service installed', undefined, true],
+    ['a CCRC_HOST the unit reader cannot decide', 'CCRC_FLEET=local\nCCRC_HOST ="127.0.0.1"\nCCRC_PORT=7788\n', false],
+    ['a foreign CCRC_ORIGIN', 'CCRC_FLEET=local\nCCRC_HOST=127.0.0.1\nCCRC_PORT=7788\nCCRC_ORIGIN=https://box.example.com\n', false],
+    ['a foreign CCRC_RP_ID', 'CCRC_FLEET=local\nCCRC_HOST=127.0.0.1\nCCRC_PORT=7788\nCCRC_RP_ID=example.com\n', false],
+  ] as const)('wave 181: where ccrc auth refuses, the dark remedy does not offer it: %s', (_name, env, noUnit) => {
+    const home = env === undefined ? unexposedBox('ccrc-doctor-auth-notverb-') : unexposedBox('ccrc-doctor-auth-notverb-', env);
+    rmSync(join(home, '.ccrc', 'auth.scrypt'), { force: true });
+    if (noUnit) removeUnitFile(home, 'ccrc.service');
+    const line = authLine(runDoctor(home).stdout);
+    expect(line).toMatch(/^PASS auth: /);
+    expect(line).toContain('CCRC_AUTH=on');
+    expect(line).not.toContain('ccrc auth on');
   });
 
   it('FAILS when the gate is ARMED and there is no passphrase — the fail-shut state, made visible', () => {
@@ -540,6 +579,10 @@ describe('ccrc doctor: auth — the gate, and the passphrase it needs', () => {
       expect(warnLines[0]).toContain(join(home, '.ccrc', 'exposure.env'));
       expect(warnLines[0]).toMatch(/was not measured/);
       expect(r.stdout).not.toMatch(/^PASS auth: /m);
+      // Wave 181 (review of wave 180): a bare `ccrc expose` exits 2 (missing subcommand); the file cannot be read, so
+      // the remedy names every arm and leaves the choice to the operator, who knows which one exposed this box.
+      expect(remedyFor(r.stdout, 'auth')).toContain('re-run the arm this box was exposed with: ccrc expose duckdns, ccrc expose byo or ccrc expose ip;');
+      expect(remedyFor(r.stdout, 'auth')).not.toMatch(/ccrc expose(?! (?:duckdns|byo|ip|status)\b)/);
     });
 
   it.skipIf(process.getuid?.() === 0)(

@@ -313,7 +313,7 @@ const VIEW = (over: Partial<DesignationView> = {}): DesignationView => ({
 const BOUND: DesignationRead = { kind: 'designated', sessionId: 'lane-a-project-a', term: 1, row: VIEW() };
 const ROSTER = { accounts: ['lane-a', 'lane-b', 'lane-c'].map((id) => ({ id, homeAble: true, exec: { kind: 'upstream' }, pool: 'pool-a' })) } as unknown as Roster;
 const FACTS = (lanes: Record<string, LaneFacts>) => ({ roster: ROSTER, limits: { 'lane-a': lim(40), 'lane-b': lim(40), 'lane-c': lim(40) },
-  edges: new Map<string, readonly string[]>(), lanes, nowS: NOW_S });
+  edges: new Map<string, readonly string[]>(), lanes, nowS: NOW_S, held: { ok: true as const, lanes: [] } });
 
 function candidatesCases(m: RenewalReadingsModule): Record<string, SuiteCase> {
   return {
@@ -338,7 +338,8 @@ function candidatesCases(m: RenewalReadingsModule): Record<string, SuiteCase> {
 const CANDIDATES_SET: MutantSet<RenewalReadingsModule> = {
   modulePath: MODULE,
   mutants: [
-    { id: 'C1 the ordered list not asked', old: "d.kind === 'designated' ? overlordAccounts(d.row.accountPools, d.row.model, f).list : []", new: '[]' },
+    // Re-pinned in PR H's fix round 1 (F1): the list now comes from the one `overlordAccounts` result the holds are read from too.
+    { id: 'C1 the ordered list not asked', old: 'overlordLoadCandidates(d, built === null ? [] : built.list, f)', new: 'overlordLoadCandidates(d, [], f)' },
   ],
   suite: candidatesCases,
 };

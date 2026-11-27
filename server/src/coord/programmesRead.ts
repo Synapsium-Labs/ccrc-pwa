@@ -91,7 +91,7 @@ export function readProgrammes(db: RunsDb, opts: { since: number; now: number },
       ending: openIds.length > 0 ? null : endingOf(gs),
     };
   });
-  return { ok: true, programmes, closedToday };
+  return { ok: true, programmes, closedToday, appliedSince: since };
 }
 
 /** Each work wave's bucket, from the group `waveRepresentative` picks (`shared/programmes.ts`). Every run in a group shares

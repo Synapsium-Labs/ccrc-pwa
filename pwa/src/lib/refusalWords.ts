@@ -862,3 +862,74 @@ export function testboxRouteText(err: unknown): string | null {
   }
   return refusalText(err, TESTBOX_ROUTE_TEXT);
 }
+
+/**
+ * The Overlord place's door refusals (Overlord W1 home B, Tasks 4 and 5; plan Global Constraints, "Refusals"): the ladder's
+ * doors (rung, Pause, a latch's Clear), Start, Rebind and Restart, keyed by the words those doors answer (`OVERLORD_REFUSALS`
+ * in `shared/refusal.ts`, and the shared `unavailable`, `not-found` and `auth-off`). `overlordRefusalText` reads
+ * them, adding what the answer carries where the word names it; a word outside this table is drawn raw, the vocabulary plan's
+ * rule for an older console, and never swallowed. `step-up-required` is not here: `useStepUp` shows the step for it.
+ */
+export const OVERLORD_PLACE_REFUSAL_TEXT: Readonly<Record<
+  | 'capability-missing' | 'authority-rolled-back' | 'journal-unreadable' | 'unavailable' | 'overlord-exists' | 'overlord-single-account'
+  | 'launch-profile-unmet' | 'overlord-sandbox-unmet' | 'overlord-body-alive' | 'overlord-attempt-pending' | 'auth-off' | 'not-found',
+  string>> = {
+  'capability-missing': 'This server does not advertise a capability word this needs, so nothing was changed.',
+  'authority-rolled-back': "The Overlord's authority reads rolled back, so nothing was changed. Confirm the restore first.",
+  'journal-unreadable': "The Overlord's authority journal could not record this, so nothing was changed.",
+  unavailable: "The Overlord's state could not be read just now, so nothing was changed. Try again in a minute.",
+  'overlord-exists': 'An Overlord is already running or starting, so a second one was not started.',
+  'overlord-single-account': 'The Overlord needs at least two accounts that can serve it. Widen its account set.',
+  'launch-profile-unmet': "The Overlord's launch profile is not engaged, so it was not started.",
+  'overlord-sandbox-unmet': "The Overlord's sandbox check failed, so it was not started.",
+  'overlord-body-alive': 'The Overlord session in place does not measure dead, so it was not replaced.',
+  'overlord-attempt-pending': 'A start is already pending on the designation. Wait for it to go live or fail.',
+  'auth-off': 'Sign-in must be on to start the Overlord.',
+  'not-found': 'No Overlord is designated, so there is nothing to act on.',
+};
+
+/** The place's doors, by the act the operator pressed (review 3998 M3): a word whose sentence depends on the act reads it here. */
+export type OverlordDoorAct = 'start' | 'rebind' | 'restart' | 'pause' | 'lower' | 'raise' | 'clear';
+
+/** The words whose sentence names the act, one sentence per act: `auth-off` refuses every stepped door while sign-in is off, and
+ *  "to start the Overlord" is true of Start alone. Keyed by word and read by `Object.hasOwn`, never a literal branch. */
+const OVERLORD_ACT_TEXT: Readonly<Record<string, Readonly<Record<OverlordDoorAct, string>>>> = {
+  'auth-off': {
+    start: OVERLORD_PLACE_REFUSAL_TEXT['auth-off'],
+    rebind: 'Sign-in must be on to rebind the Overlord.',
+    restart: 'Sign-in must be on to restart the Overlord.',
+    pause: 'Sign-in must be on to pause the Overlord.',
+    lower: "Sign-in must be on to lower the Overlord's rung.",
+    raise: "Sign-in must be on to raise the Overlord's rung.",
+    clear: "Sign-in must be on to clear a latch of the Overlord's ladder.",
+  },
+};
+
+/** The words whose answer's `detail` is drawn beside the sentence (the plan: the authority words, `overlord-body-alive`'s
+ *  `unmeasured`, and the ladder's `unavailable`). */
+const OVERLORD_DETAIL_WORDS: ReadonlySet<string> = new Set(['authority-rolled-back', 'journal-unreadable', 'overlord-body-alive', 'unavailable']);
+
+/** The words whose answer names one more fact, each with the sentence that adds it, or null when the answer lacks it. Keyed by
+ *  word and read by `Object.hasOwn`, never a literal branch (the refusal-branch ratchet). */
+const OVERLORD_NAMED_TEXT: Readonly<Record<string, (body: Record<string, unknown>) => string | null>> = {
+  'capability-missing': (b) => (typeof b.needs === 'string' ? `It needs ${b.needs}.` : null),
+  'overlord-single-account': (b) => (typeof b.count === 'number' ? `It counts ${b.count}.` : null),
+};
+
+/** A failed Overlord door in words: its word's sentence, with the capability word a raise `needs`, the accounts counted, or the
+ *  answer's detail where the word names one; a word whose sentence depends on the act (`OVERLORD_ACT_TEXT`) says the act that
+ *  was refused; a word this build does not know is drawn raw; a failure with no word (a network failure, a timeout) is its
+ *  message. */
+export function overlordRefusalText(err: unknown, act: OverlordDoorAct): string {
+  if (!(err instanceof ApiError) || typeof err.body !== 'object' || err.body === null) return err instanceof Error ? err.message : String(err);
+  const body = err.body as Record<string, unknown>;
+  const word = body.error;
+  if (typeof word !== 'string') return err.message;
+  if (Object.hasOwn(OVERLORD_ACT_TEXT, word)) return OVERLORD_ACT_TEXT[word]![act];
+  const said = refusalText(err, OVERLORD_PLACE_REFUSAL_TEXT);
+  if (said === null) return `Refused: ${word}`;
+  const named = Object.hasOwn(OVERLORD_NAMED_TEXT, word) ? OVERLORD_NAMED_TEXT[word]!(body) : null;
+  if (named !== null) return `${said} ${named}`;
+  if (OVERLORD_DETAIL_WORDS.has(word) && typeof body.detail === 'string' && body.detail.length > 0) return `${said} (${body.detail})`;
+  return said;
+}

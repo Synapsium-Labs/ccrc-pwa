@@ -803,6 +803,27 @@ describe.skipIf(!PY)('the stats file\'s write lock and value rules (codex-bridge
     expect(readdirSync(dir)).toEqual([STATS]);
   });
 
+  // #3462: the server's idle flush waits (`wait`). Behind a write that SUCCEEDS, the interval rule alone decides, and it
+  // lets the waiter through only because the last flush's tick is the tick at that write's start: the hold (0.6 s) runs
+  // past FLUSH_S (0.3 s) from that start, as a real idle flush fires FLUSH_S after an answer that ended during the write.
+  it('a waiting flush behind a write that succeeds waits for it, then writes the counts made during it', async () => {
+    const { home, dir, file } = lane('cb-stats-race-wait-');
+    const [, , r, next] = await run(home, [
+      open(file),
+      call('outcome', ['2xx']),
+      race({ force: true }, [{ method: 'outcome', args: ['fx-during'] }, { method: 'flush', kwargs: { wait: true } }], 0.6),
+      call('flush'),
+    ], { consts: { 'stats.FLUSH_S': 0.3 } });
+    expect(r.result).toBe(true);
+    expect(r.duringFinished).toBe(false); // it waited for the write in flight
+    expect(r.duringAlive).toBe(false);
+    expect(r.duringRaised).toEqual([]);
+    expect(r.duringResults).toEqual([null, true]); // then it wrote: FLUSH_S runs from the held write's start
+    expect(next.result).toBe(false); // nothing was left dirty for the next flush
+    expect(readDoc(file).outcomes).toEqual({ '2xx': 1, 'fx-during': 1 });
+    expect(readdirSync(dir)).toEqual([STATS]);
+  });
+
   it('a malformed now reads as the wall clock, and a header item that is not a pair is skipped', async () => {
     const { home, file } = lane('cb-stats-badnow-');
     const [o, , , , , clock, early, , , snap] = await run(home, [

@@ -1261,6 +1261,7 @@ describe('the rulings: every egress of session-derived text goes through the mas
     '/api/overlord/private-names': "whether a private-name list is stored, its row count, its upload time and an unreadable reason word: never a name, an entry, a hash or the key (Overlord W2, private names B)",
     '/api/decision-model': "each decision-model row's mode, ceiling, hold and line counts, today's call counts, and the host's kind, endpoint, origin and model id and the key's set time and masked flag: never the key, a price or a model's answer (Overlord W2, decision model B)",
     '/api/continuity/renewal-backstop': 'an hour, an IANA zone name, a flag and a time: no session text (Overlord W1 renewal readings A)',
+    '/api/continuity/account-holds': "each standing hold's account lane, its one cause word, a start id and a time: no session text (Overlord W1 renewal readings H)",
     '/api/coord/roll-idle': 'one setting word and its two choices (D-7453)',
     '/api/coord/plain-auto-memory': 'one setting word, its default and its two choices (Overlord W1a launch profiles PR B)',
     '/api/coord/coordinator-advisor': 'one setting word, a cap, a scope of session ids, and the defaults and choices: no session text (D-8967)',
@@ -1280,6 +1281,9 @@ describe('the rulings: every egress of session-derived text goes through the mas
     '/api/docs/:project/file': 'repository content, not session text',
     '/api/docs/:project/history': 'repository content (commit subjects and author names), not session text',
     '/api/docs/:project/range': 'repository content (one file in frames, base64), not session text',
+    // The artifact tier's two reads (X5 A2.3): never a token or a URL, which only the mint (a POST, masked) answers, once.
+    '/api/docs/artifacts': "the tier's availability word and the live capabilities' rows: random ids, project, section, path, a short commit or a branch, times, and the origins the operator confirmed; repository content, not session text",
+    '/api/docs/artifacts/scope': "one page's manifest counts (files, uncommitted, unsized, bytes): repository content, not session text",
     // The outside-folder reads (X2 P2.3): operator data and file text read from a folder the operator registered, never
     // session text. Only the paths door answers an absolute path, and it answers it to Settings alone.
     '/api/docs-folders': "each outside folder's label and state word: no path, no session text (X2 P2.3)",
