@@ -253,3 +253,9 @@ measured: Firefox, Safari and the phones (acceptance's and F's device rows), lab
 - **Server whole-tree guards:** `single-definition` 1 631 (50 files); `rings`, `anchors`, `citations`, `deviation-refs`, `dtbd`
   and `growth-check` green (one ring file killed by the cap, green alone).
 - **The ui package** is unchanged against `main`.
+- **Again on the merged tip** (after the one absorb of `main`, `288fc6471b`, the parity plan alone conflicting): the pwa
+  typecheck clean; the pwa jsdom suite in four shards, 170, 170 (with `markdown-worker-built` killed in its build by the cap,
+  then 12 green alone), 170 and 169 files (`mockup-policy` killed by the cap, then 153 green alone), shards 3 and 4 with two
+  workers after a whole-shard kill; browser `docs-print` 11, `mockup-loader` 6, `docs-mockup` 23, `docs-mockup-export` 20
+  (twice killed in its build by the cap first); server `single-definition` and `rings` 1 766 (62 files), and `deviation-refs`,
+  `citations`, `anchors` and `dtbd` 49. The private-name scans of the diff, the messages and the pull request text: clean.
