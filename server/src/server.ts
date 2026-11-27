@@ -85,7 +85,7 @@ import { createQuestions, type OperatorDoorDeps, type Questions } from './coord/
 import { heldFor } from './coord/heldFor.js';
 import { registerUpdateRoutes } from './update/routes.js';
 import {
-  composeDocs, readTree, registerDocsArtifactRoutes, registerDocsFolderReadRoutes, registerDocsFolderRegistryRoutes,
+  artifactBytes, composeDocs, readTree, registerDocsArtifactRoutes, registerDocsFolderReadRoutes, registerDocsFolderRegistryRoutes,
   registerDocsReadRoutes, registerDocsRefreshRoute, registerDocsSettingsRoutes,
 } from './docs/routes.js';
 import { registerReviewOpenRoute, registerReviewPageRoutes } from './review/routes.js';
@@ -95,6 +95,7 @@ import { startReviewSweep } from './review/sweep.js';
 import { createReaderLabRuns } from './readerLab/runs.js';
 import { installReaderLabCounter, registerReaderLabRoutes } from './readerLab/routes.js';
 import { buildArtifactServer, createArtifactListenerState, installConsoleHostFence } from './artifacts/routes.js';
+import { frameworkErrorPhrase, frameworkErrorStatus } from './artifacts/policy.js';
 import { createArtifactStore } from './artifacts/store.js';
 import { sessionLiveness } from './artifacts/liveness.js';
 import { operatorActRoute, servedFleetReads, servedFromWatcher, servedProjectReads, takenAfter } from './servedRead.js';
@@ -436,7 +437,22 @@ function findPwaRoot(): string | null {
 }
 
 export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWatcher): Promise<FastifyInstance> {
-  const app = Fastify({ logger: false });
+  // `frameworkErrors` (X5 A3, from the A1 reviews): Fastify answers a malformed percent-escape (400) and an over-long path
+  // parameter (414) itself, before any hook (the artifact host fence included), with a body whose `message` ECHOES the request
+  // path. A request misrouted here from an artifact host carries a capability token in its path. The answer keeps Fastify's
+  // own status (`frameworkErrorStatus`, L1) and body less its `message`: `error` (the status's own reason phrase,
+  // `frameworkErrorPhrase`, L1), `code` and `statusCode`, nothing of the path.
+  const app = Fastify({
+    logger: false,
+    frameworkErrors: (err, _req, reply) => {
+      const code = (err as { code?: unknown }).code;
+      const status = frameworkErrorStatus(code);
+      return (reply as FastifyReply).code(status).send({
+        error: frameworkErrorPhrase(status), code: typeof code === 'string' ? code : undefined,
+        statusCode: status,
+      });
+    },
+  });
   await app.register(fastifyWebsocket);
   await app.register(fastifyMultipart, { limits: { fileSize: 25 * 1024 * 1024 } });
   // `global: false`: only a route that opts in with `config.rateLimit` is limited (coord/routes.ts).
@@ -618,15 +634,15 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   // listen state, and closes it with the console. The console's host fence is an onRequest hook added before every
   // other, so a request naming an artifact host answers 421 before the gate runs; with the tier off it adds nothing.
   const artifactCfg = deps.cfg.artifact;
-  const artifactApp = artifactCfg.state === 'on' ? buildArtifactServer({ cfg: artifactCfg }) : null;
-  app.decorate('artifactServer', artifactApp);
-  const artifactListener = artifactApp === null ? null : createArtifactListenerState();
+  // The one capability store (X5 A2.2), in memory, built first when the tier is on: the artifact instance reads it (A3.1's
+  // wrapper) and it is handed to the docs plugin's mint-side doors below. Its liveness port asks `authStore` with the secret
+  // measured afresh on every call: `secretNow` is declared further down this body and is only called at a request, after it exists.
+  // The instance itself is built further down, after `composeDocs`: its content door (A3.3) reads bytes through that composition's
+  // readers and lanes, so it is made, decorated and closed with the console there. The console's host fence stays here, an early
+  // onRequest hook, and so do the store and the listen state.
+  const artifactStore = artifactCfg.state === 'on' ? createArtifactStore(Date.now, sessionLiveness(authStore, () => secretNow())) : null;
+  const artifactListener = artifactCfg.state === 'on' ? createArtifactListenerState() : null;
   app.decorate('artifactListener', artifactListener);
-  // The one capability store (X5 A2.2), in memory, built beside the listener state when the tier is on and handed to the docs
-  // plugin's mint-side doors below. Its liveness port asks `authStore` with the secret measured afresh on every call: `secretNow`
-  // is declared further down this body and is only called at a request, after it exists.
-  const artifactStore = artifactApp === null ? null : createArtifactStore(Date.now, sessionLiveness(authStore, () => secretNow()));
-  if (artifactApp !== null) app.addHook('onClose', async () => { await artifactApp.close(); });
   installConsoleHostFence(app, artifactCfg);
   // The reader lab's door (the reader lab design, section 4): its counter is an onRequest hook added HERE, before the
   // gate's, so a probe the gate refuses (a sandboxed frame's WebSocket upgrade on an armed box) is still counted. It only
@@ -2497,6 +2513,14 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
       write: (...args) => docsCoord.writeDocsSettings(...args),
     },
   });
+  // The artifact tier's own instance (X5 A1.3, A3.3), built here because its content door reads bytes through the docs composition
+  // above (`artifactBytes` over its readers and lanes, the console's own read path). It is handed out as the `artifactServer`
+  // decoration (null when the tier is off), before this function returns, and closed with the console.
+  const artifactApp = artifactCfg.state === 'on' && artifactStore !== null
+    ? buildArtifactServer({ cfg: artifactCfg, store: artifactStore, bytes: artifactBytes(docs.readers, docs.lanes), now: Date.now })
+    : null;
+  app.decorate('artifactServer', artifactApp);
+  if (artifactApp !== null) app.addHook('onClose', async () => { await artifactApp.close(); });
   await app.register(async (app) => {
     installDocsRequestPolicy(app);
     installDocsResponsePolicy(app);

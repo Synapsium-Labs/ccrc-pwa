@@ -29,7 +29,8 @@ export const ARTIFACT_QUEUE_WAIT_MS = 90000;
 export const ARTIFACT_FRAME_STALL_MS = 30000;
 /** The longest one response may run in all (spec section 5). */
 export const ARTIFACT_RESPONSE_MAX_MS = 600000;
-/** The bytes the tier serves in an hour across the box: 1 GiB (spec section 5). */
+/** The bytes one capability may be served in an hour: 1 GiB, per capability and not across the box (spec section 5, "Per-capability
+ *  budget"). */
 export const ARTIFACT_HOURLY_BYTES = 1073741824;
 
 // ---- The site rule and the sandbox (spec sections 2 and 3) ------------------------------------------------------------

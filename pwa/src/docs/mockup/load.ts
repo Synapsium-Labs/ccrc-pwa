@@ -16,19 +16,23 @@
 //   loadMockupAssets    the same load's end alone, `startMockupLoad(...).result`
 //   buildMockupSrcdoc   the page's bytes for the frame: CSP meta, click guard, doctype, the rewritten clone
 import {
-  DOCS_CLASS_CAP, contentClass, docsApi, resolveDocRef, type DocPin, type DocSectionSlug,
+  DOCS_CLASS_CAP, contentClass, docsApi, resolveDocRef, type DocPin, type DocSectionSlug, type DocsRangePin,
 } from '../../../../shared/docs';
 import type { DocsLoaders, DocsNotOk } from '../failures';
 import { DOCS_PWA_FETCH_CONCURRENCY, type FetchQueue } from '../fetchQueue';
 import { showBytes } from '../objectUrls';
+import { readRange, type RangeReadFailure } from '../range/readRange';
 import { refsFromTokens, rewriteCss, rewriteCssBytes, scanCss, scanCssBytesRefs } from './css';
-import { extendMockupAssetPlan } from './plan';
+import { graphKeysBelow, readImportMap, scanScript, scriptChildRefs, scriptJson, scriptRefs, type ScriptString } from './modules';
+import { extendMockupAssetPlan, importMapRefusedBy, planMockupAssets } from './plan';
 import {
   MOCKUP_CLICK_GUARD, MOCKUP_MAX_CSS_DEPTH, MOCKUP_MAX_SRCDOC_CHARS, metaFor, mockupCsp, type MockupAssetKind,
 } from './policy';
 import type {
-  HttpsOrigin, MockupAssetPlan, MockupAssetReader, MockupAssetResult, MockupAssetRow, MockupBase, MockupReadAnswer, MockupRef,
+  HttpsOrigin, MockupAssetPlan, MockupAssetReader, MockupAssetResult, MockupAssetRow, MockupBase, MockupContext, MockupReadAnswer,
+  MockupRef,
 } from './ports';
+import { MOCKUP_FETCH_SHIM_BASE_CHARS, mockupFetchShim, shimFileChars, shimNameChars, type ShimFile } from './shim';
 
 // ---------------------------------------------------------------------------------------------------------------
 // The DOM extractor
@@ -47,8 +51,25 @@ export interface MockupExtract {
   readonly unsupported: readonly { readonly key: string; readonly element: string }[];
   readonly scriptTexts: readonly string[];
   readonly dropped: readonly { readonly element: string; readonly text: string }[];
-  apply(replacements: ReadonlyMap<string, string>): void;
+  /** X2 P6.2: the page's one import map that `readImportMap` accepted, its entries in order with each value's reference
+   *  key and the text it was written with; null (or absent, for an extract built by hand) when the page has none, or more
+   *  than one, or the one it has is refused. */
+  readonly importMap?: { readonly text: string; readonly entries: readonly { readonly name: string; readonly value: string; readonly key: string }[] } | null;
+  /** Writes each replacement at its reference's site. With `loader` (X2 P6.2, the build's), also: the accepted import map's
+   *  text becomes `loader.mapText` (or a new map is the head's first element when the page has none), every refused import
+   *  map is removed, and `loader.shimText` becomes the head's first script, before all of the page's own. */
+  apply(replacements: ReadonlyMap<string, string>, loader?: MockupLoaderWrite): void;
 }
+
+/** What the build writes into the page besides its references (X2 P6.2): the import map's text, the fetch shim's text,
+ *  each null when there is none to write. Both are built by `scriptJson`, so no page-controlled byte can end their element. */
+export interface MockupLoaderWrite {
+  readonly mapText: string | null;
+  readonly shimText: string | null;
+}
+
+/** A script type the scan reads as JavaScript (X2 P6.2): no type, `module`, or a JavaScript MIME. */
+const JS_TYPES: ReadonlySet<string> = new Set(['', 'module', 'text/javascript', 'application/javascript', 'text/ecmascript', 'application/ecmascript']);
 
 const isAsciiSpace = (c: number): boolean => c === 0x20 || c === 0x09 || c === 0x0a || c === 0x0d || c === 0x0c;
 
@@ -96,18 +117,66 @@ export function parseSrcset(text: string): { candidates: SrcsetCandidate[]; drop
 /** The page's references in DOM order (base 5.6.3's element table), without adopting a node into the live document: it
  *  only reads `doc`, and `apply` writes only into that same `doc`. Keys are `r<n>` in discovery order, so the same page
  *  gives the same keys, a clone of it too. `a` and `area` are never references. */
-export function extractMockupRefs(doc: Document, page: MockupBase): MockupExtract {
+export function extractMockupRefs(doc: Document, page: MockupBase, opts: { readonly refuseMap?: boolean } = {}): MockupExtract {
   const refs: MockupRef[] = [];
   const unsupported: { key: string; element: string }[] = [];
   const scriptTexts: string[] = [];
   const dropped: { element: string; text: string }[] = [];
   const writers: Array<(r: ReadonlyMap<string, string>) => void> = [];
   let seq = 0;
-  const add = (raw: string, kind: MockupAssetKind): string => {
+  const nextKey = (): string => {
     const key = `r${seq}`;
     seq += 1;
+    return key;
+  };
+  const add = (raw: string, kind: MockupAssetKind): string => {
+    const key = nextKey();
     refs.push({ key, raw, basePath: page, kind, depth: 0 });
     return key;
+  };
+  // The import maps first (X2 P6.2): a page's one map that `readImportMap` accepts is read; every map of a page with more
+  // than one, and a map it refuses, is refused whole, as every map was before this loader. So is a map with a `src`, which
+  // the browser registers no map for (fix round 1 of review 4066, A3), and a map whose entries the plan refused
+  // (`refuseMap`, D-9152: `planMockupPage`). So is a map inside a `noscript`: the frame runs scripts, so its parser reads a
+  // `noscript`'s content as text and the map is no element there; moving it to the head would make it one.
+  const typeOf = (el: Element): string => (el.getAttribute('type') ?? '').trim().toLowerCase();
+  const maps = [...doc.querySelectorAll('script')].filter((s) => s.namespaceURI === HTML_NS && typeOf(s) === 'importmap');
+  const readable = maps.length === 1 && opts.refuseMap !== true && !maps[0]!.hasAttribute('src') && maps[0]!.closest('noscript') === null;
+  const read = readable ? readImportMap(maps[0]!.textContent ?? '') : { ok: false as const };
+  const accepted = read.ok ? maps[0]! : null;
+  const mapEntries = read.ok ? read.entries : [];
+  const mapKeys = mapEntries.map(([k]) => k);
+  const refusedMaps = maps.filter((m) => m !== accepted);
+  let importMap: MockupExtract['importMap'] = null;
+  /** An inline script's text, scanned: its imports (a module's) are rewritten at their sites, its fetch names are rows. */
+  const inlineScript = (el: Element, module: boolean): void => {
+    const text = el.textContent ?? '';
+    const scanned = scriptRefs(scanScript(text), {
+      module, inline: true, base: page, page, depth: 1, mapKeys, key: () => nextKey(),
+    });
+    // A script whose text holds `<!--` was parsed through the HTML script escape states, where `<script`, `-->` and the
+    // text around them decide where the element ends: a rewrite inside it could move that end when the built page is parsed
+    // again, and make markup live that this extraction never saw (review of the P6.2 build, finding 3). Its imports are left
+    // as written and reported `html-comment` (their own word, fix round 1 of review 4066, A7); nothing in it is rewritten.
+    const escaping = /<!--/.test(text);
+    const found = escaping
+      ? scanned.refs.map((r, i) => (scanned.sites[i] === null ? r : { ...r, unread: 'html-comment' as const }))
+      : scanned.refs;
+    const sites = escaping ? scanned.sites.map(() => null) : scanned.sites;
+    refs.push(...found);
+    const edits = found.map((r, i) => ({ key: r.key, site: sites[i] ?? null })).filter((x) => x.site !== null);
+    if (edits.length === 0) return;
+    writers.push((r) => {
+      let out = '';
+      let at = 0;
+      for (const { key, site } of edits) {
+        const v = r.get(key);
+        if (v === undefined) continue;
+        out += text.slice(at, site!.start) + v;
+        at = site!.end;
+      }
+      if (at > 0) el.textContent = out + text.slice(at);
+    });
   };
   const refuse = (element: string): void => {
     unsupported.push({ key: `u${unsupported.length}`, element });
@@ -200,9 +269,23 @@ export function extractMockupRefs(doc: Document, page: MockupBase): MockupExtrac
         }
         case 'script': {
           const type = (attr('type')?.value ?? '').trim().toLowerCase();
-          if (type === 'importmap') refuse('script[type=importmap]');
-          else if (attr('src') !== null) attrRef(attr('src'), type === 'module' ? 'module' : 'script');
-          else scriptTexts.push(el.textContent ?? '');
+          if (type === 'importmap') {
+            if (el !== accepted) {
+              refuse('script[type=importmap]');
+              break;
+            }
+            const entries = mapEntries.map(([name, value]) => {
+              const key = nextKey();
+              refs.push({ key, raw: value, basePath: page, kind: 'module', depth: 0, spec: 'map', mapKey: name });
+              return { name, value, key };
+            });
+            importMap = { text: el.textContent ?? '', entries };
+          } else if (attr('src') !== null) {
+            attrRef(attr('src'), type === 'module' ? 'module' : 'script');
+          } else {
+            scriptTexts.push(el.textContent ?? '');
+            if (JS_TYPES.has(type)) inlineScript(el, type === 'module');
+          }
           break;
         }
         case 'style':
@@ -229,11 +312,45 @@ export function extractMockupRefs(doc: Document, page: MockupBase): MockupExtrac
     if (style !== null) cssText(style.value, (v) => { style.value = v; });
   }
   return {
-    refs, unsupported, scriptTexts, dropped,
-    apply(replacements) {
+    refs, unsupported, scriptTexts, dropped, importMap,
+    apply(replacements, loader) {
       for (const write of writers) write(replacements);
+      if (loader === undefined) return;
+      for (const m of refusedMaps) m.remove();
+      const head = doc.head ?? doc.documentElement;
+      // The page's own map is moved to the head's start, ahead of every module script: a map after a module script, or in
+      // the body, is one the browser may not register, and the build's names would then resolve nowhere (fix round 1 of
+      // review 4066, A5: moved rather than refused, the smaller change). Only the shim goes before it.
+      if (accepted !== null) head.prepend(accepted);
+      if (loader.mapText !== null) {
+        if (accepted !== null) {
+          accepted.textContent = loader.mapText;
+        } else {
+          const el = doc.createElement('script');
+          el.setAttribute('type', 'importmap');
+          el.textContent = loader.mapText;
+          head.prepend(el);
+        }
+      }
+      if (loader.shimText !== null) {
+        const el = doc.createElement('script');
+        el.textContent = loader.shimText;
+        head.prepend(el);
+      }
     },
   };
+}
+
+/** One attempt's references and their plan (X2 P6.2, D-9152): the page extracted and planned; when the plan refuses the
+ *  page's import map whole (`importMapRefusedBy`), the page extracted again with the map refused, as an unreadable map is
+ *  (listed, removed from the built page, its names unmapped), planned again, and marked `importMapRefused` so the build and
+ *  Export extract it the same way. Throws what `planMockupAssets` throws. */
+export function planMockupPage(doc: Document, page: MockupBase, ctx: MockupContext): { readonly extract: MockupExtract; readonly plan: MockupAssetPlan } {
+  const extract = extractMockupRefs(doc, page);
+  const plan = planMockupAssets(extract.refs, ctx);
+  if (!importMapRefusedBy(plan.rows)) return { extract, plan };
+  const refused = extractMockupRefs(doc, page, { refuseMap: true });
+  return { extract: refused, plan: { ...planMockupAssets(refused.refs, ctx), importMapRefused: true } };
 }
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -243,14 +360,25 @@ export function extractMockupRefs(doc: Document, page: MockupBase): MockupExtrac
  *  word (`auth` for a 401, `unreachable`, `no-docs-route`, `unexpected-response`). Whole: never folded into `missing`. */
 const failureWord = (a: DocsNotOk): string => (a.s === 'failed' ? a.body.failure : a.s);
 
+/** A range read's failure as one word: the server's or the client's own answer as `failureWord` gives it, else
+ *  `range-<kind>` (`range-frame-digest`, `range-no-digest`, ...), kept whole. */
+const rangeFailureWord = (why: RangeReadFailure): string => (why.kind === 'answer' ? failureWord(why.answer) : `range-${why.kind}`);
+
 /** The loader's port over the existing Docs loaders and the screen's queue. A raster path reads through
  *  `loaders.raster`, every other through `loaders.file` with `showBytes`; each read is one queued job and one loader
  *  call, with the queue's own signal. It never relists, retries or replans, and holds no admission policy. */
 export function mockupAssetReader(
-  project: string, loaders: Pick<DocsLoaders, 'file' | 'raster'>, queue: FetchQueue,
+  project: string, loaders: Pick<DocsLoaders, 'file' | 'raster' | 'range'>, queue: FetchQueue,
 ): MockupAssetReader {
   return {
-    read: (pin, signal) => queue.run(async (jobSignal): Promise<MockupReadAnswer> => {
+    read: (pin, signal, range) => queue.run(async (jobSignal): Promise<MockupReadAnswer> => {
+      if (range !== undefined) {
+        // X2 P6.2: a fetched sibling above its class cap, through the range seam (spec 4.3): every frame and the whole read
+        // checked against their digests. Loaders with no range seam answer `range-unavailable`, and nothing is read.
+        if (loaders.range === undefined) return { kind: 'failed', failure: 'range-unavailable' };
+        const r = await readRange(loaders.range, { project, pin, range: range.pin, size: range.size }, { signal: jobSignal, onProgress: () => {} });
+        return r.ok ? { kind: 'ok', bytes: r.bytes } : { kind: 'failed', failure: rangeFailureWord(r.why) };
+      }
       if (contentClass(pin.path) === 'raster') {
         const a = await loaders.raster(project, pin, jobSignal);
         return a.s === 'ok' ? { kind: 'ok', bytes: a.value.bytes } : { kind: 'failed', failure: failureWord(a) };
@@ -285,7 +413,23 @@ interface Unit {
   readonly kind: MockupAssetKind;
   readonly mime: string;
   readonly limit: number;
+  /** X2 P6.2: read through the range seam, `limit` being the listed size. */
+  readonly range: DocsRangePin | undefined;
   done: boolean;
+}
+
+/** The kinds whose bytes name further references: a stylesheet's, and (X2 P6.2) a module's imports and a script's fetch
+ *  names. */
+const isParent = (kind: MockupAssetKind): boolean => kind === 'css' || kind === 'module' || kind === 'script';
+
+/** The import map keys a plan's rows carry (X2 P6.2): the page's own map's entries, each a `map` reference. */
+const mapKeysOf = (rows: readonly MockupAssetRow[]): string[] =>
+  rows.flatMap((r) => (r.ref.mapKey === undefined ? [] : [r.ref.mapKey]));
+
+/** What a completed parent's bytes name: a stylesheet's references, or a script's (X2 P6.2). The same call the build makes,
+ *  so the keys agree. */
+function childRefsOf(parent: Unit, bytes: Uint8Array, page: MockupBase, mapKeys: readonly string[]): MockupRef[] {
+  return parent.kind === 'css' ? scanCssBytesRefs(bytes, parent.ref).refs : scriptChildRefs(bytes, parent.ref, page, mapKeys).refs;
 }
 
 /** The word the load's end hands `now`. It reaches no row: the end comes only once every unit has settled. */
@@ -330,8 +474,10 @@ export function startMockupLoad(plan: MockupAssetPlan, reader: MockupAssetReader
   let current = plan;
   const units: Unit[] = [];
   const byKey = new Map<string, Unit>();
-  const cssUnits: Unit[] = [];
-  const sheets = new Map<Unit, Uint8Array<ArrayBuffer>>();
+  const cssUnits: Unit[] = []; // every parent (a stylesheet, a module, a script), in row order
+  const sheets = new Map<Unit, Uint8Array<ArrayBuffer>>(); // a completed parent's bytes
+  const page: MockupBase = `${plan.context.pin.section}/${plan.context.pin.path}`;
+  const mapKeys = mapKeysOf(plan.rows);
   const assets = new Map<string, { mime: string; bytes: Uint8Array<ArrayBuffer> }>();
   const failed = new Map<string, string>();
   let actualBytes = 0;
@@ -355,13 +501,15 @@ export function startMockupLoad(plan: MockupAssetPlan, reader: MockupAssetReader
       if (row.verdict.v !== 'inline' || row.size === null) continue;
       const key = unitKeyOf(row.ref);
       if (byKey.has(key)) continue;
+      const range = row.verdict.range;
       const unit: Unit = {
         key, pin: row.verdict.pin, ref: row.ref, kind: row.verdict.kind, mime: row.verdict.mime,
-        limit: Math.min(row.size.bytes, DOCS_CLASS_CAP[contentClass(row.verdict.pin.path)]), done: false,
+        limit: range !== undefined ? row.size.bytes : Math.min(row.size.bytes, DOCS_CLASS_CAP[contentClass(row.verdict.pin.path)]),
+        range, done: false,
       };
       byKey.set(key, unit);
       units.push(unit);
-      if (unit.kind === 'css') cssUnits.push(unit);
+      if (isParent(unit.kind)) cssUnits.push(unit);
     }
   };
   try {
@@ -391,7 +539,7 @@ export function startMockupLoad(plan: MockupAssetPlan, reader: MockupAssetReader
         const parent = cssUnits[cursor]!;
         cursor += 1;
         if (bytes === undefined) continue;
-        const { refs } = scanCssBytesRefs(bytes, parent.ref);
+        const refs = childRefsOf(parent, bytes, page, mapKeys);
         if (refs.length === 0) continue;
         current = extendMockupAssetPlan(current, refs);
         absorb();
@@ -410,7 +558,7 @@ export function startMockupLoad(plan: MockupAssetPlan, reader: MockupAssetReader
         return;
       }
       assets.set(docsApi.file(project, unit.pin), { mime: unit.mime, bytes: answer.bytes });
-      if (unit.kind === 'css') sheets.set(unit, answer.bytes);
+      if (isParent(unit.kind)) sheets.set(unit, answer.bytes);
     };
 
     /** The load's end. It comes only once every unit has settled (none in flight, none left to start, every stylesheet
@@ -425,7 +573,9 @@ export function startMockupLoad(plan: MockupAssetPlan, reader: MockupAssetReader
       inflight += 1;
       let pending: Promise<MockupReadAnswer>;
       try {
-        pending = reader.read(unit.pin, signal);
+        pending = unit.range === undefined
+          ? reader.read(unit.pin, signal)
+          : reader.read(unit.pin, signal, { pin: unit.range, size: unit.limit });
       } catch (err) {
         inflight -= 1;
         stop(err);
@@ -491,13 +641,32 @@ type InlineRow = MockupAssetRow & { readonly verdict: Extract<MockupAssetRow['ve
 /** `plan` with each loaded row whose key is in `skipped` turned to `skipped:'over-budget'` and each whose key is in
  *  `tooDeep` turned to `unsupported:'css-depth'`, a size basis kept in both (the row was admitted); the context and
  *  `reservedBytes` are the plan's own. */
-function withVerdicts(plan: MockupAssetPlan, skipped: ReadonlySet<string>, tooDeep: ReadonlySet<string>): MockupAssetPlan {
+function withVerdicts(
+  plan: MockupAssetPlan, skipped: ReadonlySet<string>, tooDeep: ReadonlySet<string>, cycles: ReadonlySet<string> = new Set(),
+): MockupAssetPlan {
   const rows = plan.rows.map((row): MockupAssetRow => {
     if (row.verdict.v !== 'inline') return row;
     if (skipped.has(row.ref.key)) return { ...row, verdict: { v: 'skipped', why: 'over-budget' } };
-    return tooDeep.has(row.ref.key) ? { ...row, verdict: { v: 'unsupported', why: 'css-depth' } } : row;
+    // X2 P6.2: an import that closes a cycle is left as written and reported; a module or fetch name no use reached is past
+    // the module graph's depth, never the stylesheet one's.
+    if (cycles.has(row.ref.key)) return { ...row, verdict: { v: 'unsupported', why: 'cycle' } };
+    if (!tooDeep.has(row.ref.key)) return row;
+    const graph = (row.ref.kind === 'module' && row.ref.spec !== undefined) || row.ref.kind === 'fetch';
+    return { ...row, verdict: { v: 'unsupported', why: graph ? 'module-depth' : 'css-depth' } };
   });
   return { ...plan, rows };
+}
+
+/** The prefix of the import map names the build gives each imported module (X2 P6.2): `#mockup/<n>`, a bare name, which
+ *  only the import map resolves. A name the page's own map already uses is skipped. */
+export const MOCKUP_MODULE_ID_PREFIX = '#mockup/';
+
+/** `bytes` with each site `replacement(index)` names replaced by that ASCII text, every other byte kept. */
+function spliceBytes(
+  bytes: Uint8Array<ArrayBuffer>, sites: readonly (ScriptString | null)[], replacement: (index: number) => string | null,
+): Uint8Array<ArrayBuffer> {
+  const tokens = sites.flatMap((s, i) => (s === null ? [] : [{ s, i }]));
+  return rewriteCssBytes(bytes, tokens.map((t) => ({ start: t.s.start, end: t.s.end, raw: t.s.raw, kind: 'image' as const })), (j) => replacement(tokens[j]!.i));
 }
 
 /** The page's bytes for the frame (base 5.6.2 step 6): `metaFor(csp)`, then the click guard, then the doctype, then
@@ -529,7 +698,7 @@ export function buildMockupSrcdoc(
   const { plan } = assets;
   const { section, path } = plan.context.pin;
   const clone = doc.cloneNode(true) as Document;
-  const extract = extractMockupRefs(clone, `${section}/${path}`);
+  const extract = extractMockupRefs(clone, `${section}/${path}`, { refuseMap: plan.importMapRefused === true });
   const body = clone.documentElement.outerHTML;
 
   const rowByKey = new Map<string, MockupAssetRow>(plan.rows.map((r) => [r.ref.key, r]));
@@ -546,8 +715,17 @@ export function buildMockupSrcdoc(
     return asset === undefined ? null : { row: row as InlineRow, bytes: asset.bytes };
   };
 
+  // X2 P6.2: the module graph, the import map and the fetch shim. The page's own map, when one is accepted, is charged now
+  // for what writing it back as `scriptJson` adds; a new map is charged at its first name.
+  const pageBase: MockupBase = `${section}/${path}`;
+  const mapKeys = mapKeysOf(plan.rows);
+  const pageMap = extract.importMap ?? null;
+  const NEW_MAP_CHARS = `<script type="importmap">${scriptJson({ imports: {} })}</script>`.length;
+  const pageMapCharge = pageMap === null ? 0
+    : Math.max(0, scriptJson({ imports: Object.fromEntries(pageMap.entries.map((e) => [e.name, e.value])) }).length - pageMap.text.length);
+
   // The page alone, every reference as written, against the cap: over it nothing can be built.
-  const baseChars = head.length + body.length;
+  const baseChars = head.length + body.length + pageMapCharge;
   if (baseChars > cap) {
     const loaded = new Set<string>();
     for (const row of plan.rows) if (row.verdict.v === 'inline' && assetOf(unitKeyOf(row.ref)) !== null) loaded.add(row.ref.key);
@@ -568,7 +746,19 @@ export function buildMockupSrcdoc(
     const row = rowByKey.get(r.key);
     return row !== undefined && row.verdict.v === 'inline' && assetOf(unitKeyOf(row.ref)) !== null ? row : undefined;
   };
-  /** The keys of every loaded reference below a stylesheet used at `depth`, to the depth the build nests to. */
+  /** A loaded module's imports, as the loader found them (the same call, so the keys agree), with their sites: scanned ONCE
+   *  per file for the whole build, so neither the cut's walks below each refused root nor the bottom-up build scans a file
+   *  twice (fix round 1 of review 4066, F1). */
+  const scanned = new Map<string, ReturnType<typeof scriptChildRefs>>();
+  const importsOf = (fileKey: string, loaded: { row: InlineRow; bytes: Uint8Array<ArrayBuffer> }): ReturnType<typeof scriptChildRefs> => {
+    const known = scanned.get(fileKey);
+    if (known !== undefined) return known;
+    const found = scriptChildRefs(loaded.bytes, loaded.row.ref, pageBase, mapKeys);
+    scanned.set(fileKey, found);
+    return found;
+  };
+  /** The keys of every loaded reference below a stylesheet used at `depth`, to the depth the build nests to; for a module,
+   *  every loaded module below it in the graph. */
   const keysBelow = (fileKey: string, depth: number): string[] => {
     const at = `${fileKey}@${depth}`;
     const known = below.get(at);
@@ -576,7 +766,16 @@ export function buildMockupSrcdoc(
     const out: string[] = [];
     below.set(at, out);
     const loaded = assetOf(fileKey);
-    if (loaded !== null && loaded.row.verdict.kind === 'css' && depth + 1 <= MOCKUP_MAX_CSS_DEPTH) {
+    if (loaded !== null && loaded.row.verdict.kind === 'module') {
+      for (const k of graphKeysBelow(fileKey, (file) => {
+        const at = assetOf(file);
+        if (at === null || at.row.verdict.kind !== 'module') return [];
+        return importsOf(file, at).refs.flatMap((ref): [string, string][] => {
+          const child = childRow(ref);
+          return child !== undefined && child.verdict.v === 'inline' && child.verdict.kind === 'module' ? [[child.ref.key, unitKeyOf(child.ref)]] : [];
+        });
+      })) out.push(k);
+    } else if (loaded !== null && loaded.row.verdict.kind === 'css' && depth + 1 <= MOCKUP_MAX_CSS_DEPTH) {
       for (const ref of scanCssBytesRefs(loaded.bytes, loaded.row.ref).refs) {
         const child = childRow(ref);
         if (child !== undefined) out.push(child.ref.key, ...keysBelow(unitKeyOf(child.ref), depth + 1));
@@ -592,6 +791,81 @@ export function buildMockupSrcdoc(
     return null;
   };
 
+  // The module graph (X2 P6.2, spec 4.8), inlined BOTTOM UP and ONCE each: a module's URL is built after every module it
+  // imports has its name in the import map, and each module's `data:` URL is in the page once, as its map entry (and as the
+  // `src` of a page script that loads it). An import is rewritten to the name, so a module two others import is one module.
+  const moduleUrls = new Map<string, string | null>(); // file -> its data: URL, built with its imports rewritten; null: cut
+  const building = new Set<string>(); // the modules on the current path, for the cycle check
+  const cycles = new Set<string>(); // keys of imports that close a cycle: left as written
+  const ids = new Map<string, string>(); // file -> its import map name
+  const idEntries: [string, string][] = []; // [name, URL], in the order built: bottom up
+  const takenNames = new Set(pageMap === null ? [] : pageMap.entries.map((e) => e.name));
+  let mapCharged = pageMap !== null;
+  let idSeq = 0;
+  /** The import map name of `fileKey`, its entry charged once; null when the entry does not fit (the caller cuts). */
+  const nameOf = (fileKey: string, url: string): string | null => {
+    const known = ids.get(fileKey);
+    if (known !== undefined) return known;
+    let id = `${MOCKUP_MODULE_ID_PREFIX}${idSeq}`;
+    while (takenNames.has(id)) {
+      idSeq += 1;
+      id = `${MOCKUP_MODULE_ID_PREFIX}${idSeq}`;
+    }
+    const cost = (mapCharged ? 0 : NEW_MAP_CHARS) + scriptJson(id).length + 1 + scriptJson(url).length + 1;
+    if (total + cost > cap) return null;
+    total += cost;
+    mapCharged = true;
+    idSeq += 1;
+    takenNames.add(id);
+    ids.set(fileKey, id);
+    idEntries.push([id, url]);
+    return id;
+  };
+  /** A module's URL, its imports first (each named in the map), or null once the cut is reached. */
+  const moduleUrl = (fileKey: string): string | null => {
+    const known = moduleUrls.get(fileKey);
+    if (known !== undefined) return known;
+    const loaded = assetOf(fileKey);
+    if (cut || loaded === null) return null;
+    building.add(fileKey);
+    const before = total;
+    const logStart = log.length;
+    const idStart = idEntries.length;
+    const { refs, sites } = importsOf(fileKey, loaded);
+    const names = refs.map((ref, i): string | null => {
+      if (sites[i] === null || cut) return null;
+      const child = childRow(ref);
+      if (child === undefined || child.verdict.v !== 'inline' || child.verdict.kind !== 'module') return null;
+      const childFile = unitKeyOf(child.ref);
+      if (building.has(childFile)) {
+        cycles.add(ref.key);
+        return null;
+      }
+      const childUrl = moduleUrl(childFile);
+      const id = childUrl === null ? null : nameOf(childFile, childUrl);
+      if (id === null) {
+        refuse(ref.key, childFile, 0);
+        return null;
+      }
+      log.push(ref.key);
+      return id;
+    });
+    building.delete(fileKey);
+    if (cut) {
+      // A module whose import was cut is cut with it: what it admitted is no longer in the page.
+      total = before;
+      log.length = logStart;
+      for (const [id] of idEntries.splice(idStart)) {
+        for (const [f, n] of ids) if (n === id) ids.delete(f);
+      }
+      moduleUrls.set(fileKey, null);
+      return null;
+    }
+    const url = dataUrl(loaded.row.verdict.mime, spliceBytes(loaded.bytes, sites, (i) => names[i] ?? null));
+    moduleUrls.set(fileKey, url);
+    return url;
+  };
+
   /** One use of a file at nesting depth `depth`, replacing `refLen` characters: its `data:` URL, or null (as written). */
   const use = (row: MockupAssetRow, depth: number, refLen: number): string | null => {
     if (row.verdict.v !== 'inline') return null;
@@ -601,6 +875,25 @@ export function buildMockupSrcdoc(
     const key = row.ref.key;
     const { row: canon, bytes } = loaded;
     if (cut) return refuse(key, fileKey, depth);
+    if (row.verdict.kind === 'fetch') return null; // the fetch shim's, below: never written into the page
+    if (row.verdict.kind === 'module' && canon.verdict.kind === 'module') {
+      // X2 P6.2: a module's use. An inline import is rewritten to the module's map name, a map entry's value and a script's
+      // `src` to its URL; each is charged what it adds where it is written.
+      const url = moduleUrl(fileKey);
+      if (url === null) return refuse(key, fileKey, 0);
+      if (row.ref.spec === 'import') {
+        const id = nameOf(fileKey, url);
+        if (id === null || total + id.length - refLen > cap) return refuse(key, fileKey, 0);
+        total += id.length - refLen;
+        log.push(key);
+        return id;
+      }
+      const cost = row.ref.spec === 'map' ? scriptJson(url).length - scriptJson(row.ref.raw).length : url.length - refLen;
+      if (total + cost > cap) return refuse(key, fileKey, 0);
+      total += cost;
+      log.push(key);
+      return url;
+    }
     const admit = (url: string): string | null => {
       const cost = url.length - refLen;
       if (total + cost > cap) return refuse(key, fileKey, depth);
@@ -653,7 +946,60 @@ export function buildMockupSrcdoc(
     const url = use(row, 0, ref.raw.length);
     if (url !== null) replacements.set(ref.key, url);
   }
-  extract.apply(replacements);
+  // The fetch shim (X2 P6.2): every loaded fetched sibling in row order, each file's bytes once and each name the page wrote
+  // once, under the same cut. A name is the literal as the page wrote it; the shim resolves it in the frame.
+  const shimFiles: ShimFile[] = [];
+  const shimIndex = new Map<string, number>();
+  const shimNames: [string, number][] = [];
+  const named = new Set<string>();
+  for (const row of plan.rows) {
+    if (row.verdict.v !== 'inline' || row.verdict.kind !== 'fetch') continue;
+    const fileKey = unitKeyOf(row.ref);
+    const loaded = assetOf(fileKey);
+    if (loaded === null) continue;
+    if (cut) {
+      refuse(row.ref.key, fileKey, 0);
+      continue;
+    }
+    const at = shimIndex.get(fileKey);
+    const file = at === undefined ? { mime: loaded.row.verdict.mime, b64: base64Of(loaded.bytes) } : null;
+    const index = at ?? shimFiles.length;
+    const fresh = !named.has(row.ref.raw);
+    const cost = (file === null ? 0 : (shimFiles.length === 0 ? MOCKUP_FETCH_SHIM_BASE_CHARS : 0) + shimFileChars(file))
+      + (fresh ? shimNameChars(row.ref.raw, index) : 0);
+    if (total + cost > cap) {
+      refuse(row.ref.key, fileKey, 0);
+      continue;
+    }
+    total += cost;
+    if (file !== null) {
+      shimIndex.set(fileKey, index);
+      shimFiles.push(file);
+    }
+    if (fresh) {
+      named.add(row.ref.raw);
+      shimNames.push([row.ref.raw, index]);
+    }
+    log.push(row.ref.key);
+  }
+  // The import map: the page's own entries, a sibling's value now its module's URL, then the build's names, bottom up. The
+  // written map carries no value the build did not replace (D-9152): a page entry is its module's URL or its offered `https`
+  // URL, and one with neither (a budget skip, the cut, a failed read) is left out, so no path text of the page resolves
+  // against the console's origin; its import fails as not loaded, and its row says why. So the page's own map, when one was
+  // accepted, is always written back (already charged, as an upper bound, by `pageMapCharge`).
+  let mapText: string | null = null;
+  if (idEntries.length > 0 || pageMap !== null) {
+    // No prototype, so a page's own `__proto__` entry is a key like any other (review finding 7).
+    const imports = Object.create(null) as Record<string, string>;
+    for (const e of pageMap?.entries ?? []) {
+      const url = replacements.get(e.key);
+      if (url !== undefined) imports[e.name] = url;
+      else if (rowByKey.get(e.key)?.verdict.v === 'external') imports[e.name] = e.value;
+    }
+    for (const [id, url] of idEntries) imports[id] = url;
+    mapText = scriptJson({ imports });
+  }
+  extract.apply(replacements, { mapText, shimText: shimFiles.length === 0 ? null : mockupFetchShim(shimFiles, shimNames) });
   // Every loaded row now agrees with the page. The cut's word first: a row it kept out is `skipped`. Then the depth word for
   // each row the cut did not touch and no use reached: it is in no `data:` URL of the page.
   const inlined = new Set(log);
@@ -663,5 +1009,5 @@ export function buildMockupSrcdoc(
     const k = row.ref.key;
     if (row.verdict.v === 'inline' && !inlined.has(k) && !cutKeys.has(k) && assetOf(unitKeyOf(row.ref)) !== null) tooDeep.add(k);
   }
-  return { ok: true, page: head + clone.documentElement.outerHTML, plan: withVerdicts(plan, cutKeys, tooDeep) };
+  return { ok: true, page: head + clone.documentElement.outerHTML, plan: withVerdicts(plan, cutKeys, tooDeep, cycles) };
 }

@@ -1,0 +1,319 @@
+{
+  "about": "The artifact tier's site-rule and config cases (spec 2.3). Two suites read this one table: artifacts-config.test.ts runs it against server/src/artifacts/policy.ts, and ccrc-expose-artifacts.test.ts runs it against the bash mirror in ccd/ccrc, so the server and the shell refuse and accept exactly the same things. A placeholder {a}, {b}, {c} or {d} in a string is a label generated per check ('t' plus twelve hex digits; the same token is the same label within one check) and {A} is {a} in upper case, so no case names a registrable host; every other host is under a reserved name.",
+  "acceptList": ["duckdns.org"],
+  "siteCases": [
+    { "case": "config: the five rows of the table give their verdicts", "checks": [
+      { "console": "{a}.duckdns.org", "host": "{b}.duckdns.org", "accepted": true },
+      { "console": "{a}.nip.io", "host": "{b}.nip.io", "accepted": false },
+      { "console": "ccrc.example.test", "host": "art.example.test", "accepted": false },
+      { "console": "ccrc.example.test", "host": "art.example.invalid", "accepted": true },
+      { "console": "{a}.co.uk", "host": "{b}.co.uk", "accepted": false }
+    ] },
+    { "case": "config: nip.io refused", "checks": [
+      { "console": "{a}.nip.io", "host": "{b}.nip.io", "accepted": false, "detailHas": ["nip.io"] }
+    ] },
+    { "case": "config: `ccrc.example.test` with `art.example.test` refused", "checks": [
+      { "console": "ccrc.example.test", "host": "art.example.test", "accepted": false, "detailHas": ["example.test"] }
+    ] },
+    { "case": "a host that equals the console host is refused, and so is one below it", "checks": [
+      { "console": "{a}.duckdns.org", "host": "{a}.duckdns.org", "accepted": false },
+      { "console": "{a}.duckdns.org", "host": "x.{a}.duckdns.org", "accepted": false },
+      { "console": "x.{a}.duckdns.org", "host": "{a}.duckdns.org", "accepted": false }
+    ] },
+    { "case": "config: an accept-list host above the console is refused", "checks": [
+      { "console": "{a}.duckdns.org", "host": "duckdns.org", "accepted": false }
+    ] },
+    { "case": "a host above the console by one label is refused", "checks": [
+      { "console": "x.ccrc.example.test", "host": "ccrc.example.test", "accepted": false }
+    ] },
+    { "case": "lower-cases both hosts and drops one trailing dot", "checks": [
+      { "console": "{A}.example.test", "host": "{a}.example.test.", "accepted": false },
+      { "console": "{a}.DuckDNS.org.", "host": "{b}.duckdns.org", "accepted": true }
+    ] },
+    { "case": "a single shared label (a top-level domain) is accepted", "checks": [
+      { "console": "ccrc.example.test", "host": "art.other.test", "accepted": true }
+    ] }
+  ],
+  "configCases": [
+    { "case": "an https tier with valid names is on, with the exact host fields", "checks": [
+      { "console": "https://ccrc.example.test", "consolePort": 7788,
+        "env": { "origin": "https://art.example.invalid", "content": "https://content.example.invalid", "port": "7790" },
+        "state": "on", "hosts": { "artifact": "art.example.invalid", "content": "content.example.invalid" } }
+    ] },
+    { "case": "an https origin that states a port carries it in the host field", "checks": [
+      { "console": "https://ccrc.example.test", "consolePort": 7788,
+        "env": { "origin": "https://art.example.invalid:8443", "content": "https://content.example.invalid", "port": "7790" },
+        "state": "on", "hosts": { "artifact": "art.example.invalid:8443", "content": "content.example.invalid" } }
+    ] },
+    { "case": "an origin that writes the default port :443 is off/invalid (a browser's Host never carries it)", "checks": [
+      { "console": "https://ccrc.example.test", "consolePort": 7788,
+        "env": { "origin": "https://art.example.invalid:443", "content": "https://content.example.invalid", "port": "7790" },
+        "state": "off", "why": "invalid", "detailHas": ["CCRC_ARTIFACT_ORIGIN", ":443"] }
+    ] },
+    { "case": "config: a host a browser reads as an address is refused (the URL standard rewrites it)", "checks": [
+      { "console": "https://ccrc.example.test", "consolePort": 7788,
+        "env": { "origin": "https://10.0.0.01", "content": "https://content.example.invalid", "port": "7790" },
+        "state": "off", "why": "invalid", "detailHas": ["CCRC_ARTIFACT_ORIGIN"] },
+      { "console": "https://ccrc.example.test", "consolePort": 7788,
+        "env": { "origin": "https://10.1", "content": "https://content.example.invalid", "port": "7790" },
+        "state": "off", "why": "invalid", "detailHas": ["CCRC_ARTIFACT_ORIGIN"] },
+      { "console": "https://ccrc.example.test", "consolePort": 7788,
+        "env": { "origin": "https://art.0x7f", "content": "https://content.example.invalid", "port": "7790" },
+        "state": "off", "why": "invalid", "detailHas": ["CCRC_ARTIFACT_ORIGIN"] },
+      { "console": "https://ccrc.example.test", "consolePort": 7788,
+        "env": { "origin": "https://art.example.123", "content": "https://content.example.invalid", "port": "7790" },
+        "state": "off", "why": "invalid", "detailHas": ["CCRC_ARTIFACT_ORIGIN"] }
+    ] },
+    { "case": "config: a console reached by address is off/by-address", "checks": [
+      { "console": "https://10.0.0.1", "consolePort": 7788,
+        "env": { "origin": "https://art.example.invalid", "content": "https://content.example.invalid", "port": "7790" },
+        "state": "off", "why": "by-address" }
+    ] },
+    { "case": "config: a port written with a leading zero is refused, so two spellings never make one origin", "checks": [
+      { "console": "https://ccrc.example.test", "consolePort": 7788,
+        "env": { "origin": "https://art.example.invalid", "content": "https://art.example.invalid:0443", "port": "7790" },
+        "state": "off", "why": "invalid", "detailHas": ["CCRC_ARTIFACT_CONTENT_ORIGIN"] },
+      { "console": "https://ccrc.example.test", "consolePort": 7788,
+        "env": { "origin": "https://art.example.invalid:8443", "content": "https://art.example.invalid:08443", "port": "7790" },
+        "state": "off", "why": "invalid", "detailHas": ["CCRC_ARTIFACT_CONTENT_ORIGIN"] },
+      { "console": "https://ccrc.example.test", "consolePort": 7788,
+        "env": { "origin": "https://art.example.invalid", "content": "https://content.example.invalid", "port": "07790" },
+        "state": "off", "why": "invalid" }
+    ] },
+    { "case": "config: a port of zero is refused in the words of port 0, a leading zero in the words of a leading zero", "checks": [
+      { "console": "https://ccrc.example.test", "consolePort": 7788,
+        "env": { "origin": "https://art.example.invalid", "content": "https://content.example.invalid:0", "port": "7790" },
+        "state": "off", "why": "invalid", "detailHas": ["CCRC_ARTIFACT_CONTENT_ORIGIN", "port 0"], "detailLacks": ["leading zero"] },
+      { "console": "https://ccrc.example.test", "consolePort": 7788,
+        "env": { "origin": "https://art.example.invalid:00", "content": "https://content.example.invalid", "port": "7790" },
+        "state": "off", "why": "invalid", "detailHas": ["port 0"] },
+      { "console": "https://ccrc.example.test", "consolePort": 7788,
+        "env": { "origin": "https://art.example.invalid", "content": "https://content.example.invalid:0443", "port": "7790" },
+        "state": "off", "why": "invalid", "detailHas": ["leading zero"], "detailLacks": ["port 0"] }
+    ] },
+    { "case": "config: a label outside ASCII is refused", "checks": [
+      { "console": "https://ccrc.example.test", "consolePort": 7788,
+        "env": { "origin": "https://é.example.invalid", "content": "https://content.example.invalid", "port": "7790" },
+        "state": "off", "why": "invalid", "detailHas": ["CCRC_ARTIFACT_ORIGIN"] },
+      { "console": "https://ccrc.example.test", "consolePort": 7788,
+        "env": { "origin": "https://art.example.invalid", "content": "https://ǆ.example.invalid", "port": "7790" },
+        "state": "off", "why": "invalid", "detailHas": ["CCRC_ARTIFACT_CONTENT_ORIGIN"] }
+    ] },
+    { "case": "config: the highest port is a port, one past it is not", "checks": [
+      { "console": "https://ccrc.example.test", "consolePort": 7788,
+        "env": { "origin": "https://art.example.invalid", "content": "https://content.example.invalid:65535", "port": "7790" },
+        "state": "on", "hosts": { "artifact": "art.example.invalid", "content": "content.example.invalid:65535" } },
+      { "console": "https://ccrc.example.test", "consolePort": 7788,
+        "env": { "origin": "https://art.example.invalid", "content": "https://content.example.invalid:65536", "port": "7790" },
+        "state": "off", "why": "invalid", "detailHas": ["CCRC_ARTIFACT_CONTENT_ORIGIN"] }
+    ] },
+    { "case": "config: a content origin a browser reads as an address is refused", "checks": [
+      { "console": "https://ccrc.example.test", "consolePort": 7788,
+        "env": { "origin": "https://art.example.invalid", "content": "https://content.example.7", "port": "7790" },
+        "state": "off", "why": "invalid", "detailHas": ["CCRC_ARTIFACT_CONTENT_ORIGIN"] },
+      { "console": "https://ccrc.example.test", "consolePort": 7788,
+        "env": { "origin": "https://art.example.invalid", "content": "https://0x1f.example.0x2a", "port": "7790" },
+        "state": "off", "why": "invalid", "detailHas": ["CCRC_ARTIFACT_CONTENT_ORIGIN"] }
+    ] },
+    { "case": "config: a console origin with a port is compared by hostname", "checks": [
+      { "console": "https://ccrc.example.test:8443", "consolePort": 7788,
+        "env": { "origin": "https://ccrc.example.test", "content": "https://content.example.invalid", "port": "7790" },
+        "state": "off", "why": "invalid", "detailHas": ["CCRC_ARTIFACT_ORIGIN"] },
+      { "console": "https://ccrc.example.test:8443", "consolePort": 7788,
+        "env": { "origin": "https://art.example.invalid", "content": "https://content.example.invalid", "port": "7790" },
+        "state": "on", "hosts": { "artifact": "art.example.invalid", "content": "content.example.invalid" } }
+    ] },
+    { "case": "a duckdns pair under the accept list is on", "checks": [
+      { "console": "https://{c}.duckdns.org", "consolePort": 7788,
+        "env": { "origin": "https://{a}.duckdns.org", "content": "https://{b}.duckdns.org", "port": "7790" },
+        "state": "on" }
+    ] },
+    { "case": "a nip.io pair is off/invalid and the detail names the key and the shared site", "checks": [
+      { "console": "https://{c}.nip.io", "consolePort": 7788,
+        "env": { "origin": "https://{a}.nip.io", "content": "https://{b}.nip.io", "port": "7790" },
+        "state": "off", "why": "invalid", "detailHas": ["CCRC_ARTIFACT_ORIGIN", "nip.io"] }
+    ] },
+    { "case": "config: `ccrc.example.test` with `art.example.test` refused", "checks": [
+      { "console": "https://ccrc.example.test", "consolePort": 7788,
+        "env": { "origin": "https://art.example.test", "content": "https://content.example.invalid", "port": "7790" },
+        "state": "off", "why": "invalid", "detailHas": ["CCRC_ARTIFACT_ORIGIN"] }
+    ] },
+    { "case": "the content origin goes through the site rule too", "checks": [
+      { "console": "https://ccrc.example.test", "consolePort": 7788,
+        "env": { "origin": "https://art.example.invalid", "content": "https://content.example.test", "port": "7790" },
+        "state": "off", "why": "invalid", "detailHas": ["CCRC_ARTIFACT_CONTENT_ORIGIN"] }
+    ] },
+    { "case": "config: an accept-list host above the console is refused", "checks": [
+      { "console": "https://{a}.duckdns.org", "consolePort": 7788,
+        "env": { "origin": "https://duckdns.org", "content": "https://{b}.duckdns.org", "port": "7790" },
+        "state": "off", "why": "invalid" }
+    ] },
+    { "case": "a host equal to the console host or below it is refused", "checks": [
+      { "console": "https://{a}.duckdns.org", "consolePort": 7788,
+        "env": { "origin": "https://{a}.duckdns.org:8443", "content": "https://{b}.duckdns.org", "port": "7790" },
+        "state": "off", "why": "invalid" },
+      { "console": "https://{a}.duckdns.org", "consolePort": 7788,
+        "env": { "origin": "https://x.{a}.duckdns.org", "content": "https://{b}.duckdns.org", "port": "7790" },
+        "state": "off", "why": "invalid" }
+    ] },
+    { "case": "no keys is off/unset", "checks": [
+      { "console": "https://ccrc.example.test", "consolePort": 7788, "env": {}, "state": "off", "why": "unset" }
+    ] },
+    { "case": "empty strings count as absent: all empty is off/unset", "checks": [
+      { "console": "https://ccrc.example.test", "consolePort": 7788, "env": { "origin": "", "content": "", "port": "" },
+        "state": "off", "why": "unset" }
+    ] },
+    { "case": "config: two of three is `off/partial`", "checks": [
+      { "console": "https://ccrc.example.test", "consolePort": 7788,
+        "env": { "origin": "https://art.example.invalid", "content": "https://content.example.invalid" },
+        "state": "off", "why": "partial", "detailHas": ["CCRC_ARTIFACT_PORT"] },
+      { "console": "https://ccrc.example.test", "consolePort": 7788,
+        "env": { "origin": "https://art.example.invalid", "port": "7790" },
+        "state": "off", "why": "partial", "detailHas": ["CCRC_ARTIFACT_CONTENT_ORIGIN"] },
+      { "console": "https://ccrc.example.test", "consolePort": 7788,
+        "env": { "content": "https://content.example.invalid", "port": "7790" },
+        "state": "off", "why": "partial", "detailHas": ["CCRC_ARTIFACT_ORIGIN"] }
+    ] },
+    { "case": "one of three is off/partial, naming both missing keys", "checks": [
+      { "console": "https://ccrc.example.test", "consolePort": 7788,
+        "env": { "origin": "https://art.example.invalid" },
+        "state": "off", "why": "partial", "detailHas": ["CCRC_ARTIFACT_CONTENT_ORIGIN", "CCRC_ARTIFACT_PORT"] }
+    ] },
+    { "case": "a bare empty string counts as missing", "checks": [
+      { "console": "https://ccrc.example.test", "consolePort": 7788,
+        "env": { "origin": "https://art.example.invalid", "content": "https://content.example.invalid", "port": "" },
+        "state": "off", "why": "partial", "detailHas": ["CCRC_ARTIFACT_PORT"] }
+    ] },
+    { "describe": "off/invalid names the key", "case": "an http origin on a non-loopback host", "checks": [
+      { "console": "https://ccrc.example.test", "consolePort": 7788,
+        "env": { "origin": "http://art.example.invalid", "content": "https://content.example.invalid", "port": "7790" },
+        "state": "off", "why": "invalid", "detailHas": ["CCRC_ARTIFACT_ORIGIN"] }
+    ] },
+    { "describe": "off/invalid names the key", "case": "an http content origin on a non-loopback host", "checks": [
+      { "console": "https://ccrc.example.test", "consolePort": 7788,
+        "env": { "origin": "https://art.example.invalid", "content": "http://content.example.invalid", "port": "7790" },
+        "state": "off", "why": "invalid", "detailHas": ["CCRC_ARTIFACT_CONTENT_ORIGIN"] }
+    ] },
+    { "describe": "off/invalid names the key", "case": "a trailing slash", "checks": [
+      { "console": "https://ccrc.example.test", "consolePort": 7788,
+        "env": { "origin": "https://art.example.invalid/", "content": "https://content.example.invalid", "port": "7790" },
+        "state": "off", "why": "invalid", "detailHas": ["CCRC_ARTIFACT_ORIGIN"] }
+    ] },
+    { "describe": "off/invalid names the key", "case": "a path", "checks": [
+      { "console": "https://ccrc.example.test", "consolePort": 7788,
+        "env": { "origin": "https://art.example.invalid", "content": "https://content.example.invalid/x", "port": "7790" },
+        "state": "off", "why": "invalid", "detailHas": ["CCRC_ARTIFACT_CONTENT_ORIGIN"] }
+    ] },
+    { "describe": "off/invalid names the key", "case": "an upper-case host", "checks": [
+      { "console": "https://ccrc.example.test", "consolePort": 7788,
+        "env": { "origin": "https://ART.example.invalid", "content": "https://content.example.invalid", "port": "7790" },
+        "state": "off", "why": "invalid", "detailHas": ["CCRC_ARTIFACT_ORIGIN"] }
+    ] },
+    { "describe": "off/invalid names the key", "case": "equal artifact and content origins", "checks": [
+      { "console": "https://ccrc.example.test", "consolePort": 7788,
+        "env": { "origin": "https://art.example.invalid", "content": "https://art.example.invalid", "port": "7790" },
+        "state": "off", "why": "invalid", "detailHas": ["CCRC_ARTIFACT_CONTENT_ORIGIN"] }
+    ] },
+    { "describe": "off/invalid names the key", "case": "an artifact origin equal to the console origin", "checks": [
+      { "console": "https://ccrc.example.test", "consolePort": 7788,
+        "env": { "origin": "https://ccrc.example.test", "content": "https://content.example.invalid", "port": "7790" },
+        "state": "off", "why": "invalid", "detailHas": ["CCRC_ARTIFACT_ORIGIN"] }
+    ] },
+    { "describe": "off/invalid names the key", "case": "a content origin equal to the console origin", "checks": [
+      { "console": "https://ccrc.example.test", "consolePort": 7788,
+        "env": { "origin": "https://art.example.invalid", "content": "https://ccrc.example.test", "port": "7790" },
+        "state": "off", "why": "invalid", "detailHas": ["CCRC_ARTIFACT_CONTENT_ORIGIN"] }
+    ] },
+    { "describe": "off/invalid names the key", "case": "a port equal to the console port", "checks": [
+      { "console": "https://ccrc.example.test", "consolePort": 7788,
+        "env": { "origin": "https://art.example.invalid", "content": "https://content.example.invalid", "port": "7788" },
+        "state": "off", "why": "invalid", "detailHas": ["CCRC_ARTIFACT_PORT"] }
+    ] },
+    { "describe": "off/invalid names the key", "case": "a non-numeric port", "checks": [
+      { "console": "https://ccrc.example.test", "consolePort": 7788,
+        "env": { "origin": "https://art.example.invalid", "content": "https://content.example.invalid", "port": "seven" },
+        "state": "off", "why": "invalid", "detailHas": ["CCRC_ARTIFACT_PORT"] }
+    ] },
+    { "describe": "off/invalid names the key", "case": "a port with a sign", "checks": [
+      { "console": "https://ccrc.example.test", "consolePort": 7788,
+        "env": { "origin": "https://art.example.invalid", "content": "https://content.example.invalid", "port": "+7790" },
+        "state": "off", "why": "invalid", "detailHas": ["CCRC_ARTIFACT_PORT"] }
+    ] },
+    { "describe": "off/invalid names the key", "case": "a port of zero", "checks": [
+      { "console": "https://ccrc.example.test", "consolePort": 7788,
+        "env": { "origin": "https://art.example.invalid", "content": "https://content.example.invalid", "port": "0" },
+        "state": "off", "why": "invalid", "detailHas": ["CCRC_ARTIFACT_PORT"] }
+    ] },
+    { "describe": "off/invalid names the key", "case": "a port past 65535", "checks": [
+      { "console": "https://ccrc.example.test", "consolePort": 7788,
+        "env": { "origin": "https://art.example.invalid", "content": "https://content.example.invalid", "port": "65536" },
+        "state": "off", "why": "invalid", "detailHas": ["CCRC_ARTIFACT_PORT"] }
+    ] },
+    { "describe": "off/invalid names the key", "case": "a console origin that is neither https nor loopback names CCRC_ORIGIN", "checks": [
+      { "console": "http://ccrc.example.test", "consolePort": 7788,
+        "env": { "origin": "https://art.example.invalid", "content": "https://content.example.invalid", "port": "7790" },
+        "state": "off", "why": "invalid", "detailHas": ["CCRC_ORIGIN"] }
+    ] },
+    { "describe": "loopback (development and the browser suite)", "case": "console localhost with two 127.0.0.1 origins is on, host fields with their ports", "checks": [
+      { "console": "http://localhost:7788", "consolePort": 7788,
+        "env": { "origin": "http://127.0.0.1:7790", "content": "http://127.0.0.1:7791", "port": "7792" },
+        "state": "on", "hosts": { "artifact": "127.0.0.1:7790", "content": "127.0.0.1:7791" } }
+    ] },
+    { "describe": "loopback (development and the browser suite)", "case": "an artifact origin on localhost is the same site and off/invalid", "checks": [
+      { "console": "http://localhost:7788", "consolePort": 7788,
+        "env": { "origin": "http://localhost:7790", "content": "http://127.0.0.1:7791", "port": "7792" },
+        "state": "off", "why": "invalid", "detailHas": ["CCRC_ARTIFACT_ORIGIN"] }
+    ] },
+    { "describe": "loopback (development and the browser suite)", "case": "any other http origin beside a loopback console is off/invalid", "checks": [
+      { "console": "http://localhost:7788", "consolePort": 7788,
+        "env": { "origin": "http://127.0.0.1:7790", "content": "http://art.example.invalid", "port": "7792" },
+        "state": "off", "why": "invalid", "detailHas": ["CCRC_ARTIFACT_CONTENT_ORIGIN"] }
+    ] },
+    { "describe": "loopback (development and the browser suite)", "case": "an https origin beside a loopback console is off/invalid (loopback is for development only)", "checks": [
+      { "console": "http://localhost:7788", "consolePort": 7788,
+        "env": { "origin": "http://127.0.0.1:7790", "content": "https://content.example.invalid", "port": "7792" },
+        "state": "off", "why": "invalid", "detailHas": ["CCRC_ARTIFACT_CONTENT_ORIGIN"] }
+    ] },
+    { "describe": "loopback (development and the browser suite)", "case": "a loopback origin on the console port, or with a leading-zero port, is off/invalid", "checks": [
+      { "console": "http://localhost:7788", "consolePort": 7788,
+        "env": { "origin": "http://127.0.0.1:7788", "content": "http://127.0.0.1:7791", "port": "7792" },
+        "state": "off", "why": "invalid", "detailHas": ["CCRC_ARTIFACT_ORIGIN"] },
+      { "console": "http://localhost:7788", "consolePort": 7788,
+        "env": { "origin": "http://127.0.0.1:7790", "content": "http://127.0.0.1:07790", "port": "7792" },
+        "state": "off", "why": "invalid", "detailHas": ["CCRC_ARTIFACT_CONTENT_ORIGIN"] }
+    ] },
+    { "describe": "loopback (development and the browser suite)", "case": "a loopback origin with a trailing slash, a path or no port is off/invalid", "checks": [
+      { "console": "http://localhost:7788", "consolePort": 7788,
+        "env": { "origin": "http://127.0.0.1:7790/", "content": "http://127.0.0.1:7791", "port": "7792" },
+        "state": "off", "why": "invalid" },
+      { "console": "http://localhost:7788", "consolePort": 7788,
+        "env": { "origin": "http://127.0.0.1:7790/x", "content": "http://127.0.0.1:7791", "port": "7792" },
+        "state": "off", "why": "invalid" },
+      { "console": "http://localhost:7788", "consolePort": 7788,
+        "env": { "origin": "http://127.0.0.1", "content": "http://127.0.0.1:7791", "port": "7792" },
+        "state": "off", "why": "invalid" }
+    ] },
+    { "describe": "loopback (development and the browser suite)", "case": "equal loopback origins are off/invalid", "checks": [
+      { "console": "http://localhost:7788", "consolePort": 7788,
+        "env": { "origin": "http://127.0.0.1:7790", "content": "http://127.0.0.1:7790", "port": "7792" },
+        "state": "off", "why": "invalid", "detailHas": ["CCRC_ARTIFACT_CONTENT_ORIGIN"] }
+    ] },
+    { "describe": "loopback (development and the browser suite)", "case": "an http://127.0.0.1 artifact origin beside an https console is off/invalid", "checks": [
+      { "console": "https://ccrc.example.test", "consolePort": 7788,
+        "env": { "origin": "http://127.0.0.1:7790", "content": "http://127.0.0.1:7791", "port": "7792" },
+        "state": "off", "why": "invalid" }
+    ] },
+    { "case": "exposeMode ip is off/by-address with no keys and with all three", "checks": [
+      { "console": "https://ccrc.example.test", "consolePort": 7788, "env": { "exposeMode": "ip" },
+        "state": "off", "why": "by-address" },
+      { "console": "https://ccrc.example.test", "consolePort": 7788,
+        "env": { "origin": "https://art.example.invalid", "content": "https://content.example.invalid", "port": "7790", "exposeMode": "ip" },
+        "state": "off", "why": "by-address" }
+    ] },
+    { "case": "exposeMode ip with a partial set is by-address too (an address has no second site)", "checks": [
+      { "console": "https://ccrc.example.test", "consolePort": 7788,
+        "env": { "origin": "https://art.example.invalid", "exposeMode": "ip" },
+        "state": "off", "why": "by-address" }
+    ] }
+  ]
+}

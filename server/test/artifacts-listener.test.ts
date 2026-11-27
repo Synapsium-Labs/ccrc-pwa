@@ -4,17 +4,19 @@
 // listen that fails turns the tier off and leaves the console up. Every host is under a reserved name or on loopback.
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { mkdirSync, writeFileSync } from 'node:fs';
-import http from 'node:http';
+import http, { STATUS_CODES } from 'node:http';
 import net from 'node:net';
 import path from 'node:path';
 import type { FastifyInstance } from 'fastify';
 import { buildServer, type Deps } from '../src/server.js';
 import {
-  artifactConfig, artifactMethodAllowed, clientErrorStatus, hostFence, hostMatches, namesArtifactHost, type ArtifactConfig,
+  artifactConfig, artifactMethodAllowed, clientErrorAction, clientErrorStatus, frameworkErrorPhrase, frameworkErrorStatus, hostFence, hostMatches, namesArtifactHost, type ArtifactConfig,
 } from '../src/artifacts/policy.js';
 import {
   ARTIFACT_NOT_FOUND_BODY, buildArtifactServer, createArtifactListenerState, listenArtifactServer,
 } from '../src/artifacts/routes.js';
+import { createArtifactStore, type ArtifactStore } from '../src/artifacts/store.js';
+import { ARTIFACT_ENDED_BODY } from '../src/artifacts/wrapper.js';
 import { hashLine, type ScryptParams } from '../src/auth/secret.js';
 import type { PtyLike } from '../src/pty.js';
 import { testDeps } from './helpers.js';
@@ -112,8 +114,18 @@ function rawRequest(port: number, text: string): Promise<string> {
   });
 }
 
+/** An empty capability store over a fake liveness: this file's cases name no live capability, so every token is unknown (X5 A3.1
+ *  gave the instance a store). */
+const emptyStore = (): ArtifactStore => createArtifactStore(() => 1_800_000_000_000, { of: () => 'live' });
+
+/** The content door's two ports (X5 A3.3), which these cases never reach: a port that reads nothing, and the real clock. */
+const inertPorts = {
+  bytes: { prepare: async () => ({ ok: false as const, error: 'unreadable' as const }), read: async () => ({ ok: false as const, error: 'unreadable' as const }) },
+  now: () => Date.now(),
+};
+
 const artifactApp = (): FastifyInstance => {
-  const a = buildArtifactServer({ cfg: onConfig() });
+  const a = buildArtifactServer({ cfg: onConfig(), store: emptyStore(), ...inertPorts });
   toClose.push(a);
   return a;
 };
@@ -161,6 +173,39 @@ describe('policy: the status of a request Node could not parse (L1)', () => {
     }
   });
 
+  it('clientErrorStatus: a chunk extension past Node\'s limit is 413, as Node\'s own default answers it (X5 A3)', () => {
+    expect(clientErrorStatus('HPE_CHUNK_EXTENSIONS_OVERFLOW')).toBe(413);
+  });
+
+  it('clientErrorAction: an answer only while the socket is writable and no response on it has sent its headers (X5 A3)', () => {
+    expect(clientErrorAction('HPE_INVALID_METHOD', true, false)).toEqual({ kind: 'answer', status: 400 });
+    expect(clientErrorAction('HPE_CHUNK_EXTENSIONS_OVERFLOW', true, false)).toEqual({ kind: 'answer', status: 413 });
+    expect(clientErrorAction('HPE_CHUNK_EXTENSIONS_OVERFLOW', true, true)).toEqual({ kind: 'destroy' });
+    expect(clientErrorAction('HPE_INVALID_METHOD', false, false)).toEqual({ kind: 'destroy' });
+    expect(clientErrorAction('ECONNRESET', true, false)).toEqual({ kind: 'destroy' });
+  });
+
+  it('the instance\'s clientError handler writes nothing on a socket whose response has sent its headers (X5 A3)', () => {
+    const app = artifactApp();
+    const handler = app.server.listeners('clientError')[0] as (err: Error, socket: unknown) => void;
+    const written: string[] = [];
+    let destroyed = 0;
+    // `_httpMessage._headerSent`: the two fields Node's own handler reads for a response in flight on the socket.
+    const socket = {
+      writable: true, _httpMessage: { _headerSent: true },
+      end: (t: string) => { written.push(t); }, write: (t: string) => { written.push(t); }, destroy: () => { destroyed++; },
+    };
+    handler(Object.assign(new Error('overflow'), { code: 'HPE_CHUNK_EXTENSIONS_OVERFLOW' }), socket);
+    expect(written).toEqual([]);
+    expect(destroyed).toBe(1);
+    // The same error before any response has sent its headers is answered 413, with the fixed words.
+    const before = { ...socket, _httpMessage: { _headerSent: false } };
+    handler(Object.assign(new Error('overflow'), { code: 'HPE_CHUNK_EXTENSIONS_OVERFLOW' }), before);
+    expect(written).toHaveLength(1);
+    expect(written[0]!.startsWith('HTTP/1.1 413 Payload Too Large\r\n')).toBe(true);
+    expect(written[0]!.endsWith('\r\n\r\nBad request.')).toBe(true);
+  });
+
   it('the instance\'s clientError handler words a request timeout as 408 with the hardening headers', () => {
     const app = artifactApp();
     const handler = app.server.listeners('clientError')[0] as (err: Error, socket: unknown) => void;
@@ -201,7 +246,9 @@ describe('listener: the decoration', () => {
 describe('listener: no shell', () => {
   it('every path answers the fixed 404 page, never the app shell', async () => {
     const app = artifactApp();
-    const paths = ['/index.html', '/api/auth/status', '/assets/x.js', '/ws/fleet', '/', `/a/${TOKEN}`, `/c/${TOKEN}/x.js`, '/clear',
+    // `/a/<token>` is the wrapper's route since X5 A3.1, so it has its own fixed answers (see `artifacts-wrapper.test.ts`); it is
+    // checked below, with the fetch destination a navigation sends.
+    const paths = ['/index.html', '/api/auth/status', '/assets/x.js', '/ws/fleet', '/', `/c/${TOKEN}/x.js`, '/clear',
       '/favicon.ico', '/health'];
     for (const url of paths) {
       for (const method of ['GET', 'HEAD'] as const) {
@@ -215,6 +262,11 @@ describe('listener: no shell', () => {
     const onContent = await app.inject({ method: 'GET', url: `/c/${TOKEN}/x.js`, headers: { host: CONTENT } });
     expect(onContent.statusCode).toBe(404);
     expect(onContent.body).toBe(ARTIFACT_NOT_FOUND_BODY);
+    // The wrapper route answers its own fixed ended page for an unknown token, never the shell.
+    const wrapper = await app.inject({ method: 'GET', url: `/a/${TOKEN}`, headers: { host: ART, 'sec-fetch-dest': 'document' } });
+    expect(wrapper.statusCode).toBe(404);
+    expect(wrapper.body).toBe(ARTIFACT_ENDED_BODY);
+    expectHardened(wrapper.headers, 'GET /a/<token>');
   });
 
   it('the fixed page says one sentence, with no script and no reference', () => {
@@ -398,7 +450,7 @@ describe('listener: an artifact host on the console instance is 421', () => {
     for (const host of ['127.0.0.1:7790', '127.0.0.1:7791']) {
       expect((await app.inject({ method: 'GET', url: '/api/auth/status', headers: { host } })).statusCode, host).toBe(421);
     }
-    const inst = buildArtifactServer({ cfg: lo });
+    const inst = buildArtifactServer({ cfg: lo, store: emptyStore(), ...inertPorts });
     toClose.push(inst);
     for (const host of ['127.0.0.1:7790', '127.0.0.1:7791']) {
       expect((await inst.inject({ method: 'GET', url: '/', headers: { host } })).statusCode, host).toBe(404);
@@ -440,7 +492,7 @@ describe('listener: no cookie', () => {
 describe('listener: the error handler', () => {
   it('answers a fixed 500 with no thrown text and no console output', async () => {
     const spies = CONSOLE_METHODS.map((m) => vi.spyOn(console, m).mockImplementation(() => {}));
-    const app = buildArtifactServer({ cfg: onConfig() });
+    const app = buildArtifactServer({ cfg: onConfig(), store: emptyStore(), ...inertPorts });
     toClose.push(app);
     app.get('/boom', async () => { throw new Error('SECRET-THROWN-TEXT /a/' + TOKEN); });
     app.get('/boom-sync', () => { throw Object.assign(new Error('SECRET-SYNC'), { statusCode: 418 }); });
@@ -462,7 +514,8 @@ describe('listener: logs no path', () => {
     const app = artifactApp();
     const spies = CONSOLE_METHODS.map((m) => vi.spyOn(console, m).mockImplementation(() => {}));
     const out = [
-      await app.inject({ method: 'GET', url: `/a/${TOKEN}`, headers: { host: ART } }),
+      // A navigation, so the wrapper route looks the token up (unknown: its 404) rather than refusing at the fence (403).
+      await app.inject({ method: 'GET', url: `/a/${TOKEN}`, headers: { host: ART, 'sec-fetch-dest': 'document' } }),
       await app.inject({ method: 'GET', url: `/c/${TOKEN}/dir/file.js?v=2`, headers: { host: CONTENT } }),
       await app.inject({ method: 'GET', url: `/c/${TOKEN}/../x`, headers: { host: CONTENT } }),
       await app.inject({ method: 'GET', url: `/a/${TOKEN}`, headers: { host: CONSOLE_HOST } }),
@@ -538,7 +591,7 @@ describe('listener: a taken port leaves the console up', () => {
   });
 
   it('a request that arrives while the instance closes is answered by the hook and routes, never the framework\'s bare 503', async () => {
-    const inst = buildArtifactServer({ cfg: onConfig() });
+    const inst = buildArtifactServer({ cfg: onConfig(), store: emptyStore(), ...inertPorts });
     await inst.listen({ host: '127.0.0.1', port: 0 });
     const { port } = inst.server.address() as net.AddressInfo;
     // The server has taken the connection off its queue before the close starts, so the close never resets it.
@@ -607,5 +660,37 @@ describe('listener: a taken port leaves the console up', () => {
     expect(s.read()).toBe('listening');
     s.mark('down');
     expect(s.read()).toBe('down');
+  });
+});
+
+describe('the console\'s early answers echo nothing (X5 A3, from the A1 reviews)', () => {
+  it('frameworkErrorStatus: a malformed escape is 400, an over-long parameter 414, anything else 500, as Fastify answers them', () => {
+    expect(frameworkErrorStatus('FST_ERR_BAD_URL')).toBe(400);
+    expect(frameworkErrorStatus('FST_ERR_MAX_PARAM_LENGTH')).toBe(414);
+    for (const other of ['FST_ERR_ASYNC_CONSTRAINT', '', undefined, null, 400, {}]) expect(frameworkErrorStatus(other), String(other)).toBe(500);
+  });
+
+  it('frameworkErrorPhrase: each status keeps the runtime\'s own reason phrase (X5 A3 fix round 1)', () => {
+    expect(frameworkErrorPhrase(400)).toBe('Bad Request');
+    expect(frameworkErrorPhrase(414)).toBe('URI Too Long');
+    expect(frameworkErrorPhrase(500)).toBe('Internal Server Error');
+    for (const status of [400, 414, 500] as const) expect(frameworkErrorPhrase(status), String(status)).toBe(STATUS_CODES[status]);
+  });
+
+  it('the console answers a malformed percent-escape and an over-long parameter with Fastify\'s body less its message, before the fence', async () => {
+    const app = await openConsole(onConfig(), true);
+    toClose.push(app);
+    for (const host of [ART, CONSOLE_HOST]) {
+      const bad = await app.inject({ method: 'GET', url: `/c/${TOKEN}/%zz`, headers: { host } });
+      expect(bad.statusCode, host).toBe(400);
+      expect(bad.json(), host).toEqual({ error: 'Bad Request', code: 'FST_ERR_BAD_URL', statusCode: 400 });
+      expect(bad.body, host).not.toContain(TOKEN);
+      expect(bad.body, host).not.toContain('%zz');
+    }
+    const long = 'p'.repeat(150);
+    const over = await app.inject({ method: 'GET', url: `/api/docs/${long}/tree`, headers: { host: CONSOLE_HOST } });
+    expect(over.statusCode).toBe(414);
+    expect(over.json()).toEqual({ error: 'URI Too Long', code: 'FST_ERR_MAX_PARAM_LENGTH', statusCode: 414 });
+    expect(over.body).not.toContain(long);
   });
 });

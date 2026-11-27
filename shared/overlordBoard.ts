@@ -7,7 +7,12 @@
 // absent key, read as "not in this build", never an empty part. Text a session wrote is an `UntrustedText`, never a bare string
 // (question 17): programme titles, session names, item titles, and goal text the operator did not ratify. No part carries a mail
 // body, a note, a transcript line or a goal's full text past "In short" and the definition of done (C44).
-import type { ProgrammeWaves, SessionStatus, MarkerState } from './api.js';
+import type { ProgrammeWaves, SessionStatus, MarkerState, StallLevelChoice, CollectLaneChoice } from './api.js';
+import type { ClaudeRollTargets } from './claudeVersion.js';
+import type { DispatchAbandonChoice } from './dispatch-abandon.js';
+import type { RunCloseChoice } from './run-close.js';
+import type { PlainAutoMemoryChoice } from './plainAutoMemory.js';
+import type { AdvisorChoice } from './coordinatorAdvisor.js';
 import type { ItemKind, ItemState, NeededBy } from './ledgers.js';
 import type { ProgrammeLifecycle, CoordinatorLine } from './programmeLifecycle.js';
 import type { Measure, ServiceClass } from './portfolio.js';
@@ -23,8 +28,9 @@ const BOARD_PART_MAP = {
   work: 'each programme: its wave buckets, its stuck count and its open items; the fleet\'s stall notices',
   portfolio: 'each programme\'s rank, class and flow, as the portfolio reads them',
   capacity: 'the dispatch cap and the runs it counts',
-  projects: 'the projects the fleet knows',
-  brakes: 'the registry\'s marker switches and the ladder\'s effective rung',
+  projects: 'the projects the fleet knows, and the folders under the projects root the walk could not read',
+  brakes: 'every switch of the switchboard (its registry markers, its settings rows and its files on the fleet host) and the ladder: '
+    + 'the effective rung, the operator\'s rung, the standing latches and the live conditions',
   itself: 'the readiness word, the isolation word and the sandbox check',
   timers: 'each programme: its coordinator\'s pending timers, counted, and the earliest due time',
 } as const;
@@ -120,7 +126,7 @@ export interface BoardPortfolioRow {
   /** The oldest started, still open wave's age; null when no such wave has a measured start. */
   readonly oldestOpenMs: number | null;
   /** Started, still open waves left out of `oldestOpenMs` because their start is unknown (a rebuild stood in for it); null when
-   *  the view counted none (a server before portfolio B, never this one). */
+   *  the view did not report it. */
   readonly oldestOpenUnmeasured: number | null;
   readonly closedWaves: { readonly days7: number; readonly days28: number };
   /** Done waves, first dispatch to close; `cycleUnmeasured` counts the done waves it could not time. */
@@ -148,6 +154,31 @@ export interface BoardLatch {
 /** A live condition, as the ladder read answers it: its cause, its reading and its effect (closed words each). */
 export interface BoardCondition { readonly cause: string; readonly reading: ConditionReading; readonly effect: LadderEffect }
 
+/** A word a settings row of the switchboard can hold, as that row's own predicate reads it (board B3). */
+export type BoardSettingWord =
+  | StallLevelChoice | CollectLaneChoice | ClaudeRollTargets | DispatchAbandonChoice | RunCloseChoice | PlainAutoMemoryChoice
+  | AdvisorChoice | Rung;
+/** What a settings row's store read found. */
+const BOARD_SETTING_STORED_MAP = {
+  row: 'a row stands',
+  absent: 'no row stands; what that means is the row\'s owner\'s, and `value` says its word where the owner gives it one',
+  seed: 'the migration\'s seed, which no operator has written; `value` is the word its owner reads it as',
+} as const;
+export type BoardSettingStored = keyof typeof BOARD_SETTING_STORED_MAP;
+export const BOARD_SETTING_STORED = Object.keys(BOARD_SETTING_STORED_MAP) as BoardSettingStored[];
+/** One switch kept as a settings row, through its owner's own reader (board B3). `stored` is null only where that reader does not
+ *  tell a lost row from a written one (the run-close rows). `value` is the word the row's owner reads from the row, a seeded or lost
+ *  row given the owner's meaning (the idle roll reads its seed as `all`, the stall watch reads a lost row as `follow`); it never says
+ *  whether the lane the setting feeds is armed, held or stopped (a stored `live` collect lane can still be stopped or shadowed, and
+ *  the stall watch's row is its resolver's chosen level, not the level in effect); `unknown` where the owner reads no
+ *  word from a row that stands (never the stored text); null only when no row stands and its owner gives that no word (the collect
+ *  lane reads it as unmeasurable, the dispatch abandon arms nothing). The run-close rows never answer `unknown`: their reader reads a
+ *  lost row, and any word it does not know, as shadow, which is what the lanes do too. A read that failed is unmeasured. */
+export type BoardSettingRow = Measured<{ readonly stored: BoardSettingStored | null; readonly value: BoardSettingWord | 'unknown' | null }>;
+/** One switch kept as a file on the fleet host (board B3): `set` when it stands, `clear` on a proven absence; a read that proved
+ *  neither is unmeasured. */
+export type BoardFileRow = Measured<{ readonly value: 'set' | 'clear' }>;
+
 export interface BoardTimersRow { readonly slug: string; readonly pending: number; readonly nextDueAt: number | null }
 
 export interface OverlordBoard {
@@ -157,13 +188,21 @@ export interface OverlordBoard {
     readonly programmes: readonly BoardWorkRow[];
     readonly stallNotices: Measured<{ readonly since: number; readonly windowMs: number; readonly counts: readonly BoardStallNoticeCount[] }>;
   }>;
+  /** The view's revision and rows. Its `calibration` (the forecasts' fleet-wide score, a later wave's field like the forecast
+   *  itself) and its own `at` (the board's answer carries its own time) are not carried (slug `board-portfolio-later-wave-fields`). */
   readonly portfolio: Measured<{ readonly revision: number; readonly programmes: readonly BoardPortfolioRow[] }>;
   /** `maxConcurrentWorkers` is the cap in force (the caps view's `capNow.cap`: an automatic cap is the derived one, never the
    *  stored number); `running` the active runs it counts. */
   readonly capacity: Measured<{ readonly maxConcurrentWorkers: number; readonly running: number }>;
-  readonly projects: Measured<{ readonly registry: 'listed' | 'unlistable'; readonly names: readonly string[] }>;
+  /** `unreadable` (board B3; absent from an older server): the folders under the projects root whose own listing failed and that
+   *  are not plain files. The rest of the walk stands. */
+  readonly projects: Measured<{ readonly registry: 'listed' | 'unlistable'; readonly names: readonly string[]; readonly unreadable?: readonly string[] }>;
+  /** Every switch of the switchboard (`SWITCHES`, `shared/switches.ts`) is a row of exactly one of `switches.markers`, `settings`
+   *  and `files`, keyed by its name. `settings` and `files` are board B3's, absent from an older server. */
   readonly brakes: Measured<{
     readonly switches: Measured<{ readonly markers: Readonly<Record<string, MarkerState>> }>;
+    readonly settings?: Readonly<Record<string, BoardSettingRow>>;
+    readonly files?: Readonly<Record<string, BoardFileRow>>;
     /** The effective rung, the operator's rung, the standing latches and the live conditions (spec Table 5.2a). The armed kinds of
      *  answer are W3's (plan question 3): an absent key. */
     readonly ladder: Measured<{

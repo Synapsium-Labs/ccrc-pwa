@@ -11,7 +11,8 @@ import type { PortfolioView } from '../../../shared/portfolio.js';
 import {
   BOARD_PARTS, BOARD_UNMEASURED, type BoardCondition, type BoardLatch, type BoardPart, type BoardUnmeasured, type OverlordBoard,
 } from '../../../shared/overlordBoard.js';
-import type { BoardInputs, BoardItemIn, BoardProgrammeIn, BoardRead, BoardTimerIn } from '../../src/coord/overlordBoard.js';
+import type { BoardInputs, BoardItemIn, BoardProgrammeIn, BoardRead, BoardSettingIn, BoardTimerIn } from '../../src/coord/overlordBoard.js';
+import { SWITCHES, ccrcFileSwitchNames, readSwitches, settingSwitchNames } from '../../../shared/switches.js';
 import type { MutantSet, SuiteCase } from './mutate.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');
@@ -108,6 +109,28 @@ const portfolioView = (): PortfolioView => ({
 const LATCH: BoardLatch = { cause: 'invariant-violation', cap: 'advise', raisedAt: 4242, known: true, narrowing: { state: 'taking-effect', why: 'no-witness-yet' } };
 const CONDITION: BoardCondition = { cause: 'no-witness-since-boot', reading: 'standing', effect: { kind: 'cap', cap: 'advise' } };
 
+/** Every settings row of the switchboard answering (board B3), each with another stored word and stored state, so a row read for
+ *  another, or a field dropped, shows. Its keys are the table's settings rows: a row added to the table reds the census case. */
+export const SETTING_FIXTURE: Readonly<Record<string, BoardSettingIn>> = {
+  'stall-watch-level': { stored: 'row', value: 'follow' },
+  'collect-lane-choice': { stored: 'absent', value: null },
+  'roll-idle-targets': { stored: 'seed', value: 'coordinators' },
+  'dispatch-abandon-choice': { stored: 'row', value: 'unknown' },
+  'run-close-never-started-choice': { stored: null, value: 'shadow' },
+  'run-close-claimant-crashed-choice': { stored: null, value: 'on' },
+  'run-close-claimant-gone-choice': { stored: null, value: 'off' },
+  'plain-auto-memory': { stored: 'row', value: 'on' },
+  'coordinator-advisor': { stored: 'row', value: 'fable' },
+  'overlord-rung': { stored: 'row', value: 'advise' },
+};
+const settingsInput = (): Map<string, BoardRead<BoardSettingIn>> =>
+  new Map(Object.entries(SETTING_FIXTURE).map(([k, v]) => [k, ok(v)] as const));
+/** The fleet host's three switch files: one standing, one proven absent, one the reading could not measure. */
+const FILES_READ: Record<string, MarkerState> = { 'graph-gate-off': 'set', 'ccrc-card-off': 'clear', 'compact-card-off': 'unmeasurable' };
+const FILES_OUT = {
+  'graph-gate-off': { state: 'measured', value: 'set' }, 'ccrc-card-off': { state: 'measured', value: 'clear' }, 'compact-card-off': un('read-failed'),
+};
+
 const timerRows = (): BoardTimerIn[] => [
   { setter: A, dueAt: 5000, note: NOTE }, { setter: A, dueAt: 2000, note: NOTE }, { setter: B, dueAt: 9000, note: NOTE },
   { setter: 'lane-z-project-a', dueAt: 1, note: NOTE },
@@ -123,8 +146,10 @@ export function healthyInputs(over: Partial<BoardInputs> = {}): BoardInputs {
     stallNotices: ok({ since: 100, windowMs: 200, counts: [{ row: 'checks', sent: 1, shadow: 2 }] }),
     portfolio: ok(portfolioView()),
     capacity: ok({ maxConcurrentWorkers: 6, running: 2 }),
-    projects: ok({ registry: 'listed', names: ['project-a', 'project-b'] }),
+    projects: ok({ registry: 'listed', names: ['project-a', 'project-b'], unreadable: ['project-z'] }),
     switches: ok({ 'mail-disabled': 'set', 'coordinator-paused': 'clear' } as Record<string, MarkerState>),
+    settings: settingsInput(),
+    files: ok(FILES_READ),
     ladder: ok({ rung: 'chat', operatorRung: 'advise', latches: [LATCH], conditions: [CONDITION] }),
     readiness: ok({ word: 'ready', since: 300, until: null }),
     isolation: ok({ kind: 'measured', word: 'separate-user', cause: 'other-user' }),
@@ -166,12 +191,17 @@ export function bigInputs(n: number): BoardInputs {
   });
 }
 
-/** The measured size of `JSON.stringify(composeBoard(bigInputs(50)))`, and the bound pinned over it (about 16 percent headroom).
- *  It catches a part that grows by a whole new list per programme; a leaked body or note adds too little to cross it at this
- *  scale. What catches those is the sentinel cases (`SENTINEL` above and the board door suite's C44 case). First measured at
+/** The measured size of `JSON.stringify(composeBoard(bigInputs(50)))`, asserted exactly, so a change that moves it re-measures
+ *  here, and the bound pinned over it (about 15 percent headroom).
+ *  The bound catches a part that grows by a whole new list per programme; a leaked body or note adds too little to cross it at
+ *  this scale. The exact pin (since board B3's fix round 1) reds on any change to what the composer emits for these inputs, a
+ *  leaked body or note included, but it names no cause and is re-measured on every intended change, so it proves no leak: what
+ *  proves that is the sentinel cases (`SENTINEL` above and the board door suite's C44 case). First measured at
  *  81,988 bytes (bound 95,000); re-measured in review 4010's round with the portfolio's measures and what blocks, and the
- *  ladder's latches and conditions: 103,424 bytes, the bound moved to 120,000 (the same 16 percent). */
-export const BOARD_50_MEASURED_BYTES = 103_424;
+ *  ladder's latches and conditions: 103,424 bytes, the bound moved to 120,000 (the same 16 percent). Re-measured in board B3 with
+ *  the brakes' settings rows and files and the projects walk's unreadable folders: 104,414 bytes, under the same bound (15 percent),
+ *  so the bound did not move. */
+export const BOARD_50_MEASURED_BYTES = 104_414;
 export const BOARD_50_BOUND_BYTES = 120_000;
 
 // ------------------------------------------------------------------------------------------------------------ composeBoard
@@ -237,6 +267,21 @@ export function composeBoardCases(compose: Compose): Record<string, SuiteCase> {
         if (b.brakes.state !== 'measured') throw new Error('brakes are not measured');
         expect(b.brakes.ladder).toEqual(un(r));
         expect(b.brakes.switches.state).toBe('measured');
+      } },
+    { name: 'files', over: (r) => ({ files: bad(r) }), affected: ['brakes'],
+      check: (b, r) => {
+        if (b.brakes.state !== 'measured') throw new Error('brakes are not measured');
+        expect(b.brakes.files).toEqual(Object.fromEntries(ccrcFileSwitchNames.map((k) => [k, un(r)])));
+        expect(b.brakes.settings).toEqual((board().brakes as { settings?: unknown }).settings);
+        expect(b.brakes.switches.state).toBe('measured');
+      } },
+    { name: 'one settings row', over: (r) => ({ settings: new Map([...settingsInput(), ['coordinator-advisor', bad(r)]]) }), affected: ['brakes'],
+      check: (b, r) => {
+        if (b.brakes.state !== 'measured') throw new Error('brakes are not measured');
+        const rows = b.brakes.settings ?? {};
+        expect(rows['coordinator-advisor']).toEqual(un(r));
+        for (const k of settingSwitchNames) if (k !== 'coordinator-advisor') expect(rows[k], k).toEqual({ state: 'measured', ...SETTING_FIXTURE[k] });
+        expect(b.brakes.files).toEqual(FILES_OUT);
       } },
     { name: 'readiness', over: (r) => ({ readiness: bad(r) }), affected: ['itself'],
       check: (b, r) => {
@@ -457,10 +502,19 @@ export function composeBoardCases(compose: Compose): Record<string, SuiteCase> {
         for (const it of r.blocking.items) expect(keysOf(it)).toEqual(['id', 'title']);
       }
       expect(keysOf(b.capacity)).toEqual(['maxConcurrentWorkers', 'running', 'state']);
-      expect(keysOf(b.projects)).toEqual(['names', 'registry', 'state']);
-      expect(keysOf(b.brakes)).toEqual(['ladder', 'state', 'switches']);
+      expect(keysOf(b.projects)).toEqual(['names', 'registry', 'state', 'unreadable']);
+      expect(keysOf(b.brakes)).toEqual(['files', 'ladder', 'settings', 'state', 'switches']);
       if (b.brakes.state === 'measured') {
         expect(keysOf(b.brakes.switches)).toEqual(['markers', 'state']);
+        // Neither group may be absent or empty, so the loops below cannot pass on nothing.
+        expect(keysOf(b.brakes.settings ?? {})).toEqual([...settingSwitchNames].sort());
+        expect(keysOf(b.brakes.files ?? {})).toEqual([...ccrcFileSwitchNames].sort());
+        expect(settingSwitchNames.length * ccrcFileSwitchNames.length).toBeGreaterThan(0);
+        for (const row of [...Object.values(b.brakes.settings ?? {}), ...Object.values(b.brakes.files ?? {})]) {
+          if (row.state !== 'measured') expect(keysOf(row)).toEqual(['reason', 'state']);
+        }
+        for (const row of Object.values(b.brakes.settings ?? {})) if (row.state === 'measured') expect(keysOf(row)).toEqual(['state', 'stored', 'value']);
+        for (const row of Object.values(b.brakes.files ?? {})) if (row.state === 'measured') expect(keysOf(row)).toEqual(['state', 'value']);
         expect(keysOf(b.brakes.ladder)).toEqual(['conditions', 'latches', 'operatorRung', 'rung', 'state']);
         if (b.brakes.ladder.state === 'measured') {
           for (const l of b.brakes.ladder.latches) expect(keysOf(l)).toEqual(['cap', 'cause', 'known', 'narrowing', 'raisedAt']);
@@ -497,7 +551,8 @@ export function composeBoardCases(compose: Compose): Record<string, SuiteCase> {
       const b = compose(bigInputs(50));
       expect(rowsOf(b.identity)).toHaveLength(50);
       expect(rowsOf(b.timers).every((r) => r.pending === 2)).toBe(true);
-      // Measured when written: BOARD_50_MEASURED_BYTES, a bound with headroom over it.
+      // The measured size, exactly, and the bound with headroom over it.
+      expect(JSON.stringify(b).length).toBe(BOARD_50_MEASURED_BYTES);
       expect(JSON.stringify(b).length).toBeLessThan(BOARD_50_BOUND_BYTES);
     },
 
@@ -546,10 +601,12 @@ export function composeBoardCases(compose: Compose): Record<string, SuiteCase> {
     'brakes, projects, capacity and readiness are the readers\' own answers': () => {
       const b = board();
       expect(b.capacity).toEqual({ state: 'measured', maxConcurrentWorkers: 6, running: 2 });
-      expect(b.projects).toEqual({ state: 'measured', registry: 'listed', names: ['project-a', 'project-b'] });
+      expect(b.projects).toEqual({ state: 'measured', registry: 'listed', names: ['project-a', 'project-b'], unreadable: ['project-z'] });
       expect(b.brakes).toEqual({
         state: 'measured',
         switches: { state: 'measured', markers: { 'mail-disabled': 'set', 'coordinator-paused': 'clear' } },
+        settings: Object.fromEntries(Object.entries(SETTING_FIXTURE).map(([k, v]) => [k, { state: 'measured', ...v }])),
+        files: FILES_OUT,
         ladder: { state: 'measured', rung: 'chat', operatorRung: 'advise', latches: [LATCH], conditions: [CONDITION] },
       });
       expect(b.itself).toEqual({
@@ -561,6 +618,59 @@ export function composeBoardCases(compose: Compose): Record<string, SuiteCase> {
       if (b.work.state !== 'measured') throw new Error('work is not measured');
       expect(b.work.stallNotices).toEqual({ state: 'measured', since: 100, windowMs: 200, counts: [{ row: 'checks', sent: 1, shadow: 2 }] });
       expect(b.portfolio).toMatchObject({ state: 'measured', revision: 4 });
+    },
+
+    'every switch of the switchboard is a row of exactly one brakes group, the expectation derived from the table both ways (board B3)': () => {
+      const b = board({ switches: ok(readSwitches([])) });
+      if (b.brakes.state !== 'measured' || b.brakes.switches.state !== 'measured') throw new Error('brakes are not measured');
+      const groups = [Object.keys(b.brakes.switches.markers), Object.keys(b.brakes.settings ?? {}), Object.keys(b.brakes.files ?? {})];
+      const all = groups.flat();
+      expect([...all].sort()).toEqual(Object.keys(SWITCHES).sort());
+      expect(new Set(all).size, 'no switch is a row of two groups').toBe(all.length);
+      // Each group is its storage kind's rows, from the table: the settings rows and the fleet host's files.
+      expect(groups[1]).toEqual([...settingSwitchNames]);
+      expect(groups[2]).toEqual([...ccrcFileSwitchNames]);
+      for (const k of groups[1]!) expect('setting' in SWITCHES[k as keyof typeof SWITCHES].storage, k).toBe(true);
+      for (const k of groups[2]!) expect('ccrcFile' in SWITCHES[k as keyof typeof SWITCHES].storage, k).toBe(true);
+      // The fixture answers every settings row the table has, so a row added to the table reds here until it is read.
+      expect(Object.keys(SETTING_FIXTURE).sort()).toEqual([...settingSwitchNames].sort());
+    },
+
+    'a settings row the gatherer did not hand over reads read-failed, never a missing row; a row carries its stored word and value only (board B3)': () => {
+      const settings = settingsInput();
+      settings.delete('overlord-rung');
+      settings.set('stall-watch-level', ok(Object.assign({ stored: 'row', value: 'follow' } as BoardSettingIn, { detail: SENTINEL, text: SENTINEL })));
+      const b = board({ settings });
+      if (b.brakes.state !== 'measured') throw new Error('brakes are not measured');
+      expect(b.brakes.settings?.['overlord-rung']).toEqual(un('read-failed'));
+      expect(b.brakes.settings?.['stall-watch-level']).toEqual({ state: 'measured', stored: 'row', value: 'follow' });
+      expect(JSON.stringify(b.brakes)).not.toContain(SENTINEL);
+      expect(keysOf(b.brakes.settings ?? {})).toEqual([...settingSwitchNames].sort());
+      // A gatherer that hands over no settings rows at all still gives every row, each read-failed.
+      const none = board({ settings: new Map() });
+      if (none.brakes.state !== 'measured') throw new Error('brakes are not measured');
+      expect(none.brakes.settings).toEqual(Object.fromEntries(settingSwitchNames.map((k) => [k, un('read-failed')])));
+    },
+
+    'each file row is the reading\'s own: set and clear measured, unmeasurable read-failed, a file it does not name read-failed (board B3)': () => {
+      const b = board();
+      if (b.brakes.state !== 'measured') throw new Error('brakes are not measured');
+      expect(b.brakes.files).toEqual(FILES_OUT);
+      const partial = board({ files: ok({ 'graph-gate-off': 'clear' }) });
+      if (partial.brakes.state !== 'measured') throw new Error('brakes are not measured');
+      expect(partial.brakes.files).toEqual({ 'graph-gate-off': { state: 'measured', value: 'clear' }, 'ccrc-card-off': un('read-failed'), 'compact-card-off': un('read-failed') });
+      for (const reason of BOARD_UNMEASURED) {
+        const failed = board({ files: bad(reason) });
+        if (failed.brakes.state !== 'measured') throw new Error('brakes are not measured');
+        expect(failed.brakes.files).toEqual(Object.fromEntries(ccrcFileSwitchNames.map((k) => [k, un(reason)])));
+      }
+    },
+
+    'the projects part carries the folders the walk could not read as the lister handed them over, in its order (board B3)': () => {
+      expect(board({ projects: ok({ registry: 'unlistable', names: ['project-a'], unreadable: ['project-y', 'project-x'] }) }).projects)
+        .toEqual({ state: 'measured', registry: 'unlistable', names: ['project-a'], unreadable: ['project-y', 'project-x'] });
+      expect(board({ projects: ok({ registry: 'listed', names: [], unreadable: [] }) }).projects)
+        .toEqual({ state: 'measured', registry: 'listed', names: [], unreadable: [] });
     },
 
     'portfolio rows carry the view\'s W1 fields as it gives them: the measures, what blocks, and each unmeasured flag (review 4010 F3)': () => {
@@ -728,6 +838,27 @@ const COMPOSE_SET: MutantSet<BoardModule> = {
     { id: 'L7 a condition loses its effect', old: 'effect: c.effect });', new: "effect: { kind: 'cap', cap: 'off' } as never });" },
     { id: 'L8 the conditions are dropped', old: 'conditions: l.conditions.map(condition)', new: 'conditions: []' },
     { id: 'L9 a latch carries what its reader handed over, detail included', old: 'const latch = (x: BoardLatch): BoardLatch => ({', new: 'const latch = (x: BoardLatch): BoardLatch => ({ ...x,' },
+    // Board B3: the brakes' settings rows and files, and the projects walk's unreadable folders.
+    { id: 'S1 a settings row the gatherer did not hand over reads no row', old: 'partOf(readFor(i.settings, name), (s) =>',
+      new: "partOf(i.settings.get(name) ?? { ok: true, value: { stored: 'absent', value: null } }, (s) =>" },
+    { id: 'S2 every settings row reads stored row', old: '({ stored: s.stored, value: s.value })', new: "({ stored: 'row', value: s.value })" },
+    { id: 'S3 a settings row loses its value', old: '({ stored: s.stored, value: s.value })', new: '({ stored: s.stored, value: null })' },
+    { id: 'S4 a settings row carries what the gatherer handed over, extra fields included', old: '({ stored: s.stored, value: s.value })', new: '({ ...s })' },
+    { id: 'S5 the settings rows are the ones handed over, not the table\'s', old: 'Object.fromEntries(settingSwitchNames.map((k) => [k, settingRow(k)]))',
+      new: 'Object.fromEntries([...i.settings.keys()].map((k) => [k, settingRow(k)]))' },
+    { id: 'S6 the settings rows are dropped from the brakes', old: 'settings: Object.fromEntries(settingSwitchNames.map((k) => [k, settingRow(k)])),', new: '' },
+    { id: 'S7 one settings row is read for another', old: '[k, settingRow(k)]', new: "[k, settingRow(k === 'coordinator-advisor' ? 'plain-auto-memory' : k)]" },
+    { id: 'F1 an unmeasurable file reads clear', old: "v === 'set' || v === 'clear' ? { state: 'measured', value: v } : unmeasured('read-failed')",
+      new: "v === 'set' ? { state: 'measured', value: v } : { state: 'measured', value: 'clear' }" },
+    { id: 'F2 a failed file reading is every file clear', old: 'if (!i.files.ok) return unmeasured(i.files.reason);', new: "if (!i.files.ok) return { state: 'measured', value: 'clear' };" },
+    { id: 'F3 a failed file reading loses its reason', old: 'if (!i.files.ok) return unmeasured(i.files.reason);', new: "if (!i.files.ok) return unmeasured('read-failed');" },
+    { id: 'F4 the file rows are the ones the reading names, not the table\'s', old: 'Object.fromEntries(ccrcFileSwitchNames.map((k) => [k, fileRow(k)]))',
+      new: 'Object.fromEntries(Object.keys(i.files.ok ? i.files.value : {}).map((k) => [k, fileRow(k)]))' },
+    { id: 'F5 a file the reading does not name reads clear', old: "v === 'set' || v === 'clear' ? { state: 'measured', value: v } : unmeasured('read-failed')",
+      new: "v === undefined ? { state: 'measured', value: 'clear' } : v === 'set' || v === 'clear' ? { state: 'measured', value: v } : unmeasured('read-failed')" },
+    { id: 'F6 the file rows are dropped from the brakes', old: 'files: Object.fromEntries(ccrcFileSwitchNames.map((k) => [k, fileRow(k)])),', new: '' },
+    { id: 'W1 the walk\'s unreadable folders are dropped', old: 'unreadable: p.unreadable }', new: 'unreadable: [] }' },
+    { id: 'W2 the walk\'s unreadable folders are left off the part', old: 'names: p.names, unreadable: p.unreadable }', new: 'names: p.names }' },
   ],
 };
 

@@ -1801,8 +1801,14 @@ export const anyVerdictFor = (out: string, name: string): string | undefined =>
  *  `healthy()` places no auth library or release record for this check to measure. Measured the same
  *  way: with the check in the table and this `+ 1` absent, the `(N skipped)` pins that read this constant red
  *  (`ccrc-doctor-fleet.test.ts`: 24 skipped measured where 23 was pinned). `ccrc-doctor-model-advance.test.ts`
- *  plants the record and each answer. */
-export const HEALTHY_SKIPS = (process.platform === 'darwin' ? 3 : 0) + 23;
+ *  plants the record and each answer.
+ *
+ *  RAISED BY ONE AGAIN, on every platform (native Docs artifacts X5 A4.2): `artifacts` SKIPs - `healthy()` writes the
+ *  console's exposure file with no artifact keys, so no artifact names are set. Measured the same way: with the check in
+ *  the table and this `+ 1` absent, every `(N skipped)` pin that reads this constant reds (`ccrc-doctor-core.test.ts`: 2
+ *  cases, 24 skipped measured where 23 was pinned; `ccrc-doctor-exposure.test.ts`: 1 case, 25 where 24; and
+ *  `ccrc-doctor-codex-host.test.ts`: 2 cases, 24 where 23). `ccrc-doctor-artifacts.test.ts` plants the keys. */
+export const HEALTHY_SKIPS = (process.platform === 'darwin' ? 3 : 0) + 24;
 
 // ── the session gate: the flag, and the passphrase it needs ───────────────
 // Stage 3a, Task 9. TWO FACTS, ONE VERDICT — `CCRC_AUTH` (out of `ccrc.env`,

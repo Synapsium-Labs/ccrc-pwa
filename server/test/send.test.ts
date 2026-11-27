@@ -7,6 +7,8 @@ import { sendPrompt, submitEnter, answerDialogText, draftOf, draftOfMeasured, is
 import { parseDialog } from '../src/pane/dialog.js';
 import { Tmux, type Runner } from '../src/exec.js';
 import { renderEnvelope } from '../src/coord/envelope.js';
+// The box the way Claude Code draws it, shared with the mail lane suite (Desktop polish wave 185).
+import { boxPane, EMPTY_BOX } from './inputBoxPane.js';
 
 /** D-6366: the echo polls a free sleep takes: the wait is the larger of ECHO_TRIES polls and ECHO_BUDGET_MS. */
 const ECHO_WAIT_POLLS = ECHO_BUDGET_MS / ECHO_POLL_MS;
@@ -867,8 +869,8 @@ describe('holdIfAutoContinueArmed (D-2368)', () => {
 describe('sendPrompt resumeIfOwn (F3 / bug #21)', () => {
   it('finishes submitting a draft that already matches the caller\'s own text — no retype, one Enter', async () => {
     const { tmux, calls } = fakeTmux([
-      '❯ hello world\n', // initial capture — OUR OWN text, left by a prior lost Enter
-      '❯ \n',             // after Enter — box emptied
+      boxPane(['hello world']), // initial capture — OUR OWN text, left by a prior lost Enter
+      EMPTY_BOX,                // after Enter — box emptied
     ]);
     const res = await sendPrompt({ tmux, queue: new KeyedQueue(), sleep: noSleep }, 'x', 'hello world', { resumeIfOwn: true });
     expect(res).toEqual({ ok: true });
@@ -891,7 +893,7 @@ describe('sendPrompt resumeIfOwn (F3 / bug #21)', () => {
   });
 
   it('reports enter-ignored, not draft-present, when the resumed own draft still will not submit', async () => {
-    const { tmux } = fakeTmux(['❯ hello world\n']); // last pane repeats: never empties, never leaves
+    const { tmux } = fakeTmux([boxPane(['hello world'])]); // last pane repeats: never empties, never leaves
     const res = await sendPrompt({ tmux, queue: new KeyedQueue(), sleep: noSleep }, 'x', 'hello world', { resumeIfOwn: true });
     expect(res).toMatchObject({ ok: false, error: 'enter-ignored', draft: 'hello world' });
   });
@@ -904,11 +906,6 @@ describe('sendPrompt resumeIfOwn (F3 / bug #21)', () => {
 // sends our own non-space characters and no second copy exists). It never types, and an empty box answers `nothing-to-submit` (a landed send can still have been answered
 // `enter-ignored`, so retyping would be a second copy).
 describe("sendPrompt resumeIfOwn: 'whole' (D-6367, Retry resumes our own text)", () => {
-  const RULE = '─'.repeat(60);
-  /** The box the way Claude Code draws it: the marker on row one, continuation rows indented, blank rows blank. */
-  const boxPane = (rows: string[]): string =>
-    ['earlier turn', RULE, `❯ ${rows[0]}`, ...rows.slice(1).map((r) => (r === '' ? '' : `  ${r}`)), RULE, '  👤 team·max'].join('\n') + '\n';
-  const EMPTY_BOX = boxPane(['']);
   const deps = (tmux: Tmux) => ({ tmux, queue: new KeyedQueue(), sleep: noSleep });
   const ENTER = ['tmux', 'send-keys', '-t', '=cc-x:', 'Enter'];
 
@@ -969,13 +966,16 @@ describe("sendPrompt resumeIfOwn: 'whole' (D-6367, Retry resumes our own text)",
     expect(box.submitted).toEqual([['hello world']]);
   });
 
-  it('the prefix mode is still a different mode: `true` resumes a box that merely starts with our text', async () => {
-    // Pins that 'whole' did not widen or narrow `true`: the same longer-draft pane the 'whole' case refuses.
+  it('both modes refuse a longer draft that merely starts with our text: draft-present, no key pressed', async () => {
+    // Desktop polish wave 185 REVERSED this case. It pinned that the prefix mode (`true`) pressed Enter on this pane,
+    // which is a person's draft submitted because it begins like our text. The prefix mode now also reads the box whole
+    // and closed, so it refuses exactly as the 'whole' case above does.
     const ours = 'please review the latest diff of the module';
-    const { tmux, calls } = fakeTmux([boxPane([`${ours} and also check the tests`]), EMPTY_BOX]);
+    const theirs = `${ours} and also check the tests`;
+    const { tmux, calls } = fakeTmux([boxPane([theirs]), EMPTY_BOX]);
     const res = await sendPrompt(deps(tmux), 'x', ours, { resumeIfOwn: true });
-    expect(res).toEqual({ ok: true });
-    expect(sendKeysCalls(calls)).toEqual([ENTER]);
+    expect(res).toEqual({ ok: false, error: 'draft-present', draft: theirs });
+    expect(sendKeysCalls(calls)).toEqual([]);
   });
 });
 
@@ -1017,7 +1017,7 @@ describe('sendPrompt resumeIfOwn discriminates PER DELIVERY, not just per marker
   });
 
   it('resumes ITS OWN real envelope — no retype, one Enter', async () => {
-    const { tmux, calls } = fakeTmux([boxOf(envelopeA), '❯ \n']);
+    const { tmux, calls } = fakeTmux([boxPane(envelopeA.split('\n')), EMPTY_BOX]);
     const res = await sendPrompt({ tmux, queue: new KeyedQueue(), sleep: noSleep }, 'x', envelopeA, { resumeIfOwn: true });
     expect(res).toEqual({ ok: true });
     // No `-l` literal send anywhere: the envelope was never retyped, only submitted.
@@ -1041,7 +1041,7 @@ describe('sendPrompt resumeIfOwn discriminates PER DELIVERY, not just per marker
   it('resumes envelope B once it is actually B sitting in the box', async () => {
     // The other half of the same discrimination: once the box genuinely
     // holds B's own un-submitted text, delivering B (not A) resumes it.
-    const { tmux, calls } = fakeTmux([boxOf(envelopeB), '❯ \n']);
+    const { tmux, calls } = fakeTmux([boxPane(envelopeB.split('\n')), EMPTY_BOX]);
     const res = await sendPrompt({ tmux, queue: new KeyedQueue(), sleep: noSleep }, 'x', envelopeB, { resumeIfOwn: true });
     expect(res).toEqual({ ok: true });
     expect(sendKeysCalls(calls)).toEqual([['tmux', 'send-keys', '-t', '=cc-x:', 'Enter']]);
@@ -1172,7 +1172,7 @@ describe('sendPrompt clearMailResidue', () => {
 
   it('resumeIfOwn still takes priority: a stale OWN nudge is resumed (Enter only), never cleared', async () => {
     const nudge = 'ccrc-mail: you have new mail. List it.';
-    const { tmux, calls } = fakeTmux(['❯ ' + nudge + '\n', '❯ \n']);
+    const { tmux, calls } = fakeTmux([boxPane([nudge]), EMPTY_BOX]);
     const res = await sendPrompt(
       { tmux, queue: new KeyedQueue(), sleep: noSleep }, 'x', nudge,
       { resumeIfOwn: true, clearMailResidue: true },
