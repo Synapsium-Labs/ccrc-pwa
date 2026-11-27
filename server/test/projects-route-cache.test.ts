@@ -606,7 +606,7 @@ describe('the walk cache (D-6436)', () => {
   it('a kept walk or verdict whose age reads negative is dropped, not served again when the clock catches up', () => {
     let now = T0 + 100_000;
     const cache = new ProjectWalkCache(() => now);
-    cache.keepWalk([], cache.stamp());
+    cache.keepWalk([], cache.stamp(), []);
     cache.keepProbe('/w/a', true, cache.stamp());
     expect(cache.keptWalk(), 'CONTROL: the walk is kept while fresh').toEqual([]);
     expect(cache.keptProbe('/w/a'), 'CONTROL: the verdict is kept while fresh').toBe(true);

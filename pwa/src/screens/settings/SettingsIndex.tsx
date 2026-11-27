@@ -16,8 +16,10 @@ import { AUTO, Icon, SKINS, SYSTEM, THEMES, Skeleton, cn, useNow, type IconName 
 import { commandDoor } from '../../command/door';
 import { SETTINGS_INDEX_TEXT } from '../../fleet/settingsText';
 import { SETTINGS_SECTIONS, type SettingsSectionId } from '../../lib/routes';
+import { OVERLORD_PLACE } from '../../lib/places';
 import { useSkinChoice } from '../../lib/skin';
 import { useThemeChoice } from '../../lib/theme';
+import { useOverlordShown, useOverlordStore } from '../../stores/overlord';
 import type { SettingsView } from './SettingsDataProvider';
 import { sectionStatus, type SectionStatus, type StatusTone } from './sectionStatus';
 import './settings.css';
@@ -29,6 +31,8 @@ export const SECTION_ICON: Readonly<Record<SettingsSectionId, IconName>> = {
   automation: 'bot',
   security: 'shield',
   integrations: 'network',
+  // The Overlord place's own door icon, so the section and the place are drawn alike (one definition).
+  overlord: OVERLORD_PLACE.icon,
 };
 
 /** A status line's ink, from the measured token pairs on the page's ground. */
@@ -101,15 +105,18 @@ export function SettingsIndex({ view, current = null }: {
   const choice = useThemeChoice();
   const theme = choice === SYSTEM ? null : (THEMES.find((t) => t.id === choice)?.label ?? choice);
   const now = useNow(30_000);
+  // The Overlord's row only under `overlord-v1` (plan question 9), its status from the Overlord store's one designation read.
+  const overlordShown = useOverlordShown();
+  const overlord = useOverlordStore((s) => s.designation);
   // The push state again whenever the index mounts, so a toggle on the Notifications page shows here after Back.
   const reread = view?.rereadPush;
   useEffect(() => { reread?.(); }, [reread]);
 
   return (
     <nav aria-label={SETTINGS_INDEX_TEXT.navLabel} className="settings-index">
-      {SETTINGS_SECTIONS.map((s) => {
+      {SETTINGS_SECTIONS.filter((s) => s.id !== 'overlord' || overlordShown).map((s) => {
         const status = view === null ? { kind: 'skeleton' as const }
-          : sectionStatus(s.id, view, { skin, theme, hostname: location.hostname, now });
+          : sectionStatus(s.id, view, { skin, theme, hostname: location.hostname, now, overlord });
         return (
           <SettingsIndexRow
             key={s.id}

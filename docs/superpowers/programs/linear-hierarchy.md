@@ -66,6 +66,10 @@ They decide every question the plan leaves open.
 | 8 measurement record | workspace selection stated once; one refusal vocabulary per team door, guides checked against it (`w8-linking-measurement-record`) | D-8808, D-8809 | #3242 | **merged** 2026-11-23 as `c70b7a8691` (head `7b55213a2c`, by the merge queue; run 3326 closed done): reviews 3443 (fix round: single-definition rows, a duplicate-word guard, the wire comment) and 3465 (accepted) |
 | 8 workspace id | the `team-ambiguous` detail names each holding workspace by the id the suggest door accepts; the confirm door lists them without a resend instruction (`w8-suggest-workspace-id`) | D-8808, D-8809 | #3245 | **merged** 2026-11-23 as `216a2b3f51` (head `b0ba4ab60b`, by the merge queue; run 3476 closed done): reviews 3482 (fix round: the confirm door's detail, the bound of eight, the sort test) and 3485 (accepted) |
 | 8 pair pins | nested and padded identity keys are pinned as refused on the eleven client doors that carry the text test (`w8-pair-refusal-pins`) | D-8808, D-8809 | #3247 | **merged** 2026-11-23 as `7396e609e8` (head `c3d680afa6`, by the merge queue; run 3492 closed done): review 3494 (accepted; the note's red-first wording corrected here) |
+| 8 team move | after a project's team key moves, a new ticket's create waits for its project to carry the team as last written, and a Linear answer outside the closed error table (a 200 or a 4xx) ends in `malformed` after the backoff instead of a silent permanent hold (`w8-team-move-create-order`) | D-9131, D-9132 | #3454 | **merged** 2026-11-26 as `6f3f88143e` (head `23f7511de9`, by the merge queue; run 3955 closed done): reviews 3972, 3984, 3994 and 4000; the cap lifted by one round for 3994's blocking ring finding; a live programme's move to the new team confirmed on 2026-11-27 (every bound ticket rebound by id, no duplicate, no sync word) |
+| 8 entry sheets | the console browser file applies only the sheets the shell's own walk reaches, not every built sheet (`w8-browser-entry-sheets`) | none | #3473 | **merged** 2026-11-27 as `397cccdc92` (head `2051b625b9`, by the merge queue; run 4013 closed done): reviews 4017 and 4031; the review judge's editorial size word accepted after a note cut and a file drop did not clear it |
+| 8 entry sheets words | the review-built comment, the worker reference form, and `foreign` read from the walks (`w8-review-built-comment`) | none | #3491 | **merged** 2026-11-27 as `fb5197c084` (head `091bc210b9`, by the merge queue; run 4047 closed done): review 4051 (accepted; two wording limits kept) |
+| 8 store ring | the plan store declares L3, so an L1 value import of it is an outward edge; no such edge existed (`w8-planstore-ring`) | D-9148 | #3492 | **merged** 2026-11-27 as `4ca66f8812` (head `1f09d4ff2b`, by the merge queue; run 4048 closed done): review 4054 (accepted; four wording advisories kept); eleven more stores in the same idiom filed as #3554 |
 | 8 | team and workspace mapping (spec §3.1): the project row's workspace, the pass over workspace and key pairs, attached issues as evidence (built, off), a coordinator's suggestion, the Overlord's link as a call made for the operator, the console | D-8808, D-8809 | #3123 | **merged** 2026-11-21 as `6c3ea2c55` (head `dbc6483eb`, by the merge queue; run 2862 closed done): three review rounds (2971, 2997, 3020); accepted at the cap, migration **116**; six follow-up tickets, one dropped as built |
 
 ## Decisions & deviations
@@ -380,6 +384,26 @@ They decide every question the plan leaves open.
 - **2026-11-21 — the pilot gate is clear (the coordinator).** The operator's item 533 asks for a rollout of v0.0.1369 or
   later and one team's map from the console (Reshape in Linear, then Ask for the map). The report goes to the operator
   before any other team is started. The live capture of item 498 follows that rollout.
+
+- **2026-11-26 — a team key moved by hand (the operator; the coordinator's calls 1501 and after, routine).** The
+  operator moved this project's team key to the renamed original team. The plan sync moves bound objects by id at each
+  programme's next pass, so nothing was held. The first live pass after the move wrote nothing and showed no word: a new
+  ticket's create ran before its project carried the new team, and Linear's refusal fell outside the closed error table,
+  so the workspace held silently. #3454 (D-9131, D-9132) fixed both. After its deploy, the programme that was stuck moved
+  every bound ticket by id, with no duplicate. Reshaping that team's older open issues still waits for the pilot's report
+  and for this project's Linear owner.
+
+- **2026-11-26 — a review cap lifted once (the coordinator; routine).** Review 3994 of #3454 found a blocking regression:
+  an L1 value import from the plan store, which made a new import cycle. The fix was a few lines, so the cap was lifted by
+  one round for it and its wording carries. The store's own missing ring declaration became `w8-planstore-ring` (#3492).
+
+- **2026-11-27 — a size word accepted (the coordinator; routine).** The review judge flagged #3473's editorial diff as
+  over its bound. Cutting the note and dropping the third file did not clear it, because the test code the review asked
+  for crosses the bound. The judge is not a required check, so the word was accepted for that PR.
+
+- **2026-11-27 — the ring residual has an owner (the coordinator; routine).** Eleven more coordination stores read L1 for
+  the same reason as the plan store, and three L1 files already load values from two of them. Declaring them crosses
+  several contexts, so the work is filed as #3554 for the consolidation work, not done in this programme.
 
 ## Carried constraints
 

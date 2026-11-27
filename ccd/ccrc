@@ -2843,7 +2843,10 @@ already running).
             domain — DNS is yours), ip (no domain at all: HTTPS on this
             box's bare address through caddy's internal CA — each device
             trusts the printed root once, and login is passphrase-only:
-            passkeys need a domain), status (what is configured; the token
+            passkeys need a domain), artifacts (two more names for HTML
+            pages run as artifacts: DuckDNS labels at a tty prompt, or
+            --artifact-origin and --content-origin on a byo box; --off
+            removes them), status (what is configured; the token
             is reported SET/NOT SET, never printed)
   token     the box token's fleet side. "ccrc token sync --from agent" is
             ccrc-agent's token-sync op: it trades a one-time code (on stdin)
@@ -6292,8 +6295,9 @@ cmd_passwd() {
 #   3. this terminal is a fleet session's pane: TMUX_PANE names a pane (`%<n>`) whose tmux session is `cc-<id>`, read
 #      with `tmux display-message -p -t "$TMUX_PANE" '#S'` on the fleet's server (D-8270's lookup, `_TMX_ARGV`), bounded
 #      at 2 s as the history verbs bound it. A read that fails, times out or answers anything else refuses nothing.
-# SPEED BUMPS, NOT WALLS. `env -u CLAUDECODE`, a terminal made with `script`, an unset TMUX_PANE, a script file or another
-# interpreter each run past them. They stop a session doing this by accident, never one that sets out to.
+# SPEED BUMPS, NOT WALLS. Each has its way past: `env -u CLAUDECODE` runs past the first, a terminal made with `script`
+# past the second, an unset TMUX_PANE past the third (wave 190 A12). They stop a session doing this by accident, never
+# one that sets out to.
 _ccrc_operator_only() {   # <the verb's words, e.g. "auth on">
   local what="$1" pane=""
   [ -z "${CLAUDECODE:-}" ] \
@@ -6330,7 +6334,8 @@ _ccrc_operator_only() {   # <the verb's words, e.g. "auth on">
 #   update-exposure check asks (no exposure artifact, CCRC_HOST measured a loopback address), and `_auth_unit_sources`,
 #   the unit's other sources of its environment, none of which may name a key (or be a drop-in, or an env file beyond
 #   the two) and all of which must be listable, and `_auth_unit_own`: on Linux the unit is the tree's own file byte for
-#   byte, as systemd loaded it (review 3971 R1); 5. every key read as ccrc.service receives it (`_box_unit_env`, the
+#   byte, and the file systemd says it loaded, as it is now (review 3971 R1, wave 190 F1); 5. every key read as
+#   ccrc.service receives it (`_box_unit_env`, the
 #   two path keys through `_box_path_for`), and an undecidable one refuses; 6. on: CCRC_HOST unset, 127.0.0.1 or
 #   localhost, no foreign CCRC_RP_ID/CCRC_ORIGIN/CCRC_COOKIE_INSECURE, and a USABLE passphrase (the hasher's `--check`,
 #   doctor's own question, which prints no byte of the secret) — never the other order: a gate armed with no passphrase
@@ -6357,8 +6362,9 @@ _auth_want() {   # <key> <port> -> the value `ccrc auth on` writes for it
 # in the unit directory given), is PROVABLY loopback-only (`_box_reach`: no evidence, CCRC_HOST measured), and is not
 # configured for another address (no CCRC_ORIGIN or CCRC_RP_ID other than what `on` writes, each measured; review 3934
 # A5: the typical gate-off box behind a proxy of its own, where the verb refuses). The readers `cmd_auth` refuses on,
-# asked as one yes for the words that name the verb: doctor's `auth` check, install's gate line. It does not ask the
-# unit's other sources (`_auth_unit_sources`), which needs the service manager: the verb refuses there itself, by name.
+# asked as one yes for the words that name the verb: doctor's `auth` check, install's gate line. It asks whether the
+# installed unit is the tree's file (`_auth_unit_cmp`, wave 190 A4), which needs no service manager; not the unit's
+# other sources (`_auth_unit_sources`) or what systemd loaded, which do: the verb refuses there itself, by name.
 # It clobbers `_box_unit_env`'s out-params, so a caller asks it first. It answers no on a Mac, where the verb refuses
 # (review 3971 R1(d), ruling B), so doctor and install give the hand route there.
 _auth_fits_here() {   # <unit dir>
@@ -6366,6 +6372,7 @@ _auth_fits_here() {   # <unit dir>
   [ "${CCD_OS:-linux}" != darwin ] || return 1
   [ ! -f "$BOX_ENV_FILE" ] || [ ! -r "$BOX_ENV_FILE" ] || role="$(_box_env_value "$BOX_ENV_FILE" CCRC_ROLE)"
   [ "$role" != fleet ] && [ -f "$1/$(_box_unit_file ccrc.service)" ] || return 1
+  _auth_unit_cmp "$1" "$role" || return 1
   _box_reach "$1"
   [ "${#BRE_REASONS[@]}" -eq 0 ] && [ "$BRE_HOSTRC" -eq 0 ] || return 1
   _box_unit_env CCRC_PORT || return 1
@@ -6462,14 +6469,18 @@ _auth_unit_sources() {   # <unit dir>
 # Review 3971 R1 (the coordinator's ruling): the verb acts only on a service definition that is the installer's. On
 # Linux `_inst_units` and deploy.sh land the tree's deploy/ccrc.service unchanged, so the installed unit must be that
 # file byte for byte: an ExecStart= edit, or a line the reading above does not parse as systemd does (a space around
-# `=`, a continuation, an escape in a name), is a difference, and a difference refuses. systemd must have loaded the
-# file as it is now (NeedDaemonReload=no), or the restart applies something else. rc 0 the installer's, and loaded; rc
-# 1 not, AUO_WHY which and AUO_FIX the way on; rc 2 UNMEASURED, AUO_WHY the cause. A path is printed, never a difference.
+# `=`, a continuation, an escape in a name), is a difference, and a difference refuses. `_auth_unit_cmp` is that
+# compare, which needs no service manager, so `_auth_fits_here` asks it too (wave 190 A4). rc 0 the installer's; rc 1
+# not, AUO_WHY which and AUO_FIX the way on; rc 2 UNMEASURED, AUO_WHY the cause. A path is printed, never a difference.
+# The role is the caller's own read of the recorded CCRC_ROLE (empty when none): the way on names it, because a bare
+# install takes role both and never reads the recorded one (`_kf_remedy`'s reason; wave 190 fix round 1, R2). It is
+# printed only when it is a word the install takes for a box this verb serves (the fleet word has refused already),
+# matched whole as the other readers of the role match it; any other content is never printed (fix round 2, R1).
 AUO_WHY=""; AUO_FIX=""
-_auth_unit_own() {   # <unit dir>
-  local udir="$1" uf tf out crc=0
+_auth_unit_cmp() {   # <unit dir> <recorded role or "">
+  local uf tf crc=0 none="" r="<role>"
   AUO_WHY=""; AUO_FIX=""
-  uf="$udir/$(_box_unit_file ccrc.service)"
+  uf="$1/$(_box_unit_file ccrc.service)"
   tf="$BOX_TREE_DIR/deploy/ccrc.service"
   if [ ! -f "$tf" ] || [ ! -r "$tf" ]; then
     AUO_WHY="$tf, the unit file ccrc installs, cannot be read, so whether $uf is that file was not measured"; return 2
@@ -6479,23 +6490,48 @@ _auth_unit_own() {   # <unit dir>
     || { AUO_WHY="cmp is not on PATH, so whether $uf is $tf was not measured"; return 2; }
   cmp -s -- "$tf" "$uf" || crc=$?
   case "$crc" in
-    0) ;;
+    0) return 0 ;;
     1) AUO_WHY="$uf is not the unit file ccrc installs ($tf), and this verb acts only on its own"
-       AUO_FIX="ccrc install, or an update, puts the shipped file back; or set the keys by hand (the README's 'The session gate')"
+       # Wave 190 A3: an update leaves a box already on its version alone unless forced; an install always lands it.
+       case "${2:-}" in server|both) r="$2" ;; '') none="; this box records no role, and a bare install takes role both" ;;
+         *) none="; the role $BOX_ENV_FILE records is not one ccrc install takes, and a bare install takes role both" ;; esac
+       AUO_FIX="ccrc install --role $r puts the shipped file back and reloads systemd (an update does not, on a box already on its version$none); or set the keys by hand (the README's 'The session gate')"
        return 1 ;;
-    *) AUO_WHY="$uf could not be compared with $tf, so whether it is that file was not measured"; return 2 ;;
   esac
-  out="$(_plat_timeout 10 systemctl --user show ccrc.service -p NeedDaemonReload 2>/dev/null)" || out=""
-  case "$out" in
-    NeedDaemonReload=no) return 0 ;;
-    NeedDaemonReload=yes)
-      AUO_WHY="systemd has not loaded $uf as it is now (NeedDaemonReload=yes), so the restart would apply something other than the file this verb read"
-      AUO_FIX="run systemctl --user daemon-reload, then re-run"
-      return 1 ;;
-  esac
-  AUO_WHY="systemctl --user show did not say whether systemd loaded $uf as it is now (NeedDaemonReload), so what the restart would apply was not measured"
+  AUO_WHY="$uf could not be compared with $tf, so whether it is that file was not measured"; return 2
+}
+# The compare, then ONE read of what systemd loaded for the unit (wave 190 F1): the file (FragmentPath) must be the user
+# unit directory's own, made from no other source (SourcePath empty), and loaded as it is now (NeedDaemonReload=no), or
+# the restart applies something else: a unit of the same name earlier on the search path (the control directories, the
+# runtime transient directory, the early generators) passes the compare and the reload answer alike. systemd prints
+# the properties in its own order, so each is read by name; an absent answer is unmeasured, and so is an empty one but
+# SourcePath's, where empty is no other source (`srcp` starts as a newline, which no line read can hold: fix round 1, R1).
+_auth_unit_own() {   # <unit dir> <recorded role or "">
+  local uf out line need="" frag="" srcp=$'\n'
+  _auth_unit_cmp "$1" "${2:-}" || return $?
+  uf="$1/$(_box_unit_file ccrc.service)"
+  out="$(_plat_timeout 10 systemctl --user show ccrc.service -p NeedDaemonReload -p FragmentPath -p SourcePath 2>/dev/null)" || out=""
+  while IFS= read -r line; do
+    case "$line" in
+      NeedDaemonReload=*) need="${line#*=}" ;; FragmentPath=*) frag="${line#*=}" ;; SourcePath=*) srcp="${line#*=}" ;;
+    esac
+  done <<< "$out"
   AUO_FIX="run systemctl --user daemon-reload, then re-run"
-  return 2
+  case "$need" in
+    no) ;;
+    yes) AUO_WHY="systemd has not loaded $uf as it is now (NeedDaemonReload=yes), so the restart would apply something other than the file this verb read"
+         return 1 ;;
+    *) AUO_WHY="systemctl --user show did not say whether systemd loaded $uf as it is now (NeedDaemonReload), so what the restart would apply was not measured"
+       return 2 ;;
+  esac
+  [ -n "$frag" ] || { AUO_WHY="systemctl --user show did not say which file systemd loaded for ccrc.service (FragmentPath), so what the restart would apply was not measured"; return 2; }
+  AUO_FIX="take that unit away (or what puts it there), run systemctl --user daemon-reload, then re-run; or set the keys by hand (the README's 'The session gate')"
+  [ "$frag" = "$uf" ] \
+    || { AUO_WHY="systemd loaded ccrc.service from $frag, not from $uf, the file this verb read (a unit of the same name earlier on its search path), so the restart would apply a file this verb did not read"; return 1; }
+  [ "$srcp" != $'\n' ] || { AUO_FIX="this systemd does not answer SourcePath, so this verb cannot prove the unit on this box; set the keys by hand (the README's 'The session gate')"
+    AUO_WHY="systemctl --user show did not say whether systemd made ccrc.service from another source (SourcePath), so what the restart would apply was not measured"; return 2; }
+  [ -z "$srcp" ] \
+    || { AUO_WHY="systemd made ccrc.service from $srcp (SourcePath), not from $uf alone, so the restart would apply something other than the file this verb read"; return 1; }
 }
 
 # The rewrite, as one awk pass in bytes (LC_ALL=C). A line is one of ours only when, after leading spaces and tabs,
@@ -6586,19 +6622,21 @@ _auth_restart_prove() {   # <armed|off> <host:port>
   return 1
 }
 
-# The proof window's signal handler (review 3934 F3, review 3971 R4). From just before the rename on, INT, TERM and HUP
-# put the original bytes back (its mode too) unless they are back already, restart the unit once on them, and say
-# plainly that the box is back on its old file and that this was not proven. It reads what is on disk, never where the
-# run had got to: a copy still there is not put back yet, a copy gone is back, and a restore that already failed
-# (AUTH_KEEP_BAK) is never reported as back. The state word moves before each file move. Globals, because a trap runs
-# wherever the shell is when the signal lands.
+# The proof window's signal handler (review 3934 F3, review 3971 R4, wave 190 A2). From just before the rewrite into the
+# temporary file on, INT, TERM and HUP put the original back (its mode too) unless it is back already, restart the unit
+# once on it, say what is on disk, and say plainly that this was not proven. It reads what is on disk, never where the
+# run had got to: a copy still there is put back; a copy gone, with no restore that failed, can in this run only have
+# been moved back by its own restore, so the file is TAKEN to be back, and said to be taken so; with no file before the
+# run, the one it wrote is removed, and no old file is named; and a restore that already failed (AUTH_KEEP_BAK) is never
+# reported as back. The state word moves to `written` before the rewrite into the temporary file, and to `proved`
+# before the copy is removed. Globals, because a trap runs wherever the shell is when the signal lands.
 #   pre      nothing is written yet: nothing changed.
-#   written  from just before the rename to the end of the last proof: put back if need be, restart, say so.
+#   written  from just before the rewrite to the end of the last proof: put back if need be, restart, say so.
 #   proved   the change is proven; the copy is all that is left, and the exit chain removes it.
 AUTH_SIG_STATE=""; AUTH_SIG_SUB=""; AUTH_SIG_DEST=""; AUTH_SIG_HAD=0; AUTH_SIG_MODE=""; AUTH_BAK=""; AUTH_KEEP_BAK=0
 _auth_on_signal() {
   trap '' INT TERM HUP
-  local how
+  local how what
   case "$AUTH_SIG_STATE" in
     written)
       if [ "$AUTH_KEEP_BAK" -eq 1 ]; then
@@ -6610,18 +6648,24 @@ _auth_on_signal() {
         exit 130
       fi
       if [ "$AUTH_SIG_HAD" -eq 1 ]; then
-        if [ -e "$AUTH_BAK" ] && { ! chmod -- "$AUTH_SIG_MODE" "$AUTH_BAK" 2>/dev/null || ! mv -f -- "$AUTH_BAK" "$AUTH_SIG_DEST" 2>/dev/null; }; then
-          AUTH_KEEP_BAK=1
-          echo "$PROG: auth $AUTH_SIG_SUB: stopped by a signal while proving the change, and $AUTH_SIG_DEST could NOT be put back: the previous file is kept at $AUTH_BAK, and $AUTH_SIG_DEST still holds this run's lines. Put it back (mv $AUTH_BAK $AUTH_SIG_DEST), then restart: $(_svc_restart_hint ccrc.service)" >&2
-          exit 130
+        what="the copy this run kept of $AUTH_SIG_DEST is gone, which in this run only its own restore does, so $AUTH_SIG_DEST is taken to be back on its old file"
+        if [ -e "$AUTH_BAK" ]; then
+          if ! chmod -- "$AUTH_SIG_MODE" "$AUTH_BAK" 2>/dev/null || ! mv -f -- "$AUTH_BAK" "$AUTH_SIG_DEST" 2>/dev/null; then
+            AUTH_KEEP_BAK=1
+            echo "$PROG: auth $AUTH_SIG_SUB: stopped by a signal while writing or proving the change, and $AUTH_SIG_DEST could NOT be put back: the previous file is kept at $AUTH_BAK, and $AUTH_SIG_DEST still holds this run's lines. Put it back (mv $AUTH_BAK $AUTH_SIG_DEST), then restart: $(_svc_restart_hint ccrc.service)" >&2
+            exit 130
+          fi
+          what="$AUTH_SIG_DEST is back on its old file, byte for byte"
         fi
       elif ! rm -f -- "$AUTH_SIG_DEST" 2>/dev/null; then
-        echo "$PROG: auth $AUTH_SIG_SUB: stopped by a signal while proving the change, and $AUTH_SIG_DEST, which this run created, could NOT be removed; remove it, then restart: $(_svc_restart_hint ccrc.service)" >&2
+        echo "$PROG: auth $AUTH_SIG_SUB: stopped by a signal while writing or proving the change, and $AUTH_SIG_DEST, which this run created, could NOT be removed; remove it, then restart: $(_svc_restart_hint ccrc.service)" >&2
         exit 130
+      else
+        what="$AUTH_SIG_DEST is gone again, as before this run, which found no such file"
       fi
       how="restarted once on it"
       _svc_restart ccrc.service || how="not restarted on it (the restart command failed: $(_svc_restart_hint ccrc.service))"
-      echo "$PROG: auth $AUTH_SIG_SUB: stopped by a signal while proving the change: $AUTH_SIG_DEST is back on its old file, byte for byte, and ccrc.service was $how. That was not proven: ccrc doctor's auth check reads what this box runs now." >&2 ;;
+      echo "$PROG: auth $AUTH_SIG_SUB: stopped by a signal while writing or proving the change: $what, and ccrc.service was $how. That was not proven: ccrc doctor's auth check reads what this box runs now." >&2 ;;
     proved)
       echo "$PROG: auth $AUTH_SIG_SUB: stopped by a signal after the change was proven: it stands, and nothing else was changed." >&2 ;;
     *)
@@ -6710,9 +6754,10 @@ cmd_auth() {
     || _ccrc_die "auth $sub: $AUS_WHY, so whether ccrc.service takes its bind or a sign-in key from somewhere this verb does not read was not measured. Nothing was changed."
   [ "${#AUS_REASONS[@]}" -eq 0 ] \
     || _ccrc_die "auth $sub: ccrc.service can take its bind address or a sign-in key from sources which this verb does not read ($(_auth_join "${AUS_REASONS[@]}")), so this box was not proven loopback-only. Move those settings into $BOX_ENV_FILE or remove them, then re-run, or keep the README's hand route ('The session gate'). Nothing was changed."
-  # The unit itself is the installer's, as systemd loaded it (review 3971 R1): what the readings above cannot parse.
+  # The unit is the installer's file and the one systemd loaded, as it is now (review 3971 R1, wave 190 F1): what the
+  # readings above cannot parse.
   local orc=0
-  _auth_unit_own "$BOX_UNIT_DIR" || orc=$?
+  _auth_unit_own "$BOX_UNIT_DIR" "$role" || orc=$?
   [ "$orc" -eq 0 ] || _ccrc_die "auth $sub: $AUO_WHY${AUO_FIX:+. To go on: $AUO_FIX}. Nothing was changed."
   [ ! -L "$BOX_ENV_FILE" ] \
     || _ccrc_die "auth $sub: $BOX_ENV_FILE is a symlink, and a rename would replace the link with a file; set the keys by hand (the README's 'The session gate'). Nothing was changed."
@@ -6805,7 +6850,8 @@ cmd_auth() {
 
   # The write. The original stays beside the file as a copy until the proof passes, 0600 by its own explicit mode, never
   # the source's (review 3934 F3: `cp -p` kept a 0644 file 0644). The exit chain removes it on every path but a failed
-  # restore, which names it; from just before the rename on, a signal puts the original back (`_auth_on_signal`).
+  # restore, which names it; from just before the rewrite into the temporary file on, a signal puts the original back
+  # (`_auth_on_signal`).
   local dest="$BOX_ENV_FILE" tmp bak="" had=0 mode="600"
   mkdir -p "${dest%/*}" || _ccrc_die "auth $sub: cannot create ${dest%/*}. Nothing was changed."
   tmp="$dest.auth.tmp.$$"
@@ -6833,15 +6879,18 @@ cmd_auth() {
 
   local want=armed; [ "$sub" = on ] || want=off
   if ! _auth_restart_prove "$want" "$addr"; then
-    local why="$AUTH_WHY" back="put back"
+    # Wave 190 A2: a file this run created is named as this run's, never as a previous one.
+    local why="$AUTH_WHY" back="The previous $dest was put back"
     if [ "$had" -eq 1 ]; then
       if ! chmod -- "$mode" "$bak" || ! mv -f -- "$bak" "$dest"; then
         AUTH_KEEP_BAK=1
-        back="NOT put back: the previous file is kept at $bak, and $dest still holds this run's lines"
+        back="The previous $dest was NOT put back: the previous file is kept at $bak, and $dest still holds this run's lines"
       fi
-    elif ! rm -f -- "$dest"; then
+    elif rm -f -- "$dest"; then
+      back="$dest, which this run created, was removed again"
+    else
       AUTH_KEEP_BAK=1
-      back="NOT removed: $dest still holds this run's lines"
+      back="$dest, which this run created, was NOT removed: it still holds this run's lines"
     fi
     # The state stays `written` through the restore and its proof (review 3971 R4): the handler reads the disk.
     # Back to what the box ran before this run: armed iff its CCRC_AUTH was on.
@@ -6849,14 +6898,14 @@ cmd_auth() {
     [ "${auth_cur[0]}" != on ] || was=armed
     if _auth_restart_prove "$was" "$addr"; then
       if [ "$AUTH_KEEP_BAK" -eq 1 ]; then
-        again="it answers with sign-in ${was/armed/on} as before this run, though on this run's lines, not on its old file"
+        again="it answers with sign-in ${was/armed/on} as before this run, though on this run's lines$([ "$had" -eq 0 ] || printf ', not on its old file')"
       else
         again="it is back as it was, with sign-in ${was/armed/on}"
       fi
     else
       again="and it did not come back as it was either ($AUTH_WHY); $(_svc_status_hint ccrc.service) says why"
     fi
-    _ccrc_die "auth $sub: the restarted console did not prove the change: $why. The previous $dest was $back, and ccrc.service was restarted again: $again."
+    _ccrc_die "auth $sub: the restarted console did not prove the change: $why. $back, and ccrc.service was restarted again: $again."
   fi
   AUTH_SIG_STATE=proved
   [ -z "$bak" ] || rm -f -- "$bak"
@@ -6933,7 +6982,7 @@ cmd_expose() {
   [ $# -gt 0 ] && shift
   case "$sub" in
     -h|--help) usage; exit 0 ;;
-    duckdns|byo|ip) ;;
+    duckdns|byo|ip|artifacts) ;;
     status)
       [ $# -eq 0 ] || _ccrc_usage_die "$1"
       _exp_status
@@ -6946,14 +6995,15 @@ cmd_expose() {
       ;;
     *) _ccrc_usage_die "$sub" ;;
   esac
-  [ $# -eq 0 ] || _ccrc_usage_die "$1"
+  [ "$sub" = artifacts ] || [ $# -eq 0 ] || _ccrc_usage_die "$1"
 
   # The shadow refusal comes BEFORE the tty gate: a box in the refused state
   # is refused identically from a terminal and from a pipe, and nobody types
   # two answers into a run that was never going to write them.
   local shadow_keys="" k
   if [ -f "$BOX_ENV_FILE" ] && [ -r "$BOX_ENV_FILE" ]; then
-    for k in CCRC_ORIGIN CCRC_RP_ID CCRC_AUTH; do
+    # The three artifact keys have this verb as their one writer too (D3).
+    for k in CCRC_ORIGIN CCRC_RP_ID CCRC_AUTH CCRC_ARTIFACT_ORIGIN CCRC_ARTIFACT_CONTENT_ORIGIN CCRC_ARTIFACT_PORT; do
       # `-n`: a bare `KEY=` line is an EMPTY value, which `config.ts` reads
       # with `||` — i.e. unset. Refusing over a line that decides nothing
       # would block the verb on exactly the boxes it exists to fix.
@@ -6971,9 +7021,10 @@ cmd_expose() {
   # its own undo, said first — and only where `ccrc auth off` acts (review 3934 A7): CCRC_AUTH still `on`, and neither
   # CCRC_RP_ID nor CCRC_ORIGIN holding anything but the localhost values `on` writes. Otherwise it would answer "already
   # off", or refuse a box armed by hand for another address, and the hand removal below is the remedy.
+  # X5 A4: nor when an artifact key is among those found: `ccrc auth off` never removes one, so its re-run would refuse again.
   local auth_said="" a_rp a_origin
   if [ -n "$shadow_keys" ] && [ -r "$BOX_ENV_FILE" ] && LC_ALL=C grep -qF -- "$AUTH_MARKER_HEAD" "$BOX_ENV_FILE" \
-     && [ "$(_box_env_value "$BOX_ENV_FILE" CCRC_AUTH)" = on ]; then
+     && [ "$(_box_env_value "$BOX_ENV_FILE" CCRC_AUTH)" = on ] && [[ $shadow_keys != *CCRC_ARTIFACT_* ]]; then
     a_rp="$(_box_env_value "$BOX_ENV_FILE" CCRC_RP_ID)"; a_origin="$(_box_env_value "$BOX_ENV_FILE" CCRC_ORIGIN)"
     if { [ -z "$a_rp" ] || [ "$a_rp" = localhost ]; } && { [ -z "$a_origin" ] || [[ "$a_origin" =~ ^http://localhost:[0-9]{1,5}$ ]]; }; then
       auth_said=" These are the lines ccrc auth on writes: run ccrc auth off first, which removes them and restarts the server, then re-run this."
@@ -6982,6 +7033,7 @@ cmd_expose() {
   [ -z "$shadow_keys" ] \
     || _ccrc_die "refusing to write $CCRC_EXPOSURE_FILE — $BOX_ENV_FILE already sets$shadow_keys (the stage-3a hand-edit path).$auth_said The server reads BOTH files and $CCRC_EXPOSURE_FILE wins for any key in both — so this verb's copy would silently override yours. Remove those keys from $BOX_ENV_FILE (that file is yours; this verb owns the other), then re-run. Nothing was written."
 
+  if [ "$sub" = artifacts ]; then _exp_artifacts "$@"; return; fi
   [ -t 0 ] \
     || _ccrc_die "stdin is not a terminal, and this verb will not read a DuckDNS token or an origin from a pipe or a file. A piped token cannot be typed without echo, and — the case this refusal exists for — under \`curl … | bash\` stdin is the INSTALLER SCRIPT, so a read here would take a line of shell as this box's answers. Run 'ccrc expose $sub' from a terminal. Nothing was written."
 
@@ -7099,7 +7151,8 @@ cmd_expose() {
       _ccrc_die "\"$bind\" carries whitespace, a brace or a '#' — a bind address is one host or ip, written verbatim into the Caddyfile as a directive caddy would refuse to load. Nothing was written." ;;
   esac
 
-  _exp_env_write "$sub" "$origin" "$rpid" "$host" "$token" "$bind"
+  _exp_artifact_carry "$sub" "$origin"
+  _exp_env_write "$sub" "$origin" "$rpid" "$host" "$token" "$bind" "$EXP_ART_ORIGIN" "$EXP_ART_CONTENT" "$EXP_ART_PORT"
   unset token
   _exp_caddyfile "$host" "$bind" "$sub"
   # AFTER the env write, deliberately: the ddns service's EnvironmentFile has
@@ -7146,6 +7199,100 @@ _dr_ip4_global() {
     *.*.*.*) return 0 ;;
     *) return 1 ;;
   esac
+}
+
+# ── the artifact tier's site rule and config decision, in bash ─────────────
+# Mirrors server/src/artifacts/policy.ts#siteRuleProblem and #artifactConfig, so `expose artifacts` and doctor refuse
+# exactly what the server refuses. server/test/fixtures/artifact-site-rule.json holds the cases both read. Pure bash on
+# purpose (no external binary): doctor runs it on a box whose PATH may be broken. Every argument is passed in.
+_ART_PUBLIC_SUFFIXES='duckdns.org'
+_art_port() { [[ $1 =~ ^[1-9][0-9]{0,4}$ ]] && (( $1 <= 65535 )); }
+_art_numeric() { local l=${1##*.}; [[ $l =~ ^[0-9]+$ || $l =~ ^0[xX][0-9a-fA-F]*$ ]]; }
+_art_q() { local s=$1; (( ${#s} > 80 )) && s="${s:0:80}..."; printf '"%s"' "$s"; }
+_art_https() {  # isExactHttpsOrigin
+  local LC_ALL=C r=${1#https://} h="" l='[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?'   # LC_ALL: [a-z] is ASCII only
+  [[ $1 == https://* ]] || return 1
+  h=${r%%:*}
+  if [[ $r == *:* ]]; then [[ ${r#*:} =~ ^[0-9]{1,5}$ ]] && (( 10#${r#*:} <= 65535 )) || return 1; fi
+  (( ${#h} <= 253 )) && [[ $h =~ ^($l\.)+${l}$ ]]
+}
+_art_site_problem() {  # console-host host: prints the problem and returns 1, or nothing and 0
+  local k="${1:-}" a="${2:-}" kt="" at="" sh="" n=0 s=""
+  k=${k,,} a=${a,,} k=${k%.} a=${a%.} kt=$k at=$a
+  if [[ $k == "$a" ]]; then printf '%s is the console host' "$a"; return 1; fi
+  if [[ $a == *".$k" ]]; then printf '%s is below the console host %s' "$a" "$k"; return 1; fi
+  if [[ $k == *".$a" ]]; then printf '%s is above the console host %s' "$a" "$k"; return 1; fi
+  while [[ ${kt##*.} == "${at##*.}" ]]; do
+    n=$((n + 1)); sh=${kt##*.}${sh:+.$sh}
+    [[ $kt == *.* && $at == *.* ]] || break
+    kt=${kt%.*} at=${at%.*}
+  done
+  (( n <= 1 )) && return 0
+  for s in $_ART_PUBLIC_SUFFIXES; do [[ $s == "$sh" ]] && return 0; done
+  printf '%s shares the site %s with the console' "$a" "$sh"; return 1
+}
+_art_check_origin() {  # key value console-is-loopback console-host console-port: sets _ART_H, or ART_DETAIL
+  local k=$1 v=$2 q="" host="" p="" w=""
+  q=$(_art_q "$v")
+  if (( $3 )); then
+    [[ $v =~ ^http://127\.0\.0\.1:([0-9]+)$ ]] && p=${BASH_REMATCH[1]}
+    if [[ -n $p ]] && _art_port "$p"; then
+      (( p == $5 )) && { ART_DETAIL="$k=$q is on the console's own port"; return 1; }
+      _ART_H=${v#http://}; return 0
+    fi
+    ART_DETAIL="$k=$q: beside a loopback console only http://127.0.0.1:<port> is accepted"; return 1
+  elif [[ $v =~ ^http://127\.0\.0\.1:[0-9]+$ ]]; then
+    ART_DETAIL="$k=$q is a loopback origin, which only a console at http://localhost:<port> may have"; return 1
+  fi
+  _art_https "$v" || { ART_DETAIL="$k=$q is not a bare https origin (https://<host>, lower case, no path, no trailing slash)"; return 1; }
+  host=${v#https://}
+  _art_numeric "${host%%:*}" && { ART_DETAIL="$k=$q is an address; artifacts need names"; return 1; }
+  if [[ $host == *:* ]]; then
+    p=${host#*:}
+    if ! _art_port "$p"; then
+      w='is not a port (1 to 65535)'; [[ $p =~ ^0[0-9]+$ ]] && w='writes its port with a leading zero'
+      [[ $p =~ ^0+$ ]] && w='names port 0, which is not a port'
+      ART_DETAIL="$k=$q $w"; return 1
+    fi
+    (( p == 443 )) && { ART_DETAIL="$k=$q names the default port; write it without :443"; return 1; }
+  fi
+  w=$(_art_site_problem "$4" "${host%%:*}") || { ART_DETAIL="$k=$q: $w"; return 1; }
+  _ART_H=$host
+}
+# _art_config console-origin console-port origin content port expose-mode: always returns 0 and sets ART_STATE (on, unset,
+# partial, invalid, by-address), ART_DETAIL and, on `on`, ART_HOST and ART_CONTENT_HOST.
+# shellcheck disable=SC2034  # the ART_* answers are this function's output; the caller reads them
+_art_config() {
+  local LC_ALL=C co=${1:-} cp=${2:-} o=${3:-} c=${4:-} pr=${5:-} lo=0 ch="" miss="" ah=""
+  local addr='this box is reached by address, and artifacts need names'
+  [[ -n $cp ]] || cp=7788   # unset or empty: config.ts's default
+  ART_STATE="" ART_DETAIL="" ART_HOST="" ART_CONTENT_HOST="" _ART_H=""
+  if [[ ${6:-} == ip ]]; then ART_STATE=by-address ART_DETAIL=$addr; return 0; fi
+  if [[ -z $o$c$pr ]]; then ART_STATE="unset"; return 0; fi
+  if [[ -z $o || -z $c || -z $pr ]]; then
+    [[ -z $o ]] && miss=CCRC_ARTIFACT_ORIGIN
+    [[ -z $c ]] && miss+=${miss:+, }CCRC_ARTIFACT_CONTENT_ORIGIN
+    [[ -z $pr ]] && miss+=${miss:+, }CCRC_ARTIFACT_PORT
+    ART_STATE=partial ART_DETAIL="missing $miss; all three keys are needed"; return 0
+  fi
+  ART_STATE=invalid
+  # A CCRC_PORT that is set and not plain digits is refused, never read: config.ts's Number() takes 07790 or 0x1e6e as a
+  # port bash would read otherwise, and teaching bash that parse is a second reader (review 4022 F1, the coordinator's rule).
+  _art_port "$cp" || { ART_DETAIL="CCRC_PORT=$(_art_q "$cp") is not a plain port number: write it as digits only (1 to 65535, no leading zero)"; return 0; }
+  _art_port "$pr" || { ART_DETAIL="CCRC_ARTIFACT_PORT=$(_art_q "$pr") is not a port (digits only, no leading zero, 1 to 65535)"; return 0; }
+  (( pr == cp )) && { ART_DETAIL="CCRC_ARTIFACT_PORT=$(_art_q "$pr") is the console's own port"; return 0; }
+  if [[ $co =~ ^http://localhost:([0-9]+)$ ]] && _art_port "${BASH_REMATCH[1]}"; then lo=1; ch=localhost
+  elif _art_https "$co"; then ch=${co#https://}; ch=${ch%%:*}
+  else ART_DETAIL="CCRC_ORIGIN=$(_art_q "$co") is neither a bare https origin nor http://localhost:<port>"; return 0
+  fi
+  if _art_numeric "$ch"; then ART_STATE=by-address ART_DETAIL=$addr; return 0; fi
+  [[ $o == "$co" ]] && { ART_DETAIL="CCRC_ARTIFACT_ORIGIN=$(_art_q "$o") is the console origin"; return 0; }
+  [[ $c == "$co" ]] && { ART_DETAIL="CCRC_ARTIFACT_CONTENT_ORIGIN=$(_art_q "$c") is the console origin"; return 0; }
+  [[ $c == "$o" ]] && { ART_DETAIL="CCRC_ARTIFACT_CONTENT_ORIGIN=$(_art_q "$c") is the same origin as CCRC_ARTIFACT_ORIGIN"; return 0; }
+  _art_check_origin CCRC_ARTIFACT_ORIGIN "$o" "$lo" "$ch" "$cp" || return 0
+  ah=$_ART_H
+  _art_check_origin CCRC_ARTIFACT_CONTENT_ORIGIN "$c" "$lo" "$ch" "$cp" || return 0
+  ART_STATE=on ART_HOST=$ah ART_CONTENT_HOST=$_ART_H
 }
 
 # ── _exp_ddns_units — the DuckDNS updater, installed and (best-effort) armed ─
@@ -7252,14 +7399,139 @@ PL
   fi
 }
 
+# The one reader of the three artifact keys: EXP_ART_ORIGIN/CONTENT/PORT as the exposure file holds them; rc 0 iff
+# all three are set.
+_exp_art_keys() {
+  EXP_ART_ORIGIN="" EXP_ART_CONTENT="" EXP_ART_PORT=""
+  [ -f "$CCRC_EXPOSURE_FILE" ] || return 1
+  EXP_ART_ORIGIN="$(_box_env_value "$CCRC_EXPOSURE_FILE" CCRC_ARTIFACT_ORIGIN)"
+  EXP_ART_CONTENT="$(_box_env_value "$CCRC_EXPOSURE_FILE" CCRC_ARTIFACT_CONTENT_ORIGIN)"
+  EXP_ART_PORT="$(_box_env_value "$CCRC_EXPOSURE_FILE" CCRC_ARTIFACT_PORT)"
+  [ -n "$EXP_ART_ORIGIN" ] && [ -n "$EXP_ART_CONTENT" ] && [ -n "$EXP_ART_PORT" ]
+}
+# The writing arms' carry: the stored keys, cleared (and said) when the new console origin, or the ip arm, cannot
+# keep them, so a re-run of any arm never writes a set the server would turn off.
+_exp_artifact_carry() {   # <arm> <console-origin>
+  _exp_art_keys || [ -n "$EXP_ART_ORIGIN$EXP_ART_CONTENT$EXP_ART_PORT" ] || return 0
+  if [ "$1" = ip ]; then
+    echo "expose: artifacts turned off: an address has no second site"
+  else
+    _art_config "$2" "$(_exp_console_port)" "$EXP_ART_ORIGIN" "$EXP_ART_CONTENT" "$EXP_ART_PORT" ""
+    [ "$ART_STATE" = on ] && return 0
+    echo "expose: artifacts turned off: $ART_DETAIL (ccrc expose artifacts names them again)"
+  fi
+  EXP_ART_ORIGIN="" EXP_ART_CONTENT="" EXP_ART_PORT=""
+}
+
+# `ccrc expose artifacts [--off | --artifact-origin <o> --content-origin <o>]`: the artifact tier's two names. `--off`
+# is the same write with no names, so the keys, the extra DuckDNS hosts and the second block go together.
+_exp_artifacts() {
+  local off="" ao="" co="" w="" origin rpid mode prov dom token bind arm=byo host l ok="" unit cmd
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --off) off=1; shift ;;
+      --artifact-origin) [ $# -ge 2 ] || _ccrc_usage_die "$1"; ao="$2"; shift 2 ;;
+      --content-origin) [ $# -ge 2 ] || _ccrc_usage_die "$1"; co="$2"; shift 2 ;;
+      *) _ccrc_usage_die "$1" ;;
+    esac
+  done
+  [ -z "$off" ] || [ -z "$ao$co" ] || _ccrc_usage_die "--off"
+  # A file this arm reads or rewrites that stands but is not a readable regular file is never read or written over.
+  for l in "$CCRC_EXPOSURE_FILE" "$BOX_ENV_FILE" "$CCRC_CADDYFILE"; do
+    [ ! -e "$l" ] || { [ -f "$l" ] && [ -r "$l" ]; } \
+      || _ccrc_die "$l is not a readable regular file, so the artifact tier's files were never read: look at what is really there (ls -ld $l). Nothing was written."
+  done
+  # The tier never stands alone: it sits beside a named console exposure that arms sign-in, or nowhere, so no
+  # artifacts-only exposure can exist (and the reach proof never meets one).
+  local why="" auth=""
+  if [ ! -f "$CCRC_EXPOSURE_FILE" ]; then why="this box has no exposure file yet"
+  else
+    origin="$(_box_env_value "$CCRC_EXPOSURE_FILE" CCRC_ORIGIN)"
+    rpid="$(_box_env_value "$CCRC_EXPOSURE_FILE" CCRC_RP_ID)"
+    auth="$(_box_env_value "$CCRC_EXPOSURE_FILE" CCRC_AUTH)"
+    mode="$(_box_env_value "$CCRC_EXPOSURE_FILE" CCRC_EXPOSE_MODE)"
+    prov="$(_box_env_value "$CCRC_EXPOSURE_FILE" CCRC_DDNS_PROVIDER)"
+    dom="$(_box_env_value "$CCRC_EXPOSURE_FILE" CCRC_DDNS_DOMAIN)"
+    token="$(_box_env_value "$CCRC_EXPOSURE_FILE" CCRC_DDNS_TOKEN)"
+    bind="$(_box_env_value "$CCRC_EXPOSURE_FILE" CCRC_CADDY_BIND)"
+    if [ "$mode" = ip ]; then why="this box is exposed by address, which has no second site; artifacts need names"
+    elif [ "$auth" != on ] || [ -z "$rpid" ] || [ -z "$origin" ]; then
+      why="this box's exposure file does not carry the console's sign-in (CCRC_AUTH=on, CCRC_RP_ID and CCRC_ORIGIN together)"
+    fi
+  fi
+  if [ -n "$why" ]; then
+    [ -z "$off" ] || { echo "expose: artifacts: nothing to turn off — $why"; return 0; }
+    _ccrc_die "$why: run ccrc expose duckdns or ccrc expose byo first; the artifact names sit beside the console's. Nothing was written."
+  fi
+  host="${origin#https://}"
+  if [ "$prov" = duckdns ]; then arm=duckdns; host="${dom%%,*}"; fi
+  if [ -z "$off" ]; then
+    if [ "$arm" = duckdns ]; then
+      [ -z "$ao$co" ] \
+        || _ccrc_die "on a DuckDNS box the artifact names are two more DuckDNS labels, asked at the prompt, never flags. Nothing was written."
+      [ -t 0 ] \
+        || _ccrc_die "stdin is not a terminal, and this arm reads the two DuckDNS labels from a terminal only, never a pipe or a file. Run 'ccrc expose artifacts' from a terminal. Nothing was written."
+      for w in Artifact:a Content:c; do
+        if ! IFS= read -rp "${w%:*} host DuckDNS label (the <${w#*:}> of <${w#*:}>.duckdns.org): " l; then
+          printf '\n' >&2
+          _ccrc_die "no label was entered — nothing was written"
+        fi
+        case "$l" in
+          ''|*[!a-zA-Z0-9-]*)
+            _ccrc_die "\"$l\" is not a bare DuckDNS label — one label: letters, digits and hyphens only. Nothing was written." ;;
+        esac
+        l="https://${l,,}.duckdns.org"
+        [ "$l" != "https://${host,,}" ] || _ccrc_die "$l is the console's own name; the artifact names need labels of their own. Nothing was written."
+        [ "$l" != "$ao" ] || _ccrc_die "$l is the artifact host already; the content host needs a label of its own. Nothing was written."
+        if [ -z "$ao" ]; then ao="$l"; else co="$l"; fi
+      done
+    else
+      [ -n "$ao" ] && [ -n "$co" ] \
+        || _ccrc_die "a byo box names both artifact origins: --artifact-origin <o> --content-origin <o>. Nothing was written."
+    fi
+    _exp_art_keys
+    w="${EXP_ART_PORT:-7790}"
+    _art_config "$origin" "$(_exp_console_port)" "$ao" "$co" "$w" ""
+    # A stored artifact port a bare re-run keeps: --off clears it, and the next run writes the default (review 4022 L2-F1).
+    [[ $ART_DETAIL != CCRC_ARTIFACT_PORT=* || -z $EXP_ART_PORT ]] || ART_DETAIL+=". Turn the tier off first (ccrc expose artifacts --off), then run ccrc expose artifacts again"
+    [ "$ART_STATE" = on ] || _ccrc_die "$ART_DETAIL. Nothing was written."
+    [ "$arm" = duckdns ] \
+      || echo "expose: artifacts: $ART_HOST and $ART_CONTENT_HOST must sit on a registrable domain of their own: page code can set cookies on its own registrable domain, which on a domain you share would reach your other services"
+  fi
+  _exp_env_write "$arm" "$origin" "$rpid" "$host" "$token" "$bind" "$ao" "$co" "$w"
+  _exp_caddyfile "$host" "$bind" "$arm"
+  if [ -z "$off" ] && [ "$arm" = duckdns ]; then
+    # One DuckDNS update now, so the new names resolve before caddy asks for their certificates; degraded, never fatal.
+    if [ "$CCD_OS" = darwin ]; then
+      unit="app.ccrc.$CCRC_DDNS_UNIT"; cmd="launchctl kickstart $(_svc_domain)/$unit"
+      _svc_launchctl kickstart "$(_svc_domain)/$unit" 2>/dev/null && ok=1
+    else
+      unit="$CCRC_DDNS_UNIT.service"; cmd="systemctl --user start $unit"
+      # `_exp_ddns_units`' bus defaults, for its reason: an expose is most often run over non-interactive ssh.
+      : "${XDG_RUNTIME_DIR:=/run/user/$UID}"; export XDG_RUNTIME_DIR
+      : "${DBUS_SESSION_BUS_ADDRESS:=unix:path=${XDG_RUNTIME_DIR}/bus}"; export DBUS_SESSION_BUS_ADDRESS
+      systemctl --user start "$unit" && ok=1
+    fi
+    if [ -n "$ok" ]; then echo "expose: started $unit once, so the two new names resolve before caddy asks for their certificates"
+    else echo "expose: DEGRADED — could not start the DuckDNS update now; its timer runs it within 5 minutes, or run: $cmd"; fi
+  fi
+  _exp_landing "$ao" "artifacts${off:+-off}" "$co"
+}
+
 # ── _exp_env_write — the ONE writer of $CCRC_EXPOSURE_FILE ────────────────
 # tmp + `mv -f` in the same directory (`_inst_atomic`'s discipline): the
 # server unit may source this file at any restart, and a half-written
 # EnvironmentFile is a box with half an origin. `umask 077` in the writing
 # subshell so the temp file is 0600 FROM ITS FIRST BYTE — the token must never
 # sit world-readable even for the window between create and chmod.
-_exp_env_write() {   # <arm> <origin> <rpid> <host> <token> <bind>
+_exp_env_write() {   # <arm> <origin> <rpid> <host> <token> <bind> [<artifact-origin> <content-origin> <artifact-port>]
   local arm="$1" origin="$2" rpid="$3" host="$4" token="$5" bind="${6:-}" dest="$CCRC_EXPOSURE_FILE" tmp
+  local ao="${7:-}" co="${8:-}" ap="${9:-}" art="" dom="$4" o
+  if [ -n "$ao" ] && [ -n "$co" ] && [ -n "$ap" ]; then
+    art=1
+    # each artifact name on duckdns.org joins the updater's list, console first
+    for o in "$ao" "$co"; do case "$o" in *.duckdns.org) dom="$dom,${o#https://}" ;; esac; done
+  fi
   mkdir -p "$HOME/.ccrc" || _ccrc_die "cannot create \$HOME/.ccrc"
   tmp="$dest.tmp.$$"
   if ! (
@@ -7294,15 +7566,18 @@ _exp_env_write() {   # <arm> <origin> <rpid> <host> <token> <bind>
       [ -n "$bind" ] && printf '%s\n' "CCRC_CADDY_BIND=$bind"
       if [ "$arm" = duckdns ]; then
         printf '%s\n' "CCRC_DDNS_PROVIDER=duckdns"
-        printf '%s\n' "CCRC_DDNS_DOMAIN=$host"
+        printf '%s\n' "CCRC_DDNS_DOMAIN=$dom"
         printf '%s\n' "CCRC_DDNS_TOKEN=$token"
+      fi
+      if [ -n "$art" ]; then
+        printf '%s\n' "CCRC_ARTIFACT_ORIGIN=$ao" "CCRC_ARTIFACT_CONTENT_ORIGIN=$co" "CCRC_ARTIFACT_PORT=$ap"
       fi
     } > "$tmp"
   ) || ! chmod 600 "$tmp" || ! mv -f "$tmp" "$dest"; then
     rm -f "$tmp"
     _ccrc_die "writing $dest failed — nothing was installed"
   fi
-  echo "expose: wrote $dest (0600) — CCRC_ORIGIN=$origin, CCRC_AUTH=on${bind:+, CCRC_CADDY_BIND=$bind}"
+  echo "expose: wrote $dest (0600) — CCRC_ORIGIN=$origin, CCRC_AUTH=on${bind:+, CCRC_CADDY_BIND=$bind}${art:+, artifacts at $ao and $co}"
   # The one way arming can bite: `CCRC_AUTH=on` with no passphrase file is a
   # box that refuses EVERYTHING (auth/secret.ts fails shut, by design). Said
   # as `_inst_linger`'s degraded step — loud, exact, and not a reason to
@@ -7312,19 +7587,26 @@ _exp_env_write() {   # <arm> <origin> <rpid> <host> <token> <bind>
   fi
 }
 
-# The complete Caddyfile (spec D1): the host, a loopback reverse_proxy, and
-# NOTHING else — no TLS directives, no plugin syntax. Stock Caddy's automatic
-# HTTPS reads the bare host line and does the certificate. The port comes from
-# ccrc.env through `_box_env_value` (D-85's reader), defaulting to 7788 only
-# when the file names no CCRC_PORT — the same pair of defaults
-# `cmd_install`'s landing block uses, for the same reason: hardcoding the
-# port would be right on a fresh box and a lie on every edited one.
-_exp_caddyfile() {   # <host> [bind] [arm]
-  local host="$1" bind="${2:-}" arm="${3:-}" port="" dest="$CCRC_CADDYFILE" tmp site
+# The console's port: CCRC_PORT from ccrc.env through `_box_env_value` (D-85's
+# reader), defaulting to 7788 only when the file names none — the same pair of
+# defaults `cmd_install`'s landing block uses, for the same reason: hardcoding
+# the port would be right on a fresh box and a lie on every edited one.
+_exp_console_port() {
+  local port=""
   if [ -f "$BOX_ENV_FILE" ] && [ -r "$BOX_ENV_FILE" ]; then
     port="$(_box_env_value "$BOX_ENV_FILE" CCRC_PORT)"
   fi
-  [ -n "$port" ] || port=7788
+  echo "${port:-7788}"
+}
+
+# The complete Caddyfile (spec D1): the host, a loopback reverse_proxy, and
+# NOTHING else — no TLS directives, no plugin syntax. Stock Caddy's automatic
+# HTTPS reads the bare host line and does the certificate. With the artifact
+# keys stored, the artifact tier's block follows it, and the log filter leads.
+_exp_caddyfile() {   # <host> [bind] [arm]
+  local host="$1" bind="${2:-}" arm="${3:-}" port dest="$CCRC_CADDYFILE" tmp site t=$'\t' ao="" co="" ap=""
+  port="$(_exp_console_port)"
+  if _exp_art_keys; then ao=$EXP_ART_ORIGIN co=$EXP_ART_CONTENT ap=$EXP_ART_PORT; fi
   # The ip arm (stage 5, S10) states the scheme and adds `tls internal`, so
   # the generated file READS as the contract it is: caddy's own CA signs the
   # certificate, no ACME, nothing leaves the box. (Caddy would route a bare
@@ -7334,11 +7616,20 @@ _exp_caddyfile() {   # <host> [bind] [arm]
   tmp="$dest.tmp.$$"
   if ! {
     {
+      # the log filter keeps a request's URI and headers out of caddy's log (no site block has a log directive)
+      [ -n "$ao" ] && printf '%s\n' '{' "${t}log default {" "${t}${t}output stderr" "${t}${t}format filter {" \
+        "${t}${t}${t}wrap json" "${t}${t}${t}fields {" "${t}${t}${t}${t}request>uri delete" \
+        "${t}${t}${t}${t}request>headers delete" "${t}${t}${t}}" "${t}${t}}" "${t}${t}level INFO" "${t}}" '}' ''
       printf '%s\n' "$site {"
       [ -n "$bind" ] && printf '%s\n' "    bind $bind"
       [ "$arm" = ip ] && printf '%s\n' "    tls internal"
       printf '%s\n' "    reverse_proxy 127.0.0.1:$port"
       printf '%s\n' "}"
+      if [ -n "$ao" ]; then
+        printf '\n%s\n' "${ao#https://}, ${co#https://} {"
+        [ -n "$bind" ] && printf '%s\n' "    bind $bind"
+        printf '%s\n' "    reverse_proxy 127.0.0.1:$ap" "}"
+      fi
     } > "$tmp" && chmod 644 "$tmp"
   }; then
     rm -f "$tmp"
@@ -7367,7 +7658,7 @@ _exp_caddyfile() {   # <host> [bind] [arm]
     fi
   fi
   mv -f "$tmp" "$dest" || { rm -f "$tmp"; _ccrc_die "writing $dest failed"; }
-  echo "expose: wrote $dest — caddy will serve https://$host${bind:+ on $bind} and proxy to 127.0.0.1:$port"
+  echo "expose: wrote $dest — caddy will serve https://$host${bind:+ on $bind} and proxy to 127.0.0.1:$port${ao:+ and https://${ao#https://}, https://${co#https://} to 127.0.0.1:$ap}"
 }
 
 # ── _exp_landing — what this run did NOT do, said in exact commands ───────
@@ -7378,8 +7669,20 @@ _exp_caddyfile() {   # <host> [bind] [arm]
 # prerequisite is stated here because it is the one thing neither this verb
 # nor doctor can detect from inside the box (spec D1's consequence, "stated
 # loudly instead of papered over").
-_exp_landing() {   # <origin> [arm]
-  local origin="$1" arm="${2:-}"
+_exp_landing() {   # <origin> [arm] [content-origin]
+  local origin="$1" arm="${2:-}" lead=artifacts reload="   (Caddy then obtains the two new certificates)" verb=starts
+  case "$arm" in artifacts|artifacts-off)
+    # the artifact tier's three steps: the Caddyfile copy, a reload, the server restart (no caddy install, no passkeys)
+    if [ "$arm" = artifacts-off ]; then lead="artifacts turned off" reload="" verb=stops; fi
+    echo "expose: $lead: this run started NO system service (the commands below are printed, not run). Three steps are yours:"
+    echo "expose:   1. sudo install -m 0644 $CCRC_CADDYFILE $CCRC_CADDY_SYSTEM_FILE   (a COPY, as for the console's block)"
+    echo "expose:   2. sudo systemctl reload caddy$reload"
+    echo "expose:   3. restart the server so it $verb the artifact listener: $(_svc_restart_hint ccrc.service)"
+    if [ "$arm" = artifacts ]; then
+      echo "expose: once all of the above are done, $origin and ${3:-} serve artifacts; ccrc doctor measures each piece"
+    fi
+    return 0 ;;
+  esac
   echo "expose: this run started NO system service — caddy binds ports 80/443 as root, and ccrc never escalates (the commands below are printed, not run). Three steps are yours:"
   echo "expose:   1. install caddy from your distro (Debian/Ubuntu: apt install caddy) — the stock binary; no plugins needed"
   # ── D-165: a COPY, and never the symlink this line used to lead with ────
@@ -7452,6 +7755,8 @@ _exp_status() {
   else
     echo "expose: duckdns token: NOT SET (a byo or ip box, or an incomplete duckdns run)"
   fi
+  if _exp_art_keys; then echo "expose: artifacts: $EXP_ART_ORIGIN and $EXP_ART_CONTENT, served by the listener on 127.0.0.1:$EXP_ART_PORT"
+  else echo "expose: artifacts: not set (ccrc expose artifacts names them; a box exposed by address has none)"; fi
   return 0
 }
 

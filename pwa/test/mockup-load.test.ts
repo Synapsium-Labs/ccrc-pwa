@@ -86,7 +86,7 @@ describe('extractMockupRefs: the element table, in DOM order (base 5.6.3)', () =
 <style>.s{background:url(s1.png)}</style>
 <script src="x.js"></script><script type="module" src="m.mjs"></script>
 <script>import('https://cdn.example/lib.js')</script>
-<script type="importmap">{"imports":{}}</script>
+<script type="importmap">{"imports":{"x":"data:text/javascript,1"}}</script>
 <base href="/x/"><meta http-equiv="refresh" content="5">
 </head><body style="background:url(b.png)">
 <img src="i.png" srcset="s1.png 1x, s2.png 2x">

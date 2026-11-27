@@ -204,7 +204,7 @@ CCRC_DOCTOR_CHECKS=(
   caddy
   caddyfile
   cert
-  name
+  name artifacts   # one line, as `flock timeout`: _check_artifacts follows _check_name
   disk box-settings carry-copies   # one line, as `flock timeout`: _check_box-settings and then _check_carry-copies are at the END of this file
   wrappers
   skills
@@ -2390,22 +2390,31 @@ _check_name() {
       "install it (glibc's libc-bin ships it) — until then check from any box: getent hosts $domain"
     return 2
   fi
-  local out rc
-  out="$(getent hosts "$domain" 2>/dev/null)"; rc=$?
-  if [ "$rc" -ne 0 ] || [ -z "$out" ]; then
-    # The updater remedy in this box's own vocabulary: on macOS the
-    # .timer/.service pair collapses into ONE launchd job (`_exp_ddns_units`'
-    # Darwin arm), so the systemd pair would be two dead ends there.
-    local _upd_hint
-    if [ "${CCD_OS:-linux}" = darwin ]; then
-      _upd_hint="check the updater job: $(_svc_status_hint "$CCRC_DDNS_UNIT.service") — one launchd job stands in for the .timer/.service pair"
-    else
-      _upd_hint="check the updater: systemctl --user status $CCRC_DDNS_UNIT.timer (and journalctl --user -u $CCRC_DDNS_UNIT.service -n 20)"
+  # CCRC_DDNS_DOMAIN may be `<console host>,<artifact host>,<content host>`: every host must resolve, the
+  # first (the console's) is the one compared with this box's addresses below.
+  local -a hosts=()
+  local out="" rc o h more=""
+  IFS=, read -ra hosts <<< "$domain"
+  for h in "${hosts[@]}"; do
+    [ -n "$h" ] || continue   # a hand-edited `a,,b` names no third host
+    o="$(getent hosts "$h" 2>/dev/null)"; rc=$?
+    if [ "$rc" -ne 0 ] || [ -z "$o" ]; then
+      # The updater remedy in this box's own vocabulary: on macOS the
+      # .timer/.service pair collapses into ONE launchd job (`_exp_ddns_units`'
+      # Darwin arm), so the systemd pair would be two dead ends there.
+      local _upd_hint
+      if [ "${CCD_OS:-linux}" = darwin ]; then
+        _upd_hint="check the updater job: $(_svc_status_hint "$CCRC_DDNS_UNIT.service") — one launchd job stands in for the .timer/.service pair"
+      else
+        _upd_hint="check the updater: systemctl --user status $CCRC_DDNS_UNIT.timer (and journalctl --user -u $CCRC_DDNS_UNIT.service -n 20)"
+      fi
+      _dr_fail name "$h does not resolve — the duckdns update has not landed (a record created moments ago, or a timer that never fired)" \
+        "$_upd_hint; a fresh record can also just need a minute"
+      return 1
     fi
-    _dr_fail name "$domain does not resolve — the duckdns update has not landed (a record created moments ago, or a timer that never fired)" \
-      "$_upd_hint; a fresh record can also just need a minute"
-    return 1
-  fi
+    if [ -z "$out" ]; then out="$o" domain="$h"; else more+="${more:+, }$h"; fi
+  done
+  [ -z "$more" ] || more=" (and $more resolve)"
   # First field of every answer line is an address the name resolves to.
   local -a resolved=()
   local line ip
@@ -2428,16 +2437,133 @@ _check_name() {
   local r
   for r in ${resolved[@]+"${resolved[@]}"}; do
     if _dr_wr_has "$r" ${boxips[@]+"${boxips[@]}"}; then
-      _dr_pass name "$domain resolves to this box ($r)"
+      _dr_pass name "$domain resolves to this box ($r)$more"
       return 0
     fi
   done
   if [ "${#globals[@]}" -gt 0 ]; then
-    _dr_warn name "$domain resolves to ${resolved[0]}, but this box's own public address is ${globals[0]} — DNS propagation lag, or the last duckdns update has not landed yet" \
+    _dr_warn name "$domain resolves to ${resolved[0]}, but this box's own public address is ${globals[0]} — DNS propagation lag, or the last duckdns update has not landed yet$more" \
       "give it a few minutes and re-run; if it persists, check the updater: systemctl --user status $CCRC_DDNS_UNIT.timer"
     return 2
   fi
-  _dr_pass name "$domain resolves (${resolved[0]}); this box's own public address is not discoverable from inside (NAT, or no global address on an interface), so where the record points was not compared"
+  _dr_pass name "$domain resolves (${resolved[0]}); this box's own public address is not discoverable from inside (NAT, or no global address on an interface), so where the record points was not compared$more"
+}
+
+# ── artifacts: the second and third names, their Caddyfile block and their listener ──
+# Config is judged by `_art_config` (ccrc), the one the server's own decision is mirrored in; the Caddyfile is read as
+# text (pure bash); the listener is asked on loopback once per name as Host, as its host fence answers 421 to any
+# other. The keys are read from the exposure file, the one file the expose arm writes them to (the plan's reader), not
+# through `_box_unit_env`: a set hand-placed in ccrc.env reads as unset here. The sentence is the one in server/src/artifacts/routes.ts#ARTIFACT_NOT_FOUND_BODY, pinned by a test.
+_DR_ARTIFACT_FIXED='This host serves ccrc artifacts by private link only.'
+_check_artifacts() {
+  if [ -z "${CCRC_EXPOSURE_FILE:-}" ] || [ -z "${CCRC_CADDYFILE:-}" ] || [ -z "${BOX_ENV_FILE:-}" ] \
+     || ! declare -F _box_env_value >/dev/null 2>&1 || ! declare -F _art_config >/dev/null 2>&1; then
+    _dr_fail artifacts "ccrc's own exposure constants are not loaded, so the artifact names were never checked" \
+      "this is a bug in ccrc, not a fact about your box — _check_artifacts reads CCRC_EXPOSURE_FILE, CCRC_CADDYFILE and BOX_ENV_FILE and calls _box_env_value and _art_config, all declared once in ccrc itself, and this check table was sourced by something that is not ccrc"
+    return 1
+  fi
+  if [ ! -e "$CCRC_EXPOSURE_FILE" ]; then
+    _dr_skip artifacts "no exposure configured (no $CCRC_EXPOSURE_FILE), so this box has no artifact names"
+    return 3
+  fi
+  # A file that stands but is not a readable regular file is never read (a directory makes `read` fail aloud): unmeasured.
+  if [ ! -f "$CCRC_EXPOSURE_FILE" ] || [ ! -r "$CCRC_EXPOSURE_FILE" ]; then
+    _dr_warn artifacts "$CCRC_EXPOSURE_FILE is not a readable regular file, so the artifact names were never read" \
+      "look at what is really there: ls -ld $CCRC_EXPOSURE_FILE"
+    return 2
+  fi
+  local aorigin corigin port cport="" mode f
+  aorigin="$(_box_env_value "$CCRC_EXPOSURE_FILE" CCRC_ARTIFACT_ORIGIN)"
+  corigin="$(_box_env_value "$CCRC_EXPOSURE_FILE" CCRC_ARTIFACT_CONTENT_ORIGIN)"
+  port="$(_box_env_value "$CCRC_EXPOSURE_FILE" CCRC_ARTIFACT_PORT)"
+  mode="$(_box_env_value "$CCRC_EXPOSURE_FILE" CCRC_EXPOSE_MODE)"
+  # The tier never outlives the console's exposure: keys beside an address, or beside a sign-in that is not whole, are
+  # a hand-made state no command writes, and the tier cannot serve there.
+  if [ "$mode" = ip ]; then
+    [ -n "$aorigin$corigin$port" ] || { _dr_skip artifacts "mode ip — an address has no second site, so the artifact tier is off by design (it needs names)"; return 3; }
+    _dr_fail artifacts "artifact keys stand on a box exposed by address, where the artifact tier cannot serve (an address has no second site)" \
+      "ccrc expose ip — a re-run drops them"
+    return 1
+  fi
+  if [ -n "$aorigin$corigin$port" ] && { [ "$(_box_env_value "$CCRC_EXPOSURE_FILE" CCRC_AUTH)" != on ] \
+     || [ -z "$(_box_env_value "$CCRC_EXPOSURE_FILE" CCRC_RP_ID)" ] || [ -z "$(_box_env_value "$CCRC_EXPOSURE_FILE" CCRC_ORIGIN)" ]; }; then
+    _dr_fail artifacts "artifact keys stand while $CCRC_EXPOSURE_FILE does not carry the console's sign-in (CCRC_AUTH=on, CCRC_RP_ID and CCRC_ORIGIN together), so the artifact tier cannot serve" \
+      "ccrc expose duckdns or ccrc expose byo — a re-run writes the sign-in keys and keeps artifact names that still pass"
+    return 1
+  fi
+  # With artifact keys set, ccrc.env (the console's port) and the Caddyfile are measured too; with none, neither matters.
+  for f in "$BOX_ENV_FILE" "$CCRC_CADDYFILE"; do
+    [ -z "$aorigin$corigin$port" ] || [ ! -e "$f" ] || { [ -f "$f" ] && [ -r "$f" ]; } || {
+      _dr_warn artifacts "$f is not a readable regular file, so the artifact tier was never measured against it" \
+        "look at what is really there: ls -ld $f"
+      return 2; }
+  done
+  [ ! -f "$BOX_ENV_FILE" ] || [ ! -r "$BOX_ENV_FILE" ] || cport="$(_box_env_value "$BOX_ENV_FILE" CCRC_PORT)"
+  _art_config "$(_box_env_value "$CCRC_EXPOSURE_FILE" CCRC_ORIGIN)" "${cport:-7788}" "$aorigin" "$corigin" "$port" ""
+  case "$ART_STATE" in
+    on) ;;
+    unset)
+      _dr_skip artifacts "no artifact names set (no CCRC_ARTIFACT_ORIGIN, CCRC_ARTIFACT_CONTENT_ORIGIN or CCRC_ARTIFACT_PORT in $CCRC_EXPOSURE_FILE): ccrc expose artifacts sets them"
+      return 3 ;;
+    by-address)
+      # Reached only with all three keys set (unset and partial answer first): the same hand-made state as mode ip.
+      _dr_fail artifacts "artifact keys stand beside a console reached by address (CCRC_ORIGIN in $CCRC_EXPOSURE_FILE), where the artifact tier cannot serve (an address has no second site)" \
+        "ccrc expose artifacts --off — it removes them"
+      return 1 ;;
+    *)
+      local fix="re-run: ccrc expose artifacts — it writes all three keys together and checks them as the server does"
+      case "$ART_DETAIL" in
+        CCRC_PORT=*) fix="write CCRC_PORT in $BOX_ENV_FILE as digits only (1 to 65535, no leading zero), or remove the line for 7788, then restart: $(_svc_restart_hint ccrc.service)" ;;
+        CCRC_ARTIFACT_PORT=*) fix="ccrc expose artifacts --off, then ccrc expose artifacts — a bare re-run keeps the stored port" ;;
+      esac
+      _dr_fail artifacts "$ART_DETAIL" "$fix"
+      return 1 ;;
+  esac
+  local line="" inblk=0 proxied=0
+  if [ -r "$CCRC_CADDYFILE" ]; then
+    while IFS= read -r line || [ -n "$line" ]; do
+      if [ "$line" = "$ART_HOST, $ART_CONTENT_HOST {" ]; then inblk=1
+      elif [ "$inblk" -eq 1 ]; then
+        [ "$line" != "}" ] || break
+        [ "$line" != "    reverse_proxy 127.0.0.1:$port" ] || proxied=1
+      fi
+    done < "$CCRC_CADDYFILE"
+  fi
+  if [ "$proxied" -ne 1 ]; then
+    _dr_fail artifacts "the generated Caddyfile ($CCRC_CADDYFILE) has no site block for $ART_HOST and $ART_CONTENT_HOST proxying to 127.0.0.1:$port" \
+      "ccrc expose artifacts"
+    return 1
+  fi
+  if ! command -v curl >/dev/null 2>&1; then
+    _dr_warn artifacts "curl is not on PATH, so the artifact listener on 127.0.0.1:$port could not be asked" \
+      "install it: sudo apt install curl — the fleet host's own swap hook already needs it (deploy/notify.sh)"
+    return 2
+  fi
+  local h out rc code body
+  # Both names: a listener started before a name changed fences the new one with 421 while the other still answers.
+  for h in "$ART_HOST" "$ART_CONTENT_HOST"; do
+    rc=0
+    # -q and --noproxy: the operator's ~/.curlrc (a --fail there turns the expected 404 into exit 22) and a proxy stay out
+    out="$(curl -q -s --noproxy '*' --max-time "$CCRC_HEALTH_TIMEOUT" -H "Host: $h" \
+      -w '\n%{http_code}' "http://127.0.0.1:$port/" 2>/dev/null)" || rc=$?
+    if [ "$rc" -eq 7 ]; then
+      _dr_fail artifacts "nothing listens on 127.0.0.1:$port; the server could not take that port at its last start, or has not restarted since ccrc expose artifacts; free the port, then restart the server" \
+        "free 127.0.0.1:$port, then restart the server: $(_svc_restart_hint ccrc.service)"
+      return 1
+    elif [ "$rc" -ne 0 ]; then
+      _dr_fail artifacts "the artifact listener on 127.0.0.1:$port did not answer for $h (curl exited $rc)" \
+        "restart the server: $(_svc_restart_hint ccrc.service)"
+      return 1
+    fi
+    code="${out##*$'\n'}" body="${out%$'\n'*}"
+    if [ "$code" != 404 ] || [[ "$body" != *"$_DR_ARTIFACT_FIXED"* ]]; then
+      body="${body//[[:cntrl:]]/ }"
+      _dr_fail artifacts "the listener on 127.0.0.1:$port answered $code for $h (${body:0:60}), not the artifact tier's fixed 404 page" \
+        "something other than ccrc's artifact listener answers on that port, or the server has not restarted since ccrc expose artifacts set these names: check what listens on 127.0.0.1:$port, then restart the server"
+      return 1
+    fi
+  done
+  _dr_pass artifacts "$ART_HOST and $ART_CONTENT_HOST are set, the Caddyfile routes both to 127.0.0.1:$port, and the listener there answers its fixed page for each"
 }
 
 # ── room on every filesystem the fleet's work lives on ────────────────────

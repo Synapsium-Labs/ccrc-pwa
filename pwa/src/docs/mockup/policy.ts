@@ -75,8 +75,41 @@ export const MOCKUP_MAX_ASSET_BYTES = 5 * 1024 * 1024;
  *  stylesheet at depth d is d + 1, and a reference past this is `unsupported:'css-depth'`. */
 export const MOCKUP_MAX_CSS_DEPTH = 3;
 
-/** What a mockup reference loads as: the element or rule it was found in decides it (base 5.6.3's table). */
-export type MockupAssetKind = 'image' | 'css' | 'script' | 'module' | 'font';
+/** What a mockup reference loads as: the element or rule it was found in decides it (base 5.6.3's table). `fetch` (X2 P6.2,
+ *  spec 4.8) is a sibling a page's script names as a string literal: the fetch shim answers it from the set, and it is never
+ *  written into the page as a `data:` URL. */
+export type MockupAssetKind = 'image' | 'css' | 'script' | 'module' | 'font' | 'fetch';
+
+/** The most bytes of one script the in-walls loader scans for its imports and fetch names (X2 P6.2, spec 4.8), inclusive:
+ *  the class cap, so every script the reader can read is scanned whole. A longer text is not scanned, and what it names is
+ *  "not loaded". `scanScript` is its one reader. */
+export const MOCKUP_SCRIPT_SCAN_BYTES = DOCS_MAX_DOC_BYTES;
+
+/** The most references one script's scan yields, inclusive (X2 P6.2): its static imports, the dynamic imports it cannot
+ *  follow, its bare names and its fetch names together. Past it the first one left out is one `scan-limit` row and the rest
+ *  are dropped, so a script cannot grow the census without bound. Equal to the asset limit's 64 times four. */
+export const MOCKUP_SCRIPT_MAX_REFS = 256;
+
+/** The deepest a module may be imported, inclusive (X2 P6.2): a page's module script is depth 0, a module it imports is 1.
+ *  A reference past it is `unsupported:'module-depth'`. Fetch names found in a module share it. */
+export const MOCKUP_MODULE_MAX_DEPTH = 8;
+
+/** The most entries one import map may hold, inclusive (X2 P6.2): a map over it is refused whole. */
+export const MOCKUP_IMPORT_MAP_MAX_ENTRIES = 256;
+
+/** What a fetched sibling is answered as, by lowered extension (X2 P6.2, spec 4.8): a JSON file, a glTF model and its binary
+ *  buffer; the type is always this table's, never a response's. Kept apart from `MOCKUP_ASSET_MIME`, so the prefixes
+ *  `MOCKUP_MAX_SRCDOC_CHARS`'s derivation counts stay as they were: a fetched file is never a `data:` URL. Its bytes are
+ *  written into the page all the same, as base64 in the fetch shim's table, and each addition is charged against the cap as
+ *  it is made. The derivation counts the budget's bytes once and not the shim's own text (or a module written both as a
+ *  page `src` and as a map entry), so a page within the budget can still pass the cap; with scripts run it is then told so,
+ *  and does not run (`census.ts#loaderUnfit`; corrected in fix round 1 of review 4066, A1). */
+export const MOCKUP_FETCH_MIME: Readonly<Record<string, string>> = {
+  json: 'application/json',
+  glb: 'model/gltf-binary',
+  gltf: 'model/gltf+json',
+  bin: 'application/octet-stream',
+};
 
 /** One row of the asset MIME table: the kinds an extension may serve, and the `data:` MIME it is inlined with. */
 export interface MockupMimeRow {
@@ -104,9 +137,8 @@ export const MOCKUP_ASSET_MIME: Readonly<Record<string, MockupMimeRow>> = {
   otf: { kinds: FONT, mime: 'font/otf' },
 };
 
-/** The MIME table's row for `path`'s final extension (the text after its last `.`, lowered `A-Z` only), or null: no
- *  extension, a dotfile, or an extension outside the table. */
-export function mockupMimeRow(path: string): MockupMimeRow | null {
+/** `path`'s final extension (the text after its last `.`, lowered `A-Z` only), or null: no extension, or a dotfile. */
+function extOf(path: string): string | null {
   const name = path.slice(path.lastIndexOf('/') + 1);
   const dot = name.lastIndexOf('.');
   if (dot <= 0) return null;
@@ -115,7 +147,20 @@ export function mockupMimeRow(path: string): MockupMimeRow | null {
     const c = ch.charCodeAt(0);
     ext += c >= 0x41 && c <= 0x5a ? String.fromCharCode(c + 0x20) : ch;
   }
-  return Object.prototype.hasOwnProperty.call(MOCKUP_ASSET_MIME, ext) ? MOCKUP_ASSET_MIME[ext]! : null;
+  return ext;
+}
+
+/** The MIME table's row for `path`'s final extension (the text after its last `.`, lowered `A-Z` only), or null: no
+ *  extension, a dotfile, or an extension outside the table. */
+export function mockupMimeRow(path: string): MockupMimeRow | null {
+  const ext = extOf(path);
+  return ext !== null && Object.prototype.hasOwnProperty.call(MOCKUP_ASSET_MIME, ext) ? MOCKUP_ASSET_MIME[ext]! : null;
+}
+
+/** The fetch table's type for `path`'s final extension, or null (X2 P6.2). */
+export function mockupFetchMime(path: string): string | null {
+  const ext = extOf(path);
+  return ext !== null && Object.prototype.hasOwnProperty.call(MOCKUP_FETCH_MIME, ext) ? MOCKUP_FETCH_MIME[ext]! : null;
 }
 
 /** The frame's `sandbox` attribute in the static mode: present and empty (base 5.6.5). */
@@ -125,9 +170,11 @@ export const MOCKUP_SANDBOX_STATIC = '';
  *  do not depend on the mode; the sandbox carries it. */
 export const MOCKUP_SANDBOX_SCRIPTED = 'allow-scripts';
 
-/** The base policy a mockup's frame is held to (base 5.6.4), verbatim. `connect-src`, `frame-src`, `worker-src`,
- *  `object-src` and `manifest-src` fall back to `default-src 'none'`; `'self'` never appears, because from a srcdoc it
- *  would mean the console's own origin. */
+/** The base policy a mockup's frame is held to (base 5.6.4), verbatim. `connect-src`, `object-src` and `manifest-src` fall
+ *  back to `default-src 'none'`, and `frame-src` reaches it through `child-src`. `worker-src` does not: under CSP3 it falls
+ *  back through `child-src` to `script-src`, which allows `data:`, so this policy does not refuse a `data:` worker by that
+ *  directive (corrected in fix round 1 of review 4066, A2; a comment only, the policy is unchanged). `'self'` never appears,
+ *  because from a srcdoc it would mean the console's own origin. */
 export const MOCKUP_CSP = "default-src 'none'; script-src 'unsafe-inline' data:; style-src 'unsafe-inline' data:; img-src data: blob:; font-src data:; media-src data: blob:; base-uri 'none'; form-action 'none'";
 
 /** The four directives a confirmed origin is appended to, and no other (base 5.6.4; ruling U2). */

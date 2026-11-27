@@ -22,7 +22,8 @@ recorded by slug.
 - `server/src/coord/overlordBoardRead.ts` (L3, C5): `gatherBoard`, which calls each reader once inside its own try. `goalsFor` and
   `itemsFor` are called once per programme. A throw is `threw`, and a reader that answers it could not read is `read-failed`. A
   reader's own error text stays in the gatherer. An item is cut to its id, kind, state, urgency and title before the composer
-  sees it. Projects come through `listProjects` with the server's own project-walk cache.
+  sees it. Projects come through `listProjectsWalked`, `listProjects`' one body, with the server's own project-walk cache: it
+  answers the walk's own flag (fix round 1) and, since board B3, the folders under the projects root it could not read.
 - `server/src/coord/overlordBoardRoutes.ts` (L4, C5): the door and `boardPortsOf`. The door checks the box token in `onRequest`,
   then the caller's pair, then the Overlord gate with row `board`, then the shared read runner, unfenced (call 1590). The runner
   writes one line: door `board`, scope `fleet`, the count of programmes, outcome `rows`. `boardPortsOf` builds the gatherer's ports
@@ -154,7 +155,9 @@ The ones left:
   `rankUnreadable`, class, WIP, the oldest open wave's age and `oldestOpenUnmeasured`, closed waves, cycle and
   `cycleUnmeasured`, review rounds, the 28-day endings, the time waiting on the operator, `itemsUnmeasured`, `asksUnmeasured`, and
   what blocks). It leaves out the view's later-wave fields: the health word, the forecast's median and 85% dates, spend, the edge
-  list and the critical path. `blocking.edges` is carried as a count, or null when the view did not count it.
+  list and the critical path. It leaves out two fields of the view itself too: its `calibration`, the forecasts' fleet-wide score,
+  a later wave's field like the forecast; and its own `at`, because the board's answer carries its own time. `blocking.edges` is
+  carried as a count, or null when the view did not count it.
 - `board-work-no-last-move-time` (fix round 1): spec Table 5.2a lists a programme's time of last movement. The plan's work row
   is wave buckets, open items and stalls (question 18), so the board does not carry it; adding it later is additive.
 - `board-projects-unmeasured-walk` (fix round 1, F1): the lister's one body is `listProjectsWalked`, which answers the root walk's
@@ -172,7 +175,7 @@ Before: no key for either function. After:
 
 | Decider | Mutants | Killed |
 |---|---|---|
-| `composeBoard` | 54: the plan's four (C1a/C1b/C1c an unratified goal trusted, C2 a coordinator's ratification trusted, C3a/C3b a failed reader read as an empty or measured part), C3c–C3h, C4a–C4d, C5a–C5l, and fix round 1's 24: P1–P15 (each portfolio field: the two flags, each measure, what blocks, a later-wave field riding) and L1–L9 (each latch and condition field, a latch carrying its detail) | 54 |
+| `composeBoard` | 54: the plan's four (C1a/C1b/C1c an unratified goal trusted, C2 a coordinator's ratification trusted, C3a/C3b a failed reader read as an empty or measured part), C2b and C2c (the definition of done and the pin each following the other's verdict), C3c–C3h, C4a–C4d, C5a–C5l, and fix round 1's 24: P1–P15 (each portfolio field: the two flags, each measure, what blocks, a later-wave field riding) and L1–L9 (each latch and condition field, a latch carrying its detail) | 54 |
 | `timersByProgramme` | 6 (the plan's two: T1 the latest due time, T2 another coordinator's timer; T3 a timer's note in the row; T4, T6, T7) | 6 |
 
 T3, "put a timer's note in the part", is on `timersByProgramme`, where the note arrives. One equivalent mutant (a null coordinator

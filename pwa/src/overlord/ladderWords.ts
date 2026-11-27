@@ -107,20 +107,21 @@ export function rungControlOf(
 /** The "taking effect" line (F1, F14; review 3998 F5). Null unless a narrowing door (Pause or a rung lowered) answered a
  *  `narrowing`, present and not null: keyed on that, never on `changed`.
  *
- *  THE RULE: a ladder read speaks of the door's change only if it was ANSWERED AT OR AFTER the moment the door answered
- *  (`doorAnsweredAt`, the console's clock when the door's answer arrived; the read's own `at` is the console's clock when that
- *  read arrived, and a stale read keeps the `at` of its last answer, so a refresh that failed leaves it old). A read that
- *  predates the door says nothing about this change: the door's own narrowing holds the line. Once a read that postdates the
- *  door has a last change, its `lastChange.narrowing` rules: its sentence while `taking-effect`, null once `done`, and null when
- *  it is null (another device changed the rung after this one: this tab's old narrowing must not revive a line). A postdating
- *  read with no last change recorded has no reading of the change, so the door's narrowing holds. A door time that is unknown
- *  (null or missing) trusts no read. */
+ *  THE RULE (home C's carried 4d, in place of review 3998 F5's two device-clock stamps): a ladder read speaks of the door's
+ *  change only if its call was ISSUED AFTER the door answered. The store numbers its ladder calls as it issues them
+ *  (`readSeq`, the number of the call whose answer the read holds; a stale read keeps its last answer's number), and the door
+ *  keeps the number of the newest call issued when its answer arrived (`doorSeq`). A read numbered at or below it was in flight
+ *  or done before the answer, whatever millisecond it landed in, so it says nothing about this change: the door's own narrowing
+ *  holds the line. Once a later read has a last change, its `lastChange.narrowing` rules: its sentence while `taking-effect`,
+ *  null once `done`, and null when it is null (another device changed the rung after this one: this tab's old narrowing must
+ *  not revive a line). A later read with no last change recorded has no reading of the change, so the door's narrowing holds.
+ *  A door number that is unknown (null or missing) trusts no read. */
 export function takingEffectLine(
-  doorNarrowing: NarrowingState | null | undefined, ladder: ReadState<LadderWire>, doorAnsweredAt: number | null | undefined,
+  doorNarrowing: NarrowingState | null | undefined, ladder: ReadState<LadderWire>, readSeq: number, doorSeq: number | null | undefined,
 ): string | null {
   if (doorNarrowing === null || doorNarrowing === undefined) return null;
   const postdates = (ladder.state === 'answered' || ladder.state === 'stale')
-    && typeof doorAnsweredAt === 'number' && ladder.at >= doorAnsweredAt;
+    && typeof doorSeq === 'number' && readSeq > doorSeq;
   const change = postdates ? ladder.value.lastChange : null;
   const reading = change ? change.narrowing : doorNarrowing;
   if (reading === null || reading.state !== 'taking-effect') return null;

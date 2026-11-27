@@ -14,10 +14,14 @@ import { SETTINGS_CARDS, SETTINGS_SCOPE } from '../src/fleet/settingsText';
 import { SettingsDataProvider, useSettingsView } from '../src/screens/settings/SettingsDataProvider';
 import { SettingsScreen } from '../src/screens/settings/SettingsFrame';
 import { useFleetStore } from '../src/stores/fleet';
+import { useOverlordStore } from '../src/stores/overlord';
 import { renderSettings } from './settingsHost';
 import { updatesView } from './settingsViewFixture';
 
 const SRC = path.join(import.meta.dirname, '..', 'src');
+/** The sections drawn while the server does not advertise `overlord-v1`: every one but the Overlord's (home C). These cases run
+ *  without the word, as every server does today; the Overlord's own cases are at the end. */
+const SIX = SETTINGS_SECTIONS.filter((s) => s.id !== 'overlord');
 
 afterEach(() => {
   cleanup();
@@ -52,7 +56,7 @@ describe('the index and the section routes', () => {
     expect(screen.getByRole('heading', { level: 1, name: 'Settings' })).toBeInTheDocument();
     expect(screen.queryByRole('heading', { level: 2 })).toBeNull();
     const links = Array.from(index().querySelectorAll('a[data-section]'));
-    expect(links.map((a) => a.getAttribute('href'))).toEqual(SETTINGS_SECTIONS.map((s) => `/settings/${s.id}`));
+    expect(links.map((a) => a.getAttribute('href'))).toEqual(SIX.map((s) => `/settings/${s.id}`));
     for (const a of links) {
       expect(a).toHaveClass('settings-index-row');
       expect(a.querySelectorAll('svg')).toHaveLength(2);   // the section's icon and the chevron
@@ -91,7 +95,7 @@ describe('the index and the section routes', () => {
         expect(screen.getAllByRole('status', { name: 'Loading' })).toHaveLength(2);
       }),
     };
-    for (const s of SETTINGS_SECTIONS) {
+    for (const s of SIX) {
       renderSettings(s.id);
       expect(screen.getByRole('heading', { level: 1, name: 'Settings' })).toBeInTheDocument();
       expect(screen.getAllByRole('heading', { level: 2 }).map((h) => h.textContent)).toEqual([s.title]);
@@ -130,9 +134,9 @@ const diagnosticRow = (label: string): HTMLElement =>
   within(index()).getByRole('link', { name: new RegExp(`^${label}`) });
 
 describe('the two diagnostics under the six sections (library 1.1 take-up, Task 9)', () => {
-  it('Settings has exactly six sections, Integrations the last (D-8932)', () => {
-    expect(SETTINGS_SECTIONS).toHaveLength(6);
-    expect(SETTINGS_SECTIONS.map((x) => x.id)).toEqual(['updates', 'appearance', 'notifications', 'automation', 'security', 'integrations']);
+  it('Settings has exactly seven sections, Integrations then the Overlord the last (D-8932, Overlord W1 home C)', () => {
+    expect(SETTINGS_SECTIONS).toHaveLength(7);
+    expect(SETTINGS_SECTIONS.map((x) => x.id)).toEqual(['updates', 'appearance', 'notifications', 'automation', 'security', 'integrations', 'overlord']);
   });
 
   it('Reader lab is discoverable after the six ordinary sections', () => {
@@ -248,7 +252,7 @@ describe('the provider: reads made once (spec §4.4)', () => {
       }));
       const reads = pendingReads();
       renderSettings(null);
-      for (const s of SETTINGS_SECTIONS) {
+      for (const s of SIX) {
         act(() => { navigate(`/settings/${s.id}`); });
         expect(screen.getByRole('heading', { level: 2, name: s.title })).toBeInTheDocument();
         act(() => { navigate('/settings'); });
@@ -364,7 +368,7 @@ describe('the move: nothing lost, nothing twice', () => {
     vi.spyOn(api, 'stallWatch').mockReturnValue(new Promise(() => {}));
     vi.spyOn(api, 'collectLane').mockReturnValue(new Promise(() => {}));
     const counts = new Map<string, number>();
-    for (const s of SETTINGS_SECTIONS) {
+    for (const s of SIX) {
       renderSettings(s.id);
       await act(async () => { await new Promise((r) => setTimeout(r, 0)); });
       for (const [name, role] of CONTROLS) {
@@ -379,7 +383,7 @@ describe('the move: nothing lost, nothing twice', () => {
   it('the Stall watch and Temp root collector cards are each on one page only', async () => {
     pendingReads();
     const pages: string[] = [];
-    for (const s of SETTINGS_SECTIONS) {
+    for (const s of SIX) {
       renderSettings(s.id);
       if (screen.queryAllByRole('heading', { name: /^(Stall watch|Temp root collector)$/ }).length > 0) pages.push(s.id);
       for (const h of screen.queryAllByRole('heading', { name: 'Stall watch' })) expect(h.tagName).toBe('H3');
@@ -408,7 +412,7 @@ describe('the cards: scope and purpose, in order (spec §3.3)', () => {
     vi.spyOn(api, 'updates').mockResolvedValue(updatesView());
     vi.spyOn(api, 'stallWatch').mockReturnValue(new Promise(() => {}));
     vi.spyOn(api, 'collectLane').mockReturnValue(new Promise(() => {}));
-    for (const s of SETTINGS_SECTIONS) {
+    for (const s of SIX) {
       renderSettings(s.id);
       await act(async () => { await new Promise((r) => setTimeout(r, 0)); });
       const titles = screen.getAllByRole('heading', { level: 3 });
@@ -429,6 +433,57 @@ describe('the cards: scope and purpose, in order (spec §3.3)', () => {
         expect(h.closest('section')!.getAttribute('aria-labelledby')).toBe(h.id);
       }
       cleanup();
+    }
+  });
+});
+
+// Settings › Overlord (Overlord W1 home C, Task 8; plan question 9): drawn only while the server advertises `overlord-v1`.
+describe('Settings › Overlord, only under overlord-v1', () => {
+  const AT = 1_700_000_000_000;
+  const word = (on: boolean): void => act(() => useOverlordStore.setState({
+    caps: { state: 'answered', value: on ? ['overlord-v1'] : [], at: AT }, designation: { state: 'answered', value: null, at: AT },
+  }));
+  afterEach(() => act(() => useOverlordStore.setState({ caps: { state: 'loading' }, designation: { state: 'loading' } })));
+
+  it('without the word the index lists no Overlord row, and /settings/overlord draws the index', () => {
+    pendingReads();
+    word(false);
+    renderSettings(null);
+    expect(row('overlord')).toBeNull();
+    expect(Array.from(index().querySelectorAll('a[data-section]'))).toHaveLength(6);
+    cleanup();
+    renderSettings('overlord');
+    expect(screen.queryByRole('heading', { level: 2 })).toBeNull();
+    expect(index()).toBeInTheDocument();
+    expect(document.querySelector('[data-settings-card]')).toBeNull();
+  });
+
+  it('while the word is not yet read, nothing of the Overlord\'s is drawn either', () => {
+    pendingReads();
+    renderSettings('overlord');
+    expect(screen.queryByRole('heading', { level: 2 })).toBeNull();
+    expect(row('overlord')).toBeNull();
+  });
+
+  it('with the word the index draws the Overlord last, with its status, and its page draws the six cards with scope and purpose', async () => {
+    pendingReads();
+    word(true);
+    renderSettings(null);
+    expect(Array.from(index().querySelectorAll('a[data-section]')).map((a) => a.getAttribute('data-section'))).toEqual(SETTINGS_SECTIONS.map((s) => s.id));
+    expect(row('overlord').getAttribute('data-command')).toBe('go-settings-overlord');
+    expect(within(row('overlord')).getByText('No Overlord')).toBeInTheDocument();
+    cleanup();
+    renderSettings('overlord');
+    expect(screen.getAllByRole('heading', { level: 2 }).map((h) => h.textContent)).toEqual(['Overlord']);
+    expect(document.title).toBe('Overlord · Settings · ccrc');
+    const titles = screen.getAllByRole('heading', { level: 3 }).map((h) => h.textContent);
+    const C = SETTINGS_CARDS.overlord;
+    expect(titles).toEqual([C.designation.title, C.model.title, C.accountSet.title, C.backstop.title, C.retention.title, C.accounts.title]);
+    for (const h of screen.getAllByRole('heading', { level: 3 })) {
+      const head = h.parentElement!;
+      const scope = [...head.children].find((el) => el !== h && el.tagName === 'P');
+      expect(Object.values(SETTINGS_SCOPE), h.textContent!).toContain(scope!.textContent);
+      expect(head.nextElementSibling!.textContent!.length, h.textContent!).toBeGreaterThan(20);
     }
   });
 });

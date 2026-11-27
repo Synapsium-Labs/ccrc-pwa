@@ -279,6 +279,8 @@ export const NOT_BINDING_SITES: readonly NotBindingSite[] = [
     why: "the designation row's pending session against the session a bind, go-live or fail names: the one row's own columns (Overlord §3.3), no run is read" },
   { file: 'server/src/coord/overlordDesignation.ts', text: 'settle.sessionId === p.sessionId',
     why: "the deadline sweep's settle fact against the designation row's pending session (designation B, `pendingDeadlineOf`): the row's own column and a start report's session, no run is read" },
+  { file: 'server/src/coord/overlordDesignation.ts', text: 'read.sessionId === saw.sessionId',
+    why: "the designation's bound session against the session a forced rebind was offered on (home C, `rebindMovedDetail`): the row's own column and the console's pair, no run is read" },
   { file: 'server/src/coord/overlordDesignation.ts', text: 'read.sessionId !== sessionId',
     why: "the designation's bound session against the session a renewal is for (designation B, `renewalSetOf`): the row's own column, no run is read" },
   { file: 'server/src/coord/overlordDesignationStore.ts', text: 'x !== sessionId',

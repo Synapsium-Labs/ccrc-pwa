@@ -22,6 +22,7 @@ import { MAIL_SUBJECT_MAX_BYTES } from '../../shared/api.js';
 import { briefNotTakenSubject } from '../src/coord/briefwatch.js';
 import { testDeps, withFakeClock } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
+import { boxPane } from './inputBoxPane.js';
 
 const WORKER = 'project-a-quiet-basin';
 const COORD = 'project-a-calm-mesa';
@@ -47,7 +48,7 @@ const liveHarness = (st: Box): Harness => {
     calls.push([...args]);
     if (args[0] === 'has-session') return { ran: true, code: 0, stdout: '', stderr: '' };
     if (args[0] === 'list-panes') return { ran: true, code: 0, stdout: `${PID}\n`, stderr: '' };
-    if (args[0] === 'capture-pane') return { ran: true, code: 0, stdout: `❯ ${st.box}\n`, stderr: '' };
+    if (args[0] === 'capture-pane') return { ran: true, code: 0, stdout: boxPane([st.box]), stderr: '' };
     if (args[0] === 'send-keys') {
       if (args[3] === '-l') st.box += args[5]!;
       else if (args[3] === 'Enter' && st.enterWorks) st.box = '';

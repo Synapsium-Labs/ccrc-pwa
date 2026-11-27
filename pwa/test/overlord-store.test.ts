@@ -295,3 +295,45 @@ describe('the Overlord store', () => {
     stop();
   });
 });
+
+describe('the ladder calls are numbered as they are issued (home C, carried 4d)', () => {
+  it('ladderSeq is the number of the call that answered; a failed call moves the issued count, never ladderSeq', async () => {
+    let fail = false;
+    const { reads } = fakeReads({ ladder: async () => { if (fail) throw new ApiError(503, { ok: false, error: 'unavailable' }); return LADDER; } });
+    const store = createOverlordStore({ reads, now: () => AT });
+    expect(store.getState().ladderSeq).toBe(0);
+    expect(store.getState().ladderIssued()).toBe(0);
+    await store.getState().readAll();
+    expect(store.getState().ladderIssued()).toBe(1);
+    expect(store.getState().ladderSeq).toBe(1);
+    fail = true;
+    await store.getState().refresh();
+    expect(store.getState().ladder.state).toBe('stale');
+    expect(store.getState().ladderIssued()).toBe(2);
+    expect(store.getState().ladderSeq).toBe(1);
+    fail = false;
+    await store.getState().refresh();
+    expect(store.getState().ladderSeq).toBe(3);
+  });
+
+  it('a call issued before another is never numbered above it, whichever answers first', async () => {
+    const resolvers: ((v: LadderWire) => void)[] = [];
+    const { reads } = fakeReads({ ladder: () => new Promise<LadderWire>((r) => { resolvers.push(r); }) });
+    const store = createOverlordStore({ reads, now: () => AT });
+    void store.getState().readAll();
+    await settle();
+    void store.getState().refresh();
+    void store.getState().refresh();
+    await settle();
+    expect(resolvers).toHaveLength(3);
+    expect(store.getState().ladderIssued()).toBe(3);
+    resolvers[2]!(LADDER);
+    await settle();
+    expect(store.getState().ladderSeq).toBe(3);
+    resolvers[1]!(LADDER);
+    resolvers[0]!(LADDER);
+    await settle();
+    // The earlier calls' late answers never overwrite the later one's, so the number stays the later call's.
+    expect(store.getState().ladderSeq).toBe(3);
+  });
+});

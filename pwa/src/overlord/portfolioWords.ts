@@ -41,6 +41,11 @@ export const PORTFOLIO_WORDS = {
   saving: 'Saving…',
   saved: 'Order saved.',
   discard: 'Discard changes',
+  /** `rank-changed`, as the strip says it (home C's carried 4c): the strip has already read the order again by itself, so it
+   *  does not ask the operator to, as the Waiting on you table's sentence (`LEDGER_REFUSAL_TEXT['rank-changed']`) does for a
+   *  screen that has not. That table's sentence keeps its meaning. */
+  rankChanged: 'The order changed elsewhere since this strip read it, so your order was not saved. The strip has read it again: this is the new order.',
+  rankChangedUnread: 'The order changed elsewhere since this strip read it, so your order was not saved. Reading it again failed, so the order shown may be out of date.',
 } as const;
 
 export const CLASS_WORDS: Readonly<Record<ServiceClass, string>> = {

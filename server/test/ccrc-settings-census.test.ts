@@ -209,6 +209,9 @@ const SERVER_SETTINGS: Record<string, string> = {
   CCRC_DDNS_PROVIDER: 'the exposure file\'s DDNS provider, written by `ccrc expose`',
   CCRC_DDNS_DOMAIN: 'the exposure file\'s DDNS domain, written by `ccrc expose`',
   CCRC_CADDY_BIND: 'the exposure file\'s Caddy bind, written by `ccrc expose`',
+  CCRC_ARTIFACT_ORIGIN: 'the exposure file\'s artifact origin, written by `ccrc expose artifacts`',
+  CCRC_ARTIFACT_CONTENT_ORIGIN: 'the exposure file\'s artifact content origin, written by `ccrc expose artifacts`',
+  CCRC_ARTIFACT_PORT: 'the exposure file\'s artifact listener port, written by `ccrc expose artifacts`',
 };
 
 /** The bodies that may hand `_box_env_value`, `_box_unit_env` or `_box_unit_env_shell` a key in a variable. */
@@ -216,7 +219,7 @@ const VAR_KEY_BODIES: Record<string, string> = {
   _box_unit_env: 'the model itself, reading the key its caller named',
   _box_unit_env_shell: 'the macOS model, reading the key its caller named',
   _box_path_for: 'the server\'s path overrides, one key per caller',
-  cmd_expose: 'its `for k in CCRC_ORIGIN CCRC_RP_ID CCRC_AUTH` shadow-key loop',
+  cmd_expose: 'its shadow-key loop over the console\'s three keys and the three artifact keys (`for k in CCRC_ORIGIN CCRC_RP_ID CCRC_AUTH CCRC_ARTIFACT_…`)',
   cmd_auth: 'its `for k in "${AUTH_KEYS[@]}"` loops over the four keys it writes and removes (desktop polish wave 181)',
   _ccrc_knob: 'the one reader of a setting',
 };
