@@ -82,6 +82,14 @@ export function prepStarted(source: PrintSource): boolean {
   return source.kind === 'markdown' ? source.ready : source.kind === 'markdown-parts' ? source.complete && source.parts.length > 0 : true;
 }
 
+/** What the worker is asked to prepare, and what its answer is kept under (review 4116, A2: `usePrint` reads this, so the gate is
+ *  `prepStarted`'s alone): a Markdown text's text, the parts' array itself (a new cut is a new array, and starts again); `null`
+ *  while there is nothing for the worker to prepare (no source, a source drawn at once, or one `prepStarted` holds back). */
+export function prepKeyOf(source: PrintSource | null): string | readonly string[] | null {
+  if (source === null || !fromWorker(source) || !prepStarted(source)) return null;
+  return source.kind === 'markdown' ? source.text : source.kind === 'markdown-parts' ? source.parts : null;
+}
+
 /** The trees of a text or an image leaf, drawn at once; `null` for any other source. */
 export function leafPrepared(source: PrintSource): readonly PrintPart[] | null {
   if (source.kind === 'image') return [{ kind: 'tree', tree: leafPrintTree({ kind: 'image', src: source.src, name: source.name }) }];

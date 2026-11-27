@@ -24,7 +24,7 @@ import { pinFor } from '../src/docs/useDocsVisit';
 import { planImageRef, rasterDataUrl, SVG_DATA_PREFIX } from '../src/docs/DocImage';
 import { createExportAssets, type ExportAssets } from '../src/docs/export/exportAssets';
 import { loadedImageOf } from '../src/docs/print/printImages';
-import { imagesFor, printElementCount, printPlanFor, PRINT_WHOLE_MAX_ELEMENTS } from '../src/docs/print/printPlan';
+import { fromWorker, imagesFor, prepKeyOf, prepStarted, printElementCount, printPlanFor, PRINT_WHOLE_MAX_ELEMENTS } from '../src/docs/print/printPlan';
 import type { PrintSource } from '../src/docs/print/printSource';
 import { docLinkTarget } from '../src/docs/docsLinks';
 import { exportProvenance } from '../src/docs/export/provenance';
@@ -557,6 +557,35 @@ describe('print: the whole-print ceiling (printPlan.PRINT_WHOLE_MAX_ELEMENTS, D-
     expect(printed).toHaveLength(1);
     expect(printed[0]!.startsWith(PRINT_TOO_LONG)).toBe(true);
   }, 90000);
+});
+
+// ---- what the worker is asked to prepare (review 4116, A2: one writer of the prepare gate) --------------------------------------
+
+describe('print: what the worker prepares (printPlan.prepKeyOf, the one gate prepStarted states)', () => {
+  const parts = ['# One\n', '# Two\n'];
+  const sources: readonly (PrintSource | null)[] = [
+    null,
+    { kind: 'markdown', text: '# A\n', ready: false },
+    { kind: 'markdown', text: '# A\n', ready: true },
+    { kind: 'markdown-parts', parts, complete: false, at: 0 },
+    { kind: 'markdown-parts', parts: [], complete: true, at: 0 },
+    { kind: 'markdown-parts', parts, complete: true, at: 1 },
+    { kind: 'text', parts: ['a'], name: 'a.txt', at: 0 },
+    { kind: 'image', src: 'blob:x', name: 'a.png' },
+    { kind: 'download-to-print', cls: 'pdf' },
+  ];
+
+  it('asks the worker exactly when the source is the worker\'s and prepStarted says it can start', () => {
+    for (const s of sources) {
+      const key = prepKeyOf(s);
+      expect(key !== null, JSON.stringify(s)).toBe(s !== null && fromWorker(s) && prepStarted(s));
+    }
+  });
+
+  it('keys a Markdown text by its text and parts by the parts array itself (a new array starts again)', () => {
+    expect(prepKeyOf({ kind: 'markdown', text: '# A\n', ready: true })).toBe('# A\n');
+    expect(prepKeyOf({ kind: 'markdown-parts', parts, complete: true, at: 1 })).toBe(parts);
+  });
 });
 
 // ---- which URL a printed image loads from ---------------------------------------------------------------------------------------

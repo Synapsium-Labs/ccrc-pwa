@@ -6,7 +6,9 @@
 // The cut (X2 P6.1 Step 0b2): with the render job (`pre`, the reader's own) the text is read for the shared library's own block
 // boundaries, window by window, and cut at them as it is read (`cutMarkdownText`, `mdParts.ts`, which holds every decision: what a
 // window's answer is, what a refusal or a throw does, what the line cutter takes). A part is mounted as soon as it is final, while
-// the rest is read: the bar then reads "Part k" with Next for a final part only, and "Part k of n" once the cut is whole. Until
+// the rest is read: the bar then reads "Part k" with Next for a final part only, and "Part k of n" once the cut is whole. A cutter
+// that throws (`onFallback`), or a cut that rejects with anything but an abort, is answered by the line cutter's whole cut, from part
+// 1 and with its own words (the bar and its "continues" note): the page never stays on the preparing line with no answer. Until
 // the first part is final the page says "Preparing the parts of this document (k of n)", k and n in render gates (the blocks read's
 // coverage, and then the pre-pass's, so one unit throughout). A pending fragment waits for the whole cut. With no render job
 // (`pre === null`) the line cutter cuts at once. A new text, or unmounting, aborts the read.
@@ -26,6 +28,7 @@ import { utf8Bytes } from '../../../../shared/utf8';
 import { DOCS_PARSE_BUDGET_MS, DOCS_RENDER_GATE_BYTES } from '../../lib/markdownLimits';
 import type { ReaderRenderOutcome } from '../../lib/readerRenderJob';
 import { DOCS_RANGE_TEXT, fillSentence } from '../docsText';
+import { PartExportBody } from '../exportBody';
 import { NoPrintSource, usePublishPrintSource, type PrintSource } from '../print/printSource';
 import { cutMarkdownText, partForFragment, partHolds, partText, splitMarkdownParts, type MdPart } from './mdParts';
 import { PartContext } from './partContext';
@@ -126,9 +129,31 @@ export function MarkdownParts(p: {
         if (ac.signal.aborted) return;
         setCut((prev) => (prev !== null && prev.text === text && prev.pre === pre ? { ...prev, parts: [...prev.parts, ...more] } : prev));
       },
+      // The block cutter threw: the parts it streamed are void, and the line cutter's whole cut (told whole) replaces them, from part 1.
+      onFallback: (whole) => {
+        if (ac.signal.aborted) return;
+        setCut({ text, pre, parts: whole, complete: true });
+        setIndex(0);
+        setNote(false);
+      },
     }).then(
       (all) => { if (!ac.signal.aborted) setCut({ text, pre, parts: all, complete: true }); },
-      () => { /* an abort: the effect's cleanup already ran */ },
+      () => {
+        // An abort is the effect's own cleanup: nothing to show. Anything else is a cut that failed: the page takes the line cutter's
+        // whole cut as a complete one, so it never stays on "Preparing the parts" with no answer.
+        if (ac.signal.aborted) return;
+        let whole: MdPart[];
+        try {
+          whole = splitMarkdownParts(text, DOCS_RENDER_GATE_BYTES).parts;
+        } catch {
+          // The line cutter threw too: there is nothing left to cut with, so the state stays as it is (whatever parts were streamed,
+          // or the preparing line), and no rejection is left unhandled.
+          return;
+        }
+        setCut({ text, pre, parts: whole, complete: true });
+        setIndex(0);
+        setNote(false);
+      },
     );
     return () => ac.abort();
   }, [p.text, pre]);
@@ -195,6 +220,9 @@ export function MarkdownParts(p: {
   if (pending !== null && pre !== null && (!complete || parts.length > 1)) return preparing(complete ? (done > 0 ? ends[done - 1] ?? 0 : 0) : reading.covered);
   const at = Math.min(index, parts.length - 1);
   const part = parts[at]!;
+  const shown = p.renderPart({ text: partText(p.text, part), index, fragment: placed !== null && placed === fragment ? fragment : null });
+  // Above 2 MiB Export acts on the part on screen (spec 4.3), whatever draws it: the reader frame, or the plain view or tree it falls
+  // back to (review 4116, F1), so every body under it is marked as a part here, where the parts are.
   return (
     <div className="docs-in-parts" data-part={index + 1} data-parts={complete ? parts.length : undefined}>
       <PartBar index={index} count={parts.length} more={!complete} onGo={(to) => { setIndex(to); setNote(false); }} />
@@ -203,7 +231,7 @@ export function MarkdownParts(p: {
       {part.continued && index > 0 && <p className="docs-note">{DOCS_RANGE_TEXT.partContinued}</p>}
       <PartContext.Provider value={{ whole: p.text, part }}>
         <NoPrintSource>
-          {p.renderPart({ text: partText(p.text, part), index, fragment: placed !== null && placed === fragment ? fragment : null })}
+          {overWhole ? <PartExportBody>{shown}</PartExportBody> : shown}
         </NoPrintSource>
       </PartContext.Provider>
     </div>

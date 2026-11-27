@@ -42,7 +42,7 @@ import { pinFor, type DocsVisit } from '../useDocsVisit';
 import { preparePartsPrint, type PrintRender } from './preparePrint';
 import { PrintView } from './PrintView';
 import { loadedImageOf } from './printImages';
-import { bannerFor, imagesFor, imgRefsOf, isNotReady, prepSettled, prepStarted, printLinkTarget, printPlanFor, printProgress, printTotal, type Prepared } from './printPlan';
+import { bannerFor, imagesFor, imgRefsOf, isNotReady, prepKeyOf, prepSettled, prepStarted, printLinkTarget, printPlanFor, printProgress, printTotal, type Prepared } from './printPlan';
 import { clearPrint, mountPrint, unmountPrint } from './printMount';
 import type { PrintSource } from './printSource';
 import { PRINT_WAIT_MS, printOffer } from './printTree';
@@ -94,10 +94,8 @@ function linkContextOf(page: DocsPageLocation | null, tree: DocsTreeOk | null): 
 
 export function usePrint(i: UsePrintInput): PrintControl | null {
   const { source } = i;
-  // What the worker prepared, for the text (or the parts' array) it was asked about; a new one starts again.
-  const prepKey: string | readonly string[] | null = source === null ? null
-    : source.kind === 'markdown' ? (source.ready ? source.text : null)
-      : source.kind === 'markdown-parts' ? (source.complete && source.parts.length > 0 ? source.parts : null) : null;
+  // What the worker prepared, for the text (or the parts' array) it was asked about; a new one starts again. The gate is L1's.
+  const prepKey = prepKeyOf(source);
   const [state, setState] = useState<{ readonly key: string | readonly string[]; readonly prepared: Prepared } | null>(null);
   const prepared: Prepared = state !== null && state.key === prepKey ? state.prepared : NO_PREPARED;
   const latest = useRef(i);

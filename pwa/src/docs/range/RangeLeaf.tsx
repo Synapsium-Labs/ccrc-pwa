@@ -68,8 +68,8 @@ export function RangeLeaf(p: {
   readonly children?: (read: RangeBytes) => ReactNode;
   /** The visit, which owns the one automatic re-list (spec 4.3 item 1) for this page: a refused read is handed to it, and
    *  it answers whether it re-listed, has no re-list left, or the word is none of its business. It also keeps what a finished
-   *  read gave (`rangeRead`) and drops it when a read of the page starts (`rangeDropped`: a visit that keeps no facts, as an
-   *  outside folder's, may omit it). */
+   *  read gave (`rangeRead`) and drops it when a read of the page starts or the leaf goes (`rangeDropped`: a visit that keeps no
+   *  facts, as an outside folder's, may omit it). */
   readonly visit: Pick<DocsVisit, 'rangeFailed' | 'rangeRead' | 'rangeRetry' | 'rangeRelists' | 'rangeWaiting'> & Partial<Pick<DocsVisit, 'rangeDropped'>>;
   /** A leaf with no view reads and saves as it opens (a Download tap already made, as on a version page where the file
    *  route's refusal named the blob), instead of waiting for a tap of its own. The leaf is keyed by its read key, so this
@@ -119,8 +119,9 @@ export function RangeLeaf(p: {
         setState({ s: 'failed', why, stale });
         return;
       }
-      // What the read gave, for the page's head: its identity, the bytes' digest and when its last frame was checked.
-      latest.current.visit.rangeRead({ key: rangeReadKey(target), digest: r.digest, readAt: Date.now() });
+      // What the read gave, for the page's head: its identity, the bytes' digest, the bytes (their text is what Export compares a
+      // body with) and when its last frame was checked.
+      latest.current.visit.rangeRead({ key: rangeReadKey(target), digest: r.digest, readAt: Date.now(), bytes: r.bytes });
       if (save) saveBytes(latest.current.name, r.bytes);
       setState(save && !latest.current.hasView ? { s: 'idle' } : { s: 'done', bytes: r.bytes, digest: r.digest });
     }, () => { if (ac.current === mine) setState({ s: 'failed', why: { kind: 'threw' }, stale: 'other' }); });
@@ -142,6 +143,9 @@ export function RangeLeaf(p: {
     }
     return () => { ac.current?.abort(); ac.current = null; };
   }, [key, verdict, hasView, start]);
+  // The leaf going takes what its read gave with it: the visit keeps the bytes (`rangeRead`), and none outlive the page that read
+  // them. Unmount only: a leaf that stays across a re-list (the same read key) keeps its read, as the visit's facts say.
+  useEffect(() => () => { latest.current.visit.rangeDropped?.(); }, []);
   // A re-list that served this leaf's wait: a leaf with a view reads again with the pin it now has, to show the document;
   // one with none says the file changed and waits for a new tap (one that moved the read key too was remounted, and its
   // mount effect above started it fresh).

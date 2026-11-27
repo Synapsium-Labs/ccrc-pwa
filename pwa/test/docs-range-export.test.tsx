@@ -9,10 +9,13 @@ import { act, cleanup, fireEvent, render, renderHook, screen, waitFor } from '@t
 import { DOCS_MAX_DOC_BYTES, type DocListPin, type DocPin, type DocsTreeOk } from '../../shared/docs';
 import { DocsHead, exportStateFor, type ExportInputs, type ExportState } from '../src/docs/DocsHead';
 import { actsOnPart, openedRangePin, rangePinOf, rangeReadKey } from '../src/docs/range/rangePolicy';
+import { decodeRangeBytes } from '../src/docs/range/rangeText';
+import { RangeLeaf } from '../src/docs/range/RangeLeaf';
 import { MarkdownParts, type PartsPrePass } from '../src/docs/range/MarkdownParts';
-import type { RangeLoader } from '../src/docs/range/readRange';
+import type { RangeLoader, RangeTarget } from '../src/docs/range/readRange';
 import { DOC_NOT_UTF8_NOTE } from '../src/docs/DocMarkdown';
-import { DOCS_RANGE_TEXT } from '../src/docs/docsText';
+import type { ReaderDeps } from '../src/docs/ReaderFrame';
+import { DOCS_RANGE_TEXT, EXPORT_WAIT_TEXT } from '../src/docs/docsText';
 import { answerRenderJob, type ReaderRenderOutcome } from '../src/lib/readerRenderJob';
 import { DocsScreen } from '../src/screens/DocsScreen';
 import { ExportSheet, EXPORT_PART_NOTE, type ExportBuilder } from '../src/docs/ExportSheet';
@@ -42,6 +45,8 @@ const DIGEST = 'ab12cd34ef56'.repeat(5) + 'abcd';
 const READ_AT = Date.UTC(2026, 10, 27, 10, 15, 42);
 const MTIME = '1700000000000000000';
 const enc = new TextEncoder();
+/** The bytes a fixture's range read gave to the visit. */
+const BYTES = enc.encode('hello\n') as Uint8Array<ArrayBuffer>;
 
 /** A stat-pinned draft of `path`, `size` bytes, in a worktree that holds drafts. */
 const statTree = (path: string, size: number): DocsTreeOk => treeOk({
@@ -59,8 +64,9 @@ interface Held {
   readonly ranged: RangeOpened;
 }
 
-/** The leaf a range read of `path` opened: its listing pin, the file slot the visit holds for it and what the read gave. */
-function held(tree: DocsTreeOk, url: string): Held {
+/** The leaf a range read of `path` opened: its listing pin, the file slot the visit holds for it and what the read gave (`text`: the
+ *  text of the bytes it gave, whose bytes the visit holds and which a body is compared with). */
+function held(tree: DocsTreeOk, url: string, text: string = TEXT_READ): Held {
   const page = pageAt(url);
   if (page.kind !== 'path') throw new Error('fixture: not a leaf');
   const pin = pinFor(tree, page);
@@ -68,8 +74,10 @@ function held(tree: DocsTreeOk, url: string): Held {
   const size = pin.kind === 'draft' ? entryDraftSize(tree, page.path) : entryCommittedSize(tree, page.path);
   const file: FileSlot = pin.kind === 'draft' && pin.fp === null
     ? { s: 'stat-pinned', pin, size } : { s: 'too-large', pin, size, cap: DOCS_MAX_DOC_BYTES };
-  return { page, tree, file, ranged: { pin: openedRangePin(pin, DIGEST), readAt: READ_AT } };
+  return { page, tree, file, ranged: { pin: openedRangePin(pin, DIGEST), readAt: READ_AT, bytes: enc.encode(text) as Uint8Array<ArrayBuffer> } };
 }
+/** The text the fixtures' range reads gave: `TEXT`'s own, the whole text on screen. */
+const TEXT_READ = 'the whole text on screen\n';
 const entryDraftSize = (tree: DocsTreeOk, path: string): number => tree.entries.find((e) => e.path === path)?.draft?.size ?? 0;
 const entryCommittedSize = (tree: DocsTreeOk, path: string): number => tree.entries.find((e) => e.path === path)?.committed?.size ?? 0;
 
@@ -87,7 +95,7 @@ const readyOf = (state: ExportState): Extract<ExportState, { s: 'ready' }> => {
   if (state.s !== 'ready') throw new Error('not ready: ' + JSON.stringify(state));
   return state;
 };
-const TEXT: ExportBody = { kind: 'text', text: 'the whole text on screen\n', lang: null };
+const TEXT: ExportBody = { kind: 'text', text: TEXT_READ, lang: null };
 /** What a part of a text above 2 MiB publishes: the body drawn inside the parts says it is one. */
 const PART: ExportBody = { kind: 'text', text: 'the part on screen\n', lang: null, part: true };
 
@@ -147,7 +155,7 @@ describe('export of a document read by range: exportStateFor', () => {
     expect(exportStateFor(h.page, h.tree, h.file, inputs(null, h.ranged))).toEqual({ s: 'waiting', why: 'formatting' });
     expect(exportStateFor(h.page, h.tree, h.file, inputs({ kind: 'reader' }, h.ranged))).toEqual({ s: 'plain-view' });
     // A read opened at another pin (a re-list moved it) is not this page's.
-    const other = { pin: { ...h.ranged.pin, head: 'f'.repeat(40) } as DocPin, readAt: READ_AT };
+    const other = { pin: { ...h.ranged.pin, head: 'f'.repeat(40) } as DocPin, readAt: READ_AT, bytes: enc.encode(TEXT_READ) as Uint8Array<ArrayBuffer> };
     expect(exportStateFor(h.page, h.tree, h.file, inputs(TEXT, other))).toEqual({ s: 'absent' });
     // A class with no view above its cap offers no Export, as before.
     const html = held(committedTree('m.html', DOCS_MAX_DOC_BYTES + 10), '/docs/demo/specs/m.html');
@@ -155,6 +163,101 @@ describe('export of a document read by range: exportStateFor', () => {
     // And a file past the range ceiling is read by nothing: no Export either.
     const huge = held(committedTree('huge.txt', 80 * 1048576), '/docs/demo/specs/huge.txt');
     expect(exportStateFor(huge.page, huge.tree, huge.file, inputs(TEXT, null))).toEqual({ s: 'absent' });
+  });
+
+  it('export: a body that is not the text the read gave, and is no part, waits as the whole-read path waits (review F1)', () => {
+    // A part that fell back to the plain view or the tree publishes the PART's text with no mark: it is not the whole text.
+    const md = held(statTree('a.md', 40), '/docs/demo/specs/a.md?ref=main');
+    const plainOf = (text: string, part?: true): ExportBody => ({ kind: 'plain', text, note: 'a note', ...(part === true ? { part } : {}) });
+    expect(exportStateFor(md.page, md.tree, md.file, inputs(plainOf('one part only\n'), md.ranged))).toEqual({ s: 'waiting', why: 'formatting' });
+    // The text the read gave is shown whole, so it is ready, and no part.
+    const whole = readyOf(exportStateFor(md.page, md.tree, md.file, inputs(plainOf(TEXT_READ), md.ranged)));
+    expect(whole.source).toMatchObject({ kind: 'plain', show: null });
+    expect(whole.part).toBeUndefined();
+    // A body that says it is a part (drawn inside the parts of a text above 2 MiB) is ready as one, whatever its text.
+    expect(readyOf(exportStateFor(md.page, md.tree, md.file, inputs(plainOf('one part only\n', true), md.ranged))).part).toBe(true);
+    // A text leaf: the same comparison.
+    const txt = held(statTree('a.txt', 40), '/docs/demo/specs/a.txt?ref=main');
+    expect(exportStateFor(txt.page, txt.tree, txt.file, inputs({ kind: 'text', text: 'one part only\n', lang: null }, txt.ranged)))
+      .toEqual({ s: 'waiting', why: 'formatting' });
+    expect(readyOf(exportStateFor(txt.page, txt.tree, txt.file, inputs(TEXT, txt.ranged))).part).toBeUndefined();
+    // A read of other bytes (the text moved under a re-list that kept the pin) is not the text on screen either.
+    const moved = held(statTree('a.md', 40), '/docs/demo/specs/a.md?ref=main', 'the new text\n');
+    expect(exportStateFor(moved.page, moved.tree, moved.file, inputs(plainOf(TEXT_READ), moved.ranged))).toEqual({ s: 'waiting', why: 'formatting' });
+  });
+});
+
+describe('decodeRangeBytes: the one decoder of a range read\'s bytes (L1)', () => {
+  const asBytes = (...n: number[]): Uint8Array<ArrayBuffer> => new Uint8Array(n);
+
+  it('range text: UTF-8 bytes decode as UTF-8, text and all', () => {
+    const d = decodeRangeBytes(enc.encode('héllo\n') as Uint8Array<ArrayBuffer>);
+    expect(d).toEqual({ utf8: true, text: 'héllo\n' });
+  });
+
+  it('range text: bytes that are not UTF-8 give the lossy text and utf8 false, never a throw', () => {
+    const d = decodeRangeBytes(asBytes(0x61, 0xff, 0x62));
+    expect(d.utf8).toBe(false);
+    expect(d.text).toBe('a�b');
+  });
+
+  it('range text: the same bytes array gives the same answer, so the leaf and the head hold one string; another array decodes anew', () => {
+    const a = enc.encode('same\n') as Uint8Array<ArrayBuffer>;
+    const first = decodeRangeBytes(a);
+    expect(decodeRangeBytes(a), 'one answer object per array').toBe(first);
+    const b = enc.encode('same\n') as Uint8Array<ArrayBuffer>;
+    expect(decodeRangeBytes(b)).not.toBe(first);
+    expect(decodeRangeBytes(b)).toEqual(first);
+  });
+});
+
+describe('RangeLeaf: what a finished read tells the visit', () => {
+  it('range facts: the read gives the visit its bytes, so the head has the text of the read', async () => {
+    const src = enc.encode('hello\n') as Uint8Array<ArrayBuffer>;
+    const rangeRead = vi.fn();
+    const target: RangeTarget = {
+      project: 'demo', size: src.length, range: { kind: 'blob', sha: BLOB_1 },
+      pin: { kind: 'committed', commit: COMMIT_A, servedRef: 'refs/remotes/origin/main', section: 'specs', path: 'a.md' },
+    };
+    render(
+      <RangeLeaf target={target} cls="markdown" name="a.md" loader={servingLoader(src).loader} visit={{ ...NO_RANGE_VISIT, rangeRead }}>
+        {() => <p>shown</p>}
+      </RangeLeaf>,
+    );
+    await screen.findByText('shown');
+    expect(rangeRead).toHaveBeenCalledTimes(1);
+    const facts = rangeRead.mock.calls[0]![0] as { key: string; digest: string; bytes: Uint8Array<ArrayBuffer> };
+    expect(facts.key).toBe(rangeReadKey(target));
+    expect(decodeRangeBytes(facts.bytes).text, 'the bytes the leaf shows').toBe('hello\n');
+  });
+
+  it('range facts: unmounting the leaf drops the read\'s facts, so the visit holds no bytes past the page (review: the bytes were kept)', async () => {
+    const src = enc.encode('hello\n') as Uint8Array<ArrayBuffer>;
+    const tree = statTree('a.log', src.length);
+    const f = fakeLoaders({ tree: okTree(tree) });
+    const range = servingLoader(src);
+    const seen: { visit: DocsVisit | null } = { visit: null };
+    function Harness(p: { readonly show: boolean }): ReactNode {
+      const visit = useDocsVisit(pageAt('/docs/demo/specs/a.log?ref=main'), f.loaders);
+      seen.visit = visit;
+      const file = visit.file;
+      const e = tree.entries[0]!;
+      if (!p.show || file.s !== 'stat-pinned') return null;
+      const rangePin = rangePinOf(file.pin, e);
+      if (rangePin === null) throw new Error('fixture: no range pin');
+      const target: RangeTarget = { project: 'demo', size: file.size, range: rangePin, pin: file.pin };
+      return (
+        <RangeLeaf key={rangeReadKey(target)} target={target} cls="text" name="a.log" loader={range.loader} visit={visit}>
+          {() => <p>shown</p>}
+        </RangeLeaf>
+      );
+    }
+    const { rerender } = render(<Harness show />);
+    await screen.findByText('shown');
+    await waitFor(() => expect(seen.visit?.rangeOpened, 'the read stands while the leaf is on screen').not.toBeNull());
+    expect(decodeRangeBytes(seen.visit!.rangeOpened!.bytes).text, 'the bytes the leaf read').toBe('hello\n');
+    rerender(<Harness show={false} />);
+    await waitFor(() => expect(seen.visit?.rangeOpened, 'the leaf left: nothing is held').toBeNull());
   });
 });
 
@@ -212,8 +315,8 @@ describe('the truth line: as read at <time> (spec 4.3 "The pin")', () => {
     expect(result.current.rangeOpened, 'nothing read yet').toBeNull();
     const listed = result.current.file;
     if (listed.s !== 'stat-pinned') throw new Error('fixture');
-    act(() => { result.current.rangeRead({ key: readKeyOf(f.treeValue, listed), digest: DIGEST, readAt: READ_AT }); });
-    expect(result.current.rangeOpened).toEqual({ pin: openedRangePin(listed.pin, DIGEST), readAt: READ_AT });
+    act(() => { result.current.rangeRead({ key: readKeyOf(f.treeValue, listed), digest: DIGEST, readAt: READ_AT, bytes: BYTES }); });
+    expect(result.current.rangeOpened).toEqual({ pin: openedRangePin(listed.pin, DIGEST), readAt: READ_AT, bytes: BYTES });
     expect(result.current.rangeOpened?.pin).toMatchObject({ kind: 'draft', fp: DIGEST });
     rerender({ page: pageB });
     await waitFor(() => expect(result.current.file).toMatchObject({ s: 'stat-pinned', pin: { path: 'b.txt' } }));
@@ -225,7 +328,7 @@ describe('the truth line: as read at <time> (spec 4.3 "The pin")', () => {
     expect(result.current.rangeOpened, 'a read starting leaves none').toBeNull();
     // Other bytes (a read whose stat is not the one the page lists) are not the page's read either.
     const other = { ...listed.pin, stat: { size: 99, mtimeNs: MTIME } } as DocListPin;
-    act(() => { result.current.rangeRead({ key: readKeyOf(f.treeValue, { ...listed, pin: other, size: 99 }), digest: 'e'.repeat(64), readAt: READ_AT }); });
+    act(() => { result.current.rangeRead({ key: readKeyOf(f.treeValue, { ...listed, pin: other, size: 99 }), digest: 'e'.repeat(64), readAt: READ_AT, bytes: BYTES }); });
     expect(result.current.rangeOpened, 'other bytes').toBeNull();
   });
 
@@ -238,12 +341,62 @@ describe('the truth line: as read at <time> (spec 4.3 "The pin")', () => {
     await waitFor(() => expect(result.current.file.s).toBe('too-large'));
     const listed = result.current.file;
     if (listed.s !== 'too-large') throw new Error('fixture');
-    act(() => { result.current.rangeRead({ key: readKeyOf(tree, listed), digest: DIGEST, readAt: READ_AT }); });
+    act(() => { result.current.rangeRead({ key: readKeyOf(tree, listed), digest: DIGEST, readAt: READ_AT, bytes: BYTES }); });
     expect(result.current.rangeOpened).not.toBeNull();
     // Same project, section, path, blob and size: the read's key is equal, and only the page differs.
     rerender({ page: pageB });
     await waitFor(() => expect(result.current.file.s).toBe('too-large'));
     expect(result.current.rangeOpened, 'another ref is another page').toBeNull();
+  });
+
+  it('range facts: the visit holds the bytes the read gave, and the head compares a body with their decoding, the lossy one for bytes that are not UTF-8', async () => {
+    const tree = committedTree('big.txt', DOCS_MAX_DOC_BYTES + 10);
+    const f = fakeLoaders({ tree: okTree(tree) });
+    const { result } = renderHook(() => useDocsVisit(pageAt('/docs/demo/specs/big.txt'), f.loaders));
+    await waitFor(() => expect(result.current.file.s).toBe('too-large'));
+    const listed = result.current.file;
+    if (listed.s !== 'too-large') throw new Error('fixture');
+    const bad = new Uint8Array([0x61, 0xff, 0x62]);
+    act(() => { result.current.rangeRead({ key: readKeyOf(tree, listed), digest: DIGEST, readAt: READ_AT, bytes: bad }); });
+    expect(result.current.rangeOpened?.bytes, 'the very array the leaf got').toBe(bad);
+    // The head's comparison: the lossy text of those bytes is what the body must show.
+    const h = held(committedTree('big.txt', DOCS_MAX_DOC_BYTES + 10), '/docs/demo/specs/big.txt');
+    const ranged = { ...h.ranged, bytes: bad };
+    expect(readyOf(exportStateFor(h.page, h.tree, h.file, inputs({ kind: 'text', text: 'a�b', lang: null }, ranged))).part).toBeUndefined();
+    expect(exportStateFor(h.page, h.tree, h.file, inputs(TEXT, ranged))).toEqual({ s: 'waiting', why: 'formatting' });
+  });
+
+  it('range facts: a read of a file that is neither Markdown nor text is never decoded, by the visit or the head (review: 64 MiB of an image)', async () => {
+    // The 1234 bytes are told from any other decode by their length, so a decode of anything else on the page does not count.
+    const blob = new Uint8Array(1234).fill(0x80) as Uint8Array<ArrayBuffer>;
+    const decode = vi.spyOn(TextDecoder.prototype, 'decode');
+    const decodedBlob = (): number => decode.mock.calls.filter(([b]) => (b as Uint8Array | undefined)?.byteLength === blob.length).length;
+    try {
+      // (A raster image is never read through the visit's range facts: `wantedFile` leaves it to the image's own read.)
+      for (const name of ['a.pdf', 'a.bin']) {
+        const tree = statTree(name, blob.length);
+        const f = fakeLoaders({ tree: okTree(tree) });
+        const { result, unmount } = renderHook(() => useDocsVisit(pageAt(`/docs/demo/specs/${name}?ref=main`), f.loaders));
+        await waitFor(() => expect(result.current.file.s).toBe('stat-pinned'));
+        const listed = result.current.file;
+        if (listed.s !== 'stat-pinned') throw new Error('fixture');
+        act(() => { result.current.rangeRead({ key: readKeyOf(tree, listed), digest: DIGEST, readAt: READ_AT, bytes: blob }); });
+        expect(result.current.rangeOpened, name + ': the read stands').not.toBeNull();
+        const page = pageAt(`/docs/demo/specs/${name}?ref=main`);
+        exportStateFor(page, tree, listed, inputs(null, result.current.rangeOpened));
+        expect(decodedBlob(), name + ': nothing decoded the bytes').toBe(0);
+        unmount();
+      }
+      // The control: a text file's bytes are decoded, once, however often the head asks.
+      const h = held(statTree('a.txt', blob.length), '/docs/demo/specs/a.txt?ref=main');
+      const ranged = { ...h.ranged, bytes: blob };
+      exportStateFor(h.page, h.tree, h.file, inputs(TEXT, ranged));
+      exportStateFor(h.page, h.tree, h.file, inputs(TEXT, ranged));
+      expect(decodedBlob(), 'a text file is decoded, once (the memo)').toBeGreaterThan(0);
+      expect(decodedBlob()).toBeLessThanOrEqual(2);
+    } finally {
+      decode.mockRestore();
+    }
   });
 
   describe('a re-list that leaves the bytes alone keeps the page\'s read', () => {
@@ -255,7 +408,7 @@ describe('the truth line: as read at <time> (spec 4.3 "The pin")', () => {
       const listed = result.current.file;
       if (listed.s !== 'too-large') throw new Error('fixture');
       const key = readKeyOf(tree, listed);
-      act(() => { result.current.rangeRead({ key, digest: DIGEST, readAt: READ_AT }); });
+      act(() => { result.current.rangeRead({ key, digest: DIGEST, readAt: READ_AT, bytes: BYTES }); });
       expect(result.current.rangeOpened?.pin).toMatchObject({ kind: 'committed', commit: COMMIT_A });
       // A re-list answers another commit (an unrelated file changed); the blob is the same.
       const moved = treeOk({ commit: COMMIT_B, entries: [...tree.entries, entry('specs', 'other.md')] });
@@ -266,8 +419,8 @@ describe('the truth line: as read at <time> (spec 4.3 "The pin")', () => {
       // A read in flight when the re-list lands gives its facts after it, under the same key: they stand too.
       act(() => { result.current.rangeDropped(); });
       expect(result.current.rangeOpened).toBeNull();
-      act(() => { result.current.rangeRead({ key, digest: DIGEST, readAt: READ_AT + 1 }); });
-      expect(result.current.rangeOpened).toMatchObject({ readAt: READ_AT + 1, pin: { commit: COMMIT_B } });
+      act(() => { result.current.rangeRead({ key, digest: DIGEST, readAt: READ_AT + 1, bytes: BYTES }); });
+      expect(result.current.rangeOpened).toMatchObject({ readAt: READ_AT + 1, pin: { commit: COMMIT_B }, bytes: BYTES });
     });
 
     it('range facts: a stat-pinned draft keeps its read when its worktree\'s head moves, and its opened pin names the new head', async () => {
@@ -277,7 +430,7 @@ describe('the truth line: as read at <time> (spec 4.3 "The pin")', () => {
       await waitFor(() => expect(result.current.file.s).toBe('stat-pinned'));
       const listed = result.current.file;
       if (listed.s !== 'stat-pinned') throw new Error('fixture');
-      act(() => { result.current.rangeRead({ key: readKeyOf(tree, listed), digest: DIGEST, readAt: READ_AT }); });
+      act(() => { result.current.rangeRead({ key: readKeyOf(tree, listed), digest: DIGEST, readAt: READ_AT, bytes: BYTES }); });
       expect(result.current.rangeOpened?.pin).toMatchObject({ kind: 'draft', head: COMMIT_A, fp: DIGEST });
       const moved = treeOk({ drafts: holder(COMMIT_B), entries: tree.entries });
       f.tree.mockResolvedValue(okTree(moved));
@@ -483,6 +636,87 @@ describe('a document read by range, on the Docs screen', () => {
     await screen.findByRole('button', { name: /^Save / });
     expect(screen.queryByText(EXPORT_PART_NOTE), 'the whole file is exported: nothing is a part').toBeNull();
   }, 60000);
+});
+
+// Review F1 (spec 4.3): with the reader on, a document read by range above the render gate is shown one reader frame per part. A
+// frame that falls back (a render job that refuses) draws the plain view of the PART, which publishes the part's text. At 2 MiB or
+// less Export acts on the whole text, so a part is not its text: Export waits, as the whole-read path waits for a body that is not
+// the text. Above 2 MiB the part on screen is the export, marked as one, and the sheet says so.
+describe('a document read by range, on the Docs screen, with the reader on and a part that falls back', () => {
+  /** A reader whose render job refuses: the frame falls back to the plain view (`worker-unavailable`), and the cut is the line cutter's. */
+  const refusing = (): ReaderDeps => ({
+    render: vi.fn(async () => ({ kind: 'worker-unavailable' })), mount: vi.fn(), images: vi.fn(),
+  }) as unknown as ReaderDeps;
+  const line = (i: number): string => `Paragraph number ${String(i).padStart(6, '0')} of the document\n\n`;
+  const markdownOf = (min: number): string => {
+    let text = '';
+    for (let i = 0; text.length <= min; i += 1) text += line(i);
+    return text;
+  };
+  /** Parses each text alone and records it; the first line names what was parsed, so the export's title says which text it was. */
+  const recording = (sources: string[]): MarkdownParser => async (text) => {
+    sources.push(text);
+    return parseMarkdown('# ' + (text.split('\n')[0] ?? ''), 'docs');
+  };
+  const FIRST = 'Paragraph number 000000 of the document';
+
+  function openWith(url: string, tree: DocsTreeOk, src: Uint8Array<ArrayBuffer>, parser: MarkdownParser) {
+    const f = fakeLoaders({ tree: okTree(tree) });
+    const s = servingLoader(src);
+    const reader = refusing();
+    navigate(url);
+    function Screen(): ReactNode {
+      const { path, search } = useLocation();
+      return (
+        <HighlighterContext value={inThreadContext(inThreadHighlighter())}>
+          <DocsScreen path={path} search={search} loaders={{ ...f.loaders, range: s.loader }} parser={parser} reader={reader} />
+        </HighlighterContext>
+      );
+    }
+    return { reader, ...render(<Screen />) };
+  }
+  const exportButton = (): HTMLButtonElement => screen.getByRole('button', { name: /^Export/ }) as HTMLButtonElement;
+  const settle = (): Promise<void> => act(async () => { await new Promise((r) => setTimeout(r, 60)); });
+
+  it('export: a fallen-back part of a text read by range up to 2 MiB is not the whole text, so Export waits, never exporting the part as the file', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const src = enc.encode(markdownOf(600 * 1024)) as Uint8Array<ArrayBuffer>;
+      expect(actsOnPart(new TextDecoder().decode(src)), 'a text the page exports whole').toBe(false);
+      const sources: string[] = [];
+      const { reader } = openWith('/docs/demo/specs/mid.md?ref=main', statTree('mid.md', src.length), src, recording(sources));
+      await waitFor(() => expect(sources.length).toBeGreaterThan(0), { timeout: 30000 });
+      // The part's tree is on screen: the frame fell back and the plain view parsed the part.
+      await waitFor(() => expect(screen.getByRole('heading', { name: FIRST })).toBeTruthy());
+      expect(reader.render, 'the reader was asked, and refused').toHaveBeenCalled();
+      for (const s of sources) expect(enc.encode(s).length, 'a part, not the whole text').toBeLessThanOrEqual(DOCS_RENDER_GATE_BYTES);
+      await settle();
+      await settle();
+      expect(exportButton().disabled, 'the part is not the whole text: Export waits').toBe(true);
+      expect(exportButton().getAttribute('aria-label')).toContain(EXPORT_WAIT_TEXT.formatting);
+      expect(built, 'nothing was built').toEqual([]);
+    } finally {
+      vi.restoreAllMocks();
+    }
+  }, 90000);
+
+  it('export: a fallen-back part of a text read by range above 2 MiB exports as the part on screen, and the sheet says so', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const src = enc.encode(markdownOf(DOCS_MAX_DOC_BYTES + 4096)) as Uint8Array<ArrayBuffer>;
+      expect(actsOnPart(new TextDecoder().decode(src)), 'a text the page shows in parts').toBe(true);
+      const sources: string[] = [];
+      openWith('/docs/demo/specs/big.md?ref=main', statTree('big.md', src.length), src, recording(sources));
+      await waitFor(() => expect(sources.length).toBeGreaterThan(0), { timeout: 60000 });
+      await waitFor(() => expect(screen.getByRole('heading', { name: FIRST })).toBeTruthy(), { timeout: 30000 });
+      await waitFor(() => expect(exportButton().disabled, 'the part on screen is the export').toBe(false), { timeout: 10000 });
+      fireEvent.click(exportButton());
+      await screen.findByText(EXPORT_PART_NOTE);
+      expect((built.at(-1) as { title: string }).title).toBe(FIRST);
+    } finally {
+      vi.restoreAllMocks();
+    }
+  }, 120000);
 });
 
 describe('MarkdownParts: the plain view keeps the reader\'s part', () => {

@@ -54,6 +54,7 @@ import { showBytes } from './objectUrls';
 import type { ExportBody } from './exportBody';
 import type { ExportAssets } from './export/exportAssets';
 import type { HighlightStore } from '../lib/highlightStore';
+import { decodeRangeBytes } from './range/rangeText';
 import { pinCommit, pinFor, samePin, type DocsVisit, type FileSlot, type Freshness, type RangeOpened } from './useDocsVisit';
 import { oneBarTools, type ReaderCommand } from './reader/policy';
 import { READER_MODE_TEXT } from './reader/readerModeWords';
@@ -294,10 +295,16 @@ function htmlExportState(b: ExportBody | null, text: string, pin: DocPin, show: 
   return exportWaits('preparing');
 }
 
+/** Whether a body says it is one part of a text above 2 MiB (`part`, set by whatever draws it inside the parts). */
+function isPartBody(b: ExportBody): boolean {
+  return (b.kind === 'tree' || b.kind === 'plain' || b.kind === 'text') && b.part === true;
+}
+
 /** What a Markdown or text body published says to Export, once the leaf's pin is settled. `shows`: whether a body's text is
- *  what the page shows (the whole text, or, for a document read by range, whatever the body published). `show`: the file answer the
- *  leaf shows, `null` for a document read by range. What is ready is the part on screen when the body says it is one (`part`,
- *  set by the body drawn inside the parts), and the leaf that shows no text (`none`) has no Export. */
+ *  what the page shows: the whole text the page read (a file read whole, or a document read by range: the text of the bytes
+ *  that read gave). `show`: the file answer the leaf shows, `null` for a document read by range. What is ready is the part on
+ *  screen when the body says it is one (`part`, set by the body drawn inside the parts; its text is the part's, so `shows`
+ *  does not ask), and the leaf that shows no text (`none`) has no Export. */
 function bodyExportState(
   cls: DocContentClass, b: ExportBody | null, shows: (text: string) => boolean, pin: DocPin, show: DocsShowOk | null, x: ExportInputs,
 ): ExportState {
@@ -305,13 +312,13 @@ function bodyExportState(
   if (b.kind === 'none') return EXPORT_ABSENT;
   if (cls === 'markdown' && b.kind === 'reader') return { s: 'plain-view' };
   if (cls === 'markdown' && b.kind === 'gate') return exportWaits('gate');
-  const part = (b.kind === 'tree' || b.kind === 'plain' || b.kind === 'text') && b.part === true;
+  const part = isPartBody(b);
   const ready = (source: ExportSource): ExportState => (part ? { s: 'ready', source, part: true } : { s: 'ready', source });
-  if (b.kind === 'plain' && shows(b.text)) return ready({ kind: 'plain', pin, show, body: b });
-  if (cls === 'markdown' && b.kind === 'tree' && shows(b.text)) {
+  if (b.kind === 'plain' && (part || shows(b.text))) return ready({ kind: 'plain', pin, show, body: b });
+  if (cls === 'markdown' && b.kind === 'tree' && (part || shows(b.text))) {
     return x.store === null || !x.settled ? exportWaits('highlighting') : ready({ kind: 'tree', pin, show, body: b, store: x.store });
   }
-  if (cls === 'text' && b.kind === 'text' && shows(b.text)) {
+  if (cls === 'text' && b.kind === 'text' && (part || shows(b.text))) {
     if (b.lang === null) return ready({ kind: 'text', pin, show, body: b, store: null });
     return x.store === null || !x.settled ? exportWaits('highlighting') : ready({ kind: 'text', pin, show, body: b, store: x.store });
   }
@@ -320,14 +327,18 @@ function bodyExportState(
 
 /** Export of a document read by range (X2 P6.1 Step 0c; spec 4.3 "The pin", "Markdown in parts"): the leaf's file slot is `stat-pinned`
  *  or `too-large`, and the bytes it shows are the part on screen under the OPENED pin the read gave (`x.ranged`), so there is no
- *  whole text to compare the body with and no answer to take `show` from. Only a class with a view above its cap (Markdown, text)
- *  has one. A read that has given no bytes (in progress, cancelled, failed, past the range ceiling) leaves nothing to export, so
- *  there is no Export, as there is none for any file slot that settled with no bytes (refinement (k)). */
+ *  answer to take `show` from. The body is compared with the text of the bytes the read gave, as a whole read's is with its
+ *  answer's: a part that fell back to the plain view, or the tree, of its own text is no such body, so Export waits for the one
+ *  that is. The bytes are decoded here, after the class check and through the leaf's own memoised decoder (the leaf decoded the
+ *  same array to show them), so a read of an image, a PDF or any other download is never decoded. A body that says it is a part
+ *  (a text above 2 MiB, shown in parts: `isPartBody`) is the part on screen, and is ready as one. Only a class with a view above its cap (Markdown, text) has one. A read that has given no bytes (in progress, cancelled,
+ *  failed, past the range ceiling) leaves nothing to export, so there is no Export, as there is none for any file slot that settled
+ *  with no bytes (refinement (k)). */
 function rangeExportState(cls: DocContentClass, expected: DocListPin, x: ExportInputs): ExportState {
   if (cls !== 'markdown' && cls !== 'text') return EXPORT_ABSENT;
   const ranged = x.ranged ?? null;
   if (ranged === null || !samePin(ranged.pin, expected)) return EXPORT_ABSENT;
-  return bodyExportState(cls, x.body, () => true, ranged.pin, null, x);
+  return bodyExportState(cls, x.body, (t) => t === decodeRangeBytes(ranged.bytes).text, ranged.pin, null, x);
 }
 
 export function exportStateFor(page: DocsPageLocation, tree: DocsTreeOk, file: FileSlot, x: ExportInputs): ExportState {

@@ -19,6 +19,7 @@ import { DOCS_RENDER_GATE_BYTES } from '../lib/markdownLimits';
 import { MarkdownParts } from './range/MarkdownParts';
 import { RangeImage, RangeLeaf, rangeReadKey, type RangeBytes } from './range/RangeLeaf';
 import { actsOnPart, openedRangePin, rangeOfTooLarge, rangePinOf } from './range/rangePolicy';
+import { decodeRangeBytes } from './range/rangeText';
 import type { RangeLoader } from './range/readRange';
 import { SourceParts } from './range/SourceParts';
 import { CodeBlock, PreHighlightContext } from '../lib/markdown';
@@ -425,16 +426,6 @@ function MarkdownBody(p: {
 
 /** `rangePolicy.ts`'s, which the visit reads too; still named here for the callers that import it from the leaf. */
 export { openedRangePin };
-
-/** The bytes a range read gave, decoded as UTF-8. `utf8: false` carries the lossy decoding, for the plain view with its
- *  note (spec 4.4's not-UTF-8 row); a file that is not UTF-8 is never parsed. */
-function decodeRangeBytes(bytes: Uint8Array<ArrayBuffer>): { utf8: boolean; text: string } {
-  try {
-    return { utf8: true, text: new TextDecoder('utf-8', { fatal: true }).decode(bytes) };
-  } catch {
-    return { utf8: false, text: new TextDecoder('utf-8').decode(bytes) };
-  }
-}
 
 /** The docs-show answer of bytes read by range: their text, size and digest, under the opened pin. `blob`: the blob of the
  *  bytes, when it is not the listing's (a version page's, which the too-large answer named). */

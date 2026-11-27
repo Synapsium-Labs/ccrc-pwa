@@ -142,12 +142,18 @@ export type RangeStale = 'relist' | 'changing' | 'other';
 
 /** What a finished range read tells the visit (`DocsVisit.rangeRead`): the read's identity (`rangeReadKey` of its target: the
  *  project, the place, the range pin and the size, so a moved listing pin over the same bytes is the same read), the snapshot's
- *  digest of the bytes it gave, and when its last frame was checked (Date.now()). */
-export interface RangeReadFacts { readonly key: string; readonly digest: string; readonly readAt: number }
+ *  digest of the bytes it gave, the bytes themselves (`RangeOpened.bytes`; the visit never decodes them) and when its last frame
+ *  was checked (Date.now()). The leaf drops them when it goes (`rangeDropped`), so they are held no longer than the page that read
+ *  them. */
+export interface RangeReadFacts {
+  readonly key: string; readonly digest: string; readonly readAt: number; readonly bytes: Uint8Array<ArrayBuffer>;
+}
 
 /** The page's range read, as the head reads it (`DocsVisit.rangeOpened`): the OPENED pin (a stat-pinned draft's carries the
- *  snapshot's digest as `fp`, X2 P1) and when the bytes were read. */
-export interface RangeOpened { readonly pin: DocPin; readonly readAt: number }
+ *  snapshot's digest as `fp`, X2 P1), when the bytes were read, and the bytes themselves. The head decodes them (`decodeRangeBytes`,
+ *  the leaf's own, memoised per array) only for a class whose body Export compares with their text (Markdown, text): a read of an
+ *  image, a PDF or a download of any type is never decoded. */
+export interface RangeOpened { readonly pin: DocPin; readonly readAt: number; readonly bytes: Uint8Array<ArrayBuffer> }
 
 /** One visit, as the Docs views read it. */
 export interface DocsVisit {
@@ -179,8 +185,8 @@ export interface DocsVisit {
   /** A range read of the current leaf gave its bytes: re-arms the page's one automatic re-list, as an ok file read does, and keeps
    *  its `facts` for this page (`rangeOpened`). */
   rangeRead(facts: RangeReadFacts): void;
-  /** A range read of the page starts, or its leaf opens: what an earlier read gave is no longer shown, so it is dropped (a read
-   *  that is cancelled or fails then leaves none). */
+  /** A range read of the page starts, its leaf opens, or its leaf goes: what an earlier read gave is no longer shown, so it is
+   *  dropped (a read that is cancelled or fails then leaves none, and the bytes are held no longer than the leaf). */
   rangeDropped(): void;
   /** What the range read of the page now open gave, once it finished; `null` has one meaning: no finished read stands for these
    *  bytes (nothing read yet, one in progress, cancelled or failed; another page; or other bytes), or the file slot is neither
@@ -240,8 +246,8 @@ interface Store {
   readonly rangeWaits: Map<string, { readonly treeKey: string; readonly relistAfter: number }>;
   readonly rangeRelists: Map<string, number>;
   /** The last finished range read (`rangeRead`'s facts) and the page (`relistPageKey`) it was made for: one at a time, so a
-   *  read of another page replaces it, a read starting drops it (`rangeDropped`), and it shows only while the page's file slot
-   *  names the same read (same `rangeReadKey`). */
+   *  read of another page replaces it, a read starting or its leaf going drops it (`rangeDropped`), and it shows only while the
+   *  page's file slot names the same read (same `rangeReadKey`). */
   ranged: { readonly page: string; readonly facts: RangeReadFacts } | null;
 }
 
@@ -786,7 +792,7 @@ export function useDocsVisit(page: DocsPageLocation | null, loaders: DocsLoaders
     const entry = findEntry(tree.answer.tree, file.pin.section, file.pin.path);
     const range = entry === undefined ? null : rangePinOf(file.pin, entry);
     if (range !== null && rangeReadKey({ project: page.project, pin: file.pin, range, size: file.size }) === ranged.facts.key) {
-      rangeOpened = { pin: openedRangePin(file.pin, ranged.facts.digest), readAt: ranged.facts.readAt };
+      rangeOpened = { pin: openedRangePin(file.pin, ranged.facts.digest), readAt: ranged.facts.readAt, bytes: ranged.facts.bytes };
     }
   }
 

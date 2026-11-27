@@ -3,7 +3,7 @@
 // (`answerRenderJob` with `blocks: true`), and the judge (`mdPartsJudge.ts`) holds the library's parse of the whole document
 // against each part: no part shows text as code or code as text. The nine residual classes of P1's line cutter (Results,
 // Wave P1, "The cutter's residuals") are cases here, each with its recorded input at its recorded `maxBytes`.
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { utf8Bytes } from '../../shared/utf8';
 import {
   blockWindow, collectMdBlocks, cutMarkdownText, foldBlockWindow, MarkdownCutter, partText, splitMarkdownParts, splitMarkdownPartsAt,
@@ -677,5 +677,126 @@ describe('windows, comments and the cut as a function (review of Step 0b2)', { t
     const ac = new AbortController();
     const reason = new Error('stopped');
     await expect(cutMarkdownText(dense(100), (src, o) => { ac.abort(reason); return job(src, o); }, ac.signal, { maxBytes: 3000, windowBytes: 6000 })).rejects.toBe(reason);
+  });
+});
+
+// ---- Review F2 of Wave P6.1: the fence walk is iterative, and a cutter that throws falls back to the line cutter ---------------
+describe('the fence walk of one list item, and a cutter that throws (review F2)', { timeout: 180000 }, () => {
+  const signal = new AbortController().signal;
+  /** The worker's own job as the console's `pre`. */
+  const job = (src: string, o: { blocks: true }): Promise<ReaderRenderOutcome> =>
+    new Promise((resolve) => { answerRenderJob({ id: 1, kind: 'render', src, blocks: o.blocks }, (r) => { resolve(r.outcome); }); });
+  const dense = (n: number): string => Array.from({ length: n }, (_, i) => `## Section ${i}\n\nLorem ipsum dolor sit amet, consectetur adipiscing elit.\n\n- item ${i}\n- more ${i}\n\n\`\`\`ts\nconst v = ${i};\n\`\`\`\n\n`).join('');
+  /** One top-level list whose single item holds `n` fences. */
+  const many = (n: number): string => '- intro\n' + '\n  ```js\n  z\n  ```\n'.repeat(n);
+
+  it('md parts at blocks: one list item holding 30 000 fences (about 570 KB) is cut at the part size, with no stack overflow and no fallback', async () => {
+    const text = many(30000);
+    expect(utf8Bytes(text), 'the text is above one part').toBeGreaterThan(GATE);
+    const { blocks, tailFrom } = await blocksOf(text);
+    expect(tailFrom, 'the library read the whole text').toBeNull();
+    const probe = { chars: 0 };
+    const t0 = performance.now();
+    const { parts } = splitMarkdownPartsAt(text, GATE, blocks, tailFrom, probe);
+    const ms = performance.now() - t0;
+    console.info(`md parts F2: ${utf8Bytes(text)} bytes, 30 000 fences, ${parts.length} parts, cut in ${ms.toFixed(0)} ms, ${probe.chars} characters examined`);
+    checkCover(text, parts, GATE);
+    expect(parts.length, 'the fences are cut one part each while the rest does not fit, as before the walk was iterative').toBeGreaterThan(2);
+    // Linear work, counted and not timed: every fence step measured what is left of the unit again made it quadratic.
+    expect(probe.chars, 'the walk over 30 000 fences examines each character a few times at most').toBeLessThanOrEqual(16 * text.length);
+    // Through delivery, with the worker's own job: the block cutter itself answers, the line cutter is not told.
+    const told: MdPart[][] = [];
+    const all = await cutMarkdownText(text, job, signal, { onFallback: (p) => { told.push(p); } });
+    expect(told, 'no fallback').toEqual([]);
+    expect(all).toEqual(parts);
+  });
+
+  it('md parts at blocks: the same item at 4 096 bytes is about 29 800 fence steps, each one part, and the walk is a loop (the stack does not grow with them)', async () => {
+    const text = many(30000);
+    const { blocks, tailFrom } = await blocksOf(text);
+    const probe = { chars: 0 };
+    const { parts } = splitMarkdownPartsAt(text, 4096, blocks, tailFrom, probe);
+    checkCover(text, parts, 4096);
+    expect(parts.length, 'one part per fence until the rest fits a part').toBeGreaterThan(29000);
+    expect(probe.chars).toBeLessThanOrEqual(16 * text.length);
+    // The fences' parts are the item's: each reopens the item's marker alone, then the fence.
+    for (const p of parts.slice(1, 50)) expect(p.reopen).toBe('-\n');
+  });
+
+  it('cutMarkdownText: a cutter that throws in a feed gives the line cutter\'s whole cut and the fallback signal, after the parts it had streamed', async () => {
+    const text = dense(200);
+    const feed = MarkdownCutter.prototype.feed;
+    let feeds = 0;
+    const spy = vi.spyOn(MarkdownCutter.prototype, 'feed').mockImplementation(function (this: MarkdownCutter, blocks, frontier) {
+      feeds += 1;
+      if (feeds === 4) throw new RangeError('injected');
+      return feed.call(this, blocks, frontier);
+    });
+    try {
+      const streamed: MdPart[] = [];
+      const told: MdPart[][] = [];
+      const order: string[] = [];
+      const all = await cutMarkdownText(text, job, signal, {
+        maxBytes: 3000, windowBytes: 6000,
+        onParts: (ps) => { order.push('parts'); for (const p of ps) streamed.push(p); },
+        onFallback: (ps) => { order.push('fallback'); told.push(ps); },
+      });
+      expect(streamed.length, 'parts were streamed before the throw').toBeGreaterThan(0);
+      const whole = splitMarkdownParts(text, 3000).parts;
+      expect(all).toEqual(whole);
+      expect(told, 'told once, with the whole cut').toEqual([whole]);
+      expect(order.at(-1), 'the signal comes after the parts it voids').toBe('fallback');
+      expect(order.filter((o) => o === 'fallback').length).toBe(1);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it('cutMarkdownText: a cutter that throws in finish gives the line cutter\'s whole cut and the fallback signal', async () => {
+    const text = dense(200);
+    const spy = vi.spyOn(MarkdownCutter.prototype, 'finish').mockImplementation(() => { throw new RangeError('injected'); });
+    try {
+      const told: MdPart[][] = [];
+      const all = await cutMarkdownText(text, job, signal, { maxBytes: 3000, windowBytes: 6000, onFallback: (ps) => { told.push(ps); } });
+      const whole = splitMarkdownParts(text, 3000).parts;
+      expect(all).toEqual(whole);
+      expect(told).toEqual([whole]);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it('cutMarkdownText: a throw while the signal is aborted is an abort, not a fallback, and rejects with the signal\'s reason', async () => {
+    const text = dense(200);
+    // A reason of its own, so the injected RangeError (what the cutter threw) can never be taken for it.
+    const reason = { sentinel: 'the signal\'s own reason' };
+    const options = (told: MdPart[][]) => ({ maxBytes: 3000, windowBytes: 6000, onFallback: (ps: MdPart[]) => { told.push(ps); } });
+    // In finish.
+    const ac = new AbortController();
+    const finish = vi.spyOn(MarkdownCutter.prototype, 'finish').mockImplementation(() => { ac.abort(reason); throw new RangeError('injected'); });
+    try {
+      const told: MdPart[][] = [];
+      await expect(cutMarkdownText(text, job, ac.signal, options(told))).rejects.toBe(reason);
+      expect(told).toEqual([]);
+    } finally {
+      finish.mockRestore();
+    }
+    // In a feed.
+    const feedAc = new AbortController();
+    const feed = vi.spyOn(MarkdownCutter.prototype, 'feed').mockImplementation(() => { feedAc.abort(reason); throw new RangeError('injected'); });
+    try {
+      const told: MdPart[][] = [];
+      await expect(cutMarkdownText(text, job, feedAc.signal, options(told))).rejects.toBe(reason);
+      expect(told).toEqual([]);
+    } finally {
+      feed.mockRestore();
+    }
+  });
+
+  it('cutMarkdownText: a cut that needs no fallback never tells the signal', async () => {
+    const text = dense(100);
+    const told: MdPart[][] = [];
+    await cutMarkdownText(text, job, signal, { maxBytes: 3000, windowBytes: 6000, onFallback: (ps) => { told.push(ps); } });
+    expect(told).toEqual([]);
   });
 });
