@@ -697,7 +697,7 @@ describe('the forbidden program\'s cost on quote-dense payloads naming worktree 
     const code = fs.readFileSync(__filename, 'utf8').replace(/^\s*\/\*[\s\S]*?\*\//gm, '').replace(/^\s*\/\/.*$/gm, '');
     const unsplit = (s: string): string => s.split('~').join('');
     const count = (text: string, needle: string): number => text.split(needle).length - 1;
-    const flat = (s: string): string => s.replace(/\s+/g, ' ').trim();
+    const flat = (s: string): string => s.replace(/\s+/g, ' ').replace(/\( /g, '(').replace(/ \)/g, ')').trim();
     const body = (title: string, end: string): string => {
       const at = code.indexOf(title);
       expect(at, `the case titled …${title}`).toBeGreaterThan(-1);
