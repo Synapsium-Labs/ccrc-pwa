@@ -1,7 +1,8 @@
 // Settings › Overlord (Overlord W1 home C, Tasks 8 and 9; spec 2026-11-09 §3.4, Table 11.1a, Table 11.1d's Settings row; plan
-// `w1-home.md` Tasks 8 and 9, slug `settings-gains-an-overlord-section`): six cards, each a `Section` with its scope and purpose
+// `w1-home.md` Tasks 8 and 9, slug `settings-gains-an-overlord-section`): nine cards, each a `Section` with its scope and purpose
 // line, in this order: the Overlord (its state, the place's link, Retire), the model class, the account set, the renewal backstop,
-// the response retention, and each account's facts with its hold. Ring L4, context K (a settings screen): it decides nothing.
+// the response retention, each account's facts with its hold, and (Overlord W2 Settings) the decision model's host and its rows,
+// and the private-name list. Ring L4, context K (a settings screen): it decides nothing.
 //
 // DRAWN ONLY UNDER `overlord-v1` (plan question 9): the frame draws Settings' index in its place without the word, and the index
 // lists no Overlord row. A server whose designation read is `absent` (an older one) draws one sentence and no card.
@@ -13,13 +14,16 @@
 // THE CARDS' GATE (plan question 3): the Overlord, the model class and the account set act on the designation and are drawn from
 // the store's read through `overlordGateOf`. The backstop, the retention and the account facts act on their own rows, so they are
 // drawn in every state of the designation but `absent` (slug `independent-cards-draw-without-a-designation`): the account facts
-// in particular are what Start counts, so they must be settable before any Overlord exists.
+// in particular are what Start counts, so they must be settable before any Overlord exists. The decision model's and the
+// private-name list's cards are drawn the same way (W2 Settings, the brief's ruling 3).
 import { useCallback, useState, type ReactNode } from 'react';
 import { ConfirmItsYou } from '../../accounts/ConfirmItsYou';
 import { useStepUp, type StepUpDeps } from '../../accounts/useStepUp';
 import { OVERLORD_SETTINGS_WORDS as W, overlordGateOf } from '../../overlord/overlordSettingsWords';
 import { useOverlordStore } from '../../stores/overlord';
 import { AccountFactsCard } from './AccountFactsCard';
+import { DecisionModelCards } from './DecisionModelCard';
+import { PrivateNamesCard } from './PrivateNamesCard';
 import {
   AccountSetCard, BackstopCard, DesignationCard, ModelCard, RetentionCard, type SectionCtx,
 } from './overlordCards';
@@ -46,6 +50,8 @@ export function OverlordSection({ stepUpDeps = NO_STEP_UP_DEPS }: { readonly ste
       <BackstopCard ctx={ctx} />
       <RetentionCard ctx={ctx} />
       <AccountFactsCard ctx={ctx} />
+      <DecisionModelCards ctx={ctx} />
+      <PrivateNamesCard ctx={ctx} />
     </div>
   );
 }

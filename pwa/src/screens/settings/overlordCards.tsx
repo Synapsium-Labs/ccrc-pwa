@@ -267,21 +267,44 @@ export function useCardRead<T>(call: () => Promise<unknown>, parse: (body: unkno
   return { read, reread, put };
 }
 
-/** A read that failed, or is still loading, with its Read again. */
-function ReadLine({ read, unread, card, reread }: {
+/** A note and the controls that act on it, in one row: a read's failure and its Read again, and (W2 Settings) a held row and its
+ *  Resume, an offered line and its Approve. `data` names the row for its tests. */
+export function NoteRow({ note, status = false, data, children }: {
+  readonly note: string; readonly status?: boolean; readonly data: Readonly<Record<`data-${string}`, string>>; readonly children?: ReactNode;
+}): ReactNode {
+  return (
+    <div className="ovs-actions" {...data}>
+      <p className="ovs-note" {...(status ? { role: 'status' } : {})}>{note}</p>
+      {children}
+    </div>
+  );
+}
+
+/** One labelled field of a card: its label above its control. */
+export function CardField({ label, children }: { readonly label: string; readonly children: ReactNode }): ReactNode {
+  return (
+    <label className="ovs-field">
+      <span>{label}</span>
+      {children}
+    </label>
+  );
+}
+
+/** A read that failed, or is still loading, with its Read again. Shared by every card with its own read (the W2 Settings cards
+ *  included). */
+export function ReadLine({ read, unread, card, reread }: {
   readonly read: ReadState<unknown>; readonly unread: (error: string) => string; readonly card: string; readonly reread: () => void;
 }): ReactNode {
   if (read.state === 'loading') return <p className="ovs-note" role="status">{W.loading}</p>;
   if (read.state !== 'unmeasured' && read.state !== 'stale') return null;
   return (
-    <div className="ovs-actions" data-settings-unread={card}>
-      <p className="ovs-note" role="status">{read.state === 'stale' ? `${unread(read.error)} ${W.stale(read.at)}` : unread(read.error)}</p>
+    <NoteRow note={read.state === 'stale' ? `${unread(read.error)} ${W.stale(read.at)}` : unread(read.error)} status data={{ 'data-settings-unread': card }}>
       <Button variant="ghost" size="fit" onClick={reread}>{W.readAgain}</Button>
-    </div>
+    </NoteRow>
   );
 }
 
-const valueOf = <T,>(r: ReadState<T>): T | null => (r.state === 'answered' || r.state === 'stale' ? r.value : null);
+export const valueOf = <T,>(r: ReadState<T>): T | null => (r.state === 'answered' || r.state === 'stale' ? r.value : null);
 
 // ── The renewal backstop ──
 

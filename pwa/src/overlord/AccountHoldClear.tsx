@@ -16,8 +16,11 @@ import { FACT_WORDS } from './overlordSettingsWords';
 // `onAnswered` hears every answer with what it said: `cleared`, `gone` (no hold stood) or `refused` (anything else, a 401
 // included), so a caller can tell an answer that ended the hold from one that changed nothing (review 4065 F2).
 export type HoldClearOutcome = 'cleared' | 'gone' | 'refused';
-export function AccountHoldClear({ lane, onAnswered, current = true }: {
-  readonly lane: string; readonly onAnswered?: (outcome: HoldClearOutcome) => void; readonly current?: boolean;
+// `onSent` hears the send itself, before any answer, so a caller can keep this control mounted while its Clear is in flight: an
+// answer that lands after another re-read has dropped the lane's hold then lands here and is drawn (W2 Settings, the carried ticket
+// `clear-answer-after-its-control-unmounted`).
+export function AccountHoldClear({ lane, onAnswered, onSent, current = true }: {
+  readonly lane: string; readonly onAnswered?: (outcome: HoldClearOutcome) => void; readonly onSent?: () => void; readonly current?: boolean;
 }): ReactNode {
   const [state, setState] = useState<'ready' | 'busy' | 'cleared' | 'gone'>('ready');
   const [refusal, setRefusal] = useState<string | null>(null);
@@ -29,6 +32,7 @@ export function AccountHoldClear({ lane, onAnswered, current = true }: {
     inFlight.current = true;
     setState('busy');
     setRefusal(null);
+    onSent?.();
     let outcome: HoldClearOutcome = 'refused';
     try {
       await api.clearAccountHold(lane);
