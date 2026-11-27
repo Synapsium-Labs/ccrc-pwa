@@ -27,13 +27,16 @@ import { ArtifactDoorsContext, useArtifacts } from './useArtifacts';
 /** How often the relative times are drawn again: a minute is the finest word they hold. */
 const TICK_MS = 60000;
 
+/** One row's layout, the same for a live row and an unlisted one. */
+const ROW_CLASS = 'grid gap-[var(--sp-1)]';
+
 function RowView(p: {
   readonly row: ArtifactRow; readonly now: number; readonly named: boolean; readonly busy: boolean; readonly onRevoke: () => void;
 }): ReactNode {
   const { row } = p;
   const when = artifactWhen(row, p.now);
   return (
-    <li className="grid gap-[var(--sp-1)]">
+    <li className={ROW_CLASS}>
       <span className="docs-row-name">{artifactPageName(row)}</span>
       {p.named && <span className="docs-row-note">{row.project}</span>}
       <span className="docs-row-note">{fillSentence(ARTIFACT_LIST_TEXT.id, { id: artifactShortId(row) })}</span>
@@ -59,7 +62,7 @@ function UnlistedView(p: {
 }): ReactNode {
   const { known } = p;
   return (
-    <li className="grid gap-[var(--sp-1)]">
+    <li className={ROW_CLASS}>
       <span className="docs-row-name">{artifactPageName(known)}</span>
       {p.named && <span className="docs-row-note">{known.project}</span>}
       <span className="docs-row-note">{fillSentence(ARTIFACT_LIST_TEXT.id, { id: artifactShortId(known) })}</span>
