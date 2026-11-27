@@ -2,7 +2,8 @@
 // pure: the expected table below is spelled out here once, independently of the table it checks, and compared row by row.
 import { describe, expect, it } from 'vitest';
 import {
-  ESCALATE_REASONS, OPEN_REQUEST_STATES, REQUEST_ACTORS, REQUEST_ACTOR_SEQUENCE_KIND, REQUEST_BOUNDS, REQUEST_COLUMNS, REQUEST_MOVES,
+  ESCALATE_REASONS, OPEN_REQUEST_STATES, REQUEST_ACTORS, REQUEST_ACTOR_SEQUENCE_KIND, REQUEST_BOUNDS, REQUEST_CITATION_DETAILS,
+  REQUEST_COLUMNS, REQUEST_MOVES, isRequestCitationDetail,
   REQUEST_MOVE_FIELDS, REQUEST_MOVE_REASONS, REQUEST_MOVE_REASON_MAP, REQUEST_MOVE_REQUIRED_FIELDS, REQUEST_NEXT_MOVE_MS,
   REQUEST_ORIGINS, REQUEST_STATES, REQUEST_TRANSITIONS, ROOT_FOUND_WINDOW_MS, SHORTLIST_MAX, TERMINAL_REQUEST_STATES,
   UNCLOCKED_REQUEST_STATES, isRequestMove, isRequestMoveReason, isRequestState, isTerminalRequestState, reasonsOfMove,
@@ -252,5 +253,15 @@ describe('reasons', () => {
 
   it('ESCALATE_REASONS is the three words of index question 7', () => {
     expect([...ESCALATE_REASONS]).toEqual(['needs-start', 'needs-proposal', 'unnamed-widening']);
+  });
+});
+
+describe('the citation details (plan Table 6)', () => {
+  it('are the seven words, one per refusing row, and the guard takes the map\'s keys only', () => {
+    expect(REQUEST_CITATION_DETAILS).toEqual(['too-many', 'repeated', 'unread', 'absent', 'changed', 'spent', 'not-in-root']);
+    for (const d of REQUEST_CITATION_DETAILS) expect(isRequestCitationDetail(d), d).toBe(true);
+    for (const bad of ['', 'too-large', 'said-not-operator', 'constructor', 'toString', '__proto__', null, undefined, 1]) {
+      expect(isRequestCitationDetail(bad), String(bad)).toBe(false);
+    }
   });
 });

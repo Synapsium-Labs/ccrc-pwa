@@ -9,8 +9,9 @@
 // rule across all the cited ids, so one bad id never hides an earlier rule's refusal of another.
 import {
   OPEN_REQUEST_STATES, REQUEST_BOUNDS, REQUEST_MOVES, REQUEST_MOVE_FIELDS, REQUEST_MOVE_REQUIRED_FIELDS, REQUEST_NEXT_MOVE_MS,
-  ROOT_FOUND_WINDOW_MS, UNCLOCKED_REQUEST_STATES, isRequestMove, reasonsOfMove, requestMoveEntersNeedsYou, requestTransition,
-  type RequestActor, type RequestColumn, type RequestMove, type RequestMoveReason, type RequestState,
+  ROOT_FOUND_WINDOW_MS, UNCLOCKED_REQUEST_STATES, isRequestCitationDetail, isRequestMove, isRequestMoveReason, isRequestState,
+  reasonsOfMove, requestMoveEntersNeedsYou, requestTransition,
+  type RequestActor, type RequestCitationDetail, type RequestColumn, type RequestMove, type RequestMoveReason, type RequestState,
 } from '../../../shared/overlordRequests.js';
 
 // ------------------------------------------------------------------------------------------------------------------ the move
@@ -133,10 +134,16 @@ export function answeredSinceNeedsYou(moves: readonly { readonly move: string; r
  *  its answer kinds here. */
 export const CLOSE_UNOWNED_ACT_KINDS: readonly string[] = ['open-request'];
 
+/** `closeUnownedVerdict`'s answers (RQ12): `allow`, or why not. */
+const CLOSE_UNOWNED_ANSWER_MAP: Record<CloseUnownedAnswer, true> = {
+  allow: true, 'not-received': true, 'has-open-children': true, 'has-acts': true,
+};
+export type CloseUnownedAnswer = 'allow' | 'not-received' | 'has-open-children' | 'has-acts';
+
 /** First match: only a `received` request closes unowned, with no open child and no act on it but those named above. */
 export function closeUnownedVerdict(f: {
   readonly state: RequestState; readonly actKindsOnIt: readonly string[]; readonly openChildren: number;
-}): 'allow' | 'not-received' | 'has-open-children' | 'has-acts' {
+}): CloseUnownedAnswer {
   if (f.state !== 'received') return 'not-received';
   if (f.openChildren > 0) return 'has-open-children';
   if (f.actKindsOnIt.some((k) => !CLOSE_UNOWNED_ACT_KINDS.includes(k))) return 'has-acts';
@@ -152,19 +159,25 @@ export type CitationFact =
   | { readonly read: 'absent' }
   | { readonly read: 'unmeasured'; readonly why: string };
 
+/** A refused citation's word, the door's answer (plan Table 6); the detail beside it is L0's `RequestCitationDetail`. */
+const CITATION_REFUSAL_WORD_MAP: Record<CitationRefusalWord, true> = {
+  'too-large': true, 'bad-request': true, unmeasured: true, 'said-not-operator': true,
+};
+export type CitationRefusalWord = 'too-large' | 'bad-request' | 'unmeasured' | 'said-not-operator';
+
 export type CitationAnswer =
   | { readonly kind: 'ok'; readonly cites: readonly { readonly messageId: number; readonly sha256: string; readonly root: boolean }[] }
   | {
     readonly kind: 'refused';
-    readonly word: 'too-large' | 'bad-request' | 'unmeasured' | 'said-not-operator';
-    readonly detail: 'too-many' | 'repeated' | 'unread' | 'absent' | 'changed' | 'spent' | 'not-in-root';
+    readonly word: CitationRefusalWord;
+    readonly detail: RequestCitationDetail;
     readonly id: number | null;
     readonly why: string | null;
   };
 
 const refused = (
-  word: 'too-large' | 'bad-request' | 'unmeasured' | 'said-not-operator',
-  detail: 'too-many' | 'repeated' | 'unread' | 'absent' | 'changed' | 'spent' | 'not-in-root', id: number | null, why: string | null = null,
+  word: CitationRefusalWord,
+  detail: RequestCitationDetail, id: number | null, why: string | null = null,
 ): CitationAnswer => ({ kind: 'refused', word, detail, id, why });
 
 /** Table 6, rule by rule across every id: the bounds first, so a bad body never waits on a read; an unreadable fact is never an
@@ -206,3 +219,13 @@ export function citationVerdict(c: {
 export function nextRequestId(storeHighest: number | null, journalHighest: number | null): number {
   return Math.max(storeHighest ?? 0, journalHighest ?? 0) + 1;
 }
+
+// ----------------------------------------------------------------------------------------------------------------- the words
+
+/** Every word the request record names as a literal: L0's states, moves, reasons and citation details, and this module's
+ *  refusals, citation words, close answers and act kinds. Derived from those lists, so the coordination directory's
+ *  kebab-token census admits a word only from its one declared home. */
+export const isRequestKebab = (word: string): boolean =>
+  isRequestState(word) || isRequestMove(word) || isRequestMoveReason(word) || isRequestCitationDetail(word)
+  || Object.hasOwn(REQUEST_MOVE_REFUSAL_MAP, word) || Object.hasOwn(CITATION_REFUSAL_WORD_MAP, word)
+  || Object.hasOwn(CLOSE_UNOWNED_ANSWER_MAP, word) || CLOSE_UNOWNED_ACT_KINDS.includes(word);

@@ -165,8 +165,8 @@ const CITE_SET = set(citationVerdictCases, [
   { id: 'Q25 a cite loses its hash', old: 'sha256: fact.sha256,', new: "sha256: ''," },
   { id: 'Q26 the cites come back reversed', old: 'cites: ok.map(', new: 'cites: [...ok].reverse().map(' },
   { id: 'Q27 the first of the cites only', old: 'cites: ok.map(', new: 'cites: ok.slice(0, 1).map(' },
-  { id: 'Q28 a refusal loses its id', old: "const refused = (\n  word: 'too-large' | 'bad-request' | 'unmeasured' | 'said-not-operator',\n  detail: 'too-many' | 'repeated' | 'unread' | 'absent' | 'changed' | 'spent' | 'not-in-root', id: number | null, why: string | null = null,\n): CitationAnswer => ({ kind: 'refused', word, detail, id, why });",
-    new: "const refused = (\n  word: 'too-large' | 'bad-request' | 'unmeasured' | 'said-not-operator',\n  detail: 'too-many' | 'repeated' | 'unread' | 'absent' | 'changed' | 'spent' | 'not-in-root', id: number | null, why: string | null = null,\n): CitationAnswer => ({ kind: 'refused', word, detail, id: null, why });" },
+  { id: 'Q28 a refusal loses its id', old: "): CitationAnswer => ({ kind: 'refused', word, detail, id, why });",
+    new: "): CitationAnswer => ({ kind: 'refused', word, detail, id: null, why });" },
 ]);
 
 const ID_SET = set(nextRequestIdCases, [

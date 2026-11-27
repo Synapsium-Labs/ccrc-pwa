@@ -62,6 +62,10 @@ export interface RequestInsertPlan {
   readonly input: RequestInsertInput; readonly id: number; readonly followUpAt: number | null;
 }
 export type RequestInsertRefusal = 'not-in-transaction' | 'wrong-actor' | 'bad-field' | 'root-taken' | 'parent-not-open' | 'parent-is-child';
+const REQUEST_INSERT_REFUSAL_MAP: Record<RequestInsertRefusal, true> = {
+  'not-in-transaction': true, 'wrong-actor': true, 'bad-field': true, 'root-taken': true, 'parent-not-open': true,
+  'parent-is-child': true,
+};
 
 export interface RequestMoveInput {
   readonly id: number; readonly move: RequestMove; readonly actor: RequestActor; readonly actorId: string; readonly at: number;
@@ -76,6 +80,13 @@ export interface RequestMovePlan {
   readonly followUpAt: number | null; readonly takenFrom: string | null;
 }
 export type RequestMovePlanRefusal = 'not-in-transaction' | 'not-found' | 'stale-revision' | 'bad-field' | RequestMoveRefusal;
+/** The move plan's own refusals; the rest are the decider's (`RequestMoveRefusal`). */
+const REQUEST_MOVE_PLAN_OWN_REFUSAL_MAP: Record<Exclude<RequestMovePlanRefusal, RequestMoveRefusal>, true> = {
+  'not-in-transaction': true, 'not-found': true, 'stale-revision': true, 'bad-field': true,
+};
+/** The store's refusal words, from the two lists above: the coordination directory's kebab-token census admits them here. */
+export const isRequestStoreKebab = (word: string): boolean =>
+  Object.hasOwn(REQUEST_INSERT_REFUSAL_MAP, word) || Object.hasOwn(REQUEST_MOVE_PLAN_OWN_REFUSAL_MAP, word);
 
 const errText = (e: unknown): string => (e instanceof Error ? e.message : String(e));
 const inTx = (db: DatabaseSync): boolean => { try { return db.isTransaction; } catch { return false; } };

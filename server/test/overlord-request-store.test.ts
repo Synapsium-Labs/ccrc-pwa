@@ -8,8 +8,8 @@ import { copyFileSync, mkdirSync } from 'node:fs';
 import { openCoordDb } from '../src/coord/db.js';
 import { tx } from '../src/coord/tx.js';
 import {
-  applyRequestInsertInTx, applyRequestMoveInTx, highestRequestId, movesOf, openRequests, planRequestInsertInTx, planRequestMoveInTx,
-  requestById, type RequestInsertInput, type RequestMoveInput,
+  applyRequestInsertInTx, applyRequestMoveInTx, highestRequestId, isRequestStoreKebab, movesOf, openRequests, planRequestInsertInTx,
+  planRequestMoveInTx, requestById, type RequestInsertInput, type RequestMoveInput,
 } from '../src/coord/overlordRequestStore.js';
 import { nextRequestId } from '../src/coord/overlordRequests.js';
 import { REQUEST_ACTOR_SEQUENCE_KIND, REQUEST_BOUNDS, REQUEST_NEXT_MOVE_MS, type RequestActor, type RequestMove } from '../../shared/overlordRequests.js';
@@ -638,5 +638,13 @@ describe('no operator text', () => {
     // Every string is a word, a slug, an id, a hash, a JSON list or one of the two strings passed in.
     const known = /^(\[\]|[a-z-]+|[a-z-]+:[a-z-]+|acct:operator-a|overlord-a|c{64}|the overlord (line|note))$/;
     expect([...strings].filter((s) => !known.test(s))).toEqual([]);
+  });
+});
+
+describe('isRequestStoreKebab, the census guard over the store\'s refusals', () => {
+  it('takes the insert plan\'s and the move plan\'s own refusals, and not the decider\'s', () => {
+    for (const w of ['not-in-transaction', 'wrong-actor', 'bad-field', 'root-taken', 'parent-not-open', 'parent-is-child',
+      'not-found', 'stale-revision']) expect(isRequestStoreKebab(w), w).toBe(true);
+    for (const w of ['', 'not-taken-from', 'needs-you', 'constructor', '__proto__']) expect(isRequestStoreKebab(w), w).toBe(false);
   });
 });

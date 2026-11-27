@@ -83,6 +83,8 @@ import { isInvariantKebab } from '../src/coord/invariants.js';
 import { isSequenceDoorKebab } from '../src/coord/overlordSequenceDoor.js';
 import { isBoardKebab } from '../src/coord/overlordBoard.js';
 import { isReadinessKebab } from '../src/coord/overlordReadiness.js';
+import { isRequestKebab } from '../src/coord/overlordRequests.js';
+import { isRequestStoreKebab } from '../src/coord/overlordRequestStore.js';
 import { isOverlapsKebab } from '../src/coord/overlaps.js';
 import { isDoneTestKebab } from '../src/coord/doneTests.js';
 import { isSequenceStampKebab } from '../src/coord/overlordSequenceStore.js';
@@ -1404,8 +1406,13 @@ describe('the rejection table is total, in both directions', () => {
         // switchboard's own list and are spelled as literals nowhere in the board; the guard admits them beside the settings names.
         // Each rides a 200's part, never a refusal. Admitted through the module's guard, derived from the wire's and the
         // switchboard's lists, never NOT_CODES.
-        || isBoardKebab(tok),
-        `${tok} is not a declared MailRejectCode, RunRefuseCode, LifecycleGapReason, ClaimRefuseCode, SessionLifecycle, ReclaimRefuseCode, AskRefuseCode, RunRouteRefuseCode, SetAccountPoolsRefuseCode, UpdateStoreRefuseCode, child-reclaim word, stall-watch word, expiry word, stall-watch settings word, dead-coordinator word, temp-root collector word, delegation word, collector switch word, collector-switch route refusal, hibernation word, drift kind, notice mode, archive gate, stale-archive outcome, drift lane tag, stale-sibling claimant state, coord-blocked gate reason, question-sweep word, dead-dispatch word, automatic-roll word, item-move refusal, run stuck word, review-rounds refusal, run-close word, shadow-lane word, wake-gate word, claims-move word, answer-mark word, overlaps word, receipt drop word, decision-model word, remaining-work refusal, edge predicate, edge state, health word, edge kind, spend state, service class, Overlord door word, actor issuer, Overlord refusal, designation word, unforecastable reason, approval census word, untrusted-build reason, Overlord gate word, Overlord inbox word, Overlord history word, linking refusal, block-wake word, sequence stamp word, invariant monitor word, readiness word, sequence door word or board word`).toBe(true);
+        || isBoardKebab(tok)
+        // THE REQUEST RECORD (Overlord W2, request record A): `coord/overlordRequests.ts` and `coord/overlordRequestStore.ts` name
+        // the record's states, moves and reasons, the deciders' refusals, a refused citation's word and detail, the close
+        // door's answers and the store's refusals as literals. Each is admitted through its module's guard, derived from its
+        // declared list (L0's maps among them), never NOT_CODES.
+        || isRequestKebab(tok) || isRequestStoreKebab(tok),
+        `${tok} is not a declared MailRejectCode, RunRefuseCode, LifecycleGapReason, ClaimRefuseCode, SessionLifecycle, ReclaimRefuseCode, AskRefuseCode, RunRouteRefuseCode, SetAccountPoolsRefuseCode, UpdateStoreRefuseCode, child-reclaim word, stall-watch word, expiry word, stall-watch settings word, dead-coordinator word, temp-root collector word, delegation word, collector switch word, collector-switch route refusal, hibernation word, drift kind, notice mode, archive gate, stale-archive outcome, drift lane tag, stale-sibling claimant state, coord-blocked gate reason, question-sweep word, dead-dispatch word, automatic-roll word, item-move refusal, run stuck word, review-rounds refusal, run-close word, shadow-lane word, wake-gate word, claims-move word, answer-mark word, overlaps word, receipt drop word, decision-model word, remaining-work refusal, edge predicate, edge state, health word, edge kind, spend state, service class, Overlord door word, actor issuer, Overlord refusal, designation word, unforecastable reason, approval census word, untrusted-build reason, Overlord gate word, Overlord inbox word, Overlord history word, linking refusal, block-wake word, sequence stamp word, invariant monitor word, readiness word, sequence door word, board word or request record word`).toBe(true);
     }
   });
 });

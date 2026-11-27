@@ -175,6 +175,16 @@ export interface ExpectedPath { readonly project: string; readonly path: string 
 export const REQUEST_BOUNDS = {
   cites: 8, summaryChars: 200, expectedPaths: 32, pathBytes: 512, consulted: 6, closeNoteChars: 600,
 } as const;
+/** The detail beside a refused citation's word, one per row of `citationVerdict`'s table (plan Table 6): `absent`, `changed`,
+ *  `spent` and `not-in-root` are the table's own; `too-many`, `repeated` and `unread` name its bound, repeat and read rows,
+ *  which the table words by their answer alone (slug `citation-details-for-every-row`). */
+export const REQUEST_CITATION_DETAIL_MAP = {
+  'too-many': true, repeated: true, unread: true, absent: true, changed: true, spent: true, 'not-in-root': true,
+} as const satisfies Readonly<Record<string, true>>;
+export type RequestCitationDetail = keyof typeof REQUEST_CITATION_DETAIL_MAP;
+export const REQUEST_CITATION_DETAILS = Object.keys(REQUEST_CITATION_DETAIL_MAP) as RequestCitationDetail[];
+export const isRequestCitationDetail = (v: unknown): v is RequestCitationDetail =>
+  typeof v === 'string' && Object.hasOwn(REQUEST_CITATION_DETAIL_MAP, v);
 /** One message founds one root request within this window of its `at` (H22; Table 11.5b). */
 export const ROOT_FOUND_WINDOW_MS = 24 * 3_600_000;
 /** The follow-up clock a move into a clocked state sets (Table 11.5b's "One hour"). */

@@ -103,13 +103,23 @@ Relay A's `relay-held` and its three words stay relay A's: the move is not in th
 - **`a-word-this-build-lacks`.** A stored state word this build cannot name is carried as text: no move leaves it
   (`not-from`), `openRequests` counts it as open, and a stored `takenFrom` it cannot name reads as taken. Each is the
   closed direction.
+- **`citation-details-for-every-row`.** Table 6 gives a detail word only beside `said-not-operator`; the decider gives
+  every refused row one (`too-many` for the bound, `repeated` for a repeat, `unread` for a failed read), and the seven
+  live once, in `REQUEST_CITATION_DETAIL_MAP` (L0).
+- **`request-words-have-declared-lists`.** Every kebab word the two coordination files quote now comes from a declared
+  list: L0's states, moves, reasons and citation details; L1's move refusals, citation words (`CITATION_REFUSAL_WORD_MAP`)
+  and close answers (`CLOSE_UNOWNED_ANSWER_MAP`); and the store's own refusals (two maps beside their types). Two guards,
+  `isRequestKebab` (L1) and `isRequestStoreKebab` (the store, as the sequence stamp guard is its store's), derive from
+  them, and the coordination directory's kebab-token census admits the words through those guards.
 - **`citation-at-is-the-citing-time`.** `overlord_request_messages.at` is when the request cited the message; the
   24-hour window is judged at the door from the message's own `at`, and never written (RQ11).
 - **`i12-row-before-its-predicate`** (coordinator's split). At this tip I12's row reads `predicate-not-built`, waiting on
   this piece's second part, since its table now exists.
 - **Process.** Two edits were made with a script rather than the Edit tool, against the brief's first sentence: the
   `request` row of `shared/overlord-sequence.ts` (by me), and one replace in `server/test/requestCases.ts` (by an
-  implementer subagent). Both are in the files as committed and were reviewed in the diff.
+  implementer subagent). Both are in the files as committed and were reviewed in the diff. In the fix round, the mail
+  routes suite (chat A's) was edited twice to measure a packet before its holder's yes; each time the file was restored
+  to its committed text, and the packet was sent before it was applied.
 
 ## 5. Mutation rows
 
@@ -162,3 +172,20 @@ controls); a caller with no row, a non-literal actor and a wrong literal (the ca
   `INVARIANT_MAP` marked `tables-absent` names no table the coordination schema has (the I12 row read so until this tip).
   It is more than a few lines: a row's `tables` are prose words (`hold rows`, `requests`, `act rows`), with no map to the
   schema's table names, so the check needs that map first.
+
+## 8. The first fast run's three reds, and what each pin holds now
+
+The pull request's first fast run (at `6f733ac241`) was red in three server suites, each a pin this piece moves. The
+local runs before the push had not included them, because none imports a file this piece added.
+
+| Suite and case | What the pin held | What it holds now |
+|---|---|---|
+| The sequence vocabulary's kinds case | Six kinds, ending at `readiness` | Seven, with `request` last, the order of `SEQUENCE_KIND_MAP`; and the states case checks the `request` row's states are `REQUEST_STATES` by identity |
+| The mail routes' kebab-token census of the coordination directory | No guard for the request record's words. The census stops at its first miss, so the log named `too-many`; about twenty more followed it | Two guards, `isRequestKebab` and `isRequestStoreKebab`, each derived from its module's declared lists (§4, `request-words-have-declared-lists`). The file is chat A's, so the line went to its holder as a packet first |
+| The mutation floors, `citationVerdict`'s set (moved with the census fix, not red in CI) | Mutant Q28's old text quoted the refusal helper's inline unions | Its old text is the helper's last line only, which the mutant changes; the set is killed in full again |
+| The limit samples store's migration case | Undo eight later migrations; the limit samples slot is the version less 9 | Undo nine: the request record's three tables are dropped too, and the slot is the version less 10, re-derived from `MIGRATIONS` by the case's own `findIndex` |
+
+Why a suite of another store counts this database's slots: the case winds a fixture database back to the version
+before limit samples and reopens it, so every later migration replays. A table a later migration created and the case
+did not drop makes that replay's `CREATE TABLE` fail, so each later migration's undo is listed there. Only this
+migration's own three tables were added (their indexes go with them).

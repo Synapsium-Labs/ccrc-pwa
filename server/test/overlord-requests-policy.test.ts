@@ -1,6 +1,6 @@
 // The request record's deciders (Overlord W2 request record plan, Task A2). The cases live in `requestCases.ts`, shared with the
 // mutation floors (`sim/requestSets.ts`), and run here against the real module.
-import { describe, it } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import * as requests from '../src/coord/overlordRequests.js';
 import {
   answeredSinceNeedsYouCases, citationVerdictCases, closeUnownedVerdictCases, followUpAfterMoveCases, nextRequestIdCases,
@@ -23,3 +23,13 @@ for (const [title, cases] of Object.entries(SUITES)) {
     for (const [name, run] of Object.entries(cases(requests))) it(name, run);
   });
 }
+
+describe('isRequestKebab, the census guard over the record\'s declared words', () => {
+  it('takes a word from each list it reads, and nothing else', () => {
+    for (const w of ['needs-you', 'route-elsewhere', 'unnamed-widening', 'not-in-root', 'not-taken-from', 'said-not-operator',
+      'has-acts', 'open-request']) expect(requests.isRequestKebab(w), w).toBe(true);
+    for (const w of ['', 'root-taken', 'stale-revision', 'not-a-request-word', 'constructor', '__proto__', 'toString']) {
+      expect(requests.isRequestKebab(w), w).toBe(false);
+    }
+  });
+});
