@@ -736,3 +736,7 @@ The pull request's own fast run on the pushed head is in the wave-done mail.
 
 Ledger-Edit: not needed. This note is new in this pull request, so the head commit edits no existing file under the
 programme notes folder.
+
+The landing line held this pull request on a conflict with main f80f47760b in the generated review lab fixture (#3479
+regenerated it after the merge of §17.1); the branch merged that base once (2e59e173ef) and regenerated the file with its
+header's command, whose export now carries both inputs: main's new `--z-reading` token and this wave's `--page-margin-inline`.
