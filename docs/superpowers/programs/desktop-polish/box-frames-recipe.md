@@ -202,6 +202,13 @@ fails) and was replaced by `v in map`, which the own-property cases kill.
     the word. The PWA does not call the read. Pinned twice: the read's own suite holds `[501, 'not-configured']`, and
     the client's suite holds the body, the status line and exit 0 for a 501. Mutant: `not-configured` sent inline at
     503 reds the read's store case and three ratchet cases.
+- **Tests that read a changed file as text, outside the fast run's selection** (the coordinator's ask, 39345; issue
+  #3562): for every `server/` and `shared/` TypeScript file this branch changes against `main` (25 files), every test under
+  `server/test` that names its path in a string, not an import line (193 tests). The PR's selection already holds 176 of
+  them. The other 17 ran here on the merge of `main` 9e5f592c24, one file at a time, and all 17 passed, 548 cases:
+  `advance-gate`, `archive-admission`, `archive-door-decide`, `auth-ratelimit`, `ccd-win-size`, `claims`, `divergence`,
+  `history-parser`, `mail-envelope-parse`, `overlord-board-door`, `pane-prompt-glyph`, `path-identity-w2-prose`,
+  `peers-claims-l0`, `program-view`, `pwa-static-cache`, `route-decide` and `route-fields-parse`.
 - **Not run here, read from CI on 8ccde82251, each passed:** the pin suite whose name names the approval signing (the
   approval-surface guard refuses a command naming it, 5 cases), the test projects' compile guard (it needs the console's
   packages, not installed in this tree, 12 cases), and `retire-executors-pin.test.ts` (230 cases), which timed out on this
