@@ -46,8 +46,6 @@ export function recordModalLayer(panel: Element): ReadonlySet<Element> {
   for (const known of [...layers.keys()]) if (!known.isConnected) layers.delete(known);
   // A handed node visible as a new layer mounts was lifted by its modal's close: it is no longer handed (X6 XR fix round 2,
   // review M1). A node still hidden stays: its modal is open, or it is the stranded case the set exists for.
-  // A handed node visible as a new layer mounts was lifted by its modal's close: it is no longer handed (X6 XR fix round 2,
-  // review M1). A node still hidden stays: its modal is open, or it is the stranded case the set exists for.
   for (const node of [...handed]) if (!node.isConnected || node.getAttribute('aria-hidden') !== 'true') handed.delete(node);
   const own = new Set<Element>(document.querySelectorAll('[aria-hidden="true"]:not([data-aria-hidden])'));
   for (const recorded of layers.values()) {

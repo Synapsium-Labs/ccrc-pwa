@@ -35,7 +35,12 @@ Reader mode in the console's Docs reader, on the library's 1.2.0 release: a Read
 | `c978869ff7` | fix round 1, review M2: the focus guards' target decided in L1, the Exit-only form wraps |
 | `190e509148` | fix round 1, review M3: only the current wake-lock request's refusal is remembered; the nits |
 | `b11a798006` | fix round 1, review M4: the mouse jump measured in the frame in one step |
-| (next) | fix round 1: the records (the design's frame row, the plan's Results, this note) |
+| `34325ecc13` | fix round 1: the records (the design's frame row, the plan's Results, this note) |
+| `edb0157460`, `a5b479ff6d` | fix round 2, item 1: round 1's history fix (`21fa9f982f`, `548357e5b8`) reverted, review 4043 F2 and F3 |
+| `34dba0af85` | fix round 2, item 2: an open sheet that unmounts after reader mode ends gives the console back (F1) |
+| `7ec7675250` | fix round 2, item 3: after the frameless Exit, focus goes to the head's Reader mode action or the main region (A2) |
+| `d65808462c` | fix round 2, the round's review M1: a node a sheet's close gave back is no longer held for a later unmount |
+| (next) | fix round 2: the records (the design's two sentences, the plan's Results, this note), and one duplicated comment line removed |
 
 ## Deviation numbers
 
@@ -54,6 +59,8 @@ The run was issued 9142, 9143 and 9144. None was defined: every departure below 
 
 With a mouse, in full screen, a link to a place inside the document jumps and then returns (160 to 200 ms later), in automated Chromium. The second bounded diagnosis (fix round 1) found the library is not needed: the revert follows a focus move without scroll inside the frame while an ancestor is the full-screen element, and no script of the library's or the console's causes it. Whether a person's browser shows it is not measured (device row FS-11). The browser row's known-failure part holds only the stays-at-the-target assertion and reds the day it holds; a plain row proves the jump itself.
 
+In reader mode, go Back, let a new version of the document arrive, go Forward, then Exit: the next Back does nothing, and only the one after it leaves. Fix round 1 tried to cure this and was taken back out in fix round 2, because each of its changes brought a worse fault (review 4043 F2 and F3). The coordinator carries it.
+
 ## Stated residues
 
 - The first-paint hold releases two animation frames after the mount's `ready` (a margin, not a signal: the library acknowledges no `reading`), so a frame that applies the turn late could still show its chrome for a frame.
@@ -62,6 +69,7 @@ With a mouse, in full screen, a link to a place inside the document jumps and th
 - A router push onto an unnumbered entry does not drop recorded places above it (wave PH's rows pin that); a discarded reader place is never treated as a dead entry (the crossing rule).
 - After the release gate's full-page replace, a Docs page that has not started its own visit (an index) bounces a Forward onto a dead reader entry back.
 - The console's hiding is a snapshot taken at entry: a toast host mounted later is neither inert nor hidden (spec §4.1 accepts toasts behind reader mode).
+- A console node reader mode left hidden for an open Docs sheet is given back when that sheet closes or unmounts, but not when it unmounts under an open command palette (the palette lifts nothing): it stays hidden until the next sheet unmount with no dialog open, or the next reader mode. Nor, through three timed steps, when another layer mounts and closes during that sheet's closing animation and the sheet is then reopened and unmounts open (fix round 2's review).
 - X6.72 as worded is an equivalent mutant in the real wiring (the hook marks before every step-back); the guard measured is the step-back's own mark.
 
 ## Not measured here
@@ -70,4 +78,4 @@ Firefox, phones, full screen and the wake lock on real devices: the device rows 
 
 ## Slips
 
-Implementer subagents broke the "edit tools only" rule four times: one edited `pwa/src/screens/DocsScreen.tsx` once with a script (two imports and a function; the review read the result and found it right, and the function was then moved to `readerMode.ts` with the edit tools); two ran stray shell heredocs that wrote nothing; one appended a temporary debug block to the new browser test file with a shell heredoc while measuring, then removed it with the edit tool. No commit carries text written outside the edit tools other than that one edit, and the version-control tool's own merges and the icon generator (run by the coordinator's ruling).
+Implementer subagents broke the "edit tools only" rule four times: one edited `pwa/src/screens/DocsScreen.tsx` once with a script (two imports and a function; the review read the result and found it right, and the function was then moved to `readerMode.ts` with the edit tools); two ran stray shell heredocs that wrote nothing; one appended a temporary debug block to the new browser test file with a shell heredoc while measuring, then removed it with the edit tool. No commit carries text written outside the edit tools other than that one edit, and the version-control tool's own merges and the icon generator (run by the coordinator's ruling). In fix round 2, two more: one implementer appended a test block with a shell heredoc and took it back out at once (nothing of it committed), and one made one edit of `pwa/test/reader-mode.test.tsx` with a script and left it in (read by the round's review; the plan's Results say which part). The round's two reverts were made by `git revert`, as the coordinator's ruling allowed.
