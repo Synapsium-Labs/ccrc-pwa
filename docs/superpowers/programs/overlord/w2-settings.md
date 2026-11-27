@@ -111,16 +111,27 @@ step-up without state, and neither had a multiline form. The coordinator ruled t
   - Their own suites are untouched and green.
 - **The key.**
   - Save reads the field with `peek()` and builds the body, so the key lives in the request and nowhere else.
-  - The field is emptied on the door's answer and on a final refusal, never on `step-up-required`, so the press after the confirm
-    sends the same key once more.
-  - A second `step-up-required`, on that one retry, is final: it is worded (`DECISION_WORDS.stepUpFinal`) and the field is emptied
-    (condition 4).
-  - The retry is the operator's press after the confirm. The section's doctrine is that `useStepUp` retries nothing by itself, and
-    home C's cards work the same way.
+  - The field is emptied on the door's answer and on every refusal, never on a first `step-up-required`, so the retry sends the
+    same key once more.
+  - The retry is the send the confirm starts (review 4139 F1, ruled call 1876; below). Its own `step-up-required` is final: it is
+    worded for what was refused (`DECISION_WORDS.stepUpFinal` with a key, `stepUpFinalHost` for the host alone, A4) and the field is
+    emptied (condition 4).
+  - The retry never sends less than the first send carried (F2). Save keeps one boolean, whether a key was typed, never the key. A
+    retry that finds the field emptied, because the page was hidden while the step showed, sends nothing and says so
+    (`DECISION_WORDS.keyGone`). A Save that carried no key retries with none.
 - **The names.**
   - Upload reads the box with `peek()`, turns the text into rows, and sends them. The rows live in the request body, and only the
     line numbers they came from are kept, to word a refused row.
-  - The box is emptied on the door's answer only: a refused row and a first step-up keep it, and a second step-up empties it.
+  - The box keeps the names only where the operator must edit or confirm them (A2, `names-kept-only-to-be-edited`): a refused row,
+    a refused cap (the row count's `bad-request`, and `oversize`) and a first step-up. The door's answer, a 401 (the person at the
+    screen is no longer proven) and every other refusal empty it. The field's header says so.
+  - The retry reads the box again; one that finds it emptied sends nothing and says so (`NAME_LIST_WORDS.namesGone`). Its own
+    step-up is final and worded for its act: Upload's or Clear's (`clearFinal`).
+- **The confirm starts the retry** (F1). The section keeps the one retry a card hands with its `step-up-required`, and sends it when
+  the confirm lands, once. A press by the operator is always a first send; only the confirm's send is a retry. The mark is per act
+  (Upload and Clear hand their own), and the control that asked is held while its own step shows, so its value is not sent again to
+  a door that will refuse it. Any other `ask`, another card's answer included, drops a retry not yet sent. `useStepUp` still retries
+  nothing; the section owns this (`SectionCtx.ask`, `stepShows`).
 - **Where neither is, measured.** The cases check that neither value is ever in:
   - the markup;
   - a `console` call;
@@ -129,7 +140,8 @@ step-up without state, and neither had a multiline form. The coordinator ruled t
   - a refusal line;
   - a React fiber's props or state.
 
-  The last is a reachability walk with its own control case. Fixtures use a synthetic key and synthetic names only.
+  The last is a reachability walk with its own control case. Since fix round 1 (A1) it runs for the key as well as the names, after
+  typing, with the step showing, and after the retry and its answer. Fixtures use a synthetic key and synthetic names only.
 - **Not mine (c).** The item secret panel (`pwa/src/ledgers/ItemView.tsx`'s `SecretPanel`) still keeps its value in component state.
   It is on the coordinator's ticket `item-secret-panel-holds-its-value-in-state`.
 
@@ -145,8 +157,29 @@ step-up without state, and neither had a multiline form. The coordinator ruled t
 - `one-read-for-the-decision-model`: the host card and the rows card draw one read, not a hook each (ruling 1: no second view hook).
   The read's loading and failure line is drawn once, in the host card, and the rows card is drawn once the read has a view.
 - `the-key-and-the-list-ride-the-secret-field` (ruling 6, call 1815; above).
-- `step-up-retry-is-the-operators-press`: condition 4's retry is the press after the confirm, as the section's other cards do it; a
-  second step-up answer is final and empties the field.
+- `the-confirm-starts-the-retry` (review 4139 F1, ruled call 1876; it replaces `step-up-retry-is-the-operators-press`): condition
+  4's retry is the send the section starts when the confirm lands, for the key's Save, Upload and Clear the list; a press is always
+  a first send.
+- `rows-keep-the-press-after-the-confirm`: the decision rows hand no retry. They carry no value a field could lose, so they keep the
+  section's doctrine, as home C's cards do: the operator presses the move again after the confirm. Their table runs every move in
+  both arms (A9).
+- `retry-never-sends-less` (F2): one boolean per Save, never the value; an emptied field on the retry sends nothing.
+- `names-kept-only-to-be-edited` (A2): above, and in the field's header.
+- `empty-list-is-its-own-state` (A3): a list read back with no names (after a Clear; the door stores its check alone) says so, draws
+  no count and offers no Clear. Its sentence is true of what the relay still does: it checks that the list reads and matches no name.
+- `row-answer-installed-then-read-again` (A5, the plan's SQ4): a row door's answer installs its side and its held cause into the card
+  read (`useCardRead`'s `patch`, `withRowAnswer`), then the card reads again, so a re-read that fails still shows the stored mode.
+- `unreadable-view-offers-reload` (F4): an answer the shared reader refuses keeps the reader's own detail (`useCardRead`'s
+  `detailOf`), and the line says the console may be older than its server and offers Reload, not a Read again that cannot cure it.
+- `absent-decision-model-draws-no-card` (F4): a server without the read (its 404, the card read's `absent`) draws neither decision
+  card, as the backstop and the retention do.
+- `w2-cards-measured-in-the-section-browser-file` (A6; the brief's ruling 7): the W2 cards are measured in the section's own browser
+  file at its widths, skins and palettes, with a fourth state, `w2-refused`, that draws a refused row's line (the longest row
+  sentence) and measures it inside the page.
+- `same-mode-guard-removed`: a row's "the picked mode is the stored one" guard was dead, because a native radio fires no change for
+  its own checked choice, so no mutant could kill it. It is removed, and the case "the checked radio calls nothing" still holds.
+- `mode-words-typed-over-the-modes` (A7): the mode words are a record over `NAME_LIST_MODES`, and the three sentences that name the
+  modes are built from it, so a new mode is a type error.
 - `settings-owner-gains-a-note-row-and-a-field` (above).
 - `clear-latches-at-send` (the carried ticket, above).
 - `held-off-row-draws-no-resume`: Resume is the arm door with the stored mode, and the arm door takes `shadow` or `armed` only, so a
@@ -181,6 +214,16 @@ as a packet, which it accepted, and were applied exactly.
 | DW3 | the gate's line drawn only with an offer | killed (after the case was added) | green |
 | DW4 | `offRefused` ignored | killed | green |
 | DW5 | the ceiling field takes a decimal | killed | green |
+| N6 | fix round 1 (A2): a 401 keeps the names | killed | green |
+| N7 | fix round 1 (A2): a refused row's and a refused cap's words empty the names | killed | green |
+| N8 | fix round 1 (A2): every word keeps the names | killed | green |
+| DW6 | fix round 1 (A5): a row's answer installed in every row | killed | green |
+| DW7 | fix round 1 (A5): an answer that names no cause read as "not held" | killed | green |
+| DW8 | fix round 1 (A5): the answer's side not installed | killed | green |
+
+In fix round 1, N1's target moved with the default mode's name (`DEFAULT_MODE`), and a planned N7 on a separate row clause in
+`nameListKeepsText` was dropped with that clause: a refused row is always a `bad-request`, which the keep words already hold, so the
+clause was dead.
 
 **The console, by hand** (the brief's rules, the plan's Task 2 and Task 3 steps, and the coordinator's condition 2):
 
@@ -202,6 +245,32 @@ as a packet, which it accepted, and were applied exactly.
 | M14 | the carried ticket: the latch set on the answer only, not at the send | `settings-account-facts` 1 of 15 | yes |
 | M15 | ruling 5: one of the eleven words loses its sentence (its compile error cast away) | `decision-model-words` 1 of 29 | yes |
 
+**Fix round 1, by hand** (review 4139, ruled call 1876). The counts are of the round's files: `settings-decision-model` (67) and
+`settings-private-names` (30). A file not listed was not run for that mutant.
+
+| Id | Mutant | Red with it in | Green after |
+|---|---|---|---|
+| M16 | F1: the confirm never sends the retry | `settings-decision-model` 8 of 67, `settings-private-names` 7 of 30 | yes |
+| M17 | F1 (b): the control that asked not held while its step shows | `settings-decision-model` 3 of 67, `settings-private-names` 2 of 30 | yes |
+| M18 | F1 (c): the mark not per act (Clear held by Upload's step) | `settings-private-names` 1 of 30 | yes |
+| M19 | F1 (d): another `ask` does not drop the retry | first: survived (`settings-private-names` 0 of 30, and the 1 of 67 was a load red in a row case no retry reaches); with the added case: `settings-decision-model` 1 of 68 | yes |
+| M20 | F1: the retry's own step-up not final | `settings-decision-model` 2 of 67 | yes |
+| M21 | F2: a retry whose key field was emptied sends anyway | `settings-decision-model` 1 of 67 | yes |
+| M22 | F2: the names' emptied retry worded as an empty box | `settings-private-names` 1 of 30 | yes |
+| M23 | F3: `bad-ceiling` without the door's range | `settings-decision-model` 1 of 67 | yes |
+| M24 | F4: an unreadable answer loses its detail (no Reload) | `settings-decision-model` 3 of 67 | yes |
+| M25 | A2: every refusal keeps the names, a 401 included | `settings-private-names` 4 of 30 | yes |
+| M26 | A3: Clear offered on an empty list | `settings-private-names` 1 of 30 | yes |
+| M27 | A4: Clear's final worded as Upload's | `settings-private-names` 1 of 30 | yes |
+| M28 | A5: the row's answer not installed | `settings-decision-model` 2 of 67 | yes |
+| M29 | A1: the key mirrored into component state | `settings-decision-model` 1 of 67 (the fiber walk) | yes |
+
+M19 survived its first run. In the names file the press after another card's answer hands a new retry, which replaces one left in
+place, so that file cannot see it. Its one red in the decision file was a row's step-up case, where no retry is ever handed; that
+case passed on the rerun, so the red was the box's load. The added case kills it: Save's step shows, Remove the key is then answered
+`step-up-required` (an act that hands no retry), and the confirm must send no Save. Red with M19 in (1 of 68, that case alone),
+green without it. The other counts above are of 67, before that case was added.
+
 M13 survived its first form, which logged inside the answer's words reader: that reader runs only on an answer, and a second send
 was stopped by the in-flight guard, so the mutant could never log on a refusal. The plan's mutant, a log in the refusal path, is the
 row above, and it is red. Two of the plan's Task 2 mutants have no target here: "prefill the key field" (the field is uncontrolled and
@@ -220,7 +289,15 @@ None added. Every card is the console over the server's own doors (ruling 9).
 
 ## Known limits
 
-- **A newer server's eighth row blanks the decision model's cards** on this console (`unknown-row-refuses-the-read`): the shared reader
-  refuses the whole view.
+- **A view this console cannot read blanks the decision model's cards** (`unknown-row-refuses-the-read`, review 4139 F4, ruled a
+  limit). The shared reader refuses the whole view for any of these: a row id the catalogue does not know, a held cause outside
+  `DECISION_HELD_CAUSES`, a host kind outside `DECISION_HOST_KINDS`, a ceiling outside today's bounds, or a side with a key it does
+  not know.
+  - On a first read that fails this way, the host card draws its line alone (neither Save nor Remove the key), and the rows card
+    draws nothing.
+  - After an answer, the last view stays drawn beside the line.
+  - The console and the server ship together, so such a view means a console older than its server. The line keeps the reader's
+    detail, says so, and offers Reload.
+  - The coordinator tickets "an unknown row is dropped, not the view" for a server piece; the shared reader is not this PR's.
 - **The section's reads are read once on mount and after each answer, not polled**, as home C's cards.
 - **The item secret panel keeps its value in component state** (the coordinator's ticket).

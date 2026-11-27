@@ -867,6 +867,25 @@ describe('the host card', () => {
     expect(remove).toHaveBeenCalledTimes(1);
   });
 
+  it("18. another act's step drops Save's retry: Remove asked for the step after Save did, so the confirm sends no Save", async () => {
+    // Review 4139 F1 (d): any other ask drops a retry not yet sent. Remove hands no retry, so after its confirm nothing is sent.
+    const save = vi.spyOn(api, 'setDecisionKey').mockRejectedValueOnce(stepUpRequired()).mockResolvedValue({ ok: true });
+    const remove = vi.spyOn(api, 'removeDecisionKey').mockRejectedValueOnce(stepUpRequired()).mockResolvedValue({ ok: true, held: [] });
+    await open();
+    typeKey();
+    fireEvent.click(hostSave());
+    await waitFor(() => expect(card('decision-host').querySelector('[data-step-up]')).not.toBeNull());
+    fireEvent.click(control(card('decision-host'), 'decision-key-remove'));
+    fireEvent.click(within(await screen.findByRole('dialog')).getByRole('button', { name: W.removeKey }));
+    await waitFor(() => expect(remove).toHaveBeenCalledTimes(1));
+    await settle();
+    await confirmStep();
+    await waitFor(() => expect(document.querySelector('[data-step-up]')).toBeNull());
+    await settle();
+    expect(save).toHaveBeenCalledTimes(1);
+    expect(remove).toHaveBeenCalledTimes(1);
+  });
+
   it('18. a refused removal is worded by its own sentence', async () => {
     vi.spyOn(api, 'removeDecisionKey').mockRejectedValue(refused(503, 'removed-not-held', { detail: 'hold not written' }));
     await open();
