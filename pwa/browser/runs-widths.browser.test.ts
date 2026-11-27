@@ -9,9 +9,10 @@
 //   CCRC_CHROME=<a Chrome or Chromium binary> ./node_modules/.bin/vitest run --config vitest.browser.config.ts browser/runs-widths.browser.test.ts
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { chromium, type Browser, type Page } from 'playwright-core';
-import { INSTRUMENT, REFINED } from '@ccrc/ui';
+import { INSTRUMENT, PHOSPHOR, REFINED } from '@ccrc/ui';
 import { resolveChrome } from './harness';
 import { openApp, serveDist, sharedDist, type AppFixture, type DistServer, type OpenedApp } from './app';
+import { expectStampedTheme } from './stampedTheme';
 
 const NOW = Date.now();
 const H = 3_600_000;
@@ -21,7 +22,7 @@ const DAY = 24 * H;
 export const MATRIX = {
   widths: [360, 390, 1280, 1470, 1920],
   skins: [REFINED, INSTRUMENT],
-  themes: ['light', 'dark'],
+  themes: ['light', PHOSPHOR],
 } as const;
 
 const run = (id: number, over: Record<string, unknown> = {}): object => ({
@@ -130,6 +131,7 @@ async function openBoard(width: number, skin: string, theme: string): Promise<Op
   // fold is drawn only once it lands. Wait for the answer and the fold, so a count never races the read.
   const read = opened.page.waitForResponse((r) => r.url().includes('/api/programmes'), { timeout: 20_000 });
   await opened.page.goto(`${server!.origin}/runs`);
+  await expectStampedTheme(opened.page, theme);
   await read;
   await opened.page.locator('[data-fold="quiet"]').waitFor({ timeout: 20_000 });
   await opened.page.locator('.programme-card').first().waitFor({ timeout: 20_000 });
@@ -368,6 +370,7 @@ for (const width of MATRIX.widths) {
           const { ctx, page, errors } = opened;
           try {
             await page.goto(`${server!.origin}/runs/advanced`);
+            await expectStampedTheme(page, theme);
             await page.locator('.rc-row').first().waitFor({ timeout: 20_000 });
             const measure = (): Promise<{ tap: number; vw: number; page: number; boxes: { right: number; left: number; h: number; tag: string }[] }> =>
               page.evaluate(() => {
@@ -437,10 +440,11 @@ describe('a broad column keeps the list\'s place when a run opens (D-8072)', () 
       },
       fleetFrames: [{ type: 'fleet', sessions: [] }, { type: 'runs', runs }, FIXTURE.fleetFrames![2]!],
     };
-    const opened = await openApp(browser!, { skin: INSTRUMENT, theme: 'dark', width: 1920 }, fixture);
+    const opened = await openApp(browser!, { skin: INSTRUMENT, theme: PHOSPHOR, width: 1920 }, fixture);
     const { ctx, page, errors } = opened;
     try {
       await page.goto(`${server!.origin}/runs`);
+      await expectStampedTheme(page, PHOSPHOR);
       await page.locator('.programme-card').first().waitFor({ timeout: 20_000 });
       // The board lists no run row of its own but the Stuck band's: the rows this case scrolls are the long head's.
       await openHeads(page);
@@ -570,6 +574,7 @@ for (const width of MATRIX.widths) {
           const { ctx, page, errors } = opened;
           try {
             await page.goto(`${server!.origin}/runs/advanced`);
+            await expectStampedTheme(page, theme);
             await page.locator('.ra-list .rf-link').first().waitFor({ timeout: 20_000 });
             const m = await page.evaluate(() => {
               const probe = document.createElement('div');
@@ -664,9 +669,10 @@ for (const width of MATRIX.widths) {
 
 describe('Advanced in a broad column opens a run beside its list', () => {
   it('a row sets ?open=<id> and the run draws in the pane (Instrument, 1920)', async () => {
-    const { ctx, page, errors } = await openApp(browser!, { skin: INSTRUMENT, theme: 'dark', width: 1920 }, ADVANCED_FIXTURE);
+    const { ctx, page, errors } = await openApp(browser!, { skin: INSTRUMENT, theme: PHOSPHOR, width: 1920 }, ADVANCED_FIXTURE);
     try {
       await page.goto(`${server!.origin}/runs/advanced`);
+      await expectStampedTheme(page, PHOSPHOR);
       await page.locator('.ra-list .rf-link').first().waitFor({ timeout: 20_000 });
       expect(await page.locator('.runs-column').getAttribute('data-column')).toBe('broad');
       await page.locator('.ra-list .rf-link', { hasText: 'Run 1400' }).click();

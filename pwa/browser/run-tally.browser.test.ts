@@ -7,17 +7,18 @@
 //   CCRC_CHROME=<a Chrome or Chromium binary> ./node_modules/.bin/vitest run --config vitest.browser.config.ts browser/run-tally.browser.test.ts
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { chromium, type Browser } from 'playwright-core';
-import { INSTRUMENT, REFINED } from '@ccrc/ui';
+import { INSTRUMENT, PHOSPHOR, REFINED } from '@ccrc/ui';
 import { UNCHECKED_PR } from '../../shared/api';
 import { resolveChrome } from './harness';
 import { openApp, serveDist, sharedDist, type AppFixture, type DistServer } from './app';
+import { expectStampedTheme } from './stampedTheme';
 import { fleetSession } from '../test/fleetFixture';
 
 const NOW = Date.now();
 const H = 3_600_000;
 const WIDTHS = [360, 390, 1280, 1470, 1920] as const;
 const SKINS = [REFINED, INSTRUMENT] as const;
-const THEMES = ['light', 'dark'] as const;
+const THEMES = ['light', PHOSPHOR] as const;
 
 const RUN = {
   id: 1801, program: 'prog-a', programTitle: 'Programme A with a title long enough to wrap on a phone', wave: 8, waveOf: 9,
@@ -104,6 +105,7 @@ for (const width of WIDTHS) {
           const { ctx, page, errors } = await openApp(browser!, { skin, theme, width }, FIXTURE);
           try {
             await page.goto(`${server!.origin}/programmes/prog-a`);
+            await expectStampedTheme(page, theme);
             await page.locator('[data-testid="programme-runs"] li.run-row .run-commits').first().waitFor({ timeout: 30_000 });
             const m = await page.evaluate(measure, { sels: ['li.run-row .run-tally', 'li.run-row .run-commits', 'li.run-row .run-seen'], within: '[data-testid="programme-runs"] li.run-row' });
             expect(m.parts.map((p) => p.text)).toEqual(['0/5 settled', '58 commits', 'last seen 5m ago']);
@@ -123,6 +125,7 @@ for (const width of WIDTHS) {
           const { ctx, page, errors } = await openApp(browser!, { skin, theme, width }, FIXTURE);
           try {
             await page.goto(`${server!.origin}/runs/1801`);
+            await expectStampedTheme(page, theme);
             await page.locator('.rd-head .rd-commits').first().waitFor({ timeout: 30_000 });
             const m = await page.evaluate(measure, { sels: ['.rd-head .rd-tally', '.rd-head .rd-commits', '.rd-head .rd-seen'], within: '.rd-head' });
             expect(m.parts.map((p) => p.text)).toEqual(['0/5 settled', '58 commits', 'last seen 5m ago']);
