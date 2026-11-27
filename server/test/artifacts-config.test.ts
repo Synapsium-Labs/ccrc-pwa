@@ -1,10 +1,17 @@
 // Native Docs HTML artifacts X5, plan Task A1.2: the config decision and the site rule (spec section 2.3). Every placeholder
 // host is built from a label generated per run, so no case names a registrable host someone could own; every other host is
 // under a reserved name (`.test`, `.invalid`).
+//
+// The site-rule and config cases live in ONE table, `fixtures/artifact-site-rule.json`, which `ccrc-expose-artifacts.test.ts`
+// runs against the bash mirror in `ccd/ccrc` too: the server and the shell refuse and accept exactly the same things. Only
+// the hostile-values case and the `loadConfig` cases stay as code here.
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { randomBytes } from 'node:crypto';
+import { readFileSync } from 'node:fs';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { artifactConfig, siteRuleProblem, type ArtifactConfig } from '../src/artifacts/policy.js';
+import { ARTIFACT_PUBLIC_SUFFIXES } from '../../shared/artifacts.js';
 import { loadConfig } from '../src/config.js';
 import { mkTmp } from './tmpHelpers.js';
 import { seedRoster } from './helpers.js';
@@ -13,332 +20,99 @@ const genLabel = (): string => 't' + randomBytes(6).toString('hex');
 
 const CONSOLE_PORT = 7788;
 
+const here = path.dirname(fileURLToPath(import.meta.url));
+
+interface SiteCheck { console: string; host: string; accepted: boolean; detailHas?: string[]; detailLacks?: string[] }
+interface SiteCase { case: string; checks: SiteCheck[] }
+interface ConfigEnv { origin?: string; content?: string; port?: string; exposeMode?: string }
+interface ConfigCheck {
+  console: string; consolePort: number; env: ConfigEnv; state: 'on' | 'off';
+  why?: string; detailHas?: string[]; detailLacks?: string[]; hosts?: { artifact: string; content: string };
+}
+interface ConfigCase { describe?: string; case: string; checks: ConfigCheck[] }
+interface Table { about: string; acceptList: string[]; siteCases: SiteCase[]; configCases: ConfigCase[] }
+
+const table = JSON.parse(readFileSync(path.join(here, 'fixtures', 'artifact-site-rule.json'), 'utf8')) as Table;
+
+/** One check with its placeholders filled: `{a}` to `{d}` are labels drawn fresh for this check (one label per token within
+ *  it), `{A}` is `{a}` in upper case. The JSON text is substituted whole, then parsed back. */
+function fresh<T>(check: T): T {
+  const labels: Record<string, string> = { a: genLabel(), b: genLabel(), c: genLabel(), d: genLabel() };
+  const text = JSON.stringify(check).replace(/\{([a-dA-D])\}/g,
+    (_m: string, k: string): string => (k === k.toLowerCase() ? labels[k]! : labels[k.toLowerCase()]!.toUpperCase()));
+  return JSON.parse(text) as T;
+}
+
 /** Narrow an answer to its `off` arm, failing the case when it is `on`. */
 function off(c: ArtifactConfig): Extract<ArtifactConfig, { state: 'off' }> {
   if (c.state !== 'off') throw new Error(`expected off, got on: ${JSON.stringify(c)}`);
   return c;
 }
 
+function runSiteCheck(raw: SiteCheck): void {
+  const k = fresh(raw);
+  const msg = JSON.stringify(k);
+  const p = siteRuleProblem(k.console, k.host);
+  if (k.accepted) expect(p, msg).toBeNull();
+  else expect(p, msg).not.toBeNull();
+  for (const w of k.detailHas ?? []) expect(p, msg).toContain(w);
+  for (const w of k.detailLacks ?? []) expect(p, msg).not.toContain(w);
+}
+
+function runConfigCheck(raw: ConfigCheck): void {
+  const k = fresh(raw);
+  const msg = JSON.stringify(k);
+  const c = artifactConfig(k.env, k.console, k.consolePort);
+  expect(c.state, msg).toBe(k.state);
+  if (c.state === 'on') {
+    if (k.hosts) {
+      expect(c, msg).toEqual({
+        state: 'on', artifactOrigin: k.env.origin, contentOrigin: k.env.content, port: Number(k.env.port),
+        artifactHost: k.hosts.artifact, contentHost: k.hosts.content,
+      });
+    }
+    return;
+  }
+  expect(c.why, msg).toBe(k.why);
+  for (const w of k.detailHas ?? []) expect(c.detail, msg).toContain(w);
+  for (const w of k.detailLacks ?? []) expect(c.detail, msg).not.toContain(w);
+}
+
 describe('siteRuleProblem (spec 2.3 table)', () => {
-  it('config: the five rows of the table give their verdicts', () => {
-    const dk = '.duckdns.org';
-    // Row 1: two names under a measured public suffix are different sites.
-    expect(siteRuleProblem(genLabel() + dk, genLabel() + dk)).toBeNull();
-    // Row 2: nip.io is not in the accept list, so it fails shut.
-    expect(siteRuleProblem(genLabel() + '.nip.io', genLabel() + '.nip.io')).not.toBeNull();
-    // Row 3: the same registrable site.
-    expect(siteRuleProblem('ccrc.example.test', 'art.example.test')).not.toBeNull();
-    // Row 4: no common label at all.
-    expect(siteRuleProblem('ccrc.example.test', 'art.example.invalid')).toBeNull();
-    // Row 5: co.uk is not listed, so it fails shut.
-    expect(siteRuleProblem(genLabel() + '.co.uk', genLabel() + '.co.uk')).not.toBeNull();
+  it("the table's accept list is ARTIFACT_PUBLIC_SUFFIXES", () => {
+    expect([...ARTIFACT_PUBLIC_SUFFIXES]).toEqual(table.acceptList);
   });
 
-  it('config: nip.io refused', () => {
-    const p = siteRuleProblem(genLabel() + '.nip.io', genLabel() + '.nip.io');
-    expect(p).toContain('nip.io');
-  });
-
-  it('config: `ccrc.example.test` with `art.example.test` refused', () => {
-    const p = siteRuleProblem('ccrc.example.test', 'art.example.test');
-    expect(p).toContain('example.test');
-  });
-
-  it('a host that equals the console host is refused, and so is one below it', () => {
-    const d = genLabel() + '.duckdns.org';
-    expect(siteRuleProblem(d, d)).not.toBeNull();
-    expect(siteRuleProblem(d, 'x.' + d)).not.toBeNull();
-    expect(siteRuleProblem('x.' + d, d)).not.toBeNull();
-  });
-
-  it('config: an accept-list host above the console is refused', () => {
-    const d = genLabel() + '.duckdns.org';
-    expect(siteRuleProblem(d, 'duckdns.org')).not.toBeNull();
-  });
-
-  it('lower-cases both hosts and drops one trailing dot', () => {
-    const l = genLabel();
-    expect(siteRuleProblem(l.toUpperCase() + '.example.test', l + '.example.test.')).not.toBeNull();
-    expect(siteRuleProblem(genLabel() + '.DuckDNS.org.', genLabel() + '.duckdns.org')).toBeNull();
-  });
-
-  it('a single shared label (a top-level domain) is accepted', () => {
-    expect(siteRuleProblem('ccrc.example.test', 'art.other.test')).toBeNull();
-  });
+  for (const sc of table.siteCases) {
+    it(sc.case, () => {
+      for (const check of sc.checks) runSiteCheck(check);
+    });
+  }
 });
 
 describe('artifactConfig', () => {
   const consoleOrigin = 'https://ccrc.example.test';
 
-  it('an https tier with valid names is on, with the exact host fields', () => {
-    const c = artifactConfig(
-      { origin: 'https://art.example.invalid', content: 'https://content.example.invalid', port: '7790' },
-      consoleOrigin, CONSOLE_PORT);
-    expect(c).toEqual({
-      state: 'on', artifactOrigin: 'https://art.example.invalid', contentOrigin: 'https://content.example.invalid',
-      port: 7790, artifactHost: 'art.example.invalid', contentHost: 'content.example.invalid',
-    });
-  });
-
-  it('an https origin that states a port carries it in the host field', () => {
-    const c = artifactConfig(
-      { origin: 'https://art.example.invalid:8443', content: 'https://content.example.invalid', port: '7790' },
-      consoleOrigin, CONSOLE_PORT);
-    expect(c.state).toBe('on');
-    if (c.state === 'on') expect(c.artifactHost).toBe('art.example.invalid:8443');
-  });
-
-  it('an origin that writes the default port :443 is off/invalid (a browser\'s Host never carries it)', () => {
-    const r = off(artifactConfig(
-      { origin: 'https://art.example.invalid:443', content: 'https://content.example.invalid', port: '7790' },
-      consoleOrigin, CONSOLE_PORT));
-    expect(r.why).toBe('invalid');
-    expect(r.detail).toContain('CCRC_ARTIFACT_ORIGIN');
-    expect(r.detail).toContain(':443');
-  });
-
-  it('config: a host a browser reads as an address is refused (the URL standard rewrites it)', () => {
-    // Each of these passes the host grammar, but a browser reads it as IPv4 and rewrites it before use.
-    for (const bad of ['https://10.0.0.01', 'https://10.1', 'https://art.0x7f', 'https://art.example.123']) {
-      const r = off(artifactConfig({ origin: bad, content: 'https://content.example.invalid', port: '7790' }, consoleOrigin, CONSOLE_PORT));
-      expect(r.why, bad).toBe('invalid');
-      expect(r.detail, bad).toContain('CCRC_ARTIFACT_ORIGIN');
-    }
-  });
-
-  it('config: a console reached by address is off/by-address', () => {
-    const r = off(artifactConfig(
-      { origin: 'https://art.example.invalid', content: 'https://content.example.invalid', port: '7790' }, 'https://10.0.0.1', CONSOLE_PORT));
-    expect(r.why).toBe('by-address');
-  });
-
-  it('config: a port written with a leading zero is refused, so two spellings never make one origin', () => {
-    const pairs: [string, string][] = [
-      ['https://art.example.invalid', 'https://art.example.invalid:0443'],
-      ['https://art.example.invalid:8443', 'https://art.example.invalid:08443'],
-    ];
-    for (const [origin, content] of pairs) {
-      const r = off(artifactConfig({ origin, content, port: '7790' }, consoleOrigin, CONSOLE_PORT));
-      expect(r.why, content).toBe('invalid');
-      expect(r.detail, content).toContain('CCRC_ARTIFACT_CONTENT_ORIGIN');
-    }
-    expect(off(artifactConfig(
-      { origin: 'https://art.example.invalid', content: 'https://content.example.invalid', port: '07790' }, consoleOrigin, CONSOLE_PORT)).why)
-      .toBe('invalid');
-  });
-
-  it('config: a port of zero is refused in the words of port 0, a leading zero in the words of a leading zero', () => {
-    const zero = off(artifactConfig(
-      { origin: 'https://art.example.invalid', content: 'https://content.example.invalid:0', port: '7790' }, consoleOrigin, CONSOLE_PORT));
-    expect(zero.why).toBe('invalid');
-    expect(zero.detail).toContain('CCRC_ARTIFACT_CONTENT_ORIGIN');
-    expect(zero.detail).toContain('port 0');
-    expect(zero.detail).not.toContain('leading zero');
-    const zeros = off(artifactConfig(
-      { origin: 'https://art.example.invalid:00', content: 'https://content.example.invalid', port: '7790' }, consoleOrigin, CONSOLE_PORT));
-    expect(zeros.detail).toContain('port 0');
-    const lead = off(artifactConfig(
-      { origin: 'https://art.example.invalid', content: 'https://content.example.invalid:0443', port: '7790' }, consoleOrigin, CONSOLE_PORT));
-    expect(lead.detail).toContain('leading zero');
-    expect(lead.detail).not.toContain('port 0');
-  });
-
-  it('a duckdns pair under the accept list is on', () => {
-    const c = artifactConfig(
-      { origin: `https://${genLabel()}.duckdns.org`, content: `https://${genLabel()}.duckdns.org`, port: '7790' },
-      `https://${genLabel()}.duckdns.org`, CONSOLE_PORT);
-    expect(c.state).toBe('on');
-  });
-
-  it('a nip.io pair is off/invalid and the detail names the key and the shared site', () => {
-    const c = off(artifactConfig(
-      { origin: `https://${genLabel()}.nip.io`, content: `https://${genLabel()}.nip.io`, port: '7790' },
-      `https://${genLabel()}.nip.io`, CONSOLE_PORT));
-    expect(c.why).toBe('invalid');
-    expect(c.detail).toContain('CCRC_ARTIFACT_ORIGIN');
-    expect(c.detail).toContain('nip.io');
-  });
-
-  it('config: `ccrc.example.test` with `art.example.test` refused', () => {
-    const c = off(artifactConfig(
-      { origin: 'https://art.example.test', content: 'https://content.example.invalid', port: '7790' },
-      consoleOrigin, CONSOLE_PORT));
-    expect(c.why).toBe('invalid');
-    expect(c.detail).toContain('CCRC_ARTIFACT_ORIGIN');
-  });
-
-  it('the content origin goes through the site rule too', () => {
-    const c = off(artifactConfig(
-      { origin: 'https://art.example.invalid', content: 'https://content.example.test', port: '7790' },
-      consoleOrigin, CONSOLE_PORT));
-    expect(c.why).toBe('invalid');
-    expect(c.detail).toContain('CCRC_ARTIFACT_CONTENT_ORIGIN');
-  });
-
-  it('config: an accept-list host above the console is refused', () => {
-    const d = genLabel() + '.duckdns.org';
-    const c = off(artifactConfig(
-      { origin: 'https://duckdns.org', content: `https://${genLabel()}.duckdns.org`, port: '7790' },
-      `https://${d}`, CONSOLE_PORT));
-    expect(c.why).toBe('invalid');
-  });
-
-  it('a host equal to the console host or below it is refused', () => {
-    const d = genLabel() + '.duckdns.org';
-    const eq = off(artifactConfig(
-      { origin: `https://${d}:8443`, content: `https://${genLabel()}.duckdns.org`, port: '7790' }, `https://${d}`, CONSOLE_PORT));
-    expect(eq.why).toBe('invalid');
-    const below = off(artifactConfig(
-      { origin: `https://x.${d}`, content: `https://${genLabel()}.duckdns.org`, port: '7790' }, `https://${d}`, CONSOLE_PORT));
-    expect(below.why).toBe('invalid');
-  });
-
-  it('no keys is off/unset', () => {
-    expect(off(artifactConfig({}, consoleOrigin, CONSOLE_PORT)).why).toBe('unset');
-  });
-
-  it('empty strings count as absent: all empty is off/unset', () => {
-    expect(off(artifactConfig({ origin: '', content: '', port: '' }, consoleOrigin, CONSOLE_PORT)).why).toBe('unset');
-  });
-
-  it('config: two of three is `off/partial`', () => {
-    const o = 'https://art.example.invalid';
-    const c = 'https://content.example.invalid';
-    const pairs: Array<[Parameters<typeof artifactConfig>[0], string]> = [
-      [{ origin: o, content: c }, 'CCRC_ARTIFACT_PORT'],
-      [{ origin: o, port: '7790' }, 'CCRC_ARTIFACT_CONTENT_ORIGIN'],
-      [{ content: c, port: '7790' }, 'CCRC_ARTIFACT_ORIGIN'],
-    ];
-    for (const [env, missing] of pairs) {
-      const r = off(artifactConfig(env, consoleOrigin, CONSOLE_PORT));
-      expect(r.why).toBe('partial');
-      expect(r.detail).toContain(missing);
-    }
-  });
-
-  it('one of three is off/partial, naming both missing keys', () => {
-    const r = off(artifactConfig({ origin: 'https://art.example.invalid' }, consoleOrigin, CONSOLE_PORT));
-    expect(r.why).toBe('partial');
-    expect(r.detail).toContain('CCRC_ARTIFACT_CONTENT_ORIGIN');
-    expect(r.detail).toContain('CCRC_ARTIFACT_PORT');
-  });
-
-  it('a bare empty string counts as missing', () => {
-    const r = off(artifactConfig(
-      { origin: 'https://art.example.invalid', content: 'https://content.example.invalid', port: '' },
-      consoleOrigin, CONSOLE_PORT));
-    expect(r.why).toBe('partial');
-    expect(r.detail).toContain('CCRC_ARTIFACT_PORT');
-  });
-
-  describe('off/invalid names the key', () => {
-    const good = { origin: 'https://art.example.invalid', content: 'https://content.example.invalid', port: '7790' };
-    const cases: Array<[string, Parameters<typeof artifactConfig>[0], string]> = [
-      ['an http origin on a non-loopback host', { ...good, origin: 'http://art.example.invalid' }, 'CCRC_ARTIFACT_ORIGIN'],
-      ['an http content origin on a non-loopback host', { ...good, content: 'http://content.example.invalid' }, 'CCRC_ARTIFACT_CONTENT_ORIGIN'],
-      ['a trailing slash', { ...good, origin: 'https://art.example.invalid/' }, 'CCRC_ARTIFACT_ORIGIN'],
-      ['a path', { ...good, content: 'https://content.example.invalid/x' }, 'CCRC_ARTIFACT_CONTENT_ORIGIN'],
-      ['an upper-case host', { ...good, origin: 'https://ART.example.invalid' }, 'CCRC_ARTIFACT_ORIGIN'],
-      ['equal artifact and content origins', { ...good, content: good.origin }, 'CCRC_ARTIFACT_CONTENT_ORIGIN'],
-      ['an artifact origin equal to the console origin', { ...good, origin: 'https://ccrc.example.test' }, 'CCRC_ARTIFACT_ORIGIN'],
-      ['a content origin equal to the console origin', { ...good, content: 'https://ccrc.example.test' }, 'CCRC_ARTIFACT_CONTENT_ORIGIN'],
-      ['a port equal to the console port', { ...good, port: String(CONSOLE_PORT) }, 'CCRC_ARTIFACT_PORT'],
-      ['a non-numeric port', { ...good, port: 'seven' }, 'CCRC_ARTIFACT_PORT'],
-      ['a port with a sign', { ...good, port: '+7790' }, 'CCRC_ARTIFACT_PORT'],
-      ['a port of zero', { ...good, port: '0' }, 'CCRC_ARTIFACT_PORT'],
-      ['a port past 65535', { ...good, port: '65536' }, 'CCRC_ARTIFACT_PORT'],
-    ];
-    for (const [title, env, key] of cases) {
-      it(title, () => {
-        const r = off(artifactConfig(env, consoleOrigin, CONSOLE_PORT));
-        expect(r.why).toBe('invalid');
-        expect(r.detail).toContain(key);
+  // Cases without a `describe` are tests of this block; the others are grouped, in order of first appearance, under a
+  // nested describe of the title they carry.
+  const nested = new Set<string>();
+  for (const cc of table.configCases) {
+    if (cc.describe === undefined) {
+      it(cc.case, () => {
+        for (const check of cc.checks) runConfigCheck(check);
+      });
+    } else if (!nested.has(cc.describe)) {
+      nested.add(cc.describe);
+      const title = cc.describe;
+      describe(title, () => {
+        for (const inner of table.configCases.filter((x: ConfigCase): boolean => x.describe === title)) {
+          it(inner.case, () => {
+            for (const check of inner.checks) runConfigCheck(check);
+          });
+        }
       });
     }
-
-    it('a console origin that is neither https nor loopback names CCRC_ORIGIN', () => {
-      const r = off(artifactConfig(good, 'http://ccrc.example.test', CONSOLE_PORT));
-      expect(r.why).toBe('invalid');
-      expect(r.detail).toContain('CCRC_ORIGIN');
-    });
-  });
-
-  describe('loopback (development and the browser suite)', () => {
-    const lo = 'http://localhost:7788';
-
-    it('console localhost with two 127.0.0.1 origins is on, host fields with their ports', () => {
-      const c = artifactConfig(
-        { origin: 'http://127.0.0.1:7790', content: 'http://127.0.0.1:7791', port: '7792' }, lo, 7788);
-      expect(c).toEqual({
-        state: 'on', artifactOrigin: 'http://127.0.0.1:7790', contentOrigin: 'http://127.0.0.1:7791', port: 7792,
-        artifactHost: '127.0.0.1:7790', contentHost: '127.0.0.1:7791',
-      });
-    });
-
-    it('an artifact origin on localhost is the same site and off/invalid', () => {
-      const r = off(artifactConfig(
-        { origin: 'http://localhost:7790', content: 'http://127.0.0.1:7791', port: '7792' }, lo, 7788));
-      expect(r.why).toBe('invalid');
-      expect(r.detail).toContain('CCRC_ARTIFACT_ORIGIN');
-    });
-
-    it('any other http origin beside a loopback console is off/invalid', () => {
-      const r = off(artifactConfig(
-        { origin: 'http://127.0.0.1:7790', content: 'http://art.example.invalid', port: '7792' }, lo, 7788));
-      expect(r.why).toBe('invalid');
-      expect(r.detail).toContain('CCRC_ARTIFACT_CONTENT_ORIGIN');
-    });
-
-    it('an https origin beside a loopback console is off/invalid (loopback is for development only)', () => {
-      const r = off(artifactConfig(
-        { origin: 'http://127.0.0.1:7790', content: 'https://content.example.invalid', port: '7792' }, lo, 7788));
-      expect(r.why).toBe('invalid');
-      expect(r.detail).toContain('CCRC_ARTIFACT_CONTENT_ORIGIN');
-    });
-
-    it('a loopback origin on the console port, or with a leading-zero port, is off/invalid', () => {
-      const own = off(artifactConfig({ origin: 'http://127.0.0.1:7788', content: 'http://127.0.0.1:7791', port: '7792' }, lo, 7788));
-      expect(own.why).toBe('invalid');
-      expect(own.detail).toContain('CCRC_ARTIFACT_ORIGIN');
-      const zero = off(artifactConfig({ origin: 'http://127.0.0.1:7790', content: 'http://127.0.0.1:07790', port: '7792' }, lo, 7788));
-      expect(zero.why).toBe('invalid');
-      expect(zero.detail).toContain('CCRC_ARTIFACT_CONTENT_ORIGIN');
-    });
-
-    it('a loopback origin with a trailing slash, a path or no port is off/invalid', () => {
-      for (const bad of ['http://127.0.0.1:7790/', 'http://127.0.0.1:7790/x', 'http://127.0.0.1']) {
-        const r = off(artifactConfig({ origin: bad, content: 'http://127.0.0.1:7791', port: '7792' }, lo, 7788));
-        expect(r.why).toBe('invalid');
-      }
-    });
-
-    it('equal loopback origins are off/invalid', () => {
-      const r = off(artifactConfig(
-        { origin: 'http://127.0.0.1:7790', content: 'http://127.0.0.1:7790', port: '7792' }, lo, 7788));
-      expect(r.why).toBe('invalid');
-      expect(r.detail).toContain('CCRC_ARTIFACT_CONTENT_ORIGIN');
-    });
-
-    it('an http://127.0.0.1 artifact origin beside an https console is off/invalid', () => {
-      const r = off(artifactConfig(
-        { origin: 'http://127.0.0.1:7790', content: 'http://127.0.0.1:7791', port: '7792' }, consoleOrigin, CONSOLE_PORT));
-      expect(r.why).toBe('invalid');
-    });
-
-  });
-
-  it('exposeMode ip is off/by-address with no keys and with all three', () => {
-    expect(off(artifactConfig({ exposeMode: 'ip' }, consoleOrigin, CONSOLE_PORT)).why).toBe('by-address');
-    const all = artifactConfig(
-      { origin: 'https://art.example.invalid', content: 'https://content.example.invalid', port: '7790', exposeMode: 'ip' },
-      consoleOrigin, CONSOLE_PORT);
-    expect(off(all).why).toBe('by-address');
-  });
-
-  it('exposeMode ip with a partial set is by-address too (an address has no second site)', () => {
-    expect(off(artifactConfig({ origin: 'https://art.example.invalid', exposeMode: 'ip' }, consoleOrigin, CONSOLE_PORT)).why)
-      .toBe('by-address');
-  });
+  }
 
   it('never throws on hostile values, and a hostile console origin never turns the tier on', () => {
     const good = { origin: 'https://art.example.invalid', content: 'https://c.example.invalid', port: '7790' };
