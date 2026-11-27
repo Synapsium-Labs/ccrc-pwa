@@ -98,13 +98,18 @@ describe('server/src runtime imports never point outward (ARCH-04 stage 2, D-604
     expect(outwardRuntimeEdges(file, parseSource("import type { CoordStore } from './store.js';"), ringOf, exists)).toEqual([]);
   });
 
-  it('CHARACTERIZATION (D-9148): coord/planStore.ts by its facts alone, and the edges that touch it', () => {
-    // Its `node:sqlite` import is type-only and its header declares no ring, so the rules read it L1.
-    expect(serverRing(PLAN_STORE)).toEqual({ ring: 'L1', why: 'no outer-ring fact' });
-    // No L1 or L2 file loads a value from it at runtime today: every such edge is type-only.
+  it('CONTROL: coord/planStore.ts is L3 by its header, so a runtime import of it from an L1 file is outward (D-9148)', () => {
+    // It reads and writes coord.db through the `DatabaseSync` it is handed, but its `node:sqlite` import is type-only, so
+    // its facts alone read L1 (as `store.ts`'s do): the header declaration is what holds it, and the why says so.
+    expect(serverRing(PLAN_STORE)).toEqual({ ring: 'L3', why: 'declares L3 in its header' });
+    // No L1 or L2 file loads a value from it at runtime: every such edge is type-only (#3454's one was moved inward).
     expect(valueImportersInward(PLAN_STORE)).toEqual([]);
-    // So a planted runtime import of the store from a new L1 file is not seen as outward.
-    expect(outwardRuntimeEdges(PLANTED, parseSource(PLANTED_STORE_IMPORT), ringOf, exists)).toEqual([]);
+    // A planted runtime import of the store from a new L1 file is an outward edge; the same import, type-only, is not.
+    expect(outwardRuntimeEdges(PLANTED, parseSource(PLANTED_STORE_IMPORT), ringOf, exists)
+      .map((e) => `${e.fromRing} ${e.from} -> ${e.toRing} ${e.to}`))
+      .toEqual(['L1 server/src/coord/planted.ts -> L3 server/src/coord/planStore.ts']);
+    expect(outwardRuntimeEdges(PLANTED, parseSource("import type { StoredPlan } from './planStore.js';"), ringOf, exists))
+      .toEqual([]);
   });
 
   it('CONTROL: the docs ring pin\'s role table, a declaration by the spec, is single-definition\'s copy', () => {
