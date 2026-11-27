@@ -325,6 +325,7 @@ interface BodyMount {
   readonly focus: Mock<() => void>;
   readonly destroy: Mock<() => void>;
   readonly command: Mock<(name: string) => void>;
+  readonly openAt: Mock<(id: string) => void>;
 }
 
 interface BodyRig {
@@ -355,6 +356,7 @@ function bodyRig(): BodyRig {
         focus: vi.fn(() => { log.push(`focus ${n}`); }),
         destroy: vi.fn(() => { log.push(`destroy ${n}`); }),
         command: vi.fn(),
+        openAt: vi.fn(),
       };
       mounts.push(m);
       return { seed: { hosted: false }, follow: vi.fn(), setPrefs: vi.fn(), ...m } as unknown as ReaderMount;
@@ -740,6 +742,62 @@ describe('reader mode: the frame wiring (X6 XR1.4 with XR2.1)', () => {
     await frameReady(rig, 1);
     expect(rig.mounts[1]!.setReading, 'the late frame was left under a reading that ended').toHaveBeenCalledTimes(1);
     expect(rig.mounts[1]!.setReading).toHaveBeenCalledWith('off');
+  });
+
+  it('reader mode: a body made while reader mode is on keeps its host under the reading ground until its ready has had two frames', async () => {
+    const host = (): Element | null => document.querySelector('.docs-reader');
+    const { rig, view, places } = await entered({ timers: true });
+    expect(host()?.hasAttribute('data-reader-hold'), 'CONTROL: the body made while reader mode was off was never held').toBe(false);
+    // A new commit of the document while reader mode is on: its new frame is held from before the library mounts it.
+    view.rerender(<Screen doc={KEY_A} rig={rig} bodyKey="k2" places={places} />);
+    await act(async () => { for (let i = 0; i < 30; i += 1) await Promise.resolve(); });
+    expect(rig.inputs[1]!.reading, 'CONTROL: the new body is made under the reading').toBe('screens');
+    expect(host()?.hasAttribute('data-reader-hold'), 'the new frame is mounted under the reading ground').toBe(true);
+    // Its ready alone does not show it: the turn the library posts at ready is applied by the frame after it.
+    await frameReady(rig, 1);
+    expect(host()?.hasAttribute('data-reader-hold'), 'shown at the ready itself, before the frame applied the turn').toBe(true);
+    await advance(20);
+    expect(host()?.hasAttribute('data-reader-hold'), 'shown after one animation frame').toBe(true);
+    expect(rig.mounts[1]!.focus, 'the held frame was focused while it could not take the focus').not.toHaveBeenCalled();
+    await advance(20);
+    expect(host()?.hasAttribute('data-reader-hold'), 'still held after two animation frames').toBe(false);
+    // The hidden iframe could not take the library's focus at its insertion, so it is given it as the hold lifts.
+    expect(rig.mounts[1]!.focus, 'the frame was not focused when the hold lifted').toHaveBeenCalledTimes(1);
+  });
+
+  it('reader mode: leaving while a new mount is held gives the frame focus at its release', async () => {
+    const host = (): Element | null => document.querySelector('.docs-reader');
+    const { rig } = await entered({ timers: true });
+    // A link to this very page, spelled with its file name: the live mount opens the document again, and its new frame is held.
+    act(() => { rig.inputs[0]!.onLink({ kind: 'relative', path: 'a.md', fragment: 'sec' }); });
+    expect(rig.mounts[0]!.openAt, 'CONTROL: the same-page link reopened the frame').toHaveBeenCalledWith('sec');
+    expect(host()?.hasAttribute('data-reader-hold'), 'CONTROL: the reopened frame is held').toBe(true);
+    // Reader mode is left before the new frame's ready: the context asks the frame for focus, and a hidden iframe takes none.
+    const before = rig.mounts[0]!.focus.mock.calls.length;
+    act(() => { latest.exit('exit-tap'); });
+    const asked = rig.mounts[0]!.focus.mock.calls.length;
+    expect(asked, 'CONTROL: leaving asked the frame for focus').toBeGreaterThan(before);
+    expect(latest.state.on, 'CONTROL: reader mode is off').toBe(false);
+    await frameReady(rig, 0);
+    await advance(40);
+    expect(host()?.hasAttribute('data-reader-hold'), 'the hold lifted').toBe(false);
+    expect(rig.mounts[0]!.focus.mock.calls.length, 'the frame was not given the focus it was asked for while hidden').toBe(asked + 1);
+  });
+
+  it('reader mode: a body whose host is held and which ends before its ready leaves no hold behind', async () => {
+    const { rig, view, places } = await entered({ timers: true });
+    view.rerender(<Screen doc={KEY_A} rig={rig} bodyKey="k2" places={places} />);
+    await act(async () => { for (let i = 0; i < 30; i += 1) await Promise.resolve(); });
+    const held = document.querySelector('.docs-reader');
+    expect(held?.hasAttribute('data-reader-hold')).toBe(true);
+    // The body ends (a third commit) before the frame was ready: the old host goes with its hold, and the new one is its own.
+    view.rerender(<Screen doc={KEY_A} rig={rig} bodyKey="k3" places={places} />);
+    await act(async () => { for (let i = 0; i < 30; i += 1) await Promise.resolve(); });
+    expect(held?.isConnected, 'the ended body\'s host is gone').toBe(false);
+    await frameReady(rig, 2);
+    await advance(40);
+    expect(document.querySelector('.docs-reader')?.hasAttribute('data-reader-hold'), 'the last body\'s host was released').toBe(false);
+    expect(document.querySelectorAll('[data-reader-hold]').length).toBe(0);
   });
 
   it('reader mode: a body made under one turn and ready after a switch to the other is brought to the new turn', async () => {

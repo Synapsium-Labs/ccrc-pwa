@@ -89,6 +89,18 @@ import { READER_BODY, usePublishExportBody } from './exportBody';
 
 type LinkBase = Omit<DocLinkContextValue, 'urls'>;
 
+/** The attribute that keeps the reader host under the reading ground (X6 XR1.4, the amendment's first-paint row; docs.css draws
+ *  it `visibility: hidden`): a library mount made while reader mode is on, a same-document remount included, carries it from
+ *  before the frame is inserted until its `ready` has been heard and the turn the library posts at ready has had these frames to
+ *  apply. `setReading`'s replay at ready is not a paint guarantee: the new frame builds its bar and running head first and takes
+ *  them away only when it has applied the turn. */
+const READER_HOLD_ATTR = 'data-reader-hold';
+/** How many animation frames the hold outlasts the frame's `ready` by. The library posts the turn before it calls `onReady`, and the
+ *  frame applies it in its next task; the library offers no acknowledgement to wait for, so this is a margin, not a signal. The
+ *  browser row (`reader-mode.browser.test.ts`) measures it: with one frame it held in three runs of three at both sizes on the
+ *  box it was built on, so two is the margin kept over that. */
+const READER_HOLD_FRAMES = 2;
+
 /** What the leaf needs of the reader: the render job, the mount, and the page's images. A test injects all three. */
 export interface ReaderDeps {
   render(src: string, o: { budgetMs: number; signal?: AbortSignal }): Promise<ReaderRenderOutcome>;
@@ -269,8 +281,54 @@ function ReaderBody(p: ReaderFrameProps & { readonly text: string; readonly onSi
     /** The frame this body handed reader mode's context, while it stands; the context clears it only if it is still this one. */
     let published: ReaderModeFrame | null = null;
 
+    /** Whether the host carries the hold now, and the animation frame that will release it. */
+    let held = false;
+    let releaseFrame: number | null = null;
+    /** Whether reader mode asked the frame for focus while the host was held (leaving, the overlay's Esc): a hidden iframe cannot take
+     *  it, so it is given when the hold lifts, whether reader mode is still on or not (spec 6.5: on leaving, focus returns to the frame). */
+    let focusAsked = false;
+    /** The reader mode document key of this body's own document (what `readingFor` is asked about). */
+    const docKeyNow = (): string => readerModeDocKeyOf({
+      kind: 'project', owner: live.current.props.link.project, section: live.current.props.show.section, path: live.current.props.show.path,
+    });
+    /** Puts the host under the reading ground, before a library mount made under a reading. */
+    const holdHost = (): void => {
+      const host = hostRef.current;
+      if (host === null) return;
+      if (releaseFrame !== null) cancelAnimationFrame(releaseFrame);
+      releaseFrame = null;
+      held = true;
+      focusAsked = false;
+      host.setAttribute(READER_HOLD_ATTR, '');
+    };
+    const releaseHost = (): void => {
+      if (releaseFrame !== null) cancelAnimationFrame(releaseFrame);
+      releaseFrame = null;
+      if (!held) return;
+      held = false;
+      hostRef.current?.removeAttribute(READER_HOLD_ATTR);
+    };
+    /** At the frame's `ready`: the host is shown again after `READER_HOLD_FRAMES` animation frames, and the frame is given the focus
+     *  its hidden iframe could not take at its insertion, when reader mode is still on for this document. */
+    const releaseAfterReading = (): void => {
+      if (!held) return;
+      let left = READER_HOLD_FRAMES;
+      const next = (): void => {
+        releaseFrame = requestAnimationFrame(() => {
+          releaseFrame = null;
+          left -= 1;
+          if (left > 0) { next(); return; }
+          const asked = focusAsked;
+          releaseHost();
+          if (asked || live.current.readerMode?.readingFor(docKeyNow()) !== 'off') mount?.focus?.();
+        });
+      };
+      next();
+    };
+
     const drop = (): void => {
       places.host(null);
+      releaseHost();
       mount?.destroy();
       mount = null;
       mountRef.current = null;
@@ -326,6 +384,8 @@ function ReaderBody(p: ReaderFrameProps & { readonly text: string; readonly onSi
             reopened = r.id;
             cur.link.onFragment(r.id, location.pathname + location.search);
             if (mount !== currentMount) break;
+            // A new frame made while reader mode is on stays under the reading ground until it has applied the turn.
+            if (cur.readerMode !== null && cur.readerMode.readingFor(docKeyNow()) !== 'off') holdHost();
             currentMount.openAt?.(decodedId(r.id));
             // openAt replaces the frame and its seed without replacing the handle. Reconcile even if the root's
             // intermediate stamp never reaches React's observer, sharing any already queued appearance frame.
@@ -450,9 +510,7 @@ function ReaderBody(p: ReaderFrameProps & { readonly text: string; readonly onSi
       const readingMinutes = outcome.result.meta.readingMinutes;
       // The reading this mount is made under, asked as the mount starts: the turn when reader mode is on for this body's own
       // document (and it is still the screen's), else `off`. A mount made under a reading is sent it before its `ready`.
-      const reading = cur.readerMode?.readingFor(readerModeDocKeyOf({
-        kind: 'project', owner: cur.props.link.project, section: cur.props.show.section, path: cur.props.show.path,
-      })) ?? 'off';
+      const reading = cur.readerMode?.readingFor(docKeyNow()) ?? 'off';
       /** What the frame was last sent as its reading: this mount's, then each `setReading` the context sent through the handle. It is
        *  the published frame's `planned`, which `frame-ready` compares with the turn in force. */
       let sentReading: ReaderReading = reading;
@@ -467,7 +525,10 @@ function ReaderBody(p: ReaderFrameProps & { readonly text: string; readonly onSi
         const f: ReaderModeFrame = {
           ready: true,
           planned: sentReading,
-          focus: () => m.focus?.(),
+          focus: () => {
+            if (held) focusAsked = true;
+            m.focus?.();
+          },
           setReading: (mode) => {
             sentReading = mode;
             m.setReading?.(mode);
@@ -551,10 +612,13 @@ function ReaderBody(p: ReaderFrameProps & { readonly text: string; readonly onSi
           }
           isReady = true;
           publishFrame();
+          releaseAfterReading();
         },
         onFallback: (r) => fallBack(String(r)),
         chrome,
       };
+      // A first mount made while reader mode is on (a new commit of the document read in it) is held as a reopened frame is.
+      if (reading !== 'off') holdHost();
       performance.mark('ccrc-reader-mount-start');
       let m: ReaderMount;
       try {

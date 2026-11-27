@@ -444,6 +444,10 @@
    nor an auto flex basis has to resolve: the same in every engine. */
 .docs-reader { position: relative; flex: 1 1 0; inline-size: 100%; min-block-size: 20rem; }
 .docs-reader iframe { position: absolute; inset: 0; border: 0; inline-size: 100%; block-size: 100%; }
+/* X6 XR1.4, the amendment's first-paint row: a frame made while reader mode is on stays under the reading ground (the host is not
+   drawn, and keeps its box) from before it is inserted until its `ready` has applied the turn, so its bar, running head and
+   progress line are never painted. ReaderFrame.tsx sets and clears the attribute. */
+.docs-reader[data-reader-hold] { visibility: hidden; }
 /* §4.1 (reader mode, X6 XR1.2): the fill. `data-reader-mode` is set on the container before full screen is asked for, and the
    container is then drawn fixed over the whole viewport on the reader's ground (`--bg-page`, the one the host sits on today),
    inside the safe areas, on `--z-reading` (above the toast, below the block screen). The Docs leaf and the host take the whole
