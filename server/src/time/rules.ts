@@ -39,3 +39,17 @@ export function checkEntropyBound(n: number): number {
 export function wallNotBefore(readingMs: number, lastStoredMs: number | null): number {
   return lastStoredMs === null ? readingMs : Math.max(readingMs, lastStoredMs);
 }
+
+/** The ISO week a wall time falls in, in UTC (slug quiz-week-is-utc: the Settings time zone ships in W1), as `YYYY-Www`, and
+ *  the ms of its Monday 00:00 UTC. One week for every lane keyed on it (the replay quiz, the label queue). */
+export function utcIsoWeek(now: number): { readonly key: string; readonly start: number } {
+  const d = new Date(now);
+  const midnight = Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate());
+  const dow = (d.getUTCDay() + 6) % 7;                      // Monday 0 .. Sunday 6
+  const start = midnight - dow * 86_400_000;
+  const thursday = new Date(start + 3 * 86_400_000);        // the ISO year is the year of the week's Thursday
+  const year = thursday.getUTCFullYear();
+  const dayOfYear = (thursday.getTime() - Date.UTC(year, 0, 1)) / 86_400_000;   // whole days: both are UTC midnights
+  const week = 1 + Math.floor(dayOfYear / 7);
+  return { key: `${year}-W${String(week).padStart(2, '0')}`, start };
+}

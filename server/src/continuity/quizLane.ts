@@ -10,7 +10,8 @@
 // (`QUIZ_RECORD_READY`, ask 434) it raises nothing.
 import type { RaiseItemInput } from '../coord/ledgersStore.js';
 import type { LaneArmBaseline } from '../coord/laneArm.js';
-import { QUIZ_ITEM_PROGRAMME, quizItemText, quizLaneVerdict, quizWeek, type QuizLaneHold, type QuizRead } from './quiz.js';
+import { QUIZ_ITEM_PROGRAMME, quizItemText, quizLaneVerdict, type QuizLaneHold, type QuizRead } from './quiz.js';
+import { utcIsoWeek } from '../time/rules.js';
 
 /** What the lane reads and writes, declared here by its consumer (built by `quizStore.ts#quizLanePortOf`). Each read
  *  answers its failure rather than throwing; `raise` throws on a write that failed, and the lane's row catches it. */
@@ -31,7 +32,7 @@ export type QuizLaneResult = { readonly kind: 'hold'; readonly why: QuizLaneHold
 /** One pass: read, decide, raise at most one item. A hold because a read failed is logged once, naming each read that failed
  *  (review 2121 F2), as the sibling lanes log theirs; no other hold logs. */
 export function runQuizLane(port: QuizLanePort, now: number, log: (line: string) => void): QuizLaneResult {
-  const week = quizWeek(now);
+  const week = utcIsoWeek(now);
   const recordedAts = port.recordedAts();
   const pendingWaits = port.pendingWaits();
   const baseline = port.baseline();

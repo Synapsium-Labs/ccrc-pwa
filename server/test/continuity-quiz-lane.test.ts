@@ -1,8 +1,8 @@
 // Overlord W1a, the replay quiz piece (plan `w1a-replay-quiz.md` Task 4; spec §3.3.9 C52; W0-28 ruled B): the weekly quiz
 // lane raises one operator item a week asking the operator to run history's replay quiz by hand and record it, and raises
 // nothing while the record path (the single-arm mode and `ccrc quiz-record`, a later plan) is absent (ask 434, slug
-// quiz-item-waits-for-the-record-path). The rules are L1 (`quiz.ts`: `quizWeek`, `quizItemText`, `quizLaneVerdict`); the
-// lane (`quizLane.ts`) reads and raises.
+// quiz-item-waits-for-the-record-path). The rules are L1 (`quiz.ts`: `quizItemText`, `quizLaneVerdict`; the week, `time/rules.ts#utcIsoWeek`);
+// the lane (`quizLane.ts`) reads and raises.
 import { describe, it, expect, vi } from 'vitest';
 import { existsSync, mkdirSync, readFileSync, readdirSync } from 'node:fs';
 import path from 'node:path';
@@ -10,8 +10,9 @@ import { fileURLToPath } from 'node:url';
 import { openCoordDb } from '../src/coord/db.js';
 import { CoordStore } from '../src/coord/store.js';
 import {
-  QUIZ_ITEM_PROGRAMME, QUIZ_RECORD_READY, QUIZ_UNATTENDED_GRACE_DAYS, quizItemText, quizLaneVerdict, quizWeek, type QuizLaneFacts,
+  QUIZ_ITEM_PROGRAMME, QUIZ_RECORD_READY, QUIZ_UNATTENDED_GRACE_DAYS, quizItemText, quizLaneVerdict, type QuizLaneFacts,
 } from '../src/continuity/quiz.js';
+import { utcIsoWeek } from '../src/time/rules.js';
 import { runQuizLane, type QuizLanePort } from '../src/continuity/quizLane.js';
 import { insertQuizRun, quizLanePortOf, ruleQuizRun } from '../src/continuity/quizStore.js';
 import { ITEM_STEPS_MAX, ITEM_TEXT_MAX, ITEM_TITLE_MAX } from '../../shared/ledgers.js';
@@ -33,21 +34,21 @@ const MON = Date.UTC(2026, 10, 16, 0, 0, 0);       // Monday 2026-11-16, ISO wee
 const DAY = 86_400_000;
 
 const facts = (over: Partial<QuizLaneFacts> = {}): QuizLaneFacts => ({
-  recordReady: true, now: MON + 4 * DAY, week: quizWeek(MON + DAY), recordedAts: { ok: true, value: [] }, pendingWaits: { ok: true, value: false },
+  recordReady: true, now: MON + 4 * DAY, week: utcIsoWeek(MON + DAY), recordedAts: { ok: true, value: [] }, pendingWaits: { ok: true, value: false },
   baseline: { ok: true, exists: false }, itemRaised: { ok: true, value: false }, ...over,
 });
 
-describe('quizWeek: the ISO week, in UTC (slug quiz-week-is-utc)', () => {
+describe('utcIsoWeek: the ISO week, in UTC (slug quiz-week-is-utc)', () => {
   it('names the week and its Monday start', () => {
-    expect(quizWeek(MON)).toEqual({ key: '2026-W47', start: MON });
-    expect(quizWeek(MON + 7 * DAY - 1)).toEqual({ key: '2026-W47', start: MON });
-    expect(quizWeek(MON - 1)).toEqual({ key: '2026-W46', start: MON - 7 * DAY });
+    expect(utcIsoWeek(MON)).toEqual({ key: '2026-W47', start: MON });
+    expect(utcIsoWeek(MON + 7 * DAY - 1)).toEqual({ key: '2026-W47', start: MON });
+    expect(utcIsoWeek(MON - 1)).toEqual({ key: '2026-W46', start: MON - 7 * DAY });
   });
 
   it('crosses a year by the ISO rule', () => {
-    expect(quizWeek(Date.UTC(2027, 0, 1, 12)).key).toBe('2026-W53');
-    expect(quizWeek(Date.UTC(2027, 0, 4)).key).toBe('2027-W01');
-    expect(quizWeek(Date.UTC(2026, 0, 1)).key).toBe('2026-W01');
+    expect(utcIsoWeek(Date.UTC(2027, 0, 1, 12)).key).toBe('2026-W53');
+    expect(utcIsoWeek(Date.UTC(2027, 0, 4)).key).toBe('2027-W01');
+    expect(utcIsoWeek(Date.UTC(2026, 0, 1)).key).toBe('2026-W01');
   });
 });
 

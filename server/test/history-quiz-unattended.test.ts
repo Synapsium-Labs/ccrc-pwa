@@ -16,7 +16,7 @@ import * as unMod from '../../deploy/history-quiz-unattended.mjs';
 import * as qsMod from '../../deploy/history-quiz-single.mjs';
 import * as drvMod from '../../deploy/history-replay.mjs';
 import * as qpMod from '../../deploy/history-quiz-pilot.mjs';
-import { quizWeek } from '../src/continuity/quiz.js';
+import { utcIsoWeek } from '../src/time/rules.js';
 import { mkTmp, removeTmpFixturesEachTest } from './tmpHelpers.js';
 
 type R = Record<string, any>;
@@ -1106,11 +1106,11 @@ describe('pure: nextActOf, weekKeyOf and the line readers', () => {
     expect(U.nextActOf(s, 'W')).toBe(U.nextActOf(s, 'W'));
     expect(JSON.stringify(s)).toBe(copy);
   });
-  it('weekKeyOf equals quizWeek(now).key over 3000 dates, year boundaries and the edges of each day included', () => {
+  it('weekKeyOf equals utcIsoWeek(now).key over 3000 dates, year boundaries and the edges of each day included', () => {
     const edges = [Date.UTC(2020, 11, 31), Date.UTC(2021, 0, 1), Date.UTC(2021, 0, 3), Date.UTC(2021, 0, 4), Date.UTC(2024, 11, 29), Date.UTC(2024, 11, 30),
       Date.UTC(2026, 0, 1), Date.UTC(2026, 11, 31), Date.UTC(2027, 0, 1), Date.UTC(2027, 0, 3), Date.UTC(2027, 0, 4)];
     let n = 0;
-    const check = (ms: number): void => { expect(U.weekKeyOf(ms), new Date(ms).toISOString()).toBe(quizWeek(ms).key); n += 1; };
+    const check = (ms: number): void => { expect(U.weekKeyOf(ms), new Date(ms).toISOString()).toBe(utcIsoWeek(ms).key); n += 1; };
     for (let d = 0; d < 3000; d += 1) {
       const day = Date.UTC(2017, 0, 1) + d * DAY;
       check(day);

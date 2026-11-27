@@ -10,6 +10,7 @@ import { expect } from 'vitest';
 import type { LaneArmRead } from '../../src/coord/laneArm.js';
 import type * as QuizModule from '../../src/continuity/quiz.js';
 import type * as LaneArmModule from '../../src/coord/laneArm.js';
+import type * as TimeRulesModule from '../../src/time/rules.js';
 import type { MutantSet, SuiteCase } from './mutate.js';
 
 type Quiz = typeof QuizModule;
@@ -19,6 +20,8 @@ export const QUIZ_REPORT_KEY = 'server/src/continuity/quiz.ts#validQuizReport';
 export const QUIZ_RULE_KEY = 'server/src/continuity/quiz.ts#quizRuleVerdict';
 export const QUIZ_RECORD_KEY = 'server/src/continuity/quiz.ts#quizRecordVerdict';
 export const LANE_ARM_QUIZ_KEY = 'server/src/coord/laneArm.ts#laneArmQuizViewOf';
+type TimeRules = typeof TimeRulesModule;
+const TIME_RULES_TS = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../src/time/rules.ts');
 const LANE_ARM_TS = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../src/coord/laneArm.ts');
 
 const row = (choice: unknown): LaneArmRead => ({ kind: 'row', choice, updatedAt: 0, importedAt: null, imported: null });
@@ -317,6 +320,8 @@ const LANE_ARM_QUIZ_SET: MutantSet<typeof LaneArmModule> = {
 };
 
 export const QUIZ_LANE_KEY = 'server/src/continuity/quiz.ts#quizLaneVerdict';
+// The floor's NAME, kept through the move (slug quiz-week-floor-keeps-its-key): the decider now lives in
+// server/src/time/rules.ts#utcIsoWeek, and `mutate.ts#floorsFallen` reads a removed key as a fallen floor, with no rename path.
 export const QUIZ_WEEK_KEY = 'server/src/continuity/quiz.ts#quizWeek';
 const MON = Date.UTC(2026, 10, 16);
 const DAY = 86_400_000;
@@ -376,8 +381,8 @@ const QUIZ_LANE_SET: MutantSet<Quiz> = {
   },
 };
 
-const QUIZ_WEEK_SET: MutantSet<Quiz> = {
-  modulePath: QUIZ_TS,
+const QUIZ_WEEK_SET: MutantSet<TimeRules> = {
+  modulePath: TIME_RULES_TS,
   mutants: [
     { id: 'W1', old: 'const dow = (d.getUTCDay() + 6) % 7;', new: 'const dow = d.getUTCDay();' },
     { id: 'W2', old: 'const thursday = new Date(start + 3 * 86_400_000);', new: 'const thursday = new Date(start);' },
@@ -387,12 +392,12 @@ const QUIZ_WEEK_SET: MutantSet<Quiz> = {
   ],
   suite(m): Record<string, SuiteCase> {
     return {
-      'a Monday starts its week': () => { expect(m.quizWeek(MON)).toEqual({ key: '2026-W47', start: MON }); },
-      'a Sunday ends it': () => { expect(m.quizWeek(MON + 7 * DAY - 1)).toEqual({ key: '2026-W47', start: MON }); },
+      'a Monday starts its week': () => { expect(m.utcIsoWeek(MON)).toEqual({ key: '2026-W47', start: MON }); },
+      'a Sunday ends it': () => { expect(m.utcIsoWeek(MON + 7 * DAY - 1)).toEqual({ key: '2026-W47', start: MON }); },
       'the year turns by the ISO rule': () => {
-        expect(m.quizWeek(Date.UTC(2027, 0, 1, 12)).key).toBe('2026-W53');
-        expect(m.quizWeek(Date.UTC(2027, 0, 4)).key).toBe('2027-W01');
-        expect(m.quizWeek(Date.UTC(2026, 0, 1)).key).toBe('2026-W01');
+        expect(m.utcIsoWeek(Date.UTC(2027, 0, 1, 12)).key).toBe('2026-W53');
+        expect(m.utcIsoWeek(Date.UTC(2027, 0, 4)).key).toBe('2027-W01');
+        expect(m.utcIsoWeek(Date.UTC(2026, 0, 1)).key).toBe('2026-W01');
       },
     };
   },
