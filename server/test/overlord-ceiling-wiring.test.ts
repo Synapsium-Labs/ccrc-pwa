@@ -14,13 +14,14 @@ import { actCountPort, ceilingLatchPorts } from '../src/coord/overlordCeilingWir
 import { overlordGateRun, type OverlordGateDeps } from '../src/coord/overlordGateRun.js';
 import { OVERLORD_DOORS, type DoorRow, type OverlordDoorRow } from '../src/coord/overlordDoors.js';
 import type { DesignationRead } from '../../shared/overlord-designation.js';
+import type { RecordedActor } from '../src/auth/callerIdentity.js';
 import { mkTmp, removeTmpFixtures } from './tmpHelpers.js';
 
 afterEach(async () => { await removeTmpFixtures(); });
 
 const store = (): CoordStore => new CoordStore(openCoordDb(path.join(mkTmp('ccrc-ceiling-wiring-'), 'coord.db')));
 const ladderDeps = (coord: CoordStore) => ({ coord, journal: NO_LADDER_AUTHORITY, clock: { wall: () => 1_000 }, entropy: { hex: (n: number) => 'c'.repeat(2 * n) } });
-const realRaise = (coord: CoordStore) => (detail: string, actor: never) => raiseLatch(ladderDeps(coord), ACT_CEILING_LATCH, detail, actor);
+const realRaise = (coord: CoordStore) => (detail: string, actor: RecordedActor) => raiseLatch(ladderDeps(coord), ACT_CEILING_LATCH, detail, actor);
 
 describe('the composed latch ports', () => {
   it('the standing read: no store or an unreadable one is unmeasured; a measured one says whether act-ceiling-hit stands', () => {
