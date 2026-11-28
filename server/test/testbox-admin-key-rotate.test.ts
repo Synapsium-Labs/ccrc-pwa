@@ -556,19 +556,17 @@ describe.skipIf(!HAS_KEYGEN)('a line is removed by the key it holds, not only by
     }
   });
 
-  it('revoke and disconnect remove ccrc\'s line in every variant, and the operator\'s other line stays', () => {
-    const probe = fixture();
-    const line0 = connected(probe);
-    for (const sub of ['key-revoke', 'disconnect']) {
-      for (const name of Object.keys(variants(line0, pubB64(`${probe.key}.pub`)))) {
-        const h = fixture();
-        const line = connected(h);
-        const b64 = pubB64(`${h.key}.pub`);
-        writeFileSync(h.ak, `${OTHER_LINE}\n${variants(line, b64)[name]!}\n`, { mode: 0o600 });
-        expect(json(verb(h, sub, '--from', 'pwa')), `${sub}: ${name}`).toEqual({ ok: true });
-        expect(akLines(h), `${sub}: ${name}`).toEqual([OTHER_LINE]);
-      }
-    }
+  // One case per (verb, variant) pair, each with its own fixture and its own bound (issue #3646: the ten as one case passed the
+  // default 20 s on a loaded runner). The variant names come from `variants` above, its keys read with empty arguments, so the
+  // list stays one definition and no key pair is made only to enumerate it.
+  const revokePairs = ['key-revoke', 'disconnect'].flatMap((sub) => Object.keys(variants('', '')).map((name) => [sub, name] as const));
+  it.each(revokePairs)('revoke and disconnect remove ccrc\'s line in every variant, and the operator\'s other line stays: %s, %s', (sub, name) => {
+    const h = fixture();
+    const line = connected(h);
+    const b64 = pubB64(`${h.key}.pub`);
+    writeFileSync(h.ak, `${OTHER_LINE}\n${variants(line, b64)[name]!}\n`, { mode: 0o600 });
+    expect(json(verb(h, sub, '--from', 'pwa')), `${sub}: ${name}`).toEqual({ ok: true });
+    expect(akLines(h), `${sub}: ${name}`).toEqual([OTHER_LINE]);
   });
 
   it('a ccrc line with trailing space or CR that holds ANOTHER key (an orphan) goes too, on rotate and revoke alike', () => {
