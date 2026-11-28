@@ -2487,3 +2487,13 @@ describe('X2 P2.3 review round 1: the Remove gate, the refusal filter and the tr
     }
   });
 });
+
+// X5-FU item 1 (x5-fu-console-prepare-waits): the console range prepare's own lane wait. Appended, with its own import.
+import { DOCS_LANE_PREPARE_MAX_WAIT_MS } from '../src/docs/policy.js';
+
+describe('the console prepare\'s lane wait (X5-FU, D-9146\'s residual)', () => {
+  // Its value only: a pin of the source line would be a new literal source pin over policy.ts, which ARCH-06's ratchet refuses.
+  it('is 30 s', () => {
+    expect(DOCS_LANE_PREPARE_MAX_WAIT_MS).toBe(30000);
+  });
+});

@@ -45,8 +45,9 @@ export interface SectionCtx {
   /** Shows the step in `card` (null hides it). With `retry`, the confirm sends that act once more by itself: that send is the
    *  retry, and a press by the operator is always a first send. Any other `ask` drops a retry not yet sent. */
   readonly ask: (card: string | null, retry?: StepRetry) => void;
-  /** Whether `card`'s step is showing. A card that hands a retry holds itself whole while it does, every input and every act
-   *  (review 4167 F2, F3, ruled call 1930), so nothing typed or pressed meets the retry; another card's answer frees it. */
+  /** Whether `card` is held: its step is showing, or the confirm has landed and the retry it handed is not yet sent (review 4191
+   *  F1). A card that hands a retry holds itself whole while it is, every input and every act (review 4167 F2, F3, ruled call
+   *  1930), so nothing typed or pressed meets the retry; another card's answer frees it. */
   readonly held: (card: string) => boolean;
 }
 

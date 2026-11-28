@@ -8,8 +8,9 @@
 // retry is made outside the send (`saveRetry`), from one boolean, so the closure the section keeps while the step shows reaches no
 // key (review 4167 F1, held by `settings-retry-census.test.ts`). The field is emptied on the door's answer and on every refusal,
 // never on a first `step-up-required`. That Save hands the section its retry, which the confirm sends (review 4139 F1, ruled call
-// 1876). From the press to the end of the step the card's inputs and acts are held (review 4167 F2, F3, ruled call 1930; review
-// 4183 F1): the kind, the endpoint, the model id, the key field, Save and Remove, by the send in flight and then by the step, so
+// 1876). From the press until Save's retry has been sent the card's inputs and acts are held (review 4167 F2, F3, ruled call 1930;
+// review 4183 F1; review 4191 F1): the kind, the endpoint, the model id, the key field, Save and Remove, by the send in flight, then
+// by the step, then from the confirm until the section has sent the retry, whose own send in flight holds them from there, so
 // nothing typed or pressed meets the retry, which sends the host as it was pressed. The key field's Show toggle is not held: it
 // sends nothing. The step is put away by its confirm, by another card's answered act or step, or by leaving Settings; Remove (a
 // narrowing) is held with the card while a Save's step shows, so a step that cannot be confirmed on this device holds it until one

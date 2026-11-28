@@ -149,6 +149,12 @@ const hostInputs = (): HTMLElement[] => ['decision-kind', 'decision-endpoint', '
 const hostHeldControls = (): HTMLElement[] => [
   ...hostInputs(), keyField(), hostSave(), control(card('decision-host'), 'decision-key-remove'),
 ];
+/** Each control's `disabled`, by name, as the page stands at this instant (read from inside a request, it is the page the request
+ *  was made from). */
+const heldNow = (els: readonly HTMLElement[]): Record<string, boolean> => Object.fromEntries(els.map((el) => [
+  el.getAttribute('data-settings-input') ?? el.getAttribute('data-settings-control') ?? el.getAttribute('aria-label') ?? el.tagName,
+  (el as HTMLInputElement).disabled,
+]));
 const allHeld = (els: readonly HTMLElement[], held: boolean, when: string): void => {
   for (const el of els) {
     const name = el.getAttribute('data-settings-input') ?? el.getAttribute('data-settings-control') ?? el.getAttribute('aria-label') ?? el.tagName;
@@ -679,6 +685,76 @@ describe('the host card', () => {
     await waitFor(() => expect(keyField().value).toBe(''));
     allHeld([...hostInputs(), keyField(), control(card('decision-host'), 'decision-key-remove')], false, 'after the retry');
     nowhere('after the retry');
+  });
+
+  it('15. the card is held until its retry is sent: when the retry reads the key, the field and every control of the card are held, and its answer frees them', async () => {
+    // Review 4191 F1 to F3. The confirm puts the step away in one render, and the section sends the retry after it, from an effect.
+    // The retry's request is made inside that effect, before anything renders again, so the controls read from inside the request
+    // are the page as it stands when the retry reads the field. Held only while the step shows, they read enabled there.
+    const atRetry: Record<string, boolean>[] = [];
+    const save = vi.spyOn(api, 'setDecisionKey').mockRejectedValueOnce(stepUpRequired()).mockImplementationOnce(async () => {
+      atRetry.push(heldNow(hostHeldControls()));
+      return { ok: true };
+    });
+    await open();
+    typeKey();
+    fireEvent.click(hostSave());
+    await waitFor(() => expect(card('decision-host').querySelector('[data-step-up]')).not.toBeNull());
+    await confirmStep();
+    await waitFor(() => expect(save).toHaveBeenCalledTimes(2));
+    expect(save.mock.calls[1]![0].key).toBe(KEY);
+    expect(atRetry).toEqual([Object.fromEntries(Object.keys(heldNow(hostHeldControls())).map((n) => [n, true]))]);
+    // The hold does not stick: the retry's answer frees the card.
+    await waitFor(() => expect(keyField().value).toBe(''));
+    allHeld([...hostInputs(), keyField(), control(card('decision-host'), 'decision-key-remove')], false, 'after the retry\'s answer');
+  });
+
+  it('15. a refused retry frees the card', async () => {
+    const save = vi.spyOn(api, 'setDecisionKey').mockRejectedValueOnce(stepUpRequired()).mockRejectedValueOnce(refused(400, 'bad-endpoint'));
+    await open();
+    typeKey();
+    fireEvent.click(hostSave());
+    await waitFor(() => expect(card('decision-host').querySelector('[data-step-up]')).not.toBeNull());
+    await confirmStep();
+    await waitFor(() => expect(save).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(card('decision-host').querySelector('[data-settings-refusal="decision-host"]')).not.toBeNull());
+    expect(keyField().value).toBe('');
+    allHeld([...hostInputs(), keyField(), control(card('decision-host'), 'decision-key-remove')], false, 'after a refused retry');
+  });
+
+  it('15. a step that cannot be confirmed on this device keeps the card held until another card\'s answer frees it, and no Save is sent', async () => {
+    // The step is locked: it draws no confirm, so the retry is never sent. Another card's answered act puts the step away and drops
+    // the retry, and that frees the card (the hold is not kept by a retry that will never be sent).
+    stepClient.stepUpStart.mockRejectedValue(new ApiError(429, { ok: false, error: 'step-up-locked' }));
+    const save = vi.spyOn(api, 'setDecisionKey').mockRejectedValueOnce(stepUpRequired()).mockResolvedValue({ ok: true });
+    const off = vi.spyOn(api, 'offDecisionRow').mockResolvedValue({ ok: true, row: 'programme.any', side: sideOf({ mode: 'off' }), heldWhy: null });
+    await open(viewOf({ rows: [rowOf('programme.any', { side: sideOf({ mode: 'shadow' }) })] }));
+    typeKey();
+    fireEvent.click(hostSave());
+    await waitFor(() => expect(card('decision-host').querySelector('[data-step-up]')).not.toBeNull());
+    await settle();
+    expect(screen.queryByRole('button', { name: 'Confirm with passphrase' })).toBeNull();
+    allHeld(hostHeldControls(), true, 'a locked step');
+    pick('programme.any', 'Off');
+    await waitFor(() => expect(off).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(card('decision-host').querySelector('[data-step-up]')).toBeNull());
+    allHeld(hostHeldControls(), false, 'freed by another card');
+    await settle();
+    expect(save).toHaveBeenCalledTimes(1);
+  });
+
+  it('15. leaving the section frees the card: mounted again, nothing is held, no step shows and no Save is sent', async () => {
+    const save = vi.spyOn(api, 'setDecisionKey').mockRejectedValueOnce(stepUpRequired()).mockResolvedValue({ ok: true });
+    await open();
+    typeKey();
+    fireEvent.click(hostSave());
+    await waitFor(() => expect(card('decision-host').querySelector('[data-step-up]')).not.toBeNull());
+    cleanup();
+    show();
+    await settle();
+    expect(document.querySelector('[data-step-up]')).toBeNull();
+    allHeld([...hostInputs(), keyField(), control(card('decision-host'), 'decision-key-remove')], false, 'mounted again');
+    expect(save).toHaveBeenCalledTimes(1);
   });
 
   it("16. a host-only Save holds the key field from the press: no key can be typed in flight or while the step shows, so the retry sends the host alone and discards nothing", async () => {

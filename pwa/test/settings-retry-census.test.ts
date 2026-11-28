@@ -1,23 +1,31 @@
 // The retry holds no value (Overlord W2 Settings, review 4167 F1, ruled call 1930). A card that hands the section a retry with its
-// `step-up-required` (the key's Save, the list's Upload and Clear) keeps that retry in the section's state until the confirm lands. A
-// closure keeps alive every variable of the scope it is made in that any closure of that scope names, so a retry made inside a send
-// that read the key, or parsed the names, keeps them reachable on the heap while the step shows, though the field has been emptied.
+// `step-up-required` (the key's Save, the list's Upload and Clear) keeps that retry in the section's state until it is sent, after
+// the confirm lands. A closure keeps alive every variable of the scope it is made in that any closure of that scope names, so a
+// retry made inside a send that read the key, or parsed the names, keeps them reachable on the heap while the step shows, though the
+// field has been emptied.
 //
 // No runtime check sees a closure's captured variables (the fiber walk skips functions, `helpers/fiberWalk.ts`), so this census
-// holds a shape by source, over the two card files. The fact it guards is that NO VALUE STANDS IN A SEND'S SCOPE, the scope the
-// retry would otherwise be made in; it is a check on lines of text, not a proof about closures (review 4183 F3). It checks:
+// holds a shape by source, over the two card files. "The send" is the function named `send` in each card file, the one that calls
+// the door and whose request reads the field. The fact the census guards is that NO VALUE STANDS IN THAT FUNCTION'S SCOPE, the
+// scope the retry would otherwise be made in; it is a check on lines of text, not a proof about closures (review 4183 F3). It does
+// not hold the names card's `upload`, which calls `send`: `upload` keeps the parsed rows (`parsed`) in its own scope, the scope the
+// request's body arrow is made in. No closure made there names `parsed` today, so none keeps it; the census does not check that,
+// beyond the arm on the body arrow below. It checks:
 //   - every retry is made by a MAKER declared at the component's own level, outside every send: a line of the form
 //     `const <name>Retry: StepRetry = { act: '<act>', send: () => <send>(true) };`, or, for the key's Save, which keeps one boolean,
 //     `const <name>Retry = (carried: boolean): StepRetry => ({ act: '<act>', send: () => <send>(carried, true) });`;
 //   - no other line of the file holds `send: () =>` (the reviewer's surviving mutant, the retry arrow written again inside the send,
 //     is red);
-//   - each door call hands a maker's retry, by name (a `toContain`, so a comment holding the same text would satisfy it);
+//   - each door call hands a maker's retry, by name;
 //   - the request itself reads the field: the key's `peek` inside the request, and Upload's body built from the box inside the
-//     request (`rowsBodyOf(text.current)`), so a send that keeps the rows in a local of any name is red; and no local named `typed`
-//     or `body` stands.
-// It cannot see, and nothing else here sees: a component-level `let` assigned inside a send; a retry written as `send: async () =>`,
-// in method shorthand or split over lines; a cast that passes a string as `carried`; a value kept by another means than a local of
-// the send. The code holds none of these today; a reviewer reads for them. It is not grown into a parser.
+//     request (`rowsBodyOf(text.current)`), so a send that REPLACES the request's read with a local of any name is red; and no local
+//     named `typed` or `body` stands.
+// The last two are searches of the whole source (`toContain`, `toMatch`), so a comment holding the same text satisfies each of them:
+// the door call's arm and every request arm alike.
+// It cannot see, and nothing else here sees: a local of another name kept BESIDE the unchanged request line (the key read into
+// `k` while the request still reads `peek`, say); a component-level `let` assigned inside a send; a retry written as
+// `send: async () =>`, in method shorthand or split over lines; a cast that passes a string as `carried`; a value kept by another
+// means than a local of the send. The code holds none of these today; a reviewer reads for them. It is not grown into a parser.
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';

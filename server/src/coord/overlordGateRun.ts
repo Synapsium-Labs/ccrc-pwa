@@ -31,14 +31,15 @@ import { ceilingLatchDue, type GroupCount } from './overlordActCeiling.js';
 import { ACT_CEILING_WINDOW_MS, type CeilingGroup } from '../../../shared/overlord.js';
 
 /** Step 10's act-count reader (W2 act catalogue A; plan question 1, slug `ceiling-counter-is-an-act-rows-port`): act rows
- *  written since `since` whose kind or effect is in the group, in all and for the programme (`null`: no programme target);
- *  a row settled `refused` does not count. Its producer, act rows A's store, has not landed, so the runner reads it as its
- *  stated default below, which refuses. */
+ *  written since `since` whose kind or effect is in the group, in all and for the programme, named by its slug (`null`: no
+ *  programme target; act rows A, slug `programme-is-its-slug`); a row settled `refused` does not count. Its producer is act
+ *  rows A's store (`overlordActsStore.ts#actCountReader`), built by `overlordCeilingWiring.ts#actCountPort` and bound in the
+ *  server's build function (`server.ts#buildServer`, delivery). */
 export interface ActCountReader {
-  count(group: CeilingGroup, programme: number | null, since: number): GroupCount;
+  count(group: CeilingGroup, programme: string | null, since: number): GroupCount;
 }
-/** The default until act rows A wires its count: every counted kind refuses `unavailable` (`not-wired`). No door of today
- *  reaches it, because every W1 door's kind has its bound held by an owner, or names none (`gateReads`' `ceiling`). */
+/** The stated default where no store is open: every counted kind refuses `unavailable` (`not-wired`). No door of today
+ *  reaches a count, because every W1 door's kind has its bound held by an owner, or names none (`gateReads`' `ceiling`). */
 export const NOT_WIRED_ACT_COUNT: ActCountReader = { count: () => ({ kind: 'unmeasured', why: 'not-wired' }) };
 
 /** The ceiling-hit latch's two ports (plan question 3): whether a latch for the cause stands, and its raise through the

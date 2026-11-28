@@ -23,7 +23,8 @@
 // nothing, so a slot is never freed twice. A capability that ends loses its queue places with its record, but a running ticket
 // still holds its box slot until it is released (the response it serves is still on its way out), so the box count is never
 // freed twice and never leaked. `charge` is the capability's hourly byte budget (the window restarts an hour after its start,
-// asked only where the store is asked, with no timer); it answers `ok`, `over-budget` (a spent hour) or `dead` (an ended or
+// asked only where the store is asked, with no timer); it answers `ok`, `over-budget` (a spent hour, which the refusal spends to its
+// end, X5-FU) or `dead` (an ended or
 // unknown capability) as three words, and throws for a count that is not a whole non-negative number. `recordSnapshot` keeps one
 // range snapshot per manifest entry, which the view shows through a read-only face. A route reads these in a frozen view and writes none of them.
 import { createHash, randomBytes } from 'node:crypto';
@@ -131,8 +132,9 @@ export interface ArtifactStore {
   release(ticket: number): void;
   /** The running requests of the whole box, whichever capability they belong to, ended or not. */
   boxInflight(): number;
-  /** Charge `bytes` to the capability's hour: `ok`; `over-budget`, charging nothing, when they would pass `ARTIFACT_HOURLY_BYTES`
-   *  (a spent hour and nothing else); `dead`, charging nothing, for a capability that has ended or was never minted (it fails
+  /** Charge `bytes` to the capability's hour: `ok`; `over-budget` when they would pass `ARTIFACT_HOURLY_BYTES` (a spent hour and
+   *  nothing else), which charges them nothing but spends the rest of the hour, because the read they are for was already taken
+   *  (X5-FU item 2); `dead`, charging nothing, for a capability that has ended or was never minted (it fails
    *  shut, and a caller tells it from a spent hour by the word). A count that is not a non-negative safe integer is a caller's
    *  programming error: it throws a `RangeError` (naming no id), whatever the capability's state, and charges nothing. */
   charge(id: string, bytes: number): 'ok' | 'over-budget' | 'dead';
@@ -386,7 +388,12 @@ export function createArtifactStore(
         rec.hourStart = now;
         rec.servedThisHour = 0;
       }
-      if (rec.servedThisHour + bytes > ARTIFACT_HOURLY_BYTES) return 'over-budget';
+      // A charge comes after the read it is for (the door's sink), so a refused one has already taken its bytes: it spends the rest
+      // of the hour, and the next request meets the spent hour at admission and reads nothing (X5-FU item 2).
+      if (rec.servedThisHour + bytes > ARTIFACT_HOURLY_BYTES) {
+        rec.servedThisHour = ARTIFACT_HOURLY_BYTES;
+        return 'over-budget';
+      }
       rec.servedThisHour += bytes;
       return 'ok';
     },
