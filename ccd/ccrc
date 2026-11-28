@@ -6339,20 +6339,24 @@ _ccrc_operator_only() {   # <the verb's words, e.g. "auth on">
 #        CCRC_RP_ID holds a value it did not write (armed by hand for another address: a hand edit there); a foreign
 #        cookie line alone stays, named.
 # The order of every run, and nothing is written before the last refusal:
-#   1. `_ccrc_operator_only`; 2. a server box (no CCRC_ROLE=fleet; ccrc.service installed); 3. ~/.ccrc/update.lock,
+#   1. `_ccrc_operator_only`, and on a Mac a home in `_box_said`'s closed form (wave 193 A2); 2. a server box (no
+#   CCRC_ROLE=fleet; ccrc.service installed: on a Mac its job file); 3. ~/.ccrc/update.lock,
 #   held for the whole act (an update's health gate measures this same unit; `ccrc coordination-snapshot`'s rule), and
 #   no copy a killed run left beside ccrc.env; 4. PROVABLY loopback-only: `_box_reach`, the reader doctor's
 #   update-exposure check asks (no exposure artifact, CCRC_HOST measured a loopback address), and `_auth_unit_sources`,
 #   the unit's other sources of its environment, none of which may name a key (or be a drop-in, or an env file beyond
 #   the two) and all of which must be listable, and `_auth_unit_own`: on Linux the unit is the tree's own file byte for
-#   byte, and the file systemd says it loaded, as it is now (review 3971 R1, wave 190 F1); 5. every key read as
+#   byte, and the file systemd says it loaded, as it is now (review 3971 R1, wave 190 F1); on a Mac the domain's
+#   environment read key by key, then the job file the installer's but for its PATH and ProcessType and not a link,
+#   then the job launchd holds read from one print (wave 193); 5. every key read as
 #   ccrc.service receives it (`_box_unit_env`, the
 #   two path keys through `_box_path_for`), and an undecidable one refuses; 6. on: CCRC_HOST unset, 127.0.0.1 or
 #   localhost, no foreign CCRC_RP_ID/CCRC_ORIGIN/CCRC_COOKIE_INSECURE, and a USABLE passphrase (the hasher's `--check`,
 #   doctor's own question, which prints no byte of the secret) — never the other order: a gate armed with no passphrase
 #   fails shut; off: no foreign CCRC_RP_ID/CCRC_ORIGIN; 7. the write (a 0600 copy of the original, temp file and rename,
 #   the mode kept, every other line byte for byte, a comment always a comment); 8. restart, and the PROOF: the restart
-#   command succeeding, the unit active and /api/auth/status answering the new mode within the update health window;
+#   command succeeding (on a Mac, launchctl kickstart -k), the unit active and /api/auth/status answering the new mode
+#   within the update health window;
 #   9. on any failure the original bytes go back, the unit is restarted again, and exit 1; a signal (INT, TERM, HUP)
 #   from the write on puts them back too unless they are back already, restarts once, says it was not proven, and
 #   exits 130.
@@ -6376,8 +6380,9 @@ _auth_want() {   # <key> <port> -> the value `ccrc auth on` writes for it
 # asked as one yes for the words that name the verb: doctor's `auth` check, install's gate line. It asks whether the
 # installed unit is the tree's file (`_auth_unit_cmp`, wave 190 A4), which needs no service manager; not the unit's
 # other sources (`_auth_unit_sources`) or what systemd loaded, which do: the verb refuses there itself, by name.
-# It clobbers `_box_unit_env`'s out-params, so a caller asks it first. It answers no on a Mac, where the verb refuses
-# (review 3971 R1(d), ruling B), so doctor and install give the hand route there.
+# It clobbers `_box_unit_env`'s out-params, so a caller asks it first. On a Mac (wave 193 g) it holds the home to
+# `_box_said`'s closed form, as the verb does, and its compare is the job file's (`_auth_job_cmp`); what launchd holds
+# and the domain's environment need launchctl, so they are the verb's own refusals there, by name.
 _auth_fits_here() {   # <unit dir>
   local role port
   [ "${CCD_OS:-linux}" != darwin ] || _box_said "$HOME" >/dev/null || return 1
@@ -6398,7 +6403,8 @@ _auth_fits_here() {   # <unit dir>
 
 # ── `_auth_unit_sources` — WHAT ELSE CAN HAND ccrc.service ITS BIND OR A SIGN-IN KEY (review 3934 F2) ──
 # The reach proof reads the two env files. The unit can take its environment from more than those, and a key it got
-# there decides what the proof says it measured. Linux only: on a Mac the verb refuses before this (review 3971 R1(d)).
+# there decides what the proof says it measured. On a Mac (wave 193) the job's own sources are `_auth_unit_own`'s, and
+# this reads the caller's launchd domain's environment key by key instead (the arm below).
 #   ON DISK (what the next start applies): the unit file in the unit directory given, its Environment=,
 #   PassEnvironment= and EnvironmentFile= lines, and the drop-in directories beside it, ccrc.service.d/ and the
 #   all-services service.d/; AS LOADED (what the restart applies): `systemctl --user show` of the unit's DropInPaths,
@@ -6591,7 +6597,7 @@ _auth_unit_own() {   # <unit dir> <recorded role or "">
 # from the same shell, wave 193 A1); rc 2 UNMEASURED. A path is printed, never a byte of the job.
 AUTH_JOB_SPATH=$'\001ccrc-job-path\001'; AUTH_JOB_SCLASS=$'\001ccrc-job-class\001'; AJ_PATH=""; AJ_ARGS=()
 _auth_job_cmp() {   # <unit dir> <recorded role or "">
-  local jf label exp all="" i pre suf v pbad=0 LC_ALL=C
+  local jf label exp all="" i pre suf v pbad=0 nul=0 LC_ALL=C
   local -a ajc_want ajc_have ajc_parts
   AUO_WHY=""; AUO_FIX=""; AJ_PATH=""; AJ_ARGS=()
   label="$(_svc_label ccrc.service)"; jf="$1/$label.plist"
@@ -6605,11 +6611,13 @@ _auth_job_cmp() {   # <unit dir> <recorded role or "">
   exp="$(_inst_plist_server "$label" "$HOME/.ccrc/logs/$label.log" server "$AUTH_JOB_SPATH" "$AUTH_JOB_SCLASS" 2>/dev/null)" \
     || { AUO_WHY="the job ccrc installs could not be printed here, so whether $jf is that job was not measured"; return 2; }
   mapfile -t ajc_want <<< "$exp"
-  { IFS= read -r -d '' all || :; } < "$jf" 2>/dev/null
+  # The read stops at a NUL, so it answering 0 (a NUL found) is a difference whatever follows (fix round 3, ruling 4b:
+  # the installer's bytes, a NUL, then anything compared equal); 1 is the end of the file, with no NUL in it.
+  { IFS= read -r -d '' all && nul=1; } < "$jf" 2>/dev/null
   mapfile -t ajc_have <<< "${all%$'\n'}"
   AUO_WHY="$jf is not the job ccrc installs, and this verb acts only on its own"
   AUO_FIX="ccrc install --role $AIR_ROLE puts the shipped job back and loads it into launchd (an update does not, on a box already on its version$AIR_NONE); or set the keys by hand (the README's 'The session gate')"
-  [ "${all: -1}" = $'\n' ] && [ "${#ajc_have[@]}" -eq "${#ajc_want[@]}" ] || return 1
+  [ "$nul" -eq 0 ] && [ "${all: -1}" = $'\n' ] && [ "${#ajc_have[@]}" -eq "${#ajc_want[@]}" ] || return 1
   for i in "${!ajc_want[@]}"; do
     case "${ajc_want[$i]}" in
       *"$AUTH_JOB_SPATH"*|*"$AUTH_JOB_SCLASS"*)
@@ -6639,15 +6647,15 @@ _auth_job_cmp() {   # <unit dir> <recorded role or "">
 # and `kickstart -k` restarts the definition it holds, so the job it holds must be the file just compared. ONE read,
 # `launchctl print`, through `_svc_launchctl` (its guard stands), whose lines of one tab are read by name: `path` is the
 # job file, `program` is /bin/bash, `arguments` are the file's three, and the job's own `environment` is exactly PATH
-# and HOME holding the file's values, and at most XPC_SERVICE_NAME holding the job's label and OSLogRateLimit holding a
-# whole number (wave 193 B1, ruled; `_auth_job_env_ok`, below). Any other key in it refuses, named, never its value. A missing line or block is UNMEASURED; launchd's "no such job"
+# and HOME holding the file's values, and at most XPC_SERVICE_NAME holding the job's label and OSLogRateLimit holding
+# one to nine digits (wave 193 B1, ruled; `_auth_job_env_ok`, below), each key matched by its whole name. Any other key in it refuses, named, never its value. A missing line or block is UNMEASURED; launchd's "no such job"
 # (113) refuses with the install as the way on. The print's other blocks (the inherited and default environments) are
 # not read: the domain's environment is `_auth_unit_sources`'s Mac read.
 # The keys the job's own environment block may hold, each with its rule: B1's closed set (the coordinator's rulings,
 # mails 39576 and 40092). These four, and no other, were measured on a real launchd: the GitHub-hosted runner image
 # macos-26-arm64 (20261123.0526.1), on 2026-11-27, in wave 193's first full run. PATH and HOME are compared with the job
 # file's values after the read; XPC_SERVICE_NAME is launchd's own name for the job; OSLogRateLimit is the system's
-# logging rate limit, which launchd adds to every job, a plain whole number, and no source of the sign-in setting.
+# logging rate limit, which launchd adds to every job, one to nine digits, and no source of the sign-in setting.
 _auth_job_env_ok() {   # <key> <value> <label> -> rc 0 when the job may hold that key with that value
   case "$1" in
     PATH|HOME) return 0 ;;
@@ -6657,7 +6665,7 @@ _auth_job_env_ok() {   # <key> <value> <label> -> rc 0 when the job may hold tha
   esac
 }
 _auth_job_loaded() {   # <unit dir> <recorded role or "">
-  local jf label out rc=0 line sect="" path="" prog="" k v a=0 e=0 extra="" lpath=$'\n' lhome=$'\n' LC_ALL=C
+  local jf label out rc=0 line sect="" path="" prog="" k v a=0 e=0 extra="" odd="" lpath=$'\n' lhome=$'\n' LC_ALL=C
   local -a ajl_args=()
   label="$(_svc_label ccrc.service)"; jf="$1/$label.plist"
   _auth_install_role "${2:-}"
@@ -6667,21 +6675,33 @@ _auth_job_loaded() {   # <unit dir> <recorded role or "">
   AUO_FIX="this verb cannot prove the job on this box without that read; set the keys by hand (the README's 'The session gate')"
   [ "$rc" -eq 0 ] && [ -n "$out" ] \
     || { AUO_WHY="launchctl print $(_svc_domain)/$label did not answer, so what launchd holds for the job was not measured"; return 2; }
+  # Fix round 3 (ruling 4a, review 4154 R1): a shape the reader does not know, where it reads, refuses as not measured,
+  # naming no value: inside the job's own environment block, a line that is not a key, ` => ` and a value; a second
+  # environment or arguments block; a second path or program line; a line of two tabs, or a block's closing line,
+  # outside any block (what a value holding a newline and a closing line would leave); a block still open at the end.
+  # The job's top-level lines the reader does not use are passed over by name, as before, and so is every line inside
+  # another block.
   while IFS= read -r line; do
     case "$sect:$line" in
-      :$'\t'"path = "*) path="${line#*= }" ;;
-      :$'\t'"program = "*) prog="${line#*= }" ;;
-      :$'\t'"arguments = {") sect='args'; a=1 ;;
-      :$'\t'"environment = {") sect='env'; e=1 ;;
+      :$'\t'"path = "*) [ -z "$path" ] || { odd="a second path line"; break; }; path="${line#*= }" ;;
+      :$'\t'"program = "*) [ -z "$prog" ] || { odd="a second program line"; break; }; prog="${line#*= }" ;;
+      :$'\t'"arguments = {") [ "$a" -eq 0 ] || { odd="a second arguments block"; break; }; sect='args'; a=1 ;;
+      :$'\t'"environment = {") [ "$e" -eq 0 ] || { odd="a second environment block"; break; }; sect='env'; e=1 ;;
+      :$'\t\t'*|:$'\t}') odd="a line outside any block that belongs inside one"; break ;;
       :$'\t'*" = {") sect='other' ;;
       *:$'\t}') sect="" ;;
       args:$'\t\t'*) ajl_args+=("${line#$'\t\t'}") ;;
       env:$'\t\t'*" => "*) k="${line#$'\t\t'}"; v="${k#* => }"; k="${k%% => *}"
+        [[ "$k" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || { odd="a line in the job's environment block that is not a key, => and a value"; break; }
         # B1's closed set, key by key (`_auth_job_env_ok`); any other key, or a value outside its rule, refuses, named.
         case "$k" in PATH) lpath="$v" ;; HOME) lhome="$v" ;; esac
         _auth_job_env_ok "$k" "$v" "$label" || extra="$k" ;;
+      env:*) odd="a line in the job's environment block that is not a key, => and a value"; break ;;
     esac
   done <<< "$out"
+  [ -n "$odd" ] || [ -z "$sect" ] || odd="a block still open at the end of the print"
+  [ -z "$odd" ] \
+    || { AUO_WHY="launchctl print $(_svc_domain)/$label printed $odd, a shape this verb does not read, so what launchd holds was not measured"; return 2; }
   [ -n "$path" ] && [ -n "$prog" ] && [ "$a" -eq 1 ] && [ "$e" -eq 1 ] \
     || { AUO_WHY="launchctl print $(_svc_domain)/$label did not say all of the job's path, program, arguments and environment, so what launchd holds was not measured"; return 2; }
   AUO_FIX="ccrc install --role $AIR_ROLE loads the job file into launchd again (an update does not, on a box already on its version$AIR_NONE); or set the keys by hand (the README's 'The session gate')"
@@ -6882,9 +6902,11 @@ cmd_auth() {
   # A copy that a run left (review 3934 F3): the file as it was before that run, which was killed, or whose restore
   # failed and kept it (review 3971 R5). Which of the two the box keeps is the operator's to say, so nothing runs past
   # it. After the lock, so a running act's own copy is never misread.
+  # The copy's name ends in bytes from disk, so that suffix goes through the one printer (fix round 3, ruling 4c; C5).
   local left
   for left in "$BOX_ENV_FILE".auth-restore.*; do
     [ -e "$left" ] || [ -L "$left" ] || continue
+    left="$BOX_ENV_FILE.auth-restore.$(_box_said "${left#"$BOX_ENV_FILE.auth-restore."}")"
     _ccrc_die "auth $sub: $left is a copy of $BOX_ENV_FILE as it was before a run of ccrc auth that did not finish (it was killed, or it could not put the file back and kept the copy), so which of the two this box keeps is yours to say: compare them, keep the one you want as $BOX_ENV_FILE, delete $left, then re-run. Nothing was changed."
   done
 

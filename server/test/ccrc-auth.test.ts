@@ -1220,6 +1220,9 @@ describe(`ccrc auth on a Mac: the job proved (wave 193) [${IS_DARWIN ? 'darwin' 
     ['no newline after its last line', (j) => j.replace(/\n$/, '')],
     ['a binary plist', () => 'bplist00\u00d4\u0001\u0002\u0003\u0000\u0000\u0000\u0008Label'],
     ['a ProcessType that is not one of the four words', (j) => j.replace('<string>Background</string>', '<string>Batch</string>')],
+    // Fix round 3 (ruling 4b): the read stops at a NUL, so a NUL is a difference wherever it stands.
+    ["the installer's bytes, then a NUL and more after its last line", (j) => `${j}\u0000<key>NODE_OPTIONS</key>\n`],
+    ['a NUL inside it', (j) => j.replace('<key>HOME</key>', '<key>HO\u0000ME</key>')],
   ];
   for (const [name, edit] of edits) {
     it(`refuses on and off a job file that is not the installer's: ${name}, naming the file, never a byte of it`, async () => {
@@ -1327,6 +1330,12 @@ describe(`ccrc auth on a Mac: the job proved (wave 193) [${IS_DARWIN ? 'darwin' 
       [`with ${k}, not the measured key's exact name`,
         (h, j) => printOf(h, j, { env: [[k, '64'], ['PATH', JOB_PATH], ['HOME', h], ['XPC_SERVICE_NAME', MAC_LABEL]] }),
         new RegExp(`launchd holds the job app\\.ccrc\\.ccrc with ${k} in its own environment`)]),
+    // Fix round 3 (review 4154 F1): PATH and HOME by their whole names only. A suffix or a prefix match of either would
+    // let these through beside a valid PATH and HOME.
+    ...(['NODE_PATH', 'DYLD_LIBRARY_PATH', 'PYTHONPATH', 'PATHX', 'HOMEX', 'HOMEBREW_PREFIX'] as const).map((k):
+      [string, (h: string, j: string) => string, RegExp] => [`with ${k} beside a valid PATH and HOME, not their exact names`,
+      (h, j) => printOf(h, j, { env: [['OSLogRateLimit', '64'], ['PATH', JOB_PATH], ['HOME', h], [k, '/tmp/x'], ['XPC_SERVICE_NAME', MAC_LABEL]] }),
+      new RegExp(`launchd holds the job app\\.ccrc\\.ccrc with ${k} in its own environment, which .*app\\.ccrc\\.ccrc\\.plist does not set`)]),
     ['with another PATH', (h, j) => printOf(h, j, { env: [['PATH', '/tmp/evil:/usr/bin'], ['HOME', h]] }), /with another PATH or HOME in its environment than/],
     ['with another HOME', (h, j) => printOf(h, j, { env: [['PATH', JOB_PATH], ['HOME', '/tmp/elsewhere']] }), /with another PATH or HOME in its environment than/],
   ];
@@ -1377,6 +1386,47 @@ describe(`ccrc auth on a Mac: the job proved (wave 193) [${IS_DARWIN ? 'darwin' 
       const r = await runTty(b.home, ['auth', 'on']);
       await expectRefused(b, r, bytes(envFile(b.home)), words);
       expect(r.out).toMatch(/this verb cannot prove the job on this box without that read; set the keys by hand/);
+    });
+  }
+  // Fix round 3 (ruling 4a, review 4154 R1): a shape the reader does not know, where it reads, refuses as not measured,
+  // on and off, naming no value. On the tip before this round each of these was read as the job ccrc installs.
+  const odd = (what: string): RegExp => new RegExp(`launchctl print gui/\\d+/app\\.ccrc\\.ccrc printed ${what}, a shape this verb does not read, so what launchd holds was not measured`);
+  const envBlock = (p: string, lines: string[]): string => p.replace('\tenvironment = {\n', `\tenvironment = {\n${lines.map((l) => `${l}\n`).join('')}`);
+  const unclosed = (p: string): string => p.slice(0, p.indexOf('\t}', p.indexOf('\tenvironment = {')));
+  for (const [name, print, words] of [
+    ['a value holding a newline, a closing line and a key after it',
+      (h: string) => printOf(h, job(h), { env: [['OSLogRateLimit', '64'], ['PATH', JOB_PATH], ['HOME', h], ['XPC_SERVICE_NAME', `${MAC_LABEL}\n\t}\n\t\tCCRC_HOST => 0.0.0.0`]] }),
+      odd('a line outside any block that belongs inside one')],
+    ['a second environment block, after one with another PATH',
+      (h: string) => printOf(h, job(h), { env: [['PATH', '/tmp/evil:/usr/bin'], ['HOME', h]] })
+        .replace('\tdomain = ', `\tenvironment = {\n\t\tPATH => ${JOB_PATH}\n\t\tHOME => ${h}\n\t}\n\tdomain = `),
+      odd('a second environment block')],
+    ['a second path line, after one naming another file',
+      (h: string) => printOf(h, job(h), { path: '/tmp/evil/app.ccrc.ccrc.plist' }).replace('\ttype = ', `\tpath = ${macJobFile(h)}\n\ttype = `),
+      odd('a second path line')],
+    ['a second program line, after one naming another program',
+      (h: string) => printOf(h, job(h), { program: '/tmp/evil/zsh' }).replace('\targuments = {\n', '\tprogram = /bin/bash\n\targuments = {\n'),
+      odd('a second program line')],
+    ['a second arguments block',
+      (h: string) => printOf(h, job(h)).replace('\tinherited environment = {\n', `\targuments = {\n${jobArgs(job(h)).map((a) => `\t\t${a}\n`).join('')}\t}\n\tinherited environment = {\n`),
+      odd('a second arguments block')],
+    ['a print that ends inside the environment block', (h: string) => unclosed(printOf(h, job(h))),
+      odd('a block still open at the end of the print')],
+    ['an environment line with no arrow', (h: string) => envBlock(printOf(h, job(h)), ['\t\tNODE_OPTIONS=--require /tmp/x.js']),
+      odd("a line in the job's environment block that is not a key, => and a value")],
+    // An empty key named nothing the table could refuse by name, so before this round the job passed with it.
+    ['an environment line with no key before its arrow', (h: string) => envBlock(printOf(h, job(h)), ['\t\t => /tmp/x.js']),
+      odd("a line in the job's environment block that is not a key, => and a value")],
+  ] as const) {
+    it(`refuses on and off as not measured ${name}, naming no value`, async () => {
+      const b = box('ccrc-auth-mac-odd-', portLines());
+      writeFileSync(join(b.home, 'lc-print'), print(b.home));
+      for (const sub of ['on', 'off']) {
+        const r = await runTty(b.home, ['auth', sub]);
+        await expectRefused(b, r, bytes(envFile(b.home)), words);
+        expect(r.out).toMatch(/this verb cannot prove the job on this box without that read; set the keys by hand/);
+        expect(r.out).not.toMatch(/0\.0\.0\.0|\/tmp\/evil|--require|\/tmp\/x/);
+      }
     });
   }
 
@@ -1563,6 +1613,20 @@ onEach('ccrc auth: a signal in the proof window (review 3934 F3)', () => {
       expect(bytes(envFile(b.home))).toBe(before);
       expect(restarts(b.home)).toEqual([]);
       expect(existsSync(left)).toBe(true);
+    }
+  });
+  // Fix round 3 (ruling 4c, review 4154 A2): the copy's name ends in bytes from disk, so its suffix goes through the one
+  // printer (C5): an escape sequence or a newline in it never reaches the terminal.
+  it('names a leftover copy whose suffix is not in the closed form by the held word, on and off', async () => {
+    const b = box('ccrc-auth-leftover-odd-', portLines());
+    const left = join(b.home, '.ccrc', 'ccrc.env.auth-restore.4242\x1b[2J\nx');
+    writeFileSync(left, 'CCRC_HOST=127.0.0.1\n', { mode: 0o600 });
+    for (const sub of ['on', 'off']) {
+      const r = await runTty(b.home, ['auth', sub]);
+      expect(r.code, r.out).not.toBe(0);
+      expect(r.out).toContain(`${envFile(b.home)}.auth-restore.[a value this verb does not print] is a copy of`);
+      expect(r.out).not.toContain('\x1b[2J');
+      expect(restarts(b.home)).toEqual([]);
     }
   });
 });
@@ -1796,14 +1860,25 @@ onEach('ccrc auth: every refusal before the write (review 3934 F4)', (p) => {
 // never see it, so the class is held on Linux by the file's text: no interval bound over 255 anywhere in ccd/ccrc (main
 // has none, so the guard is not noisy). The rows below pin the length edges the form keeps.
 describe('ccrc auth: the closed form carries no counted bound a Mac cannot match (wave 193 fix round)', () => {
-  it('ccd/ccrc holds no interval bound over 255, in a bash match or any other pattern', () => {
+  // An interval bound, its open-ended form `{,n}` included (fix round 3, ruling 4d), whose largest number is over 255.
+  const overIn = (text: string): string[] => {
     const over: string[] = [];
-    readFileSync(CCRC_SRC, 'utf8').split('\n').forEach((line, i) => {
-      for (const m of line.matchAll(/\\?\{(\d+)(?:,(\d*))?\\?\}/g)) {
-        if (Math.max(Number(m[1]), Number(m[2] || 0)) > 255) over.push(`ccd/ccrc:${i + 1}: ${m[0]}`);
+    text.split('\n').forEach((line, i) => {
+      for (const m of line.matchAll(/\\?\{(\d*)(?:,(\d*))?\\?\}/g)) {
+        if (Math.max(Number(m[1] || 0), Number(m[2] || 0)) > 255) over.push(`ccd/ccrc:${i + 1}: ${m[0]}`);
       }
     });
-    expect(over).toEqual([]);
+    return over;
+  };
+  it('ccd/ccrc holds no interval bound over 255, in a bash match or any other pattern', () => {
+    expect(overIn(readFileSync(CCRC_SRC, 'utf8'))).toEqual([]);
+  });
+  it('the reader sees a bound over 255 in each form, the open-ended one included, and passes 255', () => {
+    expect(overIn('[[ "$v" =~ ^[a-z]{1,1024}$ ]]')).toHaveLength(1);
+    expect(overIn("grep -E '^x{300}$'")).toHaveLength(1);
+    expect(overIn('[[ "$v" =~ ^a{,300}$ ]]')).toHaveLength(1);
+    expect(overIn("sed -n '/^a\\{1,256\\}$/p'")).toHaveLength(1);
+    expect(overIn('[[ "$v" =~ ^a{1,255}$ ]] && [[ "$v" =~ ^a{,255}$ ]]')).toEqual([]);
   });
   it('_box_said prints 1024 bytes of the form whole, and holds 1025, an empty value and a byte outside it', () => {
     const said = (v: string): { rc: number; out: string } => {
@@ -1820,9 +1895,9 @@ describe('ccrc auth: the closed form carries no counted bound a Mac cannot match
 // Wave 193 fix round 2: three rows were red on a real Mac because their stubs passed through to /usr/bin/<tool>, where a
 // Mac has none of cp, mv and rm. A stub reaches its system tool through `realTool`, the lookup, never a fixed path.
 describe('ccrc auth: every stub in this file reaches its system tool by lookup (wave 193 fix round 2)', () => {
-  // A fixed /bin, /usr/bin, /sbin or /usr/sbin path run with an argument from the stub's shell; a shell itself is not a
-  // tool a stub passes through to.
-  const FIXED = /\/(?:usr\/)?s?bin\/([A-Za-z0-9_.-]+) +"?\$/g;
+  // A fixed /bin, /usr/bin, /sbin or /usr/sbin path run with an argument from the stub's shell, flags before it included
+  // (fix round 3, ruling 4d); a shell itself is not a tool a stub passes through to.
+  const FIXED = /\/(?:usr\/)?s?bin\/([A-Za-z0-9_.-]+)(?: +-[^\s"$]*)* +"?\$/g;
   const fixedIn = (text: string): string[] => {
     const hits: string[] = [];
     text.split('\n').forEach((line, i) => {
@@ -1838,6 +1913,8 @@ describe('ccrc auth: every stub in this file reaches its system tool by lookup (
     expect(fixedIn(`exec ${p('usr', 'bin', 'rm')} "$@"`)).toHaveLength(1);
     expect(fixedIn(`${p('usr', 'bin', 'cp')} "$@" || exit $?`)).toHaveLength(1);
     expect(fixedIn(`next=x; ${p('bin', 'mv')} "$plan.n" "$plan"`)).toHaveLength(1);
+    expect(fixedIn(`exec ${p('usr', 'bin', 'rm')} -f "$@"`)).toHaveLength(1);
+    expect(fixedIn(`exec ${p('bin', 'cp')} -p -- "$@"`)).toHaveLength(1);
     expect(fixedIn('`exec ${realTool(\'rm\')} "$@"`')).toEqual([]);
     expect(fixedIn(`exec ${p('bin', 'sh')} "$0"`)).toEqual([]);
   });

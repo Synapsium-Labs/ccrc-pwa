@@ -3,12 +3,12 @@
 // `strace -f`; the fixtures the parts share are in `ccrc-doctorFixture.ts`.
 import { describe, it, expect } from 'vitest';
 import { spawnSync } from 'node:child_process';
-import { writeFileSync, readFileSync, mkdirSync, rmSync, chmodSync, copyFileSync } from 'node:fs';
+import { writeFileSync, readFileSync, mkdirSync, rmSync, chmodSync, copyFileSync, existsSync } from 'node:fs';
 import path, { join } from 'node:path';
 import { mkTmp, removeTmpFixturesEachTest } from './tmpHelpers.js';
 import { fixtureSecretLine } from './authFixtures.js';
 import { itLinux, itDarwin } from './platformFixtures.js';
-import { installDoctorHooks, REPO, CCRC_SRC, CHECKS_SRC, BASH, writeAuthSecret, unstub, shq, stub, stubBin, writeCcrcEnv, unitDirOf, writeUnitFile, removeUnitFile, sysCaddyfile, runDoctor, healthy, lineFor, expectUndecided, UnitEnvAnswer, remedyFor } from './ccrc-doctorFixture.js';
+import { installDoctorHooks, REPO, CCRC_SRC, CHECKS_SRC, BASH, writeAuthSecret, unstub, shq, stub, stubBin, writeCcrcEnv, unitDirOf, writeUnitFile, removeUnitFile, sysCaddyfile, runDoctor, doctorEnv, healthy, lineFor, expectUndecided, UnitEnvAnswer, remedyFor } from './ccrc-doctorFixture.js';
 
 // Each case's homes go when the case ends, not in a file-wide end sweep (R100, review 518's S1): that sweep overran vitest's 20 s
 // hook timeout on the one file this family was split from. Registered before `installDoctorHooks()`'s root `afterEach` (the codex
@@ -168,39 +168,91 @@ describe('ccrc doctor: auth — the gate, and the passphrase it needs', () => {
   // Review 3934 F5 and A5: the helper that says whether `ccrc auth` is this box's remedy declines wherever the verb
   // refuses — CCRC_ROLE=fleet recorded, no ccrc.service, a CCRC_HOST the unit reader cannot decide, and a CCRC_ORIGIN or
   // CCRC_RP_ID other than what `on` writes (a gate-off box behind a proxy of its own) — so doctor offers the hand route.
+  // Fix round 3 (ruling 2): on a Mac the launchd job sources ccrc.env with bash, where `CCRC_HOST ="127.0.0.1"` is a
+  // command, so no key of the file is decided and doctor says so, not measured; the verb is not offered on either. The
+  // Linux answer (systemd decides CCRC_AUTH, the hand route) is unchanged.
+  const NOT_PLAIN = (n: number): RegExp => new RegExp(`^WARN auth: there is no passphrase file at .*, and .*/\\.ccrc/ccrc\\.env line ${n} is not a plain NAME=value line, and on macOS the launchd job sources both env files with bash, so that line can change what they set, so whether the gate is armed \\(and failing shut\\) was not measured`);
   it.each([
-    ['CCRC_ROLE=fleet in ccrc.env', 'CCRC_FLEET=local\nCCRC_HOST=127.0.0.1\nCCRC_PORT=7788\nCCRC_ROLE=fleet\n', false],
-    ['no ccrc.service installed', undefined, true],
-    ['a CCRC_HOST the unit reader cannot decide', 'CCRC_FLEET=local\nCCRC_HOST ="127.0.0.1"\nCCRC_PORT=7788\n', false],
-    ['a foreign CCRC_ORIGIN', 'CCRC_FLEET=local\nCCRC_HOST=127.0.0.1\nCCRC_PORT=7788\nCCRC_ORIGIN=https://box.example.com\n', false],
-    ['a foreign CCRC_RP_ID', 'CCRC_FLEET=local\nCCRC_HOST=127.0.0.1\nCCRC_PORT=7788\nCCRC_RP_ID=example.com\n', false],
-  ] as const)('wave 181: where ccrc auth refuses, the dark remedy does not offer it: %s', (_name, env, noUnit) => {
+    ['CCRC_ROLE=fleet in ccrc.env', 'CCRC_FLEET=local\nCCRC_HOST=127.0.0.1\nCCRC_PORT=7788\nCCRC_ROLE=fleet\n', false, null],
+    ['no ccrc.service installed', undefined, true, null],
+    ['a CCRC_HOST the unit reader cannot decide', 'CCRC_FLEET=local\nCCRC_HOST ="127.0.0.1"\nCCRC_PORT=7788\n', false, NOT_PLAIN(2)],
+    ['a foreign CCRC_ORIGIN', 'CCRC_FLEET=local\nCCRC_HOST=127.0.0.1\nCCRC_PORT=7788\nCCRC_ORIGIN=https://box.example.com\n', false, null],
+    ['a foreign CCRC_RP_ID', 'CCRC_FLEET=local\nCCRC_HOST=127.0.0.1\nCCRC_PORT=7788\nCCRC_RP_ID=example.com\n', false, null],
+  ] as const)('wave 181: where ccrc auth refuses, the dark remedy does not offer it: %s', (_name, env, noUnit, onMac) => {
     const home = env === undefined ? unexposedBox('ccrc-doctor-auth-notverb-') : unexposedBox('ccrc-doctor-auth-notverb-', env);
     rmSync(join(home, '.ccrc', 'auth.scrypt'), { force: true });
     if (noUnit) removeUnitFile(home, 'ccrc.service');
     const line = authLine(runDoctor(home).stdout);
-    expect(line).toMatch(/^PASS auth: /);
-    expect(line).toContain('CCRC_AUTH=on');
+    if (process.platform === 'darwin' && onMac !== null) {
+      expect(line).toMatch(onMac);
+    } else {
+      expect(line).toMatch(/^PASS auth: /);
+      expect(line).toContain('CCRC_AUTH=on');
+    }
     expect(line).not.toContain('ccrc auth on');
   });
 
   // Wave 193 g: on a Mac the helper asks the job file's proof and the reader that holds ccrc.env to plain assignments
-  // (both need no service manager), so where either says no, the verb, which refuses there, is not offered.
-  itDarwin.each([
+  // (both need no service manager), so where either says no, the verb, which refuses there, is not offered. Fix round
+  // 3 (the review's nit): each row also says what doctor does say there, the hand route or the not-measured line.
+  const macNotOwn = [
     ['the job file edited by hand', (h: string): void => {
-      const j = join(unitDirOf(h), 'app.ccrc.ccrc.plist');
+      const j = join(h, 'Library', 'LaunchAgents', 'app.ccrc.ccrc.plist');
       writeFileSync(j, `${readFileSync(j, 'latin1')}<!-- edited -->\n`, 'latin1');
-    }],
+    }, null],
     ['a ccrc.env line that is not a plain assignment', (h: string): void => {
       const p = join(h, '.ccrc', 'ccrc.env');
       writeFileSync(p, `${readFileSync(p, 'utf8')}CCRC_X=$(id)\n`);
-    }],
-  ] as const)('wave 193: where the Mac proof says no, the dark remedy does not offer ccrc auth: %s', (_name, plant) => {
+    }, NOT_PLAIN(4)],
+  ] as const;
+  const expectMacLine = (line: string, notMeasured: RegExp | null): void => {
+    if (notMeasured === null) {
+      expect(line).toMatch(/^PASS auth: no passphrase file at .*the shipped default, so nothing is gated/);
+      expect(line).toContain('CCRC_AUTH=on');
+    } else {
+      expect(line).toMatch(notMeasured);
+    }
+    expect(line).not.toContain('ccrc auth on');
+  };
+  itDarwin.each(macNotOwn)('wave 193: where the Mac proof says no, the dark remedy does not offer ccrc auth: %s', (_name, plant, notMeasured) => {
     const home = unexposedBox('ccrc-doctor-auth-mac-notown-');
     rmSync(join(home, '.ccrc', 'auth.scrypt'), { force: true });
     plant(home);
-    const line = authLine(runDoctor(home).stdout);
-    expect(line).not.toContain('ccrc auth on');
+    expectMacLine(authLine(runDoctor(home).stdout), notMeasured);
+  });
+
+  // Fix round 3 (ruling 2): the same answers on a simulated darwin, so a Linux run goes red where a Mac would. Doctor's
+  // auth check alone: ccrc and the check table sourced, then `CCD_OS=darwin` and both unit directories where a Mac keeps
+  // them, and the job the installer's writer prints for this home planted there.
+  const checkAuthDarwin = (home: string): string => {
+    const agents = join(home, 'Library', 'LaunchAgents');
+    mkdirSync(agents, { recursive: true });
+    const w = spawnSync(BASH, ['-c', '. "$1"; CCD_OS=darwin; _inst_plist_server app.ccrc.ccrc "$HOME/.ccrc/logs/app.ccrc.ccrc.log" server /usr/bin:/bin Background',
+      'writer', CCRC_SRC], { env: { HOME: home, PATH: process.env['PATH'] ?? '/usr/bin:/bin' }, encoding: 'latin1' });
+    expect(w.status, w.stderr).toBe(0);
+    if (!existsSync(join(agents, 'app.ccrc.ccrc.plist'))) writeFileSync(join(agents, 'app.ccrc.ccrc.plist'), w.stdout, 'latin1');
+    const r = spawnSync(BASH, ['-c', `. ${shq(CCRC_SRC)}; . ${shq(CHECKS_SRC)}; CCD_OS=darwin; `
+      + 'BOX_UNIT_DIR="$HOME/Library/LaunchAgents"; CCRC_UNIT_DIR="$BOX_UNIT_DIR"; _check_auth'], { env: doctorEnv(home), encoding: 'utf8' });
+    return authLine(r.stdout);
+  };
+  describe(`doctor's auth line on a Mac [${process.platform === 'darwin' ? 'darwin' : 'darwin, simulated'}] (fix round 3, ruling 2)`, () => {
+    it('the control: a loopback-only server box is offered ccrc auth on', () => {
+      const home = unexposedBox('ccrc-doctor-auth-simmac-ok-');
+      rmSync(join(home, '.ccrc', 'auth.scrypt'), { force: true });
+      expect(checkAuthDarwin(home)).toMatch(/^PASS auth: .*to arm the gate: ccrc passwd, then ccrc auth on$/);
+    });
+    it('a CCRC_HOST the unit reader cannot decide: not measured, naming the line, and the verb not offered', () => {
+      const home = unexposedBox('ccrc-doctor-auth-simmac-host-', 'CCRC_FLEET=local\nCCRC_HOST ="127.0.0.1"\nCCRC_PORT=7788\n');
+      rmSync(join(home, '.ccrc', 'auth.scrypt'), { force: true });
+      expectMacLine(checkAuthDarwin(home), NOT_PLAIN(2));
+    });
+    it.each(macNotOwn.map(([name, plant, notMeasured]) => [name, plant, notMeasured] as const))('%s', (_name, plant, notMeasured) => {
+      const home = unexposedBox('ccrc-doctor-auth-simmac-notown-');
+      rmSync(join(home, '.ccrc', 'auth.scrypt'), { force: true });
+      checkAuthDarwin(home);
+      plant(home);
+      expectMacLine(checkAuthDarwin(home), notMeasured);
+    });
   });
 
   // Wave 190 A4: the helper asks the installer's-unit proof's compare half (it needs no service manager), so where the

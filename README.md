@@ -1492,9 +1492,13 @@ its `PATH` must be plain absolute directories (no `<`, `>`, `&`, quote or backsl
 `ProcessType` one of launchd's four classes. An edited job, a link, a re-saved or binary plist and a job an older
 install wrote all refuse, naming the file, with `ccrc install --role <the recorded role>` as the way on; a `PATH` the
 verb does not read refuses with the way on that cures it, an install from a shell whose `PATH` is plain. launchd must
-hold that file as it is (`launchctl print`: its path, program, arguments and environment), the launchd domain must set
-none of the verb's keys and no `BASH_ENV`, and `ccrc.env` must be plain `NAME=value` lines, since the job sources it with
-bash. A home whose path holds a character outside letters, digits and `._/@:+,%=~-[]` refuses before anything is read.
+hold that file as it is (`launchctl print`: its path, program, arguments and environment, a print of a shape the verb
+does not read refusing as not measured), the caller's launchd domain must set none of the verb's keys and no
+`BASH_ENV`, and `ccrc.env` must be plain `NAME=value` lines, since the job sources it with bash. That domain read
+answers for the domain of the shell the verb runs in, while the job and its restart are the desktop session's: from a
+login session other than the desktop's (an SSH login, say) a value set in the desktop's domain may read as unset, which
+is unmeasured. The one key that is dangerous there is `CCRC_HOST`, on `off`. A home whose path holds a character outside
+letters, digits and `._/@:+,%=~-[]` refuses before anything is read.
 Anywhere else on a Mac the hand edit above is the route. It cannot see a drop-in placed outside the user unit
 directory that systemd has not loaded yet, or anything that changes what node runs before the server reads its keys: a
 node option such as `NODE_OPTIONS`, or a `PATH` that finds another `node` first (the unit starts node through

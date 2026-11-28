@@ -5,7 +5,7 @@ import { describe, it, expect } from 'vitest';
 import { spawnSync } from 'node:child_process';
 import { mkdirSync, readFileSync, writeFileSync, existsSync, statSync, chmodSync, readdirSync, rmSync } from 'node:fs';
 import path, { join } from 'node:path';
-import { removeTmpFixturesEachTest } from './tmpHelpers.js';
+import { mkTmp, removeTmpFixturesEachTest } from './tmpHelpers.js';
 import { scaled } from './timeScale.js';
 import { itLinux, itDarwin, IS_DARWIN } from './platformFixtures.js';
 import { GPT_LANE_BINS } from './codexLaneFixture.js';
@@ -756,19 +756,58 @@ describe('ccrc install: the landing block, and doctor as the last word', () => {
 
   // Review 3934 F5 and A5: install names `ccrc auth on` only where the verb would act. The unit arm is not reachable
   // here: install writes ccrc.service itself before its gate line.
+  // Fix round 3 (ruling 2): on a Mac the launchd job sources ccrc.env with bash, where `CCRC_HOST ="127.0.0.1"` is a
+  // command, so no key of the file is decided and the gate line says so, not measured; the verb is not offered on
+  // either. The Linux answer (systemd decides CCRC_AUTH, the hand route) is unchanged.
+  const NOT_PLAIN_GATE = /^install: gate: this box has NO PWA passphrase, and .*\/\.ccrc\/ccrc\.env line 1 is not a plain NAME=value line, and on macOS the launchd job sources both env files with bash, so that line can change what they set, so whether CCRC_AUTH is on was not measured — ccrc doctor's auth check says what to do$/;
   it.each([
-    ['CCRC_ROLE=fleet recorded in ccrc.env', 'CCRC_ROLE=fleet\n'],
-    ['a CCRC_HOST the unit reader cannot decide', 'CCRC_HOST ="127.0.0.1"\n'],
-    ['a foreign CCRC_ORIGIN', 'CCRC_ORIGIN=https://box.example.com\n'],
-    ['a foreign CCRC_RP_ID', 'CCRC_RP_ID=example.com\n'],
-  ])('wave 181: where ccrc auth refuses, the gate line does not offer it: %s', (_name, env) => {
+    ['CCRC_ROLE=fleet recorded in ccrc.env', 'CCRC_ROLE=fleet\n', null],
+    ['a CCRC_HOST the unit reader cannot decide', 'CCRC_HOST ="127.0.0.1"\n', NOT_PLAIN_GATE],
+    ['a foreign CCRC_ORIGIN', 'CCRC_ORIGIN=https://box.example.com\n', null],
+    ['a foreign CCRC_RP_ID', 'CCRC_RP_ID=example.com\n', null],
+  ] as const)('wave 181: where ccrc auth refuses, the gate line does not offer it: %s', (_name, env, onMac) => {
     const home = freshBox('ccrc-install-gate-notverb-');
     preexisting(home, 'ccrc.env', env);
     const r = runInstall(home);
     const line = gateLine(r.stdout);
     expect(line, r.stdout).toContain('NO PWA passphrase');
-    expect(line).toContain('CCRC_AUTH=on');
+    if (IS_DARWIN && onMac !== null) expect(line).toMatch(onMac);
+    else expect(line).toContain('CCRC_AUTH=on');
     expect(line).not.toContain('ccrc auth on');
+  });
+
+  // Fix round 3 (ruling 2): the same answer on a simulated darwin, so a Linux run goes red where a Mac would. The gate
+  // line's block is cut out of cmd_install by its first and last lines and run alone, with ccrc sourced, then
+  // `CCD_OS=darwin` and the unit directory where a Mac keeps it, and the job the installer's writer prints planted there.
+  describe(`install's gate line on a Mac [${IS_DARWIN ? 'darwin' : 'darwin, simulated'}] (fix round 3, ruling 2)`, () => {
+    const SRC = join(REPO, 'ccd', 'ccrc');
+    const gateDarwin = (env: string): string => {
+      const home = mkTmp('ccrc-install-gate-simmac-');
+      mkdirSync(join(home, '.ccrc'), { recursive: true });
+      writeFileSync(join(home, '.ccrc', 'ccrc.env'), env, { mode: 0o600 });
+      const agents = join(home, 'Library', 'LaunchAgents');
+      mkdirSync(agents, { recursive: true });
+      const w = spawnSync(BASH, ['-c', '. "$1"; CCD_OS=darwin; _inst_plist_server app.ccrc.ccrc "$HOME/.ccrc/logs/app.ccrc.ccrc.log" server /usr/bin:/bin Background',
+        'writer', SRC], { env: { HOME: home, PATH: process.env['PATH'] ?? '/usr/bin:/bin' }, encoding: 'latin1' });
+      expect(w.status, w.stderr).toBe(0);
+      writeFileSync(join(agents, 'app.ccrc.ccrc.plist'), w.stdout, 'latin1');
+      const text = readFileSync(SRC, 'utf8');
+      const from = text.indexOf('  local gsec grc urc=0 fits=0\n');
+      const to = text.indexOf('  _inst_doctor_tail\n', from);
+      expect(from).toBeGreaterThan(0);
+      expect(to).toBeGreaterThan(from);
+      const r = spawnSync(BASH, ['-c', `. "$1"; CCD_OS=darwin; BOX_UNIT_DIR="$HOME/Library/LaunchAgents"; _gate() {\n${text.slice(from, to)}}\n_gate`, 'gate', SRC],
+        { env: { HOME: home, PATH: process.env['PATH'] ?? '/usr/bin:/bin', LC_ALL: 'C' }, encoding: 'utf8' });
+      return gateLine(r.stdout);
+    };
+    it('the control: a loopback-only server box is offered ccrc auth on', () => {
+      expect(gateDarwin('CCRC_HOST=127.0.0.1\n')).toBe('install: gate: this box has NO PWA passphrase — install never writes one. To arm the gate: ccrc passwd, then ccrc auth on (it writes the sign-in lines and restarts the server itself)');
+    });
+    it('a CCRC_HOST the unit reader cannot decide: not measured, naming the line, and the verb not offered', () => {
+      const line = gateDarwin('CCRC_HOST ="127.0.0.1"\n');
+      expect(line).toMatch(NOT_PLAIN_GATE);
+      expect(line).not.toContain('ccrc auth on');
+    });
   });
 
   it('G2c: an absolute CCRC_AUTH_SECRET_PATH, with the file present there and absent at the default — the present arm, naming the redirected path', () => {
