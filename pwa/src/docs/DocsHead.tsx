@@ -16,7 +16,7 @@
 // viewport, one row and one dense line (desk-nav Part B, D-8101), with back, crumbs and actions sharing `HeadRow`, action
 // words giving way first, and the dense truth line below. A desktop-born reader keeps its frame bar on narrowing.
 import {
-  useContext, useId, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore,
+  useContext, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore,
   type CSSProperties, type KeyboardEvent, type ReactNode, type RefObject,
 } from 'react';
 import { flushSync } from 'react-dom';
@@ -58,10 +58,11 @@ import type { HighlightStore } from '../lib/highlightStore';
 import { rangeHasTextView } from './range/rangePolicy';
 import { decodeRangeBytes } from './range/rangeText';
 import { pinCommit, pinFor, samePin, type DocsVisit, type FileSlot, type Freshness, type RangeOpened } from './useDocsVisit';
-import { oneBarTools, type ReaderCommand } from './reader/policy';
-import { READER_MODE_TEXT } from './reader/readerModeWords';
+import { READER_LAYOUTS, oneBarTools, type ReaderCommand, type ReaderLayout } from './reader/policy';
+import { chooseReaderLayout, onReaderLayout } from './reader/layoutPref';
+import { READER_LAYOUT_TEXT, READER_MODE_TEXT } from './reader/readerModeWords';
 import type { ReaderBar, ReaderProgress } from './readerBar';
-import { ReaderModeContext, type ReaderModeContextValue } from './useReaderMode';
+import { ReaderModeContext, type ReaderModeContextValue, type ReaderModeFrame } from './useReaderMode';
 
 type Leaf = DocsPageLocation & { kind: 'path' };
 type TreePage = Exclude<DocsPageLocation, { kind: 'index' }>;
@@ -803,6 +804,59 @@ function PrintAction(): ReactNode {
   );
 }
 
+/** The Layout row (X2 P5.1, spec 2026-11-18 4.2): ONE control, at PAGE DETAILS (the stacked panel's actions and the compact row's
+ *  panel), beside Print. The desk's actions row has none (D-9180); the command palette's Layout commands choose there. A native `<select>` of the reader's five layouts (Default,
+ *  Classic, Editorial, Review, Guided), whose change is the device's choice (`chooseReaderLayout`: stored per device, and the frame
+ *  mounted again in it). Whether it is drawn is `readerLayoutRowDrawn`'s, from the Docs screen's reader-mode context (`layoutRowDrawn`):
+ *  a ready reader frame for a Markdown leaf, and never while reader mode is on; so never on a listing, the plain view, or while the
+ *  frame loads. It shows the layout the reader chose at once (from it, or from the palette's Layout commands, which it hears through
+ *  `onReaderLayout`), while the frame is still loading that layout's texts, and the layout of the frame that stands otherwise: the
+ *  choice is held with the frame it was made over, so the next frame published (the new one's ready, or the old one again when the
+ *  texts did not load) says what is shown. Under the layout rule `default-only`, outside the
+ *  default layout, the context's note says why reader mode is not offered, beside the row (`readerModeLayoutNote`). */
+function LayoutRow(): ReactNode {
+  const readerMode = useContext(ReaderModeContext);
+  const selectId = useId();
+  const noteId = useId();
+  const [picked, setPicked] = useState<{ readonly frame: ReaderModeFrame; readonly layout: ReaderLayout } | null>(null);
+  const frame = readerMode?.frame ?? null;
+  // Any choice, from this row or the palette's Layout commands, is shown at once, held with the frame it was made over (m-9): the row
+  // hears the choice itself, so an open Page details never shows the layout the frame still carries while the new one loads.
+  useEffect(() => {
+    if (frame === null) return undefined;
+    return onReaderLayout((layout) => { setPicked({ frame, layout }); });
+  }, [frame]);
+  if (readerMode === null || frame === null || !readerMode.layoutRowDrawn) return null;
+  const note = readerMode.layoutNote;
+  const shown = picked !== null && picked.frame === frame ? picked.layout : frame.layout;
+  return (
+    <div className="docs-layout-row">
+      <label htmlFor={selectId}>{READER_LAYOUT_TEXT.label}</label>
+      <select
+        id={selectId} className="docs-layout-select" value={shown} aria-describedby={note === null ? undefined : noteId}
+        onChange={(e) => {
+          const chosen = READER_LAYOUTS.find((l) => l === e.currentTarget.value);
+          if (chosen === undefined) return;
+          chooseReaderLayout(chosen);
+        }}
+      >
+        {READER_LAYOUTS.map((l) => <option key={l} value={l}>{READER_LAYOUT_TEXT.names[l]}</option>)}
+      </select>
+      {note !== null && <p id={noteId} className="docs-note">{note}</p>}
+    </div>
+  );
+}
+
+/** The desk's layout note (D-9180): under the default-only rule, outside the default layout, the sentence that says why reader mode is
+ *  not offered and which palette command gives it back, on its own line under the head's row where `PrintNote` and "Updated to" sit,
+ *  never inside the actions row. The rule is the context's (`layoutDeskNote`, the same `readerModeLayoutNote` as Page details'), drawn
+ *  only where the Layout row would be (`layoutRowDrawn`). */
+function DeskLayoutNote(): ReactNode {
+  const readerMode = useContext(ReaderModeContext);
+  const note = readerMode !== null && readerMode.layoutRowDrawn ? readerMode.layoutDeskNote : null;
+  return note === null ? null : <p className="docs-note" data-layout-note="">{note}</p>;
+}
+
 /** What Print says below the head's row, as the head's other notes are (never inside the bar or the actions' flex box, whose width it
  *  would take): the head draws it after its row, beside "Updated to". A failed Download to print (`role="alert"`), and, for a document
  *  too long to print whole, the sentence that Print prints the part on screen and how to print the rest. */
@@ -907,7 +961,11 @@ function ActionsRow(p: ActionInputs & { readonly form: FullHeadForm; readonly he
   // stacked list is the page's details), and only while the Docs screen's context offers it: a ready frame outside the plain view.
   const readerMode = useContext(ReaderModeContext);
   const reader = row && readerMode !== null && readerMode.offered ? readerMode : null;
-  if (target === null && committedHref === null && reader === null) return null;
+  // The Layout row (X2 P5.1): Page details' list only, one control (`LayoutRow`), drawn by `readerLayoutRowDrawn`. The desk's row has none
+  // (D-9180: it is crowded at its widths); the layout is chosen from the command palette there, and `DeskLayoutNote` says why reader mode
+  // is not offered.
+  const layoutRow = !row && page.kind === 'path' && readerMode !== null && readerMode.layoutRowDrawn;
+  if (target === null && committedHref === null && reader === null && !layoutRow) return null;
   return (
     <div className="docs-actions">
       {reader !== null && <ReaderModeAction ctx={reader} />}
@@ -922,6 +980,7 @@ function ActionsRow(p: ActionInputs & { readonly form: FullHeadForm; readonly he
         />
       )}
       {page.kind === 'path' && !row && <PrintAction />}
+      {layoutRow && <LayoutRow />}
       {committedHref !== null && (row
         ? (
           <DocsPageLink className="docs-action" href={committedHref} label={DOCS_HEAD_TEXT.openCommitted} title={DOCS_HEAD_TEXT.openCommitted}>
@@ -974,7 +1033,10 @@ function useHeadActions(p: ActionInputs): HeadActions {
   if (page.kind === 'path' && page.view !== 'committed' && page.at === null) {
     const k = docsPathKind(tree, page.section, page.path, modeOf(page));
     if (k.kind === 'leaf' && k.view.offersCommitted) {
-      const to = { kind: 'path', section: page.section, path: page.path, dirSlash: false, view: 'committed' } as const;
+      // The same page in its committed view keeps the visit's layout (`?variant=`), as it keeps the ref (X2 P5.1).
+      const to = {
+        kind: 'path', section: page.section, path: page.path, dirSlash: false, view: 'committed', variant: page.variant ?? null,
+      } as const;
       committedHref = docsPageUrl(docsLocation(page, to));
     }
   }
@@ -1135,6 +1197,7 @@ function ProjectHead(p: {
         <>
           <TruthLine page={listed.page} visit={visit} tree={listed.tree} receivedAt={receivedAt} now={now} />
           {p.plainView === true && <PlainViewNote />}
+          {page.kind === 'path' && <DeskLayoutNote />}
         </>
       )}
       <PrintNote />
@@ -1496,16 +1559,18 @@ function CompactPanelTail(p: { readonly tree: DocsTreeOk; readonly head: HeadAct
   const { tree } = p;
   const { target, showsDraft, onVersion, share, exported, committedHref } = p.head;
   const printed = useContext(PrintControlContext) !== null;
+  const framed = useContext(ReaderModeContext)?.layoutRowDrawn === true;
   const exportNote = exported.s === 'plain-view' ? DOCS_HEAD_TEXT.exportPlainHint
     : exported.s === 'updating' || exported.s === 'waiting' ? fillSentence(DOCS_HEAD_TEXT.exportBusy, { state: exportWords(exported) })
       : null;
   return (
     <>
-      {(target !== null || committedHref !== null || printed) && (
+      {(target !== null || committedHref !== null || printed || framed) && (
         <div className="docs-actions">
           {target !== null && <GithubAction tree={tree} target={target} showsDraft={showsDraft} onVersion={onVersion} />}
           {committedHref !== null && <DocsPageLink className="docs-action" href={committedHref}>{DOCS_HEAD_TEXT.openCommitted}</DocsPageLink>}
           <PrintAction />
+          <LayoutRow />
         </div>
       )}
       {share.s === 'updating' && <p className="docs-note">{fillSentence(DOCS_HEAD_TEXT.shareBusy, { state: shareWords(share) })}</p>}

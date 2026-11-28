@@ -27,7 +27,11 @@ import { parseMarkdown } from '../src/lib/markdownParse';
 import { DocsScreen } from '../src/screens/DocsScreen';
 import { navigate } from '../src/lib/router';
 import { readPlaces, resetPopstateForTests } from '../src/lib/popstate';
-import { READER_MODE_TEXT } from '../src/docs/reader/readerModeWords';
+import { READER_LAYOUT_TEXT, READER_MODE_TEXT } from '../src/docs/reader/readerModeWords';
+import type { ReaderLayout } from '../src/docs/reader/policy';
+import { chooseReaderLayout } from '../src/docs/reader/layoutPref';
+import { baseCommands } from '../src/command/commands';
+import type { CommandContext } from '../src/command/registry';
 import { fakeLoaders, fileResponse, treeOk } from './docsFixtures';
 
 // The visit's places are the history half's (reader-places.test.ts); here only what `ReaderFrame` hands them is read.
@@ -40,12 +44,28 @@ vi.mock('../src/docs/reader/places', async (importOriginal) => {
   return { ...orig, startPlaces: (o: Parameters<typeof orig.startPlaces>[0]) => (realPlaces.on ? orig.startPlaces(o) : placesFake) };
 });
 
+/** The layout rule the hook reads (X2 P5.1): `READER_LAYOUT_RULE` is one constant, so the rows that need the other value read it through
+ *  this holder, which every case of this file leaves at `remount`. The shipped constant is `default-only` (the coordinator's ruling of
+ *  2026-11-28), so every case that enters reader mode from a layout other than `default` runs under `remount` pinned through this
+ *  mock, to keep the remount machinery tested for the day the rule flips back; the one case that names `default-only` pins that
+ *  value the same way, and the shipped behaviour itself is pinned against the real constant in `reader-mode-policy.test.ts`. */
+const layoutRule = vi.hoisted(() => ({ value: 'remount' as 'remount' | 'default-only' }));
+vi.mock('../src/docs/reader/readerMode', async (importOriginal) => {
+  const orig = await importOriginal<typeof import('../src/docs/reader/readerMode')>();
+  return { ...orig, get READER_LAYOUT_RULE() { return layoutRule.value; } };
+});
+
 afterEach(() => {
   vi.restoreAllMocks();
   document.body.replaceChildren();
+  layoutRule.value = 'remount';
 });
 
 const STUB_ASSETS = { guard: 'g', bootstrap: 'b', enhance: 'e', css: 'c' };
+/** The stub texts of a layout: the default's four, and for another layout its own bundle and stylesheet. */
+const stubAssetsOf = (layout: ReaderLayout): typeof STUB_ASSETS & { layoutCss?: string } => (
+  layout === 'default' ? STUB_ASSETS : { ...STUB_ASSETS, enhance: `e:${layout}`, layoutCss: `css:${layout}` }
+);
 
 type Reading = 'screens' | 'scroll' | 'off';
 
@@ -78,7 +98,9 @@ interface Rig {
 /** A rig: an injected `mount` spy whose frame has `setReading`, an iframe element inside `el` for `focus`, and an order log. */
 function rig(o: {
   reading?: Reading; chrome?: ReaderChrome; profile?: 'lab-draw'; onProgress?: (share: number) => void;
-  onReader?: ReaderMountInput['onReader']; throwOnSetReading?: boolean;
+  onReader?: ReaderMountInput['onReader']; throwOnSetReading?: boolean; initialHash?: string; layout?: ReaderLayout;
+  /** Each layout the assets loader was asked for, in order. */
+  loads?: ReaderLayout[];
 } = {}): Rig {
   const order: string[] = [];
   const frames: FakeFrame[] = [];
@@ -102,7 +124,10 @@ function rig(o: {
     return f as unknown as DocFrame;
   });
   const input: ReaderMountInput = {
-    document: { result: { outcome: 'rendered', html: '<p>x</p>', meta: { title: 'T', frontList: null } } },
+    document: {
+      result: { outcome: 'rendered', html: '<p>x</p>', meta: { title: 'T', frontList: null } },
+      ...(o.initialHash === undefined ? {} : { initialHash: o.initialHash }),
+    },
     bytes: 100,
     docKey: 'demo:sec:a/b.md',
     title: 'b.md',
@@ -113,11 +138,12 @@ function rig(o: {
     ...(o.profile === undefined ? {} : { profile: o.profile }),
     ...(o.onProgress === undefined ? {} : { onProgress: o.onProgress }),
     ...(o.onReader === undefined ? {} : { onReader: o.onReader }),
+    ...(o.layout === undefined ? {} : { layout: o.layout }),
   };
   const run = () => mountReader(el, input, {
     mount: mount as unknown as typeof mountDocFrame,
     store: () => null,
-    assets: () => Promise.resolve(STUB_ASSETS),
+    assets: (layout) => { o.loads?.push(layout); return Promise.resolve(stubAssetsOf(layout)); },
     mermaid: () => Promise.resolve('MERMAID'),
     e17: 'does-not-hold',
   });
@@ -309,7 +335,7 @@ describe('reader mode: reader ops at the mount', () => {
 // callbacks, inside the real hook (`useReaderMode`) and its container. The mount's real bridge is the describes' above.
 
 const LINK: Omit<DocLinkContextValue, 'urls'> = {
-  project: 'demo', pageRef: null, pageAt: null, view: 'effective', section: 'specs', path: 'a.md', tree: treeOk(),
+  project: 'demo', pageRef: null, pageAt: null, pageVariant: null, view: 'effective', section: 'specs', path: 'a.md', tree: treeOk(),
   pageSource: 'committed', onFragment: () => undefined,
 };
 const RENDERED: ReaderRenderOutcome = {
@@ -335,6 +361,8 @@ interface BodyMount {
   readonly command: Mock<(name: string) => void>;
   readonly openAt: Mock<(id: string) => void>;
   readonly closeOverlay: Mock<() => void>;
+  /** The layout request the mount was given (X2 P5.1): only a rig made with a `layout` has a mount with a `remount`. */
+  readonly remount: Mock<(o: { layout: ReaderLayout; reading?: string; onKept?: () => void }) => void>;
 }
 
 interface BodyRig {
@@ -345,7 +373,13 @@ interface BodyRig {
   readonly log: string[];
 }
 
-function bodyRig(): BodyRig {
+/** A rig whose mounts are the fake `ReaderMount`s the body is handed. With `layout` its mounts carry a live `layout` (the one they were
+ *  made in, then each `remount`'s) and a `remount`, as the bridge's do; without it they have neither, as before layouts. `gate` holds
+ *  each mount until it settles (a mount still loading); `keep` makes each remount fail as a layout chunk that does not load does: the
+ *  frame and its layout stay, and the caller is told (`onKept`); `pending` keeps each remount into another layout waiting, as a layout
+ *  chunk still loading does (the live layout does not move and nobody is told). A request for the layout the mount carries is the
+ *  bridge's same-layout arm in every rig: nothing is mounted, a request waiting is dropped, and the caller is told (`onKept`). */
+function bodyRig(o: { layout?: boolean; gate?: Promise<void>; keep?: boolean; pending?: boolean } = {}): BodyRig {
   const inputs: ReaderMountInput[] = [];
   const mounts: BodyMount[] = [];
   const log: string[] = [];
@@ -353,12 +387,14 @@ function bodyRig(): BodyRig {
     render: async () => RENDERED,
     images: async () => ({ urls: {}, drafts: 0, auth: 0 }),
     mount: async (el, input) => {
+      if (o.gate !== undefined) await o.gate;
       const n = mounts.length;
       inputs.push(input);
       log.push(`mount ${n}`);
       const iframe = el.ownerDocument.createElement('iframe');
       iframe.setAttribute('tabindex', '-1');
       el.replaceChildren(iframe);
+      let current: ReaderLayout = input.layout ?? 'default';
       const m: BodyMount = {
         n, iframe,
         setReading: vi.fn((mode: string) => { log.push(`setReading ${n} ${mode}`); }),
@@ -367,9 +403,18 @@ function bodyRig(): BodyRig {
         command: vi.fn(),
         openAt: vi.fn(),
         closeOverlay: vi.fn(),
+        remount: vi.fn((r: { layout: ReaderLayout; reading?: string; onKept?: () => void }) => {
+          log.push(`remount ${n} ${r.layout}${r.reading === undefined ? '' : ` ${r.reading}`}`);
+          if (o.keep === true || r.layout === current) { r.onKept?.(); return; }
+          if (o.pending === true) return;
+          current = r.layout;
+        }),
       };
       mounts.push(m);
-      return { seed: { hosted: false }, follow: vi.fn(), setPrefs: vi.fn(), ...m } as unknown as ReaderMount;
+      const handle: Record<string, unknown> = { seed: { hosted: false }, follow: vi.fn(), setPrefs: vi.fn(), ...m };
+      if (o.layout === true) Object.defineProperty(handle, 'layout', { get: () => current, enumerable: true });
+      else delete handle['remount'];
+      return handle as unknown as ReaderMount;
     },
   };
   return { reader, inputs, mounts, log };
@@ -394,17 +439,21 @@ let latest: ReaderModeContextValue;
 const parser = async () => parseMarkdown('# Formatted', 'docs');
 
 /** One body of `a.md` (or `path`), keyed so a new key is a new body, as a new commit's `bodyKey` is. */
-function bodyOf(rig: BodyRig, bodyKey: string, path = 'a.md'): ReactNode {
+function bodyOf(rig: BodyRig, bodyKey: string, path = 'a.md', link: Omit<DocLinkContextValue, 'urls'> = LINK): ReactNode {
   return (
     <ReaderFrame
-      key={bodyKey} show={{ ...fileResponse('# A').show, path }} bodyKey={bodyKey} link={LINK} parser={parser}
+      key={bodyKey} show={{ ...fileResponse('# A').show, path }} bodyKey={bodyKey} link={link} parser={parser}
       reader={rig.reader} pendingFragment={null} onFragmentConsumed={() => undefined}
     />
   );
 }
 
 /** The Docs screen's part of reader mode: the hook, its container and its context around one body. */
-function Screen(p: { doc: string | null; rig: BodyRig; bodyKey: string; path?: string; places: ReaderModePlaces }): ReactNode {
+function Screen(p: {
+  doc: string | null; rig: BodyRig; bodyKey: string; path?: string; places: ReaderModePlaces; phone?: true;
+  /** The page's link context, where a case needs another than `LINK` (a visit's `pageVariant`). */
+  link?: Omit<DocLinkContextValue, 'urls'>;
+}): ReactNode {
   const { value, container, controls } = useReaderMode({ doc: p.doc, plainView: false, places: p.places });
   latest = value;
   // The outside door, as `DocsScreen` sets it (`r` and the palette read it).
@@ -412,9 +461,11 @@ function Screen(p: { doc: string | null; rig: BodyRig; bodyKey: string; path?: s
     setReaderModeHandle(controls);
     return () => setReaderModeHandle(null);
   }, [controls]);
+  const body = <DocsReading reading={container}>{bodyOf(p.rig, p.bodyKey, p.path, p.link)}</DocsReading>;
   return (
     <ReaderModeContext value={value}>
-      <DocsReading reading={container}>{bodyOf(p.rig, p.bodyKey, p.path)}</DocsReading>
+      {/* A phone's body is mounted on ccrc's own bar, a desk's on the frame's: both enter reader mode the same way (X2 P5.1). */}
+      {p.phone === true ? <ReaderBarContext value={{ chrome: 'host-bar', publish: () => undefined }}>{body}</ReaderBarContext> : body}
     </ReaderModeContext>
   );
 }
@@ -1078,5 +1129,820 @@ describe('reader mode: focus on the head\'s action while a dead reader entry is 
     await act(async () => { await vi.waitFor(() => { expect(lastIdx()).toBe(doc); }, { timeout: 4000, interval: 10 }); await sleep(30); });
     expect(readerModeHandle()?.offered(), 'CONTROL: offered again once the step landed').toBe(true);
     expect(document.activeElement, 'after the landing, focus is still on the head\'s action').toBe(action);
+  });
+});
+
+// ─── the layouts (X2 P5.1, D-8975): reader mode reads in the default layout ─────────────────────────────────────────────────────────
+
+const PREFS_KEY = 'ccrc:reader:v1:pref:prefs';
+/** A remount request as the body makes it (M5): the layout and the reading the frame was last sent. (The stale-write guard of I1 is
+ *  not part of the request any more: the storage port the bridge hands the library keeps the stored layout, I-3.) */
+const asked = (layout: ReaderLayout, reading: string): unknown => expect.objectContaining({ layout, reading });
+const layoutsOf = (rig: Rig): string[] => rig.mount.mock.calls.map((c) => (c as unknown as [HTMLElement, { adapters: HostAdapters }])[1].adapters.layout ?? 'default');
+
+describe('layouts: ReaderMount.remount (X2 P5.1)', () => {
+  it('remount: the same document, no body read, no initialHash', async () => {
+    // X6.22: a `remount` that keeps the opening hash reds here.
+    const loads: ReaderLayout[] = [];
+    const r = rig({ initialHash: 'sec', loads });
+    const m = await r.run();
+    r.ready(0);
+    const first = (r.mount.mock.calls[0] as unknown as [HTMLElement, { document: RenderInput }])[1].document;
+    expect(first.initialHash, 'CONTROL: the first mount opens at the hash it was given').toBe('sec');
+    m.remount!({ layout: 'review', reading: 'screens' });
+    // The new layout's texts load first, and the old frame stays meanwhile.
+    expect(r.mount, 'the new frame was mounted before the layout\'s texts came').toHaveBeenCalledTimes(1);
+    expect(r.frames[0]!.destroy).not.toHaveBeenCalled();
+    await vi.waitFor(() => { expect(r.mount).toHaveBeenCalledTimes(2); });
+    const second = (r.mount.mock.calls[1] as unknown as [HTMLElement, { document: RenderInput }])[1].document;
+    expect(second.initialHash, 'the stored place wins: the new frame has no opening hash').toBeNull();
+    expect(second.result, 'the same rendered document: nothing was read again').toBe(first.result);
+    expect(loads, 'only the new layout\'s texts were loaded').toEqual(['default', 'review']);
+    const a = r.adaptersAt(1);
+    expect(a.layout).toBe('review');
+    expect(a.assets.enhance).toBe('e:review');
+    expect(a.assets.layoutCss).toBe('css:review');
+    expect(m.layout).toBe('review');
+    // The old frame goes, the new one is sent the reading before its ready, and the old one never was.
+    expect(r.order).toEqual(['mount 0', 'ready 0', 'destroy 0', 'mount 1', 'setReading 1 screens']);
+    expect(r.frames[0]!.setReading).not.toHaveBeenCalled();
+    // Back to the default layout: its texts are kept, so the swap is at once, and the default's adapters name no layout.
+    m.remount!({ layout: 'default', reading: 'off' });
+    expect(r.mount, 'a layout loaded before swaps in the same task').toHaveBeenCalledTimes(3);
+    expect(Object.keys(r.adaptersAt(2))).not.toContain('layout');
+    expect(Object.keys(r.adaptersAt(2).assets).sort()).toEqual(['bootstrap', 'css', 'enhance', 'guard']);
+    expect(loads, 'a kept layout is not loaded again').toEqual(['default', 'review']);
+    expect(r.frames[2]!.setReading, 'a fresh mount is off: nothing is sent').not.toHaveBeenCalled();
+    expect(m.layout).toBe('default');
+  });
+
+  it('remount: a later request replaces a loading one, and a destroy cancels it', async () => {
+    const pending = new Map<ReaderLayout, () => void>();
+    const loads: ReaderLayout[] = [];
+    const el = document.createElement('div');
+    document.body.append(el);
+    const frames: DocFrame[] = [];
+    const mount = vi.fn(() => {
+      const f = { destroy: vi.fn(), setReading: vi.fn(), setPrefs: vi.fn(), setAppearance: vi.fn() } as unknown as DocFrame;
+      frames.push(f);
+      return f;
+    });
+    const onFallback = vi.fn();
+    const m = await mountReader(el, {
+      document: { result: { outcome: 'rendered', html: '<p>x</p>', meta: { title: 'T', frontList: null } } },
+      bytes: 100, docKey: null, title: 'a.md', prefs: { theme: 'auto' },
+      onLink: vi.fn(), onHash: vi.fn(), copy: vi.fn(), onReady: vi.fn(), onFallback,
+    }, {
+      mount: mount as unknown as typeof mountDocFrame, store: () => null, mermaid: () => Promise.resolve('M'), e17: 'does-not-hold',
+      assets: (layout) => {
+        loads.push(layout);
+        if (layout === 'default') return Promise.resolve(STUB_ASSETS);
+        return new Promise((resolve) => { pending.set(layout, () => resolve(stubAssetsOf(layout))); });
+      },
+    });
+    m.remount!({ layout: 'review' });
+    m.remount!({ layout: 'guided' });
+    expect(loads).toEqual(['default', 'review', 'guided']);
+    // The first request's texts arrive after the second was made: it changes nothing.
+    pending.get('review')!();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(mount, 'a replaced request mounted').toHaveBeenCalledTimes(1);
+    pending.get('guided')!();
+    await vi.waitFor(() => { expect(mount).toHaveBeenCalledTimes(2); });
+    expect(m.layout).toBe('guided');
+    expect(frames[0]!.destroy).toHaveBeenCalledTimes(1);
+    // A destroy while a layout loads cancels the swap: the frame is the live one's, and nothing more is mounted.
+    m.remount!({ layout: 'classic' });
+    m.destroy();
+    pending.get('classic')!();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(mount).toHaveBeenCalledTimes(2);
+    m.remount!({ layout: 'editorial' });
+    expect(loads, 'a destroyed mount asked for nothing').not.toContain('editorial');
+    expect(onFallback).not.toHaveBeenCalled();
+  });
+
+  /** A bridge whose layouts' texts, but the one it mounts in (`initial`, the default's), are held until `release(layout)` or
+   *  `fail(layout)`, with the frames it mounts. */
+  async function heldBridge(initial: ReaderLayout = 'default'): Promise<{
+    m: ReaderMount; mount: Mock<(el: HTMLElement, o: { document: RenderInput; adapters: HostAdapters }) => DocFrame>;
+    frames: Array<{ destroy: Mock<() => void>; setReading: Mock<(mode: string) => void> }>;
+    release: (l: ReaderLayout) => void; fail: (l: ReaderLayout) => void; onFallback: Mock<() => void>;
+  }> {
+    const held = new Map<ReaderLayout, { ok: () => void; no: () => void }>();
+    const frames: Array<{ destroy: Mock<() => void>; setReading: Mock<(mode: string) => void> }> = [];
+    const el = document.createElement('div');
+    document.body.append(el);
+    const mount = vi.fn((_el: HTMLElement, _o: { document: RenderInput; adapters: HostAdapters }) => {
+      const f = { destroy: vi.fn(), setReading: vi.fn(), setPrefs: vi.fn(), setAppearance: vi.fn() };
+      frames.push(f);
+      return f as unknown as DocFrame;
+    });
+    const onFallback = vi.fn();
+    const m = await mountReader(el, {
+      document: { result: { outcome: 'rendered', html: '<p>x</p>', meta: { title: 'T', frontList: null } } },
+      bytes: 100, docKey: null, title: 'a.md', prefs: { theme: 'auto' },
+      onLink: vi.fn(), onHash: vi.fn(), copy: vi.fn(), onReady: vi.fn(), onFallback,
+      ...(initial === 'default' ? {} : { layout: initial }),
+    }, {
+      mount: mount as unknown as typeof mountDocFrame, store: () => null, mermaid: () => Promise.resolve('M'), e17: 'does-not-hold',
+      assets: (layout) => (layout === initial
+        ? Promise.resolve(stubAssetsOf(layout))
+        : new Promise((resolve, reject) => { held.set(layout, { ok: () => resolve(stubAssetsOf(layout)), no: () => reject(new Error('chunk')) }); })),
+    });
+    return {
+      m, mount, frames, onFallback,
+      release: (l) => { held.get(l)!.ok(); },
+      fail: (l) => { held.get(l)!.no(); },
+    };
+  }
+  const settle = async (): Promise<void> => { for (let i = 0; i < 10; i += 1) await Promise.resolve(); };
+
+  it('remount: a layout chunk that fails to load keeps the frame that was showing', async () => {
+    // M3: a failed layout chunk is no fallback and no loss of the frame: the console warns, the layout stays, and a reading that was
+    // recorded for the swap (reader mode's entry) is set on the frame that stays, in place.
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const b = await heldBridge();
+    const onKept = vi.fn();
+    b.m.remount!({ layout: 'review', onKept });
+    b.fail('review');
+    await settle();
+    expect(b.onFallback, 'a failed layout chunk fell back').not.toHaveBeenCalled();
+    expect(b.frames[0]!.destroy, 'the frame that was showing was destroyed').not.toHaveBeenCalled();
+    expect(b.mount).toHaveBeenCalledTimes(1);
+    expect(b.m.layout).toBe('default');
+    expect(warn.mock.calls.some((c) => typeof c[0] === 'string' && c[0].startsWith('ccrc-reader: '))).toBe(true);
+    expect(onKept, 'the caller is told the frame was kept').toHaveBeenCalledTimes(1);
+    // Reader mode's entry: the reading rode the request, and the chunk fails: reader mode stays on the frame that stands, in place.
+    b.m.remount!({ layout: 'guided', reading: 'screens', onKept });
+    expect(b.frames[0]!.setReading, 'the reading went to the old frame while the texts loaded').not.toHaveBeenCalled();
+    b.fail('guided');
+    await settle();
+    expect(b.frames[0]!.setReading).toHaveBeenCalledTimes(1);
+    expect(b.frames[0]!.setReading).toHaveBeenCalledWith('screens');
+    expect(b.onFallback).not.toHaveBeenCalled();
+    expect(b.mount).toHaveBeenCalledTimes(1);
+    expect(onKept).toHaveBeenCalledTimes(2);
+    // A request replaced by a later one reports nothing when it fails.
+    b.m.remount!({ layout: 'classic', onKept });
+    b.m.remount!({ layout: 'editorial', onKept });
+    b.fail('classic');
+    await settle();
+    expect(onKept, 'a replaced request told the caller').toHaveBeenCalledTimes(2);
+  });
+
+  it('remount: openAt during a pending layout load keeps the anchor', async () => {
+    // M1: the anchor wins. The pending swap is dropped, so the frame opened at the anchor is not replaced by one with no hash when
+    // the texts arrive; with the pending layout's texts not in, it is made in the layout the live frame carries.
+    const b = await heldBridge();
+    b.m.remount!({ layout: 'review', reading: 'screens' });
+    b.m.openAt!('sec');
+    expect(b.mount, 'the openAt did not mount at once').toHaveBeenCalledTimes(2);
+    const at = (n: number): { document: RenderInput; adapters: HostAdapters } => b.mount.mock.calls[n]![1];
+    expect(at(1).document.initialHash).toBe('sec');
+    expect(at(1).adapters.layout, 'made in the live layout, the pending one\'s texts not being in').toBeUndefined();
+    b.release('review');
+    await settle();
+    expect(b.mount, 'the dropped swap mounted when its texts arrived').toHaveBeenCalledTimes(2);
+    expect(b.frames[1]!.destroy, 'the anchored frame was replaced').not.toHaveBeenCalled();
+    expect(b.m.layout).toBe('default');
+    // The reading recorded for the dropped request is the reading the anchored frame was sent.
+    expect(b.frames[1]!.setReading).toHaveBeenCalledWith('screens');
+    expect(b.frames[0]!.setReading).not.toHaveBeenCalled();
+  });
+
+  it('remount: a reading set while a layout loads rides the swap and is never sent to the frame about to go', async () => {
+    // M2.
+    const b = await heldBridge();
+    b.m.remount!({ layout: 'review' });
+    b.m.setReading!('scroll');
+    b.m.setReading!('screens');
+    expect(b.frames[0]!.setReading, 'a reading reached the old frame during the load').not.toHaveBeenCalled();
+    b.release('review');
+    await vi.waitFor(() => { expect(b.mount).toHaveBeenCalledTimes(2); });
+    expect(b.frames[0]!.setReading).not.toHaveBeenCalled();
+    expect(b.frames[1]!.setReading).toHaveBeenCalledTimes(1);
+    expect(b.frames[1]!.setReading).toHaveBeenCalledWith('screens');
+    // Once nothing loads, a reading is sent to the live frame as before.
+    b.m.setReading!('off');
+    expect(b.frames[1]!.setReading).toHaveBeenLastCalledWith('off');
+  });
+
+  it('remount: a request for the layout the frame carries mounts nothing, drops a loading one, sets the reading in place and tells the caller', async () => {
+    const b = await heldBridge();
+    const onKept = vi.fn();
+    b.m.remount!({ layout: 'review' });
+    expect(onKept).not.toHaveBeenCalled();
+    b.m.remount!({ layout: 'default', reading: 'screens', onKept });
+    expect(b.frames[0]!.setReading).toHaveBeenCalledWith('screens');
+    // I-4a: the caller took a hold on the host for the request that was dropped, and no `ready` will lift it: it is told, as for a
+    // frame that was kept, so it releases the hold and shows the document.
+    expect(onKept, 'the same-layout arm told nobody the frame stands').toHaveBeenCalledTimes(1);
+    b.release('review');
+    await settle();
+    expect(b.mount, 'a dropped request mounted').toHaveBeenCalledTimes(1);
+    expect(b.m.layout).toBe('default');
+    expect(onKept, 'the dropped request told the caller again when its texts came').toHaveBeenCalledTimes(1);
+  });
+
+  it('remount: openAt while the default load is pending under a reading mounts in default, at the anchor, when the texts come', async () => {
+    // I-4b: reader mode on reads in default. An anchor link made while the entry's default texts load rides that swap, so the frame the
+    // anchor opens is the default one, not a review frame that a second remount would have to replace.
+    const b = await heldBridge('review');
+    b.m.remount!({ layout: 'default', reading: 'screens' });
+    b.m.openAt!('sec');
+    expect(b.mount, 'a frame was mounted in review at the anchor').toHaveBeenCalledTimes(1);
+    expect(b.frames[0]!.destroy, 'the review frame went before the default one was in').not.toHaveBeenCalled();
+    b.release('default');
+    await vi.waitFor(() => { expect(b.mount).toHaveBeenCalledTimes(2); });
+    const at = (n: number): { document: RenderInput; adapters: HostAdapters } => b.mount.mock.calls[n]![1];
+    expect(at(1).document.initialHash, 'the swap opens at the anchor').toBe('sec');
+    expect(Object.keys(at(1).adapters), 'the swap is in default').not.toContain('layout');
+    expect(b.m.layout).toBe('default');
+    expect(b.frames[0]!.destroy).toHaveBeenCalledTimes(1);
+    expect(b.frames[1]!.setReading, 'the reading rode the swap').toHaveBeenCalledWith('screens');
+    expect(b.mount, 'a second frame was mounted for the anchor').toHaveBeenCalledTimes(2);
+    // With no reading in force the anchor wins as it always did (M1): the pending swap is dropped, the frame opens in the live layout.
+    const off = await heldBridge('review');
+    off.m.remount!({ layout: 'default' });
+    off.m.openAt!('sec');
+    expect(off.mount, 'the anchor did not mount at once with no reading').toHaveBeenCalledTimes(2);
+    expect(Object.keys(off.mount.mock.calls[1]![1].adapters)).toContain('layout');
+    off.release('default');
+    await settle();
+    expect(off.mount, 'the dropped swap mounted').toHaveBeenCalledTimes(2);
+  });
+
+  it('remount: an anchor riding a default swap that fails to load opens in the live layout, and a later request for it does the same', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const failed = await heldBridge('review');
+    const onKept = vi.fn();
+    failed.m.remount!({ layout: 'default', reading: 'screens', onKept });
+    failed.m.openAt!('sec');
+    failed.fail('default');
+    await settle();
+    expect(warn).toHaveBeenCalled();
+    expect(onKept, 'the caller was not told the frame was kept').toHaveBeenCalledTimes(1);
+    expect(failed.mount, 'the anchor was lost with the failed swap').toHaveBeenCalledTimes(2);
+    expect(failed.mount.mock.calls[1]![1].document.initialHash).toBe('sec');
+    expect(Object.keys(failed.mount.mock.calls[1]![1].adapters), 'the anchor opened in the live layout').toContain('layout');
+    expect(failed.m.layout).toBe('review');
+    // Leaving meanwhile: the request for the layout the frame carries drops the swap, and the anchor opens there at once.
+    const left = await heldBridge('review');
+    const keptOnLeave = vi.fn();
+    left.m.remount!({ layout: 'default', reading: 'screens' });
+    left.m.openAt!('sec');
+    left.m.remount!({ layout: 'review', reading: 'off', onKept: keptOnLeave });
+    expect(keptOnLeave).toHaveBeenCalledTimes(1);
+    expect(left.mount, 'the anchor was lost with the dropped swap').toHaveBeenCalledTimes(2);
+    expect(left.mount.mock.calls[1]![1].document.initialHash).toBe('sec');
+    left.release('default');
+    await settle();
+    expect(left.mount, 'the dropped swap mounted').toHaveBeenCalledTimes(2);
+  });
+
+  it('remount: a same-page reopening after a remount is mounted in the layout the frame is in, with the anchor', async () => {
+    const r = rig();
+    const m = await r.run();
+    r.ready(0);
+    m.remount!({ layout: 'guided' });
+    await vi.waitFor(() => { expect(r.mount).toHaveBeenCalledTimes(2); });
+    m.openAt!('x');
+    expect(layoutsOf(r)).toEqual(['default', 'guided', 'guided']);
+    const reopened = (r.mount.mock.calls[2] as unknown as [HTMLElement, { document: RenderInput }])[1].document;
+    expect(reopened.initialHash).toBe('x');
+  });
+});
+
+// Under the `remount` rule, pinned through the `layoutRule` holder above (the shipped rule is `default-only`): the cases that enter from
+// another layout and leave are the remount machinery's, kept tested for the day the rule flips back.
+describe('layouts: the body and reader mode, under the remount rule (X2 P5.1)', () => {
+  beforeEach(() => {
+    for (const f of Object.values(placesFake)) f.mockClear();
+  });
+  afterEach(() => {
+    cleanup();
+    vi.useRealTimers();
+    window.localStorage.clear();
+    while (restorers.length > 0) restorers.pop()?.();
+  });
+
+  const PREF = JSON.stringify({ theme: 'dark', layout: 'review' });
+  /** A screen with one ready body whose mount is in the stored layout `pref` (none stored: the default), nothing entered. */
+  async function layoutScreen(o: {
+    pref: ReaderLayout | null; phone?: true; timers?: boolean; link?: Omit<DocLinkContextValue, 'urls'>; keep?: true;
+  }): Promise<{ rig: BodyRig; places: ReturnType<typeof placesPort>; view: ReturnType<typeof render> }> {
+    if (o.timers === true) vi.useFakeTimers();
+    if (o.pref !== null) window.localStorage.setItem(PREFS_KEY, JSON.stringify({ theme: 'dark', layout: o.pref }));
+    const rig = bodyRig({ layout: true, ...(o.keep === true ? { keep: true } : {}) });
+    const places = placesPort();
+    const view = render(
+      <Screen
+        doc={KEY_A} rig={rig} bodyKey="k1" places={places}
+        {...(o.phone === true ? { phone: true as const } : {})} {...(o.link === undefined ? {} : { link: o.link })}
+      />,
+    );
+    await flush();
+    await frameReady(rig, 0);
+    return { rig, places, view };
+  }
+  const host = (): Element | null => document.querySelector('.docs-reader');
+
+  it('remount: waits 400 ms after the last progress message', async () => {
+    // X6.23: a remount that does not wait for the quiet reds here.
+    const { rig } = await layoutScreen({ pref: 'review', timers: true });
+    expect(rig.inputs[0]!.layout, 'CONTROL: the body mounted in the stored layout').toBe('review');
+    act(() => { rig.inputs[0]!.onProgress!(0.3); });
+    await advance(100);
+    act(() => { latest.enter('button'); });
+    expect(latest.state.on, 'CONTROL: reader mode is on').toBe(true);
+    expect(rig.mounts[0]!.remount, 'remounted 100 ms after a progress message').not.toHaveBeenCalled();
+    expect(rig.mounts[0]!.setReading, 'the reading went to the frame that is about to be replaced').not.toHaveBeenCalled();
+    await advance(299);
+    expect(rig.mounts[0]!.remount, 'remounted 399 ms after the progress message').not.toHaveBeenCalled();
+    // Another message meanwhile moves the quiet on: the wait is read again when it ends.
+    act(() => { rig.inputs[0]!.onProgress!(0.31); });
+    await advance(1);
+    expect(rig.mounts[0]!.remount, 'remounted before the frame had been quiet for 400 ms').not.toHaveBeenCalled();
+    await advance(399);
+    expect(rig.mounts[0]!.remount).toHaveBeenCalledTimes(1);
+    expect(rig.mounts[0]!.remount).toHaveBeenCalledWith(asked('default', 'screens'));
+  });
+
+  it('remount: a turn change during the quiet wait remounts in default with the new turn, and nothing reaches the old frame', async () => {
+    // I2: the decision reads the layout the bridge was last ASKED to mount, which a request still waiting has not changed.
+    const { rig } = await layoutScreen({ pref: 'review', timers: true });
+    const m = rig.mounts[0]!;
+    act(() => { rig.inputs[0]!.onProgress!(0.3); });
+    await advance(100);
+    act(() => { latest.enter('button'); });
+    expect(latest.state.on, 'CONTROL: reader mode is on').toBe(true);
+    await advance(100);
+    act(() => { latest.setTurn('scroll'); });
+    expect(m.setReading, 'the new turn reached the review frame that is about to be replaced').not.toHaveBeenCalled();
+    await advance(199);
+    expect(m.remount, 'remounted before the frame had been quiet for 400 ms').not.toHaveBeenCalled();
+    await advance(1);
+    expect(m.remount, 'the turn change dropped the remount').toHaveBeenCalledTimes(1);
+    expect(m.remount).toHaveBeenCalledWith(asked('default', 'scroll'));
+    expect(m.setReading, 'a reading reached the old frame').not.toHaveBeenCalled();
+  });
+
+  it('remount: leaving during the quiet wait cancels it and remounts nothing', async () => {
+    // I2: entering was never carried out, so leaving has nothing to give back: the review frame stays, its reading off.
+    const { rig } = await layoutScreen({ pref: 'review', timers: true });
+    const m = rig.mounts[0]!;
+    act(() => { rig.inputs[0]!.onProgress!(0.3); });
+    await advance(100);
+    act(() => { latest.enter('button'); });
+    expect(latest.state.on, 'CONTROL: reader mode is on').toBe(true);
+    await advance(100);
+    act(() => { latest.exit('exit-tap'); });
+    expect(latest.state.on).toBe(false);
+    await advance(2000);
+    expect(m.remount, 'a remount ran after leaving').not.toHaveBeenCalled();
+    expect(rig.mounts, 'a second mount was made').toHaveLength(1);
+    expect(m.setReading, 'the review frame was not told reader mode is off').toHaveBeenLastCalledWith('off');
+    expect(m.setReading.mock.calls.filter((c) => c[0] !== 'off'), 'the review frame was told to read').toEqual([]);
+  });
+
+  it('remount: a same-page link during the quiet wait keeps the anchor, and the frame it opens is remounted in default once the wait is over', async () => {
+    // M1, the body's half: the anchor wins over the waiting remount, which is dropped. I-4c: the frame the anchor opened is in the layout
+    // the mount has (review), and reader mode reads in default, so the body asks `readerLayoutRemount` again for it: the remount is
+    // scheduled anew, behind the quiet wait, with the reading, instead of setting the reading on a review frame in place.
+    const { rig } = await layoutScreen({ pref: 'review', timers: true });
+    const m = rig.mounts[0]!;
+    act(() => { rig.inputs[0]!.onProgress!(0.3); });
+    await advance(100);
+    act(() => { latest.enter('button'); });
+    expect(latest.state.on, 'CONTROL: reader mode is on').toBe(true);
+    act(() => { rig.inputs[0]!.onLink({ kind: 'relative', path: 'a.md', fragment: 'x' }); });
+    expect(m.openAt, 'the link did not reopen the frame at its anchor').toHaveBeenCalledWith('x');
+    expect(m.setReading, 'reader mode went on in place in the review frame the anchor opened').not.toHaveBeenCalled();
+    await advance(2000);
+    expect(m.remount, 'the frame the anchor opened was left in review under reader mode').toHaveBeenCalledTimes(1);
+    expect(m.remount).toHaveBeenCalledWith(asked('default', 'screens'));
+    expect(m.setReading, 'a reading reached the review frame').not.toHaveBeenCalled();
+  });
+
+  it('default-only: a Layout choice still loading to guided is not offered reader mode, and r does nothing', async () => {
+    // I-1: the published frame names the layout it is on its way to (`issued`), not the one it still carries, so the offer, the note and
+    // `r` read the layout on its way; and the published `setReading` is a backstop that never sends a reading to a layout the rule refuses.
+    layoutRule.value = 'default-only';
+    const rig = bodyRig({ layout: true, pending: true });
+    render(<Screen doc={KEY_A} rig={rig} bodyKey="k1" places={placesPort()} />);
+    await flush();
+    await frameReady(rig, 0);
+    expect(latest.frame?.layout, 'CONTROL: the frame is in the default layout').toBe('default');
+    expect(latest.offered, 'CONTROL: reader mode is offered in default').toBe(true);
+    act(() => { chooseReaderLayout('guided'); });
+    expect(rig.mounts[0]!.remount, 'CONTROL: the choice reached the frame, whose texts are still loading').toHaveBeenCalledWith(asked('guided', 'off'));
+    expect(latest.frame?.layout, 'the published frame still says default while it loads guided').toBe('guided');
+    expect(latest.offered, 'reader mode was offered while the frame was on its way to guided').toBe(false);
+    expect(readerModeHandle()?.available()).toBe(false);
+    expect(latest.layoutNote, 'the note beside the Layout row').toBe(READER_LAYOUT_TEXT.note);
+    // `r`: the registry's own command, as the key runs it, and the frame's own `r` (its toggle op).
+    const r = baseCommands().find((c) => c.id === 'toggle-reader-mode')!;
+    act(() => { r.run({} as CommandContext); });
+    act(() => { latest.frameToggle(); });
+    expect(latest.state.on, 'r started reader mode on a frame on its way to guided').toBe(false);
+    // The backstop: a reading reaches the published frame anyway, and is not sent.
+    act(() => { latest.frame!.setReading('screens'); });
+    expect(rig.mounts[0]!.setReading, 'a reading was sent to a frame on its way to a layout the rule refuses').not.toHaveBeenCalled();
+    // Off is always sent.
+    act(() => { latest.frame!.setReading('off'); });
+    expect(rig.mounts[0]!.setReading).toHaveBeenCalledWith('off');
+  });
+
+  it('remount: a frame that is kept after a layout chunk fails to load is where the body goes on from', async () => {
+    // M3, the body's half: the bridge kept the frame and says so (`onKept`); the hold on the host lifts, the published frame says the
+    // layout it still has, and leaving then sets the reading in place instead of mounting a layout the frame already carries.
+    vi.useFakeTimers();
+    const { rig } = await layoutScreen({ pref: 'review', keep: true });
+    const m = rig.mounts[0]!;
+    act(() => { latest.enter('button'); });
+    await advance(0);
+    expect(m.remount, 'CONTROL: entering asked for default').toHaveBeenCalledTimes(1);
+    await advance(40);
+    expect(host()?.hasAttribute('data-reader-hold'), 'the host stays held after a failed remount').toBe(false);
+    expect(latest.frame?.layout, 'the published frame names the layout it has').toBe('review');
+    act(() => { latest.exit('exit-tap'); });
+    await advance(0);
+    expect(m.remount, 'leaving mounted a layout the frame already carries').toHaveBeenCalledTimes(1);
+    expect(m.setReading).toHaveBeenLastCalledWith('off');
+  });
+
+  it('remount: a layout chosen while the mount is still loading is asked for once it lands, unless the frame is already in it', async () => {
+    // M4: the one decider (`readerLayoutChoice`) is asked here as it is for a choice made on a landed mount.
+    let open: () => void = () => undefined;
+    const gate = new Promise<void>((resolve) => { open = resolve; });
+    window.localStorage.setItem(PREFS_KEY, JSON.stringify({ layout: 'review' }));
+    const rig = bodyRig({ layout: true, gate });
+    render(<Screen doc={KEY_A} rig={rig} bodyKey="k1" places={placesPort()} />);
+    await flush();
+    expect(rig.mounts, 'CONTROL: the mount is still loading').toHaveLength(0);
+    act(() => { chooseReaderLayout('guided'); });
+    open();
+    await flush();
+    expect(rig.mounts[0]!.remount, 'a choice made while the mount loaded was lost').toHaveBeenCalledWith(asked('guided', 'off'));
+    // A choice of the layout the mount was made in, while it loads, asks for nothing.
+    cleanup();
+    window.localStorage.setItem(PREFS_KEY, JSON.stringify({ layout: 'review' }));
+    let open2: () => void = () => undefined;
+    const gate2 = new Promise<void>((resolve) => { open2 = resolve; });
+    const rig2 = bodyRig({ layout: true, gate: gate2 });
+    render(<Screen doc={KEY_A} rig={rig2} bodyKey="k1" places={placesPort()} />);
+    await flush();
+    act(() => { chooseReaderLayout('review'); });
+    open2();
+    await flush();
+    expect(rig2.mounts[0]!.remount).not.toHaveBeenCalled();
+  });
+
+  it('remount: a phone mount in the default layout enters in place, with no remount', async () => {
+    for (const phone of [true, undefined] as const) {
+      const { rig } = await layoutScreen({ pref: null, ...(phone === true ? { phone } : {}) });
+      expect(rig.inputs[0]!.chrome, 'CONTROL: the mount is on the bar the width asked for').toBe(phone === true ? 'host-bar' : 'frame-bar');
+      expect(rig.inputs[0]!.layout).toBe('default');
+      act(() => { latest.enter('button'); });
+      await flush();
+      expect(latest.state.on).toBe(true);
+      expect(rig.mounts[0]!.setReading, 'entered in place').toHaveBeenCalledWith('screens');
+      expect(rig.mounts[0]!.remount, 'the default layout was mounted again').not.toHaveBeenCalled();
+      expect(rig.mounts, 'a second mount was made').toHaveLength(1);
+      act(() => { latest.exit('exit-tap'); });
+      expect(rig.mounts[0]!.setReading).toHaveBeenLastCalledWith('off');
+      expect(rig.mounts[0]!.remount, 'leaving mounted the default layout again').not.toHaveBeenCalled();
+      cleanup();
+      window.localStorage.clear();
+    }
+  });
+
+  it('remount: entering from review remounts in default, on a phone too, and leaving restores review', async () => {
+    // X6.59: entering that keeps the reader's layout reds here.
+    for (const phone of [true, undefined] as const) {
+      const { rig, places } = await layoutScreen({ pref: 'review', ...(phone === true ? { phone } : {}) });
+      const m = rig.mounts[0]!;
+      expect(rig.inputs[0]!.layout, 'CONTROL: the body mounted in review').toBe('review');
+      expect(latest.frame?.layout, 'CONTROL: the published frame says review').toBe('review');
+      act(() => { latest.enter('button'); });
+      await flush();
+      expect(latest.state.on).toBe(true);
+      expect(m.remount, `entering from review did not remount in default (${phone === true ? 'phone' : 'desk'})`).toHaveBeenCalledTimes(1);
+      expect(m.remount).toHaveBeenLastCalledWith(asked('default', 'screens'));
+      expect(m.setReading, 'the reading was set in place on the review frame').not.toHaveBeenCalled();
+      // The new mount reports ready: it is published, in the layout it now carries.
+      await frameReady(rig, 0);
+      expect(latest.frame?.layout, 'the published frame is the default layout\'s').toBe('default');
+      // Leaving: the reader's own layout comes back, and reader mode's reading ends with it.
+      act(() => { latest.exit('exit-tap'); });
+      await flush();
+      expect(latest.state.on).toBe(false);
+      expect(m.remount, 'leaving did not restore review').toHaveBeenCalledTimes(2);
+      expect(m.remount).toHaveBeenLastCalledWith(asked('review', 'off'));
+      // Reader mode never writes the layout pref.
+      expect(window.localStorage.getItem(PREFS_KEY), 'reader mode wrote the stored layout').toBe(PREF);
+      expect(places.push).toHaveBeenCalledTimes(1);
+      cleanup();
+      window.localStorage.clear();
+    }
+  });
+
+  // One case per layout the reader may stand in besides the default (P5.1, AR-2). Each is made fresh (a stored pref of that layout),
+  // enters from it and leaves, on a desk and on a phone.
+  for (const layout of ['classic', 'editorial', 'review', 'guided'] as const) {
+    it(`remount: entering from ${layout} remounts in default and leaving restores ${layout}`, async () => {
+      for (const phone of [undefined, true] as const) {
+        const where = `${layout}, ${phone === true ? 'phone' : 'desk'}`;
+        const stored = JSON.stringify({ theme: 'dark', layout });
+        const { rig, places } = await layoutScreen({ pref: layout, ...(phone === true ? { phone } : {}) });
+        const m = rig.mounts[0]!;
+        expect(rig.inputs[0]!.layout, `CONTROL (${where}): the body mounted in the stored layout`).toBe(layout);
+        act(() => { latest.enter('button'); });
+        await flush();
+        expect(latest.state.on, `${where}: reader mode is on`).toBe(true);
+        expect(m.remount, `${where}: entering did not remount in default`).toHaveBeenCalledTimes(1);
+        expect(m.remount, `${where}: entering did not remount in default`).toHaveBeenLastCalledWith(asked('default', 'screens'));
+        expect(m.setReading, `${where}: the reading was set in place on the ${layout} frame`).not.toHaveBeenCalled();
+        await frameReady(rig, 0);
+        expect(latest.frame?.layout, `${where}: the published frame is the default layout's`).toBe('default');
+        act(() => { latest.exit('exit-tap'); });
+        await flush();
+        expect(latest.state.on, `${where}: reader mode is off`).toBe(false);
+        expect(m.remount, `${where}: leaving did not restore ${layout}`).toHaveBeenCalledTimes(2);
+        expect(m.remount, `${where}: leaving did not restore ${layout}`).toHaveBeenLastCalledWith(asked(layout, 'off'));
+        expect(window.localStorage.getItem(PREFS_KEY), `${where}: reader mode wrote the stored layout`).toBe(stored);
+        expect(places.push, `${where}: one place was pushed`).toHaveBeenCalledTimes(1);
+        cleanup();
+        window.localStorage.clear();
+      }
+    });
+  }
+
+  it('remount: with ?variant=B on the page, reader mode reads in default and leaving restores review, and the stored pref is untouched', async () => {
+    // The visit's `?variant=B` (`DOCS_VARIANT_LAYOUT`: review) beats the stored classic for this visit; reader mode takes neither.
+    const link = { ...LINK, pageVariant: 'review' as const };
+    const stored = JSON.stringify({ theme: 'dark', layout: 'classic' });
+    for (const phone of [undefined, true] as const) {
+      const where = phone === true ? 'phone' : 'desk';
+      const { rig } = await layoutScreen({ pref: 'classic', link, ...(phone === true ? { phone } : {}) });
+      const m = rig.mounts[0]!;
+      expect(rig.inputs[0]!.layout, `CONTROL (${where}): the visit's variant beats the stored layout`).toBe('review');
+      act(() => { latest.enter('button'); });
+      await flush();
+      expect(m.remount, `${where}: entering did not remount in default`).toHaveBeenCalledTimes(1);
+      expect(m.remount).toHaveBeenLastCalledWith(asked('default', 'screens'));
+      await frameReady(rig, 0);
+      act(() => { latest.exit('exit-tap'); });
+      await flush();
+      expect(m.remount, `${where}: leaving did not restore the visit's review`).toHaveBeenCalledTimes(2);
+      expect(m.remount).toHaveBeenLastCalledWith(asked('review', 'off'));
+      expect(window.localStorage.getItem(PREFS_KEY), `${where}: the stored pref was changed`).toBe(stored);
+      cleanup();
+      window.localStorage.clear();
+    }
+  });
+
+  it('remount: a layout chosen from the Layout row while reader mode is off mounts again at once; while it is on, leaving gives the choice back', async () => {
+    const { rig } = await layoutScreen({ pref: 'review' });
+    const m = rig.mounts[0]!;
+    act(() => { chooseReaderLayout('guided'); });
+    expect(m.remount, 'the choice did not reach the frame in the same task').toHaveBeenCalledWith(asked('guided', 'off'));
+    await frameReady(rig, 0);
+    // The same layout again asks for nothing.
+    act(() => { chooseReaderLayout('guided'); });
+    expect(m.remount).toHaveBeenCalledTimes(1);
+    // Reader mode on: the frame goes to default, and a choice made now waits; leaving restores it, not the stored review.
+    act(() => { latest.enter('button'); });
+    await flush();
+    expect(m.remount).toHaveBeenLastCalledWith(asked('default', 'screens'));
+    await frameReady(rig, 0);
+    act(() => { chooseReaderLayout('classic'); });
+    expect(m.remount, 'a choice remounted the frame while reader mode held it in default').toHaveBeenCalledTimes(2);
+    act(() => { latest.exit('exit-tap'); });
+    await flush();
+    expect(m.remount).toHaveBeenLastCalledWith(asked('classic', 'off'));
+    // A body that has ended hears no more choices.
+    cleanup();
+    const after = m.remount.mock.calls.length;
+    chooseReaderLayout('editorial');
+    expect(m.remount.mock.calls.length).toBe(after);
+  });
+
+  it('remount: under default-only, nothing remounts for the layout, because reader mode is not offered outside default', async () => {
+    layoutRule.value = 'default-only';
+    const { rig } = await layoutScreen({ pref: 'review' });
+    expect(latest.frame?.layout, 'CONTROL: the frame is in review').toBe('review');
+    expect(latest.offered, 'reader mode was drawn outside the default layout').toBe(false);
+    expect(readerModeHandle()?.available(), 'r is available outside the default layout').toBe(false);
+    expect(latest.layoutNote, 'the note beside the Layout row').toBe(READER_LAYOUT_TEXT.note);
+    act(() => { latest.enter('button'); });
+    await flush();
+    expect(latest.state.on, 'reader mode started outside the default layout').toBe(false);
+    expect(rig.mounts[0]!.remount).not.toHaveBeenCalled();
+    expect(rig.mounts[0]!.setReading).not.toHaveBeenCalled();
+    expect(rig.mounts).toHaveLength(1);
+    // In the default layout it is offered, and entered in place: nothing to remount for.
+    cleanup();
+    window.localStorage.clear();
+    const def = await layoutScreen({ pref: null });
+    expect(latest.offered).toBe(true);
+    expect(latest.layoutNote).toBeNull();
+    act(() => { latest.enter('button'); });
+    await flush();
+    expect(latest.state.on).toBe(true);
+    expect(def.rig.mounts[0]!.setReading).toHaveBeenCalledWith('screens');
+    expect(def.rig.mounts[0]!.remount).not.toHaveBeenCalled();
+  });
+
+  it('mount plan: while reader mode is on, a same-document remount (a new commit, or openAt) is planned in default, whatever the stored layout pref', async () => {
+    // X6.68's layout half: a mount plan that ignores reader mode's state reds here.
+    const body = await layoutScreen({ pref: 'review' });
+    expect(body.rig.inputs[0]!.layout, 'CONTROL: a body made while reader mode is off is in the stored layout').toBe('review');
+    act(() => { latest.enter('button'); });
+    await flush();
+    expect(body.rig.mounts[0]!.remount).toHaveBeenLastCalledWith(asked('default', 'screens'));
+    await frameReady(body.rig, 0);
+    // A new commit of the document while reader mode is on: its body is made in the default layout, not the stored one.
+    body.view.rerender(<Screen doc={KEY_A} rig={body.rig} bodyKey="k2" places={body.places} />);
+    await flush();
+    expect(body.rig.inputs[1]!.reading, 'CONTROL: the new body is made under the reading').toBe('screens');
+    expect(body.rig.inputs[1]!.layout, 'a new commit made while reader mode is on was planned in the stored layout').toBe('default');
+    expect(window.localStorage.getItem(PREFS_KEY), 'the stored layout is untouched').toBe(PREF);
+    // After leaving, a later commit is in the stored layout again.
+    act(() => { latest.exit('exit-tap'); });
+    body.view.rerender(<Screen doc={KEY_A} rig={body.rig} bodyKey="k3" places={body.places} />);
+    await flush();
+    expect(body.rig.inputs[2]!.layout).toBe('review');
+    // A same-page reopening (openAt) is made in the layout the live mount is in: the bridge keeps it, default while reader mode is on.
+    const r = rig({ layout: 'review' });
+    const m = await r.run();
+    r.ready(0);
+    m.remount!({ layout: 'default', reading: 'screens' });
+    await vi.waitFor(() => { expect(r.mount).toHaveBeenCalledTimes(2); });
+    m.openAt!('x');
+    expect(layoutsOf(r)).toEqual(['review', 'default', 'default']);
+  });
+
+  it('focus: the frame is focused on the new mount\'s ready, after entering and after leaving', async () => {
+    const { rig } = await layoutScreen({ pref: 'review', timers: true });
+    const m = rig.mounts[0]!;
+    act(() => { latest.enter('button'); });
+    await advance(0);
+    expect(m.remount, 'CONTROL: entering remounted').toHaveBeenCalledTimes(1);
+    expect(host()?.hasAttribute('data-reader-hold'), 'the remounted frame is held under the reading ground').toBe(true);
+    const asked = m.focus.mock.calls.length;
+    // The new mount's ready: the hold lifts after two animation frames and the frame is given the focus it could not take hidden.
+    await frameReady(rig, 0);
+    await advance(20);
+    expect(m.focus.mock.calls.length, 'focused before the hold lifted').toBe(asked);
+    await advance(20);
+    expect(host()?.hasAttribute('data-reader-hold'), 'the hold lifted').toBe(false);
+    expect(m.focus.mock.calls.length, 'the frame was not focused at the new mount\'s ready after entering').toBe(asked + 1);
+    // Leaving: the same, for the mount that gives the reader's own layout back.
+    act(() => { latest.exit('exit-tap'); });
+    await advance(0);
+    expect(m.remount, 'CONTROL: leaving remounted').toHaveBeenCalledTimes(2);
+    expect(host()?.hasAttribute('data-reader-hold'), 'the restored frame is held').toBe(true);
+    const askedOnLeaving = m.focus.mock.calls.length;
+    await frameReady(rig, 0);
+    await advance(40);
+    expect(host()?.hasAttribute('data-reader-hold')).toBe(false);
+    expect(m.focus.mock.calls.length, 'the frame was not focused at the new mount\'s ready after leaving').toBe(askedOnLeaving + 1);
+  });
+
+  it('remount: a body that ends while a remount waits drops it, and a mount without remount is set in place', async () => {
+    const { rig, view } = await layoutScreen({ pref: 'review', timers: true });
+    act(() => { rig.inputs[0]!.onProgress!(0.3); });
+    act(() => { latest.enter('button'); });
+    expect(rig.mounts[0]!.remount).not.toHaveBeenCalled();
+    view.unmount();
+    await advance(1000);
+    expect(rig.mounts[0]!.remount, 'a remount fired after its body ended').not.toHaveBeenCalled();
+    cleanup();
+    // The older mounts (no `remount`, no `layout`) are entered in place, as they always were.
+    vi.useRealTimers();
+    window.localStorage.setItem(PREFS_KEY, JSON.stringify({ layout: 'review' }));
+    const plain = bodyRig();
+    const places = placesPort();
+    render(<Screen doc={KEY_A} rig={plain} bodyKey="k1" places={places} />);
+    await flush();
+    await frameReady(plain, 0);
+    act(() => { latest.enter('button'); });
+    await flush();
+    expect(plain.mounts[0]!.setReading).toHaveBeenCalledWith('screens');
+  });
+});
+
+// ─── the body over the REAL bridge, under the remount rule (X2 P5.1, I-4) ───────────────────────────────────────────────────────
+//
+// The rig above fakes the bridge, so what the bridge answers a request is whatever the fake says. These cases run the body over the real
+// `mountReader` with a fake library mount and layout texts held until released, so a dropped or riding request is the bridge's own.
+
+interface LibFrame {
+  readonly adapters: HostAdapters;
+  readonly document: RenderInput;
+  readonly destroy: Mock<() => void>;
+  readonly setReading: Mock<(mode: string) => void>;
+}
+
+/** A body rig whose `mount` is the real bridge over a fake library mount. The layout texts of each layout in `held` wait until
+ *  `release(layout)`; every other layout's come at once. */
+function bridgeRig(held: readonly ReaderLayout[]): { rig: BodyRig; frames: LibFrame[]; release: (l: ReaderLayout) => void } {
+  const frames: LibFrame[] = [];
+  const releases = new Map<ReaderLayout, () => void>();
+  const libraryMount = vi.fn((target: HTMLElement, o: { document: RenderInput; adapters: HostAdapters }) => {
+    const iframe = target.ownerDocument.createElement('iframe');
+    iframe.setAttribute('tabindex', '-1');
+    target.replaceChildren(iframe);
+    const f: LibFrame = {
+      adapters: o.adapters, document: o.document, destroy: vi.fn(), setReading: vi.fn(),
+    };
+    frames.push(f);
+    return { ...f, setPrefs: vi.fn(), setAppearance: vi.fn() } as unknown as DocFrame;
+  });
+  const reader: ReaderDeps = {
+    render: async () => RENDERED,
+    images: async () => ({ urls: {}, drafts: 0, auth: 0 }),
+    mount: (el, input) => mountReader(el, input, {
+      mount: libraryMount as unknown as typeof mountDocFrame, store: () => null, mermaid: () => Promise.resolve('M'),
+      e17: 'does-not-hold', libraryContract: () => 'none',
+      assets: (layout) => (held.includes(layout)
+        ? new Promise((resolve) => { releases.set(layout, () => resolve(stubAssetsOf(layout))); })
+        : Promise.resolve(stubAssetsOf(layout))),
+    }),
+  };
+  return { rig: { reader, inputs: [], mounts: [], log: [] }, frames, release: (l) => { releases.get(l)!(); } };
+}
+
+describe('layouts: the body over the real bridge, under the remount rule (X2 P5.1, I-4)', () => {
+  beforeEach(() => {
+    for (const f of Object.values(placesFake)) f.mockClear();
+  });
+  afterEach(() => {
+    cleanup();
+    vi.useRealTimers();
+    window.localStorage.clear();
+  });
+
+  const host = (): Element | null => document.querySelector('.docs-reader');
+  /** A screen in the stored layout `review`, its first frame ready, the default layout's texts held. Fake timers. */
+  async function bridgeScreen(): Promise<ReturnType<typeof bridgeRig>> {
+    vi.useFakeTimers();
+    window.localStorage.setItem(PREFS_KEY, JSON.stringify({ theme: 'dark', layout: 'review' }));
+    const b = bridgeRig(['default']);
+    render(<Screen doc={KEY_A} rig={b.rig} bodyKey="k1" places={placesPort()} />);
+    await flush();
+    expect(b.frames, 'CONTROL: the body mounted a frame in review').toHaveLength(1);
+    expect(b.frames[0]!.adapters.layout).toBe('review');
+    await act(async () => { b.frames[0]!.adapters.onReady!(); });
+    return b;
+  }
+
+  it('remount: leaving while the entry\'s default load is pending releases the hold and shows the document', async () => {
+    // I-4a: entering from review holds the host and asks for default, whose texts are still loading; leaving asks for review, the
+    // layout the frame still carries. The bridge's same-layout arm drops the request and mounts nothing, so no `ready` comes to lift the
+    // hold: the arm tells the caller, which releases it.
+    const b = await bridgeScreen();
+    act(() => { latest.enter('button'); });
+    await advance(0);
+    expect(host()?.hasAttribute('data-reader-hold'), 'CONTROL: entering holds the host while its default frame loads').toBe(true);
+    act(() => { latest.exit('exit-tap'); });
+    await advance(0);
+    await advance(60);
+    expect(host()?.hasAttribute('data-reader-hold'), 'the document stayed hidden under a hold nothing would lift').toBe(false);
+    expect(b.frames, 'CONTROL: nothing was mounted again').toHaveLength(1);
+    b.release('default');
+    await flush();
+    await advance(60);
+    expect(b.frames, 'the dropped default load mounted when its texts came').toHaveLength(1);
+    expect(host()?.hasAttribute('data-reader-hold')).toBe(false);
+  });
+
+  it('remount: a same-page link while entering reads in default', async () => {
+    // I-4b: an anchor link made while the entry's default texts load rides that swap. The frame it opens is the default one (reader mode
+    // reads in default), and the body goes on knowing the frame is on its way to default: leaving then gives review back.
+    const b = await bridgeScreen();
+    act(() => { latest.enter('button'); });
+    await advance(0);
+    act(() => { b.frames[0]!.adapters.onLink!({ kind: 'relative', path: 'a.md', fragment: 'x' } as never); });
+    expect(b.frames, 'the link mounted a frame before the default texts came').toHaveLength(1);
+    b.release('default');
+    await flush();
+    expect(b.frames, 'the swap did not mount').toHaveLength(2);
+    expect(Object.keys(b.frames[1]!.adapters), 'the frame the anchor opened is not in the default layout').not.toContain('layout');
+    expect(b.frames[1]!.document.initialHash).toBe('x');
+    expect(b.frames[0]!.destroy).toHaveBeenCalledTimes(1);
+    expect(b.frames[1]!.setReading, 'reader mode did not go on in the frame the anchor opened').toHaveBeenCalledWith('screens');
+    await act(async () => { b.frames[1]!.adapters.onReady!(); });
+    await advance(60);
+    expect(host()?.hasAttribute('data-reader-hold')).toBe(false);
+    // Leaving gives the reader's own layout back: the body still knew the frame as default-bound, so it asks for review.
+    act(() => { latest.exit('exit-tap'); });
+    await advance(0);
+    expect(b.frames, 'leaving did not remount into review').toHaveLength(3);
+    expect(b.frames[2]!.adapters.layout).toBe('review');
   });
 });

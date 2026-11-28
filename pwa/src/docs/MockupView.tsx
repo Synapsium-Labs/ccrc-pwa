@@ -410,9 +410,11 @@ function MockupLive(p: MockupViewProps & {
   // The in-app route of a doc target: the one builder of a page location (`docsLocation`), at this page's project, ref and version.
   const routeOf = useMemo<RouteOf>(
     () => (section: DocSectionSlug, path: string): string => docsPageUrl(docsLocation(
-      { kind: 'project', project: page.project, ref: page.ref }, { kind: 'path', section, path, dirSlash: false, at: page.at },
+      { kind: 'project', project: page.project, ref: page.ref },
+      // The visit's layout (`?variant=`) goes with the link, as its ref and version do (X2 P5.1).
+      { kind: 'path', section, path, dirSlash: false, at: page.at, variant: page.variant ?? null },
     )),
-    [page.project, page.ref, page.at],
+    [page.project, page.ref, page.at, page.variant],
   );
   const census = useMemo(
     () => (loaded === null || build === null || origins === null ? [] : censusOf(build.plan.rows, loaded.extract, scriptOrigins, origins, routeOf)),

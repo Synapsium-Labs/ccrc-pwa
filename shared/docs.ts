@@ -1436,9 +1436,44 @@ export const DOCS_FOLDERS_API_PREFIX = DOCS_API_PREFIX + '-folders';
  *  navigation cannot attach it, and a cross-origin fetch can only after a preflight the server never answers. */
 export const DOCS_REQUEST_HEADER = 'x-ccrc-docs';
 export const DOCS_REQUEST_HEADER_VALUE = '1';
+/** The reader's layouts (X2 P5.1, spec 2026-11-18 4.2; D-8762), `default` first: the default layout (the standalone reader's `AB`),
+ *  `classic`, `editorial` (`A`), `review` (`B`) and `guided` (`C`). The one list and the one type: the PWA's reader policy, the bridge
+ *  and the page grammar all name them from here. Mirrors the library's `FRAME_LAYOUTS`; nothing is imported from it (L0). */
+export const READER_LAYOUTS = ['default', 'classic', 'editorial', 'review', 'guided'] as const;
+export type ReaderLayout = (typeof READER_LAYOUTS)[number];
+
+/** The standalone reader's five `?variant=` names (spec 4.2), each layout to its one name: the table, written once. Total by
+ *  construction: a layout with no name does not compile (`satisfies Record<ReaderLayout, string>`), so nothing falls back to one. The
+ *  forward map `DOCS_VARIANT_LAYOUT` is derived from it. */
+export const DOCS_LAYOUT_VARIANT = Object.freeze({
+  default: 'AB', classic: 'classic', editorial: 'A', review: 'B', guided: 'C',
+} as const satisfies Readonly<Record<ReaderLayout, string>>);
+type DocsVariantName = (typeof DOCS_LAYOUT_VARIANT)[ReaderLayout];
+/** The standalone names, each to its layout (spec 4.2), flipped from `DOCS_LAYOUT_VARIANT`. `?variant=` reads it, the page URL writes
+ *  the name back (`docsLayoutVariant`), and the reader policy's `layoutFromVariant` asks it. */
+export const DOCS_VARIANT_LAYOUT: Readonly<Record<DocsVariantName, ReaderLayout>> = Object.freeze(
+  Object.fromEntries(READER_LAYOUTS.map((l) => [DOCS_LAYOUT_VARIANT[l], l])) as Record<DocsVariantName, ReaderLayout>,
+);
+const DOCS_VARIANT_NAMES: readonly DocsVariantName[] = READER_LAYOUTS.map((l) => DOCS_LAYOUT_VARIANT[l]);
+/** The longest standalone name (`classic`): a `?variant=` value longer than it is never read, copied or kept. */
+const DOCS_VARIANT_MAX_LENGTH = Math.max(...DOCS_VARIANT_NAMES.map((n) => n.length));
+
+/** The layout a standalone `?variant=` name means: exactly one of the five names, case-sensitive. `null` has one meaning, "not one of
+ *  the five" (unknown, empty, any other case, or longer than the longest name, which is refused before anything else reads it). */
+export function docsVariantLayout(name: string): ReaderLayout | null {
+  if (name.length > DOCS_VARIANT_MAX_LENGTH) return null;
+  const known = DOCS_VARIANT_NAMES.find((n) => n === name);
+  return known === undefined ? null : DOCS_VARIANT_LAYOUT[known];
+}
+
+/** The standalone name a layout is written as in `?variant=` (`DOCS_LAYOUT_VARIANT`: each layout has exactly one name). */
+export function docsLayoutVariant(layout: ReaderLayout): DocsVariantName {
+  return DOCS_LAYOUT_VARIANT[layout];
+}
+
 /** The page query keys, in the order docsPageUrl writes them. `at` is the version view's (rich-docs spec G6, R-d): a
- *  leaf's full commit, kept beside `ref`. */
-export const DOCS_PAGE_KEYS = ['ref', 'at', 'view', 'frame'] as const;
+ *  leaf's full commit, kept beside `ref`. `variant` (X2 P5.1) is last: a path page's one-visit layout (`DOCS_VARIANT_LAYOUT`). */
+export const DOCS_PAGE_KEYS = ['ref', 'at', 'view', 'frame', 'variant'] as const;
 /** Pin keys. On a page they are refused as commit-in-page, never canonicalised: a page names a commit only as `at`
  *  (rich-docs spec A14), and a durable pointer to one exact commit is a GitHub URL (spec 3.1, 3.11). */
 export const DOCS_PIN_KEYS = ['commit', 'servedRef', 'branch', 'head', 'fp'] as const;
@@ -1451,7 +1486,10 @@ export type DocsPageLocation =
       ref: DocsRefSpec | null;
       /** The version view's commit (rich-docs spec G6); `null` has one meaning, the latest at `ref`. */
       at: string | null;
-      view: 'effective' | 'committed'; frame: 'inline' | 'full' };
+      view: 'effective' | 'committed'; frame: 'inline' | 'full';
+      /** The reader layout this visit names (`?variant=`, X2 P5.1); absent has one meaning, the visit names none and the reader opens
+       *  in the device's own layout. Optional so a location built without it is the same location it always was. */
+      variant?: ReaderLayout };
 /** Canonicalise a validated legacy-ref hint, without trusting the failure's optional context. */
 export function docsResolvedRefLocation(page: DocsPageLocation, body: unknown): DocsPageLocation | null {
   if (page.kind === 'index' || page.ref === null || typeof body !== 'object' || body === null) return null;
@@ -1521,6 +1559,11 @@ function pageKeepsView(l: DocsPathLocation): boolean {
  *  `view=committed` beside it is redundant (`pageKeepsView`). */
 function pageKeepsAt(l: DocsPathLocation): boolean {
   return l.at !== null && !l.dirSlash;
+}
+
+/** `variant` survives only on a leaf (X2 P5.1): a directory is no document, so it has no layout to open in. */
+function pageKeepsVariant(l: DocsPathLocation): boolean {
+  return !l.dirSlash;
 }
 
 /** `frame=full` survives only on a leaf whose class is html (spec 3.1, 5.6.7). */
@@ -1625,9 +1668,18 @@ export function parseDocsPage(pathname: string, search: string): DocsPageParse {
   let at: string | null = null;
   let view: DocsPathLocation['view'] = 'effective';
   let frame: DocsPathLocation['frame'] = 'inline';
+  let variant: ReaderLayout | null = null;
   for (const key of DOCS_PAGE_KEYS) {
     const raw = q.raw.get(key);
     if (raw === undefined) continue;
+    if (key === 'variant') {
+      // Dropped, never refused (X2 P5.1): a value that is not one of the five names leaves no variant, so the canonical URL has no
+      // `variant` key and the visit opens in the device's layout. A raw value longer than the longest name is rejected before it is
+      // decoded or compared, and no value is copied into the location or the answer.
+      const decoded = raw.length > DOCS_VARIANT_MAX_LENGTH * 3 ? null : pageDecode(raw);
+      variant = decoded === null ? null : docsVariantLayout(decoded);
+      continue;
+    }
     const value = pageDecode(raw);
     if (value === null) return { ok: false, why: 'bad-escape' };
     if (key === 'ref') {
@@ -1655,6 +1707,8 @@ export function parseDocsPage(pathname: string, search: string): DocsPageParse {
       at: pageKeepsAt(asked) ? at : null,
       view: pageKeepsView(asked) ? 'committed' : 'effective',
       frame: pageKeepsFrame(asked) ? 'full' : 'inline',
+      // Left out, never `undefined`, when the visit names none: a parse without a variant answers the location it always did.
+      ...(variant === null || !pageKeepsVariant(asked) ? {} : { variant }),
     };
   }
   return { ok: true, loc, canonical: docsPageUrl(loc) };
@@ -1687,6 +1741,7 @@ export function docsPageUrl(loc: DocsPageLocation | DocsFolderLocation): string 
     at: loc.kind === 'path' && pageKeepsAt(loc) ? loc.at : null,
     view: loc.kind === 'path' && pageKeepsView(loc) ? 'committed' : null,
     frame: loc.kind === 'path' && pageKeepsFrame(loc) ? 'full' : null,
+    variant: loc.kind === 'path' && pageKeepsVariant(loc) && loc.variant !== undefined ? docsLayoutVariant(loc.variant) : null,
   };
   const pairs: string[] = [];
   for (const key of DOCS_PAGE_KEYS) {

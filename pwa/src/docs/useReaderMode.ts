@@ -29,25 +29,28 @@ import { setReaderPlaceHost, type ReaderPlaceHost } from '../lib/popstate';
 import { readKey, writeKey } from '../lib/storage';
 import { focusShownLandmark } from '../skins/frame';
 import { useFleetStore } from '../stores/fleet';
-import type { ReaderCommand } from './reader/policy';
+import type { ReaderCommand, ReaderLayout } from './reader/policy';
 import type { ReaderProgress } from './readerBar';
 import {
   landedBelowReaderPlace, markReaderExitPending, pushReaderPlace, readerPlaceFreeNow, standingOnDeadReaderEntry,
   stepBelowReaderPlace,
 } from './reader/places';
 import {
-  READER_EXIT_LANDING_MS, READER_EXIT_SETTLE_MS, READER_MODE_OFF, READER_WAKE_IDLE_MS, readerModeDrawn, readerModeExitFocus, readerModeOffered, readerModeStep, readerTurnOf,
-  wakeLockWanted,
+  READER_EXIT_LANDING_MS, READER_EXIT_SETTLE_MS, READER_LAYOUT_RULE, READER_MODE_OFF, READER_WAKE_IDLE_MS, readerLayoutRowDrawn,
+  readerModeDrawn, readerModeExitFocus, readerModeOffered, readerModeStep, readerTurnOf, wakeLockWanted,
   type ReaderModeAct, type ReaderModeEvent, type ReaderModeHow, type ReaderModeState, type ReaderReading, type ReaderTurn,
 } from './reader/readerMode';
-import { READER_MODE_TEXT } from './reader/readerModeWords';
+import { READER_MODE_TEXT, readerModeLayoutNote } from './reader/readerModeWords';
+import { readerLayoutHandle, setReaderLayoutHandle } from './readerLayoutHandle';
 
 /** The frame, as reader mode needs it: ready or not, the reading its mount was last sent (`planned`, `off` when it was sent none:
  *  `frame-ready` compares it with the turn in force), focus, the `reading` op, and, for the overlay, the document's title, how
  *  far it has been read, its reading time in minutes (absent when the library gave none) and the frame's own commands
- *  (`command('settings')`). No remount and no layout (D-8975). */
+ *  (`command('settings')`). `layout` is the layout the live mount carries (X2 P5.1): reader mode is offered, and the Layout row and its
+ *  note read, by it. */
 export interface ReaderModeFrame {
   readonly ready: boolean;
+  readonly layout: ReaderLayout;
   readonly planned: ReaderReading;
   focus(): void;
   setReading(mode: ReaderReading): void;
@@ -104,6 +107,18 @@ export interface ReaderModeContextValue {
    *  and an exit's own step back still landing are read at each `enter` (wave 62 fix round 1, review 4192 F6: the action stays
    *  drawn while the step lands, so a focus it holds is not dropped, and a press is refused). */
   readonly offered: boolean;
+  /** The sentence Page details draws beside the Layout row when the layout rule keeps reader mode from the layout in use
+   *  (`readerModeLayoutNote`, X2 P5.1); `null` has one meaning: nothing to say (reader mode is offered in this layout, or no frame
+   *  stands). */
+  readonly layoutNote: string | null;
+  /** The same note in the desk's words (D-9180): the desk head has no Layout control, so its note is a line under the head's row and
+   *  names the palette command. The one rule is `layoutNote`'s (`readerModeLayoutNote`, `place: 'desk'`); drawn only while
+   *  `layoutRowDrawn`. */
+  readonly layoutDeskNote: string | null;
+  /** Whether the Layout row is drawn, at its one spot, Page details (`readerLayoutRowDrawn`, X2 P5.1; D-9180 took the desk's row
+   *  from it), and whether the palette offers its Layout commands: a reader frame is ready for a Markdown leaf, and reader mode is
+   *  not on. */
+  readonly layoutRowDrawn: boolean;
   /** How the reader turns the page, kept per device (`READER_TURN_STORAGE_KEY`); `screens` until a device chooses. */
   readonly turn: ReaderTurn;
   /** The overlay's turn switch (X6 XR2.2): stores the turn, the one writer of its key, then sends the frame it in place while on. */
@@ -159,6 +174,9 @@ export interface ReaderModeControls {
   available(): boolean;
   on(): boolean;
   toggle(): void;
+  /** `readerLayoutRowDrawn` now (`readerLayoutHandle.ts`): whether the Layout row would be drawn, which is when the palette lists its
+   *  Layout commands (D-9180). Read at the moment of the question, never a render's copy. */
+  layoutRowDrawn(): boolean;
 }
 
 /** The device's remembered turn (X6 XR2.2, `ccrc-reader-turn`: `screens` or `scroll`). Read through the one storage port
@@ -408,12 +426,18 @@ function createController(sink: Sink, initialTurn: ReaderTurn) {
     modalMounted: document.querySelector('[role="dialog"]') !== null,
     figureOpen: figure,
     exitLanding: stepping,
+    layout: frame?.layout ?? 'default',
+    rule: READER_LAYOUT_RULE,
   });
   /** The offer less the modal-layer clause, read now: a listing (the shortcut sheet is a dialog itself) asks this, never
    *  `offered`. It keeps the step's wait, so the palette lists no Reader mode while the step lands (review 4192 F8). */
   const available = (): boolean => readerModeOffered({
     frameReady: frame?.ready === true, plainView: input.plainView, modalMounted: false, figureOpen: figure, exitLanding: stepping,
+    layout: frame?.layout ?? 'default', rule: READER_LAYOUT_RULE,
   });
+  /** The Layout row's drawn answer, read now (`readerLayoutRowDrawn`, the one rule): what the context carries at render, for the
+   *  palette's Layout commands (D-9180), which ask it through `readerLayoutHandle.ts`. */
+  const layoutRowDrawn = (): boolean => readerLayoutRowDrawn({ frameReady: frame?.ready === true, plainView: input.plainView, readerModeOn: state.on });
   const exit = (cause: 'exit-tap' | 'key'): void => step({ kind: cause });
   const enter = (_by: 'button' | 'key'): void => {
     const c = container;
@@ -501,6 +525,7 @@ function createController(sink: Sink, initialTurn: ReaderTurn) {
     focusFrame(): void { frame?.focus(); },
     offered,
     available,
+    layoutRowDrawn,
     on: (): boolean => state.on,
     enter,
     exit,
@@ -605,7 +630,12 @@ export function useReaderMode(o: { doc: string | null; plainView: boolean; place
     // `readerModeDrawn` owns the rule. The modal-layer test and the step's wait are read at each `enter` and in the handle, not at
     // render (`readerModeOffered`).
     state, turn, setTurn: ctl.setTurn,
-    offered: readerModeDrawn({ frameReady: frame?.ready === true, plainView, figureOpen: figure }),
+    offered: readerModeDrawn({
+      frameReady: frame?.ready === true, plainView, figureOpen: figure, layout: frame?.layout ?? 'default', rule: READER_LAYOUT_RULE,
+    }),
+    layoutNote: readerModeLayoutNote({ layout: frame?.layout ?? 'default', rule: READER_LAYOUT_RULE }),
+    layoutDeskNote: readerModeLayoutNote({ layout: frame?.layout ?? 'default', rule: READER_LAYOUT_RULE, place: 'desk' }),
+    layoutRowDrawn: readerLayoutRowDrawn({ frameReady: frame?.ready === true, plainView, readerModeOn: state.on }),
     enter: ctl.enter, exit: ctl.exit, menu: ctl.menu, escOverlay: ctl.escOverlay, activity: ctl.activity, dismiss: ctl.dismiss,
     aa: ctl.aa, frame,
     setFrame: ctl.setFrame, dropFrame: ctl.dropFrame, setFigure: ctl.setFigure, setFallback: ctl.setFallback, readingFor: ctl.readingFor,
@@ -614,6 +644,14 @@ export function useReaderMode(o: { doc: string | null; plainView: boolean; place
   const container = useMemo<ReaderModeContainer>(() => ({
     setContainer: ctl.setContainer, on: state.on, how: state.on ? state.how : undefined, live, focusFrame: ctl.focusFrame,
   }), [ctl, state, live]);
-  const controls = useMemo<ReaderModeControls>(() => ({ offered: ctl.offered, available: ctl.available, on: ctl.on, toggle: ctl.toggle }), [ctl]);
+  const controls = useMemo<ReaderModeControls>(() => ({
+    offered: ctl.offered, available: ctl.available, on: ctl.on, toggle: ctl.toggle, layoutRowDrawn: ctl.layoutRowDrawn,
+  }), [ctl]);
+  // The palette's Layout commands (D-9180) ask whether the Layout row would be drawn, through `readerLayoutHandle.ts`: set while
+  // the screen's hook is mounted, cleared on unmount only if the slot is still this hook's, so no other screen offers them.
+  useEffect(() => {
+    setReaderLayoutHandle(controls);
+    return () => { if (readerLayoutHandle() === controls) setReaderLayoutHandle(null); };
+  }, [controls]);
   return { value, container, controls };
 }

@@ -26,7 +26,23 @@
 // in; drawn on request or on open, it loads the text first, only for such a document, and a chunk that does not load
 // drops the scan, so the figures show their source and the page still mounts (the W8a plan's refinement (c)).
 //
-// `mountReader` remounts only for `openAt` (a link to this very page, spelled with its file name): the old frame is
+// The layout (X2 P5.1, D-8762): a mount carries one of the five layouts (`input.layout`, absent `default`), hands the library its
+// enhance bundle and stylesheet (`loadReaderAssets(layout)`) and names it in `adapters.layout`, which a `default` mount leaves out so
+// its adapters are exactly what they were before layouts. `remount` mounts the same rendered document again in another layout (the
+// Layout row's choice, and reader mode's entry and exit): the new layout's assets load first (the old frame stays meanwhile, and the
+// texts a layout loaded once are kept, so a return to it swaps at once), then the old frame is destroyed and the new one mounted with
+// no opening hash, so the stored reading place wins, and sent the reading in force before its `ready`. Texts that do not load keep
+// the frame that was showing (never a fallback: a frame stands), a reading set while they load rides the swap, and an `openAt` drops
+// the request: the anchor wins. The one exception is reader mode's own entry into `default` (`readerAnchorRidesSwap`): an `openAt`
+// while that swap loads keeps it, and the anchor rides it, so the frame the anchor opens is the default one. A request for the layout
+// the frame already carries drops a swap in flight and mounts nothing, and says so (`onKept`), like a swap that failed to load; an
+// anchor that was riding a swap that is dropped or fails opens in the live layout then.
+//
+// The storage port handed to the library is wrapped (`layoutKeepingPort`): the frame writes its whole prefs snapshot back on any
+// prefs change, so every write of the prefs key keeps the `layout` stored at that moment (`policy.ts#withStoredLayoutKept`), and the
+// device's layout has one writer, `layoutPref.ts` (I-3).
+//
+// `mountReader` remounts for `openAt` (a link to this very page, spelled with its file name): the old frame is
 // destroyed and the same document is mounted again at the anchor, through the same mount function and adapters. The
 // library's `update` is never called (it keeps the first mount's adapters, `focus` among them). A hosted mount follows
 // appearance through `setAppearance`; a mode-only mount follows theme through `setPrefs`. Whether a mount focuses its frame is `policy.ts#readerMountFocusFor`'s, from one fact this file
@@ -47,10 +63,11 @@ import { isDocsCommit } from '../../../../shared/docs';
 import { READER_STORE_PREFIX } from '../../lib/readerLimits';
 import { enumerablePageStorage, type EnumerableStoragePort } from '../../lib/storage';
 import {
-  READER_E17_MERMAID, isHostedMount, readerMountAsks, readerMountFocusFor, readerMountPlan,
-  type ReaderChrome, type ReaderCommand, type ReaderE17Reading, type ReaderLink, type ReaderMountProfile, type ReaderReading,
-  type ReaderAct,
+  READER_E17_MERMAID, READER_PREFS_KEY, isHostedMount, readerMountAsks, readerMountFocusFor, readerMountPlan, withStoredLayoutKept,
+  type ReaderChrome, type ReaderCommand, type ReaderE17Reading, type ReaderLayout, type ReaderLink, type ReaderMountProfile,
+  type ReaderReading, type ReaderAct,
 } from './policy';
+import { readerAnchorRidesSwap } from './readerMode';
 import { loadMermaidAsset, loadReaderAssets, loadReaderFonts } from './assets';
 import { readHostAppearance } from './hostAppearance';
 import { readerAppearanceSupported } from './appearance';
@@ -105,6 +122,8 @@ export interface ReaderMountInput {
   /** The reading this mount is made under (reader mode's turn); absent reads `off`. A mount made while reader mode is on is sent
    *  `setReading` with it before its `ready`. The reader lab's mounts ignore it. */
   readonly reading?: ReaderReading;
+  /** The layout this mount carries (X2 P5.1); absent reads `default`. The reader lab's mounts ignore it. */
+  readonly layout?: ReaderLayout;
   /** `history.ts#readerVersionSeed`'s answer for this body. Absent, the document's own `version` is cut to `{sha, draft}`
    *  as before. Passed on only when the mount's plan carries history (all three of this and the next two). */
   readonly version?: ReaderVersionSeed;
@@ -119,7 +138,9 @@ export interface ReaderMountInput {
 export interface ReaderMountDeps {
   readonly mount?: typeof mountDocFrame;
   readonly store?: () => EnumerableStoragePort | null;
-  readonly assets?: () => Promise<FrameAssets>;
+  /** The frame's texts for a layout (`assets.ts#loadReaderAssets`); called with the mount's layout, and again with each layout a
+   *  `remount` asks for that was not loaded before. */
+  readonly assets?: (layout: ReaderLayout) => Promise<FrameAssets>;
   readonly mermaid?: () => Promise<string>;
   readonly libraryContract?: () => number | 'none';
   readonly fonts?: () => Promise<{ sans: string; mono: string }>;
@@ -139,8 +160,10 @@ export interface ReaderMount {
    *  assets did not load). */
   command?(name: ReaderCommand): void;
   /** Opens the same document again at the anchor `id` (without `#`), for a link to this very page spelled with its file
-   *  name (completion plan Task 13): a new mount of the same document with `initialHash: id`, so no body is read again.
-   *  Does nothing after `destroy`. Absent: this mount has no frame (the assets did not load). */
+   *  name (completion plan Task 13): a new mount of the same document with `initialHash: id`, so no body is read again, in the layout
+   *  the live frame carries. A layout swap still loading is dropped (the anchor wins), except reader mode's own swap into `default`
+   *  (`readerAnchorRidesSwap`, I-4b): that one is kept, and the anchor is the opening hash of the frame it mounts. Does nothing after
+   *  `destroy`. Absent: this mount has no frame (the assets did not load). */
   openAt?(id: string): void;
   /** Closes the frame's full-screen figure, if one is open (a Back that pops its place), through the live frame's
    *  `closeOverlay()`. Does nothing after `destroy`, on a mount made without `onPlace` (the library throws for a host with
@@ -156,6 +179,21 @@ export interface ReaderMount {
    *  (`openAt`'s) is sent, and calls the live frame's `setReading`, which the library queues before `ready` (the latest wins).
    *  Does nothing after `destroy`; a frame that refuses is warned about and ignored. Absent: this mount has no frame. */
   setReading?(mode: ReaderReading): void;
+  /** The layout the live mount carries (X2 P5.1): the input's, then the one a `remount` last swapped in. It does not move while a
+   *  remount's assets are still loading. Absent: this mount has no frame. */
+  readonly layout?: ReaderLayout;
+  /** Mounts the same rendered document again in `opts.layout` (X2 P5.1): no body is read, and the new frame has no opening hash, so the
+   *  stored reading place wins. The layout's assets load first and the old frame stays meanwhile (texts already loaded swap at once);
+   *  a request made while another is loading replaces it (the latest wins), and a `destroy` or an `openAt` meanwhile cancels it (but
+   *  see `openAt`: reader mode's own swap into `default` keeps it, the anchor riding it). A request for the layout the live frame
+   *  already carries mounts nothing: it drops any loading request, sets the reading in place and calls `opts.onKept` (the caller may
+   *  hold the host for a swap it asked for, which no `ready` will now lift). `opts.reading`, when given, is recorded as the reading in
+   *  force first; a `setReading` made while the texts load is recorded the same way. Either rides the swap, is sent to the new frame
+   *  before its `ready`, as `openAt`'s is, and is never sent to the old frame while the swap is pending. `mountGen`, readiness and any
+   *  held command are reset as `openAt` resets them. Texts that do not load keep the frame that was showing (the layout is not
+   *  changed, a warning goes to the console, the recorded reading is sent to that frame in place) and call `opts.onKept`; nothing
+   *  falls back, for a frame still stands. Does nothing after `destroy`. Absent: this mount has no frame. */
+  remount?(opts: { layout: ReaderLayout; reading?: ReaderReading; onKept?: () => void }): void;
   /** Focuses the live frame's iframe (an already focused one is blurred first, so the focus lands anew). Does nothing after
    *  `destroy`. Absent: this mount has no frame. */
   focus?(): void;
@@ -174,6 +212,27 @@ function hostOwnsFocus(el: HTMLElement): boolean {
   const doc = el.ownerDocument;
   const active = doc.activeElement;
   return active !== null && active.isConnected && active !== doc.body && active !== doc.documentElement && !el.contains(active);
+}
+
+/** The page's storage as the library is handed it (I-3): every write of the reader's prefs key keeps the `layout` field stored at that
+ *  moment (`withStoredLayoutKept`), because the frame writes its whole mount-time snapshot of the object back on any prefs change (a
+ *  theme `follow`, an Aa width, font or size), the layout it was mounted in included. `layoutPref.ts` is the only writer of the field.
+ *  Every other key, every read, a removal and the enumeration pass through unchanged. A read that throws leaves the write as it came
+ *  (nothing is known to keep). */
+function layoutKeepingPort(port: EnumerableStoragePort): EnumerableStoragePort {
+  return {
+    getItem: (key) => port.getItem(key),
+    setItem: (key, value) => {
+      if (key !== READER_PREFS_KEY) { port.setItem(key, value); return; }
+      let stored: string | null;
+      try { stored = port.getItem(key); }
+      catch { port.setItem(key, value); return; }
+      port.setItem(key, withStoredLayoutKept(value, stored));
+    },
+    removeItem: (key) => port.removeItem(key),
+    key: (index) => port.key(index),
+    get length() { return port.length; },
+  };
 }
 
 /** A mount that holds nothing (the assets did not load): both calls do nothing. */
@@ -214,9 +273,12 @@ export async function mountReader(el: HTMLElement, input: ReaderMountInput, deps
   const asks = readerMountAsks(input.profile, input.reading === undefined ? {} : { reading: input.reading });
   const contract = (deps.libraryContract ?? (() => frameLibrary.APPEARANCE_CONTRACT ?? 'none'))();
   const hosted = isHostedMount(plan, readerAppearanceSupported(contract), input.appearanceRoot !== undefined);
+  // The layout the live library mount carries: the input's (the reader lab's mounts are always `default`), then each `remount`'s.
+  let layout: ReaderLayout = input.profile === undefined ? input.layout ?? 'default' : 'default';
+  const loadAssets = deps.assets ?? loadReaderAssets;
   // Start the base I/O first, then faces without yielding; contain either loader's immediate failure.
   let baseLoad: Promise<FrameAssets>;
-  try { baseLoad = (deps.assets ?? loadReaderAssets)(); }
+  try { baseLoad = loadAssets(layout); }
   catch (error) { baseLoad = Promise.reject(error); }
   void baseLoad.catch(() => undefined);
   let faces: Promise<{ sans: string; mono: string } | undefined> | undefined;
@@ -225,9 +287,12 @@ export async function mountReader(el: HTMLElement, input: ReaderMountInput, deps
     catch { faces = Promise.resolve(undefined); }
   }
   let assets: FrameAssets;
+  // The texts of each layout loaded so far (a layout's own, without faces or Mermaid), so a return to one swaps at once.
+  const loadedLayouts = new Map<ReaderLayout, FrameAssets>();
   try {
     const { fonts: _fonts, ...base } = await baseLoad;
     assets = base;
+    loadedLayouts.set(layout, base);
   } catch {
     input.onFallback('assets');
     return INERT;
@@ -276,7 +341,8 @@ export async function mountReader(el: HTMLElement, input: ReaderMountInput, deps
     }
   }
 
-  const port = plan.store ? (deps.store ?? enumerablePageStorage)() : null;
+  const pageStore = plan.store ? (deps.store ?? enumerablePageStorage)() : null;
+  const port = pageStore === null ? null : layoutKeepingPort(pageStore);
   const historyChanges = plan.history ? input.changes : undefined;
   const historyOpen = plan.history ? input.openVersion : undefined;
   // The theme the next library mount starts with: the input's, then the latest `setPrefs` (a fresh mount does not know
@@ -319,6 +385,8 @@ export async function mountReader(el: HTMLElement, input: ReaderMountInput, deps
     }),
     // The frame's bar is turned off only on ccrc's bar; progress is asked for by every production mount (D-8805), whose plan says so.
     ...(plan.chrome === 'host-bar' ? { features: { chrome: { bar: false, topSpace: false } } } : {}),
+    // A `default` mount names no layout, so its adapters are exactly what they were before layouts (X2 P5.1).
+    ...(layout === 'default' ? {} : { layout }),
     // A `host-bar` mount always did; any other Docs mount does when its input listens (the reader's body always does now).
     ...(asks.progress && (plan.chrome === 'host-bar' || input.onProgress !== undefined)
       ? { onProgress: (share: number) => input.onProgress?.(share) } : {}),
@@ -369,18 +437,115 @@ export async function mountReader(el: HTMLElement, input: ReaderMountInput, deps
   // wins) and posts it at `ready`, unlike `command`, `goto` and `closeOverlay`, which it drops there, so holding it here would
   // be a second queue beside the library's and dropping it would lose the turn.
   let reading: ReaderReading = asks.reading;
+  /** What the live frame was last sent: a fresh frame is `off`, then each send. A load that fails sends the live frame the reading
+   *  recorded meanwhile only when it differs. */
+  let frameReading: ReaderReading = 'off';
   const sendReading = (f: ReturnType<typeof mountDocFrame>, mode: ReaderReading): void => {
+    frameReading = mode;
     try {
       f.setReading(mode);
     } catch (e) {
       console.warn('ccrc-reader: the frame refused setReading', e);
     }
   };
+  /** A frame just mounted is off; it is sent the reading in force before its `ready` when that is not `off`. */
+  const startReading = (f: ReturnType<typeof mountDocFrame>): void => {
+    frameReading = 'off';
+    if (reading !== 'off') sendReading(f, reading);
+  };
   mountGen += 1;
   let frame = mountFrame(el, { document, adapters: adaptersNow() });
-  if (reading !== 'off') sendReading(frame, reading);
+  startReading(frame);
+  /** The remount request in force: each `remount` takes the next number, and a load that settles under an older one changes nothing. */
+  let remountGen = 0;
+  /** The layout whose texts a remount is loading, `null` for none: while it stands, a reading set is recorded and not sent to the old
+   *  frame (it rides the swap), and an `openAt` drops the request (unless the anchor rides it, below). */
+  let pendingLayout: ReaderLayout | null = null;
+  /** The anchor an `openAt` left to ride the swap into `default` that is loading (`readerAnchorRidesSwap`), `null` for none: the swap
+   *  that mounts takes it as its opening hash; a request that drops the swap, or a swap that fails, opens it in the live layout. It
+   *  outlives a request that is replaced by a later one (the anchor wins), and ends the moment a frame is opened at it. */
+  let pendingAnchor: string | null = null;
+  /** Takes `base` as `want`'s texts (and `want` as the live layout): the layout's own texts, with the faces and the Mermaid text this
+   *  mount already holds, neither of which depends on the layout. */
+  const useLayoutTexts = (want: ReaderLayout, base: FrameAssets): void => {
+    loadedLayouts.set(want, base);
+    assets = {
+      ...base,
+      ...(assets.mermaid === undefined ? {} : { mermaid: assets.mermaid }),
+      ...(assets.fonts === undefined ? {} : { fonts: assets.fonts }),
+    };
+    layout = want;
+  };
+  /** Replaces the live frame with a new one in the layout now live, opened at the anchor `hash` (`null`: no opening hash, so the stored
+   *  place wins), sent the reading in force before its `ready`. Every library mount after the first goes through here. */
+  const mountAgain = (hash: string | null): void => {
+    frame.destroy();
+    mountGen += 1;
+    isReady = false;
+    held = null;
+    const next = mountFrame(el, { document: { ...document, initialHash: hash }, adapters: adaptersNow() });
+    frame = next;
+    // The library runs host code while it mounts (a focus or insertion handler, a fallback): one that destroyed this
+    // mount then reached the frame before it, so the new frame goes too.
+    if (destroyed) next.destroy();
+    else startReading(next);
+  };
+  /** Swaps the live frame for a new one in `want`, with `base` its texts, at the anchor an `openAt` left riding it, if any (else no
+   *  opening hash: the stored place wins). */
+  const swapLayout = (want: ReaderLayout, base: FrameAssets): void => {
+    if (destroyed) return;
+    useLayoutTexts(want, base);
+    const anchor = pendingAnchor;
+    pendingAnchor = null;
+    mountAgain(anchor);
+  };
+  /** The swap in flight is not going to mount (a request for the live layout dropped it, or its texts did not load): the frame that
+   *  stands stays, in the layout it has. An anchor that was riding the swap opens there now; else the reading recorded meanwhile goes
+   *  to the frame in place. */
+  const keepFrame = (): void => {
+    pendingLayout = null;
+    const anchor = pendingAnchor;
+    pendingAnchor = null;
+    if (anchor !== null) mountAgain(anchor);
+    else if (reading !== frameReading) sendReading(frame, reading);
+  };
   return {
     get seed() { return seed; },
+    get layout() { return layout; },
+    remount(opts) {
+      if (destroyed) return;
+      if (opts.reading !== undefined) reading = opts.reading;
+      remountGen += 1;
+      const gen = remountGen;
+      if (opts.layout === layout) {
+        // The frame already carries it: a request still loading is dropped, and nothing is mounted again. The caller is told, as for a
+        // frame that was kept: it may hold the host for the request it made, and no `ready` is coming to lift it (I-4a).
+        keepFrame();
+        opts.onKept?.();
+        return;
+      }
+      const known = loadedLayouts.get(opts.layout);
+      if (known !== undefined) {
+        pendingLayout = null;
+        swapLayout(opts.layout, known);
+        return;
+      }
+      pendingLayout = opts.layout;
+      let load: Promise<FrameAssets>;
+      try { load = loadAssets(opts.layout); }
+      catch (error) { load = Promise.reject(error); }
+      load.then(({ fonts: _fonts, ...base }) => {
+        if (destroyed || gen !== remountGen) return;
+        pendingLayout = null;
+        swapLayout(opts.layout, base);
+      }, () => {
+        if (destroyed || gen !== remountGen) return;
+        // The frame that was showing stays, in the layout it has: nothing falls back.
+        console.warn(`ccrc-reader: the ${opts.layout} layout did not load; the frame stays in ${layout}`);
+        keepFrame();
+        opts.onKept?.();
+      });
+    },
     follow(nextTheme) {
       if (destroyed) return;
       theme = nextTheme;
@@ -403,20 +568,25 @@ export async function mountReader(el: HTMLElement, input: ReaderMountInput, deps
     },
     openAt(id) {
       if (destroyed) return;
-      frame.destroy();
-      mountGen += 1;
-      isReady = false;
-      held = null;
-      const next = mountFrame(el, { document: { ...document, initialHash: id }, adapters: adaptersNow() });
-      frame = next;
-      // The library runs host code while it mounts (a focus or insertion handler, a fallback): one that destroyed this
-      // mount then reached the frame before it, so the new frame goes too.
-      if (destroyed) next.destroy();
-      else if (reading !== 'off') sendReading(next, reading);
+      if (readerAnchorRidesSwap({ reading, pending: pendingLayout })) {
+        // Reader mode's own swap into default is loading (I-4b): the anchor rides it, and the frame it mounts opens there, in default,
+        // where a frame opened now in the layout the mount carries would have to be replaced at once.
+        pendingAnchor = id;
+        return;
+      }
+      // The anchor wins over a remount still loading: that request is dropped (a load that settles later changes nothing), and the
+      // frame opened at the anchor is in the layout the live frame carries. (The request's texts are never in while it loads, so its
+      // layout is never the one to open in.)
+      remountGen += 1;
+      pendingLayout = null;
+      pendingAnchor = null;
+      mountAgain(id);
     },
     setReading(mode) {
       if (destroyed) return;
       reading = mode;
+      // While a remount's texts load the old frame is about to go: the reading is recorded and rides the swap.
+      if (pendingLayout !== null) return;
       sendReading(frame, mode);
     },
     focus() {

@@ -51,7 +51,9 @@ describe('the asset texts', () => {
       ts.forEachChild(n, walk);
     };
     walk(sf);
-    const want = (['guard', 'bootstrap', 'enhance', 'css', 'mermaid'] as const)
+    // The five of the default layout, then each other layout's bundle and stylesheet (X2 P5.1), each specifier written once.
+    const want = (['guard', 'bootstrap', 'enhance', 'css', 'mermaid',
+      'enhanceClassic', 'cssClassic', 'enhanceEditorial', 'cssEditorial', 'enhanceReview', 'cssReview', 'enhanceGuided', 'cssGuided'] as const)
       .map((k) => `@synapsium-labs/pinax-lib/assets/${FRAME_MANIFEST[k].path}?raw`);
     const faces = ['@/fonts/Geist-Variable.woff2?inline', '@/fonts/GeistMono-Variable.woff2?inline'];
     expect([...specifiers].sort()).toEqual([...want, ...faces].sort());

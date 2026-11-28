@@ -150,7 +150,7 @@ const EMPTY_FOLDER_TREE: DocsTreeOk = {
  *  to another page has no visit to hand its fragment to, so the hand-off is a no-op and the page opens at its top. */
 function folderLinkBase(label: string, section: DocSectionSlug, path: string): Omit<DocLinkContextValue, 'urls'> {
   return {
-    project: '~' + label, pageRef: null, pageAt: null, view: 'effective', section, path, tree: EMPTY_FOLDER_TREE,
+    project: '~' + label, pageRef: null, pageAt: null, pageVariant: null, view: 'effective', section, path, tree: EMPTY_FOLDER_TREE,
     pageSource: 'draft', onFragment: () => undefined,
   };
 }

@@ -183,7 +183,10 @@ export function DocsBanners(p: {
         );
       }
       if (page.view === 'committed') {
-        const to = { kind: 'path', section: page.section, path: page.path, dirSlash: false, view: 'effective' } as const;
+        // The same page in its other view: it keeps the visit's layout (`?variant=`), as it keeps the ref (X2 P5.1).
+        const to = {
+          kind: 'path', section: page.section, path: page.path, dirSlash: false, view: 'effective', variant: page.variant ?? null,
+        } as const;
         out.push(
           <Banner key="view-committed" id="view-committed" tone="info"
             text={fillSentence(DOCS_BANNER_TEXT.viewCommitted, { short: shortCommit(tree.ref.commit) })}>

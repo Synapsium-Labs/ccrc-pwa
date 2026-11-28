@@ -73,14 +73,18 @@ import {
 } from './ReaderSheets';
 import type { ReaderImages, loadReaderImages } from './reader/images';
 import type { ReaderMount, ReaderMountInput, ReaderThemePref } from './reader/bridge';
-import { readerModeDocKeyOf, type ReaderReading } from './reader/readerMode';
+import {
+  READER_LAYOUT_RULE, layoutAllowsReaderMode, readerAnchorRidesSwap, readerLayoutChoice, readerLayoutRemount, readerModeDocKeyOf,
+  readerRemountDelayMs, type ReaderReading,
+} from './reader/readerMode';
+import { onReaderLayout, readReaderLayout } from './reader/layoutPref';
 import { ReaderModeContext, type ReaderModeFrame } from './useReaderMode';
 import { readerServedHash, readerVersionSeed } from './reader/history';
 import { startReaderHistory } from './readerHistory';
 import { docNow, startPlaces } from './reader/places';
 import {
-  copyDecision, readerBarTitle, readerBodyReducer, readerDocKey, readerPrefsOf, routeReaderLink,
-  type ReaderBodyState, type ReaderLink,
+  copyDecision, readerBarTitle, readerBodyReducer, readerDocKey, readerMountLayout, readerPrefsOf, routeReaderLink,
+  type ReaderBodyState, type ReaderLayout, type ReaderLink,
 } from './reader/policy';
 import { READER_FALLBACK_NOTE, type ReaderHiddenChar } from './reader/readerText';
 import { ReaderBarContext, createReaderProgress, usePublishReaderBar, type ReaderBar } from './readerBar';
@@ -342,9 +346,37 @@ function ReaderBody(p: ReaderFrameProps & { readonly text: string; readonly onSi
       next();
     };
 
+    // The layout (X2 P5.1, D-8762). `issued` is the layout the bridge was last ASKED to mount: the mount's own until a request is made,
+    // then that request's, set only where `remount` is actually called, so a request still waiting out the quiet (`remountTimer`) or
+    // cancelled has changed nothing and a decision made then reads where the frame is; `chosenHere` the layout the reader chose from
+    // the Layout row during this body, which beats the visit's `?variant=` and the stored one for its exit from reader mode
+    // (`readerMountLayout`'s `chosen`);
+    // `lastProgressAt` the clock reading of the frame's last `progress` message, which a reader-mode remount waits
+    // `READER_REMOUNT_QUIET_MS` beyond; `remountTimer` that wait, a local of this body's effect, cleared with it, the latest request
+    // replacing it; `sentReading` what the frame was last sent as its reading, which each request carries. `scheduleLayoutRemount`
+    // (set once the mount lands) is the one way a reader-mode remount is made: the wait, the hold, the focus, then the request.
+    let issued: ReaderLayout = 'default';
+    let chosenHere: ReaderLayout | null = null;
+    let lastProgressAt: number | null = null;
+    let remountTimer: ReturnType<typeof setTimeout> | null = null;
+    let unwatchLayout: (() => void) | null = null;
+    let sentReading: ReaderReading = 'off';
+    let scheduleLayoutRemount: (m: ReaderMount, to: ReaderLayout) => void = () => undefined;
+    const cancelRemount = (): void => {
+      if (remountTimer !== null) clearTimeout(remountTimer);
+      remountTimer = null;
+    };
+    /** The layout reader mode's exit gives back: the reader's choice this visit, else the visit's `?variant=`, else the device's. */
+    const chosenLayout = (): ReaderLayout => readerMountLayout({
+      pref: readReaderLayout(), visit: live.current.props.link.pageVariant, chosen: chosenHere, readingOn: false,
+    });
+
     const drop = (): void => {
       places.host(null);
       releaseHost();
+      cancelRemount();
+      unwatchLayout?.();
+      unwatchLayout = null;
       mount?.destroy();
       mount = null;
       mountRef.current = null;
@@ -400,9 +432,31 @@ function ReaderBody(p: ReaderFrameProps & { readonly text: string; readonly onSi
             reopened = r.id;
             cur.link.onFragment(r.id, location.pathname + location.search);
             if (mount !== currentMount) break;
+            // The anchor wins over a layout remount still waiting out the quiet (M1): it is dropped, and the frame opens at the anchor in
+            // the layout the mount has. The bridge drops one that is already loading the same way, except reader mode's own swap into
+            // default (`readerAnchorRidesSwap`, I-4b), which the anchor rides: `issued` then stays where the frame is going.
+            const waiting = remountTimer !== null;
+            cancelRemount();
             // A new frame made while reader mode is on stays under the reading ground until it has applied the turn.
             if (cur.readerMode !== null && cur.readerMode.readingFor(docKeyNow()) !== 'off') holdHost();
+            // A swap in flight is one the bridge was asked for (`issued` is not the layout it carries yet).
+            const inFlight = issued !== (currentMount.layout ?? issued);
+            // A request still waiting out the quiet was never sent to the bridge: its recorded reading is brought up to what was decided,
+            // so the bridge and the body judge the swap in flight by the same reading.
+            if (waiting && inFlight) currentMount.setReading?.(sentReading);
+            const rides = readerAnchorRidesSwap({ reading: sentReading, pending: inFlight ? issued : null });
             currentMount.openAt?.(decodedId(r.id));
+            if (!rides) issued = currentMount.layout ?? issued;
+            if (waiting) {
+              // The request that was waiting is asked again of the one decider (I-4c), from where the frame stands now, rather than the
+              // reading being set on a frame that is in the wrong layout for it: it is made behind a new quiet wait, with the hold,
+              // and until then the frame stands as it is. With nothing to remount for, the reading is set in place.
+              const to = currentMount.remount === undefined ? null : readerLayoutRemount({
+                mounted: issued, chosen: chosenLayout(), reading: sentReading, rule: READER_LAYOUT_RULE,
+              });
+              if (to === null) currentMount.setReading?.(sentReading);
+              else scheduleLayoutRemount(currentMount, to);
+            }
             // openAt replaces the frame and its seed without replacing the handle. Reconcile even if the root's
             // intermediate stamp never reaches React's observer, sharing any already queued appearance frame.
             if (mount === currentMount && currentMount.seed?.hosted) {
@@ -529,9 +583,62 @@ function ReaderBody(p: ReaderFrameProps & { readonly text: string; readonly onSi
       // The reading this mount is made under, asked as the mount starts: the turn when reader mode is on for this body's own
       // document (and it is still the screen's), else `off`. A mount made under a reading is sent it before its `ready`.
       const reading = cur.readerMode?.readingFor(docKeyNow()) ?? 'off';
-      /** What the frame was last sent as its reading: this mount's, then each `setReading` the context sent through the handle. It is
-       *  the published frame's `planned`, which `frame-ready` compares with the turn in force. */
-      let sentReading: ReaderReading = reading;
+      // The layout this mount carries (X2 P5.1): the default layout whenever reader mode is on for this document (a new commit's body
+      // made while it is on included, whatever the stored layout), else the visit's `?variant=`, else the device's. The reader's choice
+      // is listened for from here, before the mount lands, so a choice made while it loads is not lost.
+      const mountLayout = readerMountLayout({
+        pref: readReaderLayout(), visit: cur.props.link.pageVariant, chosen: chosenHere, readingOn: reading !== 'off',
+      });
+      issued = mountLayout;
+      /** Asks the live mount `m` for `to`, in the one shape every remount takes: the reading the frame was last sent (so a frame that
+       *  swaps in is under it), and the word that the frame stands (`onKept`: the layout's texts did not load (M3), or the request
+       *  was for the layout the mount already carries, which the bridge drops with nothing to mount, I-4a): then `issued` is the layout
+       *  the mount carries again, a host held for this request is released, and the frame is published as it stands. The stored
+       *  layout needs no guard here: the storage port the bridge hands the library keeps it through every frame write (I-3). The
+       *  frame is published again as the request is made, naming the layout it is on its way to (`issued`), so the offer, the note and
+       *  `r` read it (I-1). `held`: whether this request holds the host (reader mode's entry and exit do, a Layout choice does not). */
+      const askRemount = (m: ReaderMount, to: ReaderLayout, held: boolean): void => {
+        issued = to;
+        publishFrame();
+        m.remount?.({
+          layout: to, reading: sentReading,
+          onKept: () => {
+            if (mount !== m) return;
+            issued = m.layout ?? issued;
+            if (held) releaseAfterReading();
+            publishFrame();
+          },
+        });
+      };
+      /** A reader-mode remount into `to` for the live mount `m`: behind the quiet wait (`READER_REMOUNT_QUIET_MS` after the frame's
+       *  last `progress` message, read again when the wait ends, so a message that came meanwhile extends it), with the host held under
+       *  the reading ground like a reopened frame, the reading sent before its `ready`, and the focus taken then. The latest request
+       *  replaces a waiting one (`cancelRemount`, which every caller makes first). */
+      scheduleLayoutRemount = (m: ReaderMount, to: ReaderLayout): void => {
+        const remount = (): void => {
+          remountTimer = null;
+          if (mount !== m) return;
+          const wait = readerRemountDelayMs(Date.now(), lastProgressAt);
+          if (wait > 0) {
+            remountTimer = setTimeout(remount, wait);
+            return;
+          }
+          holdHost();
+          focusAsked = true;
+          askRemount(m, to, true);
+        };
+        remount();
+      };
+      unwatchLayout = onReaderLayout((layout) => {
+        chosenHere = layout;
+        // Remount now, or wait for reader mode's next exit (which gives `chosenHere` back), or nothing: the one decider says (M4).
+        if (mount === null || mount.remount === undefined) return;
+        const readingNow = live.current.readerMode?.readingFor(docKeyNow()) ?? 'off';
+        if (readerLayoutChoice({ mounted: issued, chosen: layout, reading: readingNow }) !== 'remount') return;
+        cancelRemount();
+        askRemount(mount, layout, false);
+      });
+      sentReading = reading;
       /** Whether this body's frame has reported `ready`: with the mount, it is what makes the frame the context's. */
       let isReady = false;
       /** Hands reader mode's context this body's frame, once the mount has landed and the frame is ready (again after each
@@ -542,14 +649,31 @@ function ReaderBody(p: ReaderFrameProps & { readonly text: string; readonly onSi
         if (!isReady || m === null || ctx === null) return;
         const f: ReaderModeFrame = {
           ready: true,
+          // The layout the bridge was last asked to mount (I-1): the frame is on its way to it while a request loads, and the offer,
+          // the note and `r` read it, not the layout the old frame still carries.
+          layout: issued,
           planned: sentReading,
           focus: () => {
             if (held) focusAsked = true;
             m.focus?.();
           },
           setReading: (mode) => {
+            // The backstop of what is offered (I-1): a reading is never sent to a frame in a layout the rule refuses it. `off` always is.
+            if (mode !== 'off' && !layoutAllowsReaderMode(issued, READER_LAYOUT_RULE)) return;
             sentReading = mode;
-            m.setReading?.(mode);
+            // Reader mode reads in the default layout (D-8975): entering from another layout, and leaving back to the reader's own,
+            // mount the same document again (`readerLayoutRemount` decides, from the layout the bridge was last asked to mount, so a
+            // request still waiting out the quiet is not yet where the frame is; a mount with no `remount` is set in place). The
+            // latest request replaces a waiting one, and one that finds nothing to remount sets the reading in place.
+            cancelRemount();
+            const to = m.remount === undefined ? null : readerLayoutRemount({
+              mounted: issued, chosen: chosenLayout(), reading: mode, rule: READER_LAYOUT_RULE,
+            });
+            if (to === null) {
+              m.setReading?.(mode);
+              return;
+            }
+            scheduleLayoutRemount(m, to);
           },
           command: (name) => m.command?.(name),
           title: barTitle,
@@ -593,8 +717,10 @@ function ReaderBody(p: ReaderFrameProps & { readonly text: string; readonly onSi
         },
         copy: onCopy,
         reading,
+        layout: mountLayout,
         // A changed share is activity; a share resent is not.
         onProgress: (share: number) => {
+          lastProgressAt = Date.now();
           const last = progress.read();
           progress.set(share);
           if (share !== last) live.current.readerMode?.activity();
@@ -630,9 +756,17 @@ function ReaderBody(p: ReaderFrameProps & { readonly text: string; readonly onSi
             reopened = null;
             live.current.props.onFragmentConsumed();
           }
+          // A ready after the first is a replaced frame's: a layout swap's (the bridge mounts it when the layout's texts have loaded) or
+          // a same-page reopening's. A hosted mount read the root as it mounted, so, as after `openAt`, its seed is taken as followed
+          // and the root is read again, sharing any appearance frame already queued (m-3).
+          const swapped = isReady;
           isReady = true;
           publishFrame();
           releaseAfterReading();
+          if (swapped && mount !== null && mount.seed?.hosted) {
+            followedStamp.current = mount.seed.stamp;
+            scheduleAppearance(mount);
+          }
         },
         onFallback: (r) => fallBack(String(r)),
         chrome,
@@ -655,6 +789,15 @@ function ReaderBody(p: ReaderFrameProps & { readonly text: string; readonly onSi
       }
       mount = m;
       mountRef.current = m;
+      // A layout chosen from the Layout row while this mount was loading: asked for now, unless reader mode holds the document in the
+      // default layout (the next exit gives it back).
+      const askedWhileLoading = chosenHere;
+      if (askedWhileLoading !== null && m.remount !== undefined) {
+        const readingNow = live.current.readerMode?.readingFor(docKeyNow()) ?? 'off';
+        if (readerLayoutChoice({ mounted: issued, chosen: askedWhileLoading, reading: readingNow }) === 'remount') {
+          askRemount(m, askedWhileLoading, false);
+        }
+      }
       // The pops that are the frame's reach the mount through this host. A figure the dispatcher closes (a Back) is closed by
       // the host's own command, which the frame does not report, so reader mode hears of it here.
       places.host({

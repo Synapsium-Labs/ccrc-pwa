@@ -83,7 +83,7 @@ const basePin = (commit = BASE): DocPin => headPin(commit);
 const draftPin = (): DocPin => ({ kind: 'draft', branch: 'main', head: C1, section: 'specs', path: 'a.md', fp: 'f'.repeat(64) });
 
 const LINK: Omit<DocLinkContextValue, 'urls'> = {
-  project: 'demo', pageRef: null, pageAt: null, view: 'effective', section: 'specs', path: 'a.md', tree: treeOk(),
+  project: 'demo', pageRef: null, pageAt: null, pageVariant: null, view: 'effective', section: 'specs', path: 'a.md', tree: treeOk(),
   pageSource: 'committed', onFragment: () => {},
 };
 

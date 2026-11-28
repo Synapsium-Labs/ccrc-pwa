@@ -11,12 +11,85 @@
 // Each `null` here has one meaning, stated at the function.
 import { DOCS_PARSE_BUDGET_MS } from '../../lib/markdownLimits';
 import { utf8ByteLength } from '../../lib/markdownGuard';
-import { READER_COPY_WRITE_MAX_BYTES, READER_DOC_KEY_MAX_UNITS, READER_LAB_DRAW_WATCHDOG_MS } from '../../lib/readerLimits';
+import {
+  READER_COPY_WRITE_MAX_BYTES, READER_DOC_KEY_MAX_UNITS, READER_LAB_DRAW_WATCHDOG_MS, READER_STORE_PREFIX,
+} from '../../lib/readerLimits';
 import { docLinkTarget } from '../docLinkTarget';
 import type { DocLinkContextValue } from '../DocLink';
-import type { DocSectionSlug } from '../../../../shared/docs';
+import { READER_LAYOUTS, docsVariantLayout, type DocSectionSlug, type ReaderLayout } from '../../../../shared/docs';
 import type { ReaderHiddenChar } from './readerText';
 import type { ReaderReading } from './readerMode';
+
+/** The reader's layouts (X2 P5.1, D-8762): defined once, in `shared/docs.ts` (the page grammar's `?variant=` map names them too), and
+ *  re-exported here so the mount's callers keep naming them from the policy. */
+export { READER_LAYOUTS };
+export type { ReaderLayout };
+
+/** The layout a standalone `?variant=` name means (`AB`, `A`, `B`, `C`, `classic`; X2 P5.1), or `default` for anything else, `null`
+ *  included. Reads the one map in `shared/docs.ts` (`docsVariantLayout`). */
+export function layoutFromVariant(v: string | null): ReaderLayout {
+  return v === null ? 'default' : docsVariantLayout(v) ?? 'default';
+}
+
+/** Whether `v` is a layout NAME (`default`, `classic`, `editorial`, `review`, `guided`), as the library's `prefs` object stores one:
+ *  not a standalone `?variant=` name. */
+function isReaderLayout(v: unknown): v is ReaderLayout {
+  return typeof v === 'string' && (READER_LAYOUTS as readonly string[]).includes(v);
+}
+
+/** The prefs object the library keeps under the reader's `pref:prefs` key, as text parsed to a plain object, or `null` when the text is
+ *  absent, does not parse, or is not a plain object. */
+function prefsObject(raw: string | null): Record<string, unknown> | null {
+  if (raw === null) return null;
+  try {
+    const v: unknown = JSON.parse(raw);
+    return typeof v === 'object' && v !== null && !Array.isArray(v) ? (v as Record<string, unknown>) : null;
+  } catch {
+    return null;
+  }
+}
+
+/** The device's layout from the stored prefs text (`ccrc:reader:v1:pref:prefs`, the library's own JSON object): its `layout` field when
+ *  that is one of the five layout names, else `default` (absent, unparsable, not an object, or a name no build knows). */
+export function readerLayoutOfPref(raw: string | null): ReaderLayout {
+  const layout = prefsObject(raw)?.['layout'];
+  return isReaderLayout(layout) ? layout : 'default';
+}
+
+/** The prefs text with `layout` set and every other field exactly as it was (the library owns the rest and keeps fields it does not
+ *  know); unparsable or non-object text becomes `{"layout": …}` alone. */
+export function withLayoutInPref(raw: string | null, layout: ReaderLayout): string {
+  return JSON.stringify({ ...(prefsObject(raw) ?? {}), layout });
+}
+
+/** The storage key of the library's reader prefs object (`pref:prefs` under the reader's prefix): where the `layout` field lives, and
+ *  the one key whose writes by the frame the storage port rewrites (`withStoredLayoutKept`). */
+export const READER_PREFS_KEY = `${READER_STORE_PREFIX}pref:prefs`;
+
+/** The prefs text a frame writes (`value`, its whole snapshot of the object) with the `layout` field as it stands in storage (`stored`,
+ *  the text under the same key now), so the frame is never a writer of the field (`layoutPref.ts` is the only one, I1, I-3): the stored
+ *  field is copied as it is, whatever its value; with none stored (absent, no field, not an object) the write carries none. Every other
+ *  field of the write is kept as it came, in its order. A `value` that is no JSON object is nobody's prefs and is returned as it is,
+ *  and so is one with no `layout` where none is stored. */
+export function withStoredLayoutKept(value: string, stored: string | null): string {
+  const next = prefsObject(value);
+  if (next === null) return value;
+  const kept = prefsObject(stored);
+  if (kept !== null && 'layout' in kept) return JSON.stringify({ ...next, layout: kept['layout'] });
+  if (!('layout' in next)) return value;
+  const { layout: _dropped, ...rest } = next;
+  return JSON.stringify(rest);
+}
+
+/** The layout a mount is made in: reader mode on for this document means `default` whatever the device, the visit or the page says
+ *  (reader mode reads in the default layout, D-8975; this is X6.68's layout half); else the layout this page's reader chose from the
+ *  Layout row (`chosen`, `null` for none), else the visit's (`?variant=`) when it names one, else the device's. */
+export function readerMountLayout(
+  i: { pref: ReaderLayout; visit: ReaderLayout | null; chosen: ReaderLayout | null; readingOn: boolean },
+): ReaderLayout {
+  if (i.readingOn) return 'default';
+  return i.chosen ?? i.visit ?? i.pref;
+}
 
 /** A link as the host's classifier of the frame's href yields it (mirrors the library's host-link shape; nothing is
  *  imported from it). The frame's content is untrusted: `external` is re-derived from its `url` before it is used. */

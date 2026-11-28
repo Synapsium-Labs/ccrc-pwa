@@ -11,14 +11,18 @@ import { CommandLayer } from '../src/command/CommandLayer';
 import { baseCommands } from '../src/command/commands';
 import { available, rankCommands, type CommandContext } from '../src/command/registry';
 import { useShortcuts } from '../src/command/useShortcuts';
+import { setReaderLayoutHandle } from '../src/docs/readerLayoutHandle';
 import { setReaderModeHandle, type ReaderModeHandle } from '../src/docs/readerModeHandle';
 import { NO_READER_PLACES, useReaderMode, type ReaderModeFrame } from '../src/docs/useReaderMode';
-import { READER_MODE_KEY, READER_MODE_TEXT } from '../src/docs/reader/readerModeWords';
+import { onReaderLayout } from '../src/docs/reader/layoutPref';
+import { READER_LAYOUTS } from '../src/docs/reader/policy';
+import { READER_LAYOUT_TEXT, READER_MODE_KEY, READER_MODE_TEXT, readerLayoutCommandTitle } from '../src/docs/reader/readerModeWords';
 import { useFleetStore } from '../src/stores/fleet';
 
 afterEach(() => {
   cleanup();
   setReaderModeHandle(null);
+  setReaderLayoutHandle(null);
   vi.restoreAllMocks();
 });
 
@@ -76,7 +80,7 @@ describe('commands: r', () => {
   it('commands: the real handle answers available() through a dialog that offered() refuses', () => {
     const { result } = renderHook(() => useReaderMode({ doc: 'doc-a', plainView: false, places: NO_READER_PLACES }));
     const frame: ReaderModeFrame = {
-      ready: true, planned: 'off', focus: () => undefined, setReading: () => undefined, command: () => undefined,
+      ready: true, layout: 'default', planned: 'off', focus: () => undefined, setReading: () => undefined, command: () => undefined,
       title: 'a.md', progress: { read: () => 0, subscribe: () => () => undefined },
     };
     expect(result.current.controls.available(), 'no frame stored').toBe(false);
@@ -181,5 +185,105 @@ describe('commands: r', () => {
       act(() => { useFleetStore.setState({ sessions: [], runs: [] }); });
       expect(listsReader(rowsNow()), 'gone when nothing is available').toBe(false);
     });
+  });
+});
+
+// The layout from the command palette, on every width (X2 P5.1, D-9180): the desk's head has no Layout control, so each layout is a
+// palette command, offered where Page details draws the Layout row.
+describe('palette: the Layout commands (D-9180)', () => {
+  const layoutRows = (): ReturnType<typeof baseCommands> => baseCommands().slice(-READER_LAYOUTS.length);
+
+  it('palette: one Layout command per layout, last, titled from the one list', () => {
+    const all = baseCommands();
+    const rows = layoutRows();
+    // Last, after `toggle-reader-mode`, so every earlier command keeps its place; one per layout, in the layouts' own order.
+    expect(all.at(-READER_LAYOUTS.length - 1)?.id, 'the row before them is reader mode\'s').toBe('toggle-reader-mode');
+    expect(rows.map((c) => c.title)).toEqual(READER_LAYOUTS.map((l) => `Layout: ${READER_LAYOUT_TEXT.names[l]}`));
+    expect(rows.map((c) => c.title)).toEqual(['Layout: Default', 'Layout: Classic', 'Layout: Editorial', 'Layout: Review', 'Layout: Guided']);
+    expect(rows.map((c) => c.title)).toEqual(READER_LAYOUTS.map(readerLayoutCommandTitle));
+    for (const row of rows) {
+      expect(row.group, row.id).toBe('Docs');
+      expect(row.keys, `${row.id}: no key binding`).toBeUndefined();
+    }
+    expect(new Set(all.map((c) => c.id)).size, 'ids are unique').toBe(all.length);
+  });
+
+  it('palette: the Layout commands are offered exactly when the Layout row would be, never in reader mode, on no other screen', () => {
+    const rows = layoutRows();
+    const ids = new Set(rows.map((c) => c.id));
+    const offered = (c: CommandContext): string[] => available(baseCommands(), c).map((x) => x.id).filter((id) => ids.has(id));
+    const open = ctx({ paletteOpen: true });
+    // No Docs screen: none, with the palette open or closed.
+    setReaderLayoutHandle(null);
+    expect(offered(open), 'no Docs screen').toEqual([]);
+    expect(offered(ctx({ path: '/fleet' })), 'another screen').toEqual([]);
+    // A stand-in handle: offered exactly as it answers, and they ARE listed while the palette is open.
+    let drawn = true;
+    setReaderLayoutHandle({ layoutRowDrawn: () => drawn });
+    expect(offered(open), 'listed in the open palette').toEqual([...ids]);
+    expect(rankCommands('Layout: G', available(baseCommands(), open)).map((c) => c.title)).toContain('Layout: Guided');
+    expect(offered(ctx()), 'and with the palette closed').toEqual([...ids]);
+    drawn = false;
+    expect(offered(open), 'the row is not drawn').toEqual([]);
+    // The real hook's answer is `readerLayoutRowDrawn`'s: a ready frame outside the plain view; none while reader mode is on.
+    const frame: ReaderModeFrame = {
+      ready: true, layout: 'review', planned: 'off', focus: () => undefined, setReading: () => undefined, command: () => undefined,
+      title: 'a.md', progress: { read: () => 0, subscribe: () => () => undefined },
+    };
+    const first = renderHook((p: { plainView: boolean }) => useReaderMode({ doc: 'doc-a', plainView: p.plainView, places: NO_READER_PLACES }), {
+      initialProps: { plainView: false },
+    });
+    expect(offered(open), 'CONTROL: no frame yet').toEqual([]);
+    act(() => { first.result.current.value.setFrame(frame); });
+    expect(offered(open), 'a ready frame').toEqual([...ids]);
+    first.rerender({ plainView: true });
+    expect(offered(open), 'the plain view').toEqual([]);
+    first.rerender({ plainView: false });
+    expect(offered(open)).toEqual([...ids]);
+    act(() => { first.result.current.value.setFrame({ ...frame, ready: false }); });
+    expect(offered(open), 'a frame that is not ready').toEqual([]);
+    first.unmount();
+    expect(offered(open), 'unmounted: the slot is cleared').toEqual([]);
+  });
+
+  it('palette: a Layout command writes the pref and tells the frame, for the layout already shown too', () => {
+    setReaderLayoutHandle({ layoutRowDrawn: () => true });
+    const heard: string[] = [];
+    const stop = onReaderLayout((l) => { heard.push(l); });
+    try {
+      for (const row of layoutRows()) row.run(ctx());
+      expect(heard).toEqual([...READER_LAYOUTS]);
+      expect(window.localStorage.getItem('ccrc:reader:v1:pref:prefs'), 'the last choice is stored').toBe('{"layout":"guided"}');
+      // The layout already stored is written again: no skip for "already shown".
+      heard.length = 0;
+      layoutRows()[4]!.run(ctx());
+      expect(heard).toEqual(['guided']);
+    } finally {
+      stop();
+      window.localStorage.clear();
+    }
+  });
+
+  it('palette: a Layout command run where the Layout row is not drawn does nothing', () => {
+    // m-1: `run` re-checks the handle as `toggle-reader-mode`'s does, so a run that reaches it after the row went (a stale palette
+    // list, reader mode entered meanwhile, another screen) writes no pref and tells no frame.
+    const heard: string[] = [];
+    const stop = onReaderLayout((l) => { heard.push(l); });
+    try {
+      // No Docs screen at all, and a screen whose row is not drawn.
+      setReaderLayoutHandle(null);
+      for (const row of layoutRows()) row.run(ctx());
+      setReaderLayoutHandle({ layoutRowDrawn: () => false });
+      for (const row of layoutRows()) row.run(ctx());
+      expect(heard, 'a frame was told').toEqual([]);
+      expect(window.localStorage.getItem('ccrc:reader:v1:pref:prefs'), 'a pref was written').toBeNull();
+      // CONTROL: the same runs with the row drawn choose.
+      setReaderLayoutHandle({ layoutRowDrawn: () => true });
+      layoutRows()[3]!.run(ctx());
+      expect(heard).toEqual(['review']);
+    } finally {
+      stop();
+      window.localStorage.clear();
+    }
   });
 });

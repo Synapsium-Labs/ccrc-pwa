@@ -40,7 +40,7 @@ interface FakeFrame extends ReaderModeFrame {
 function fakeFrame(readingMinutes?: number): FakeFrame {
   const order: string[] = [];
   return {
-    ready: true, planned: 'off', title: 'Native Docs reader: reader mode', progress: createReaderProgress(), order,
+    ready: true, layout: 'default', planned: 'off', title: 'Native Docs reader: reader mode', progress: createReaderProgress(), order,
     ...(readingMinutes === undefined ? {} : { readingMinutes }),
     focus: vi.fn<() => void>(() => { order.push('focus'); }),
     setReading: vi.fn<ReaderModeFrame['setReading']>(),

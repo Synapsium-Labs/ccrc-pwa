@@ -7,7 +7,7 @@
 // that parsed, and `DocsBanners` on a page with a listing; so a tree failure keeps the crumbs and a file failure keeps
 // the header and the truth line (spec 4.7's placement, M4.F4). Its stylesheet is docs/docs.css (spec 4.14), which
 // also holds the fleet header's Docs door: this static import, through app.tsx's, puts it in the main stylesheet.
-import { useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { useCallback, useContext, useEffect, useMemo, useReducer, useRef, useState, type ReactNode } from 'react';
 import {
   DOCS_PAGE_PREFIX, docsPageUrl, docsResolvedRefLocation, isDocsFolderLocation, parseDocsPage, parseDocsRef,
   type DocPin, type DocsPageLocation, type DocsProjectsResponse, type DocsRefSpec, type DocsTreeOk,
@@ -37,6 +37,8 @@ import { ReaderBarContext, type ReaderBar, type ReaderBarSlot } from '../docs/re
 import { readerChromeFor } from '../docs/reader/policy';
 import { docsRetryPlan, type DocsAnswer, type DocsLoaders, type DocsNotOk } from '../docs/failures';
 import { docsDefaultBranchFallback, docsLocation } from '../docs/docsLinks';
+import { pageAfterVariantEnded } from '../docs/docsLinkBase';
+import { onReaderLayout, readerLayoutChosenAt } from '../docs/reader/layoutPref';
 import { folderIndexSlot, type DocsFolderLoaders, type FolderIndexSlot } from '../docs/folderPage';
 import {
   DOCS_HEAD_TEXT, DOCS_PAGE_INVALID_SENTENCE, DOCS_VIEW_TEXT, failureSentence, fillSentence, slotSentence,
@@ -196,7 +198,18 @@ export function DocsScreen(p: {
   // An outside folder's page (X2 P2.4) is no project page: it has its own head and reads through the folder loaders, so
   // the visit, the banners and `DocsHead` see `null` there, exactly as they do for a page that did not parse.
   const folderPage = parsed.ok && isDocsFolderLocation(parsed.loc) ? parsed.loc : null;
-  const page = parsed.ok && !isDocsFolderLocation(parsed.loc) ? parsed.loc : null;
+  const parsedPage = parsed.ok && !isDocsFolderLocation(parsed.loc) ? parsed.loc : null;
+  // The page every view is handed (X2 P5.1, I-2). A `?variant=` names the layout of one visit, and a Layout choice (the row, the
+  // palette) ends it for the rest of that page without moving the address: the one fact "a choice ended the variant at this address"
+  // is `layoutPref.ts`'s, and the page is derived from it here, once, so the head's links, the banners', the doc links and Print's all
+  // follow from it and none reads the raw address. The screen is told of a choice to draw it again; the canonical redirect below
+  // still reads the parsed address, which keeps its variant.
+  const [, heardChoice] = useReducer((n: number) => n + 1, 0);
+  useEffect(() => onReaderLayout(() => heardChoice()), []);
+  const endedAt = readerLayoutChosenAt();
+  const page = useMemo(
+    () => (parsedPage === null ? null : pageAfterVariantEnded(parsedPage, here, endedAt)), [parsedPage, here, endedAt],
+  );
   const visit = useDocsVisit(page, loaders);
 
   // The image queue and the drafted-asset count, one each per visit, stable across renders (DocsAssetContext).

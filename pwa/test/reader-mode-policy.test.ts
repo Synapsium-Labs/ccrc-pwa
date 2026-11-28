@@ -22,8 +22,12 @@ import {
   type ReaderModeEvent,
   type ReaderModeState,
 } from '../src/docs/reader/readerMode';
-import { READER_MODE_TEXT, overlayProgressText, timeLeftText } from '../src/docs/reader/readerModeWords';
+import {
+  READER_LAYOUT_TEXT, READER_MODE_TEXT, overlayProgressText, readerModeLayoutNote, timeLeftText,
+} from '../src/docs/reader/readerModeWords';
 import type { DocsFolderLocation, DocsPageLocation } from '../../shared/docs';
+import { READER_LAYOUTS } from '../src/docs/reader/policy';
+import { READER_LAYOUT_RULE } from '../src/docs/reader/readerMode';
 
 type On = Extract<ReaderModeState, { on: true }>;
 
@@ -361,7 +365,10 @@ describe('reader mode: the turn (X6 XR2.2)', () => {
 
 describe('reader mode: what is offered, and the wake lock', () => {
   it('offered: only a ready frame outside the plain view, never while a modal layer is mounted or a figure is open', () => {
-    const base = { frameReady: true, plainView: false, modalMounted: false, figureOpen: false, exitLanding: false };
+    const base = {
+      frameReady: true, plainView: false, modalMounted: false, figureOpen: false, exitLanding: false,
+      layout: 'default' as const, rule: 'remount' as const,
+    };
     expect(readerModeOffered(base)).toBe(true);
     expect(readerModeOffered({ ...base, frameReady: false })).toBe(false);
     expect(readerModeOffered({ ...base, plainView: true })).toBe(false);
@@ -371,14 +378,14 @@ describe('reader mode: what is offered, and the wake lock', () => {
   });
 
   it('drawn: the entry is drawn where it is offered, and stays drawn while only the step\'s landing or a modal layer refuses it (fix round 1, F6)', () => {
-    const base = { frameReady: true, plainView: false, figureOpen: false };
+    const base = { frameReady: true, plainView: false, figureOpen: false, layout: 'default' as const, rule: 'remount' as const };
     expect(readerModeDrawn(base)).toBe(true);
     expect(readerModeDrawn({ ...base, frameReady: false })).toBe(false);
     expect(readerModeDrawn({ ...base, plainView: true })).toBe(false);
     expect(readerModeDrawn({ ...base, figureOpen: true })).toBe(false);
     // Every fact the drawn answer reads refuses the offer the same way; the two it does not read refuse only the offer.
     for (const [frameReady, plainView, figureOpen] of [[true, false, false], [false, false, false], [true, true, false], [true, false, true]] as const) {
-      const facts = { frameReady, plainView, figureOpen };
+      const facts = { frameReady, plainView, figureOpen, layout: 'default' as const, rule: 'remount' as const };
       const offered = readerModeOffered({ ...facts, modalMounted: false, exitLanding: false });
       expect(readerModeDrawn(facts), `drawn and offered agree at ${JSON.stringify(facts)}`).toBe(offered);
     }
@@ -492,5 +499,45 @@ describe('reader mode: the Exit with no frame, and where the guards send focus (
     expect(readerModeExitFocus({ on: true, frameStands: true })).toBe('frame');
     // An exit with no frame standing: the main region.
     expect(readerModeExitFocus({ on: false, frameStands: false })).toBe('main');
+  });
+});
+
+// The layout rule (X2 P5.1, D-8975): `readerModeOffered`'s `layout` and `rule` inputs and `readerModeLayoutNote`.
+describe('reader mode: the layout rule (X2 P5.1)', () => {
+  const FACTS = { frameReady: true, plainView: false, modalMounted: false, figureOpen: false, exitLanding: false } as const;
+  const DEFAULT_LAYOUT = { layout: 'default', rule: READER_LAYOUT_RULE } as const;
+
+  it('offered: under remount, in every layout; under default-only, in the default layout only, with the note elsewhere', () => {
+    // X6.60: a `readerModeOffered` that ignores `rule` reds here.
+    for (const layout of READER_LAYOUTS) {
+      expect(readerModeOffered({ ...FACTS, layout, rule: 'remount' }), `remount in ${layout}`).toBe(true);
+      expect(readerModeOffered({ ...FACTS, layout, rule: 'default-only' }), `default-only in ${layout}`).toBe(layout === 'default');
+      expect(readerModeDrawn({ ...FACTS, layout, rule: 'default-only' }), `drawn under default-only in ${layout}`).toBe(layout === 'default');
+      expect(readerModeLayoutNote({ layout, rule: 'remount' }), `remount in ${layout}`).toBeNull();
+      expect(readerModeLayoutNote({ layout, rule: 'default-only' }), `default-only in ${layout}`)
+        .toBe(layout === 'default' ? null : 'Reader mode reads in the default layout. Choose it here to use reader mode.');
+    }
+    expect(READER_LAYOUT_TEXT.note).toBe('Reader mode reads in the default layout. Choose it here to use reader mode.');
+    // The other inputs still refuse, in the default layout and under either rule.
+    for (const rule of ['remount', 'default-only'] as const) {
+      expect(readerModeOffered({ ...FACTS, layout: 'default', rule, frameReady: false })).toBe(false);
+      expect(readerModeOffered({ ...FACTS, layout: 'default', rule, plainView: true })).toBe(false);
+      expect(readerModeOffered({ ...FACTS, layout: 'default', rule, modalMounted: true })).toBe(false);
+      expect(readerModeOffered({ ...FACTS, layout: 'default', rule, figureOpen: true })).toBe(false);
+      expect(readerModeOffered({ ...FACTS, layout: 'default', rule, exitLanding: true })).toBe(false);
+    }
+    // The default layout under the shipped rule is offered, as it always was.
+    expect(readerModeOffered({ ...FACTS, ...DEFAULT_LAYOUT })).toBe(true);
+  });
+
+  // The shipped behaviour, against the real constant (the coordinator's ruling of 2026-11-28; the cases above pin each rule by hand).
+  it('offered: with the shipped rule, reader mode is offered in default and in no other layout', () => {
+    expect(READER_LAYOUT_RULE, 'the shipped rule').toBe('default-only');
+    for (const layout of READER_LAYOUTS) {
+      expect(readerModeOffered({ ...FACTS, layout, rule: READER_LAYOUT_RULE }), `offered in ${layout}`).toBe(layout === 'default');
+      expect(readerModeDrawn({ ...FACTS, layout, rule: READER_LAYOUT_RULE }), `drawn in ${layout}`).toBe(layout === 'default');
+      expect(readerModeLayoutNote({ layout, rule: READER_LAYOUT_RULE }), `the note in ${layout}`)
+        .toBe(layout === 'default' ? null : READER_LAYOUT_TEXT.note);
+    }
   });
 });
