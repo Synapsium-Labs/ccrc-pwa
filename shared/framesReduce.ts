@@ -18,6 +18,10 @@ import { CLASSES } from './models.js';
 /** Whitespace erased, as `server/src/inject/send.ts`'s `squash` reads a box row: wrapping moves only spaces. */
 const squash = (s: string): string => s.replace(/\s+/g, '');
 
+/** The `ours` list as rule 2 reads it: each text squashed, the empty ones dropped. The one builder of that list: the
+ *  reducer's own rule 2 and the shape rule's our-text class (`framesShape.ts`, wave 198) both call it. */
+export const oursSquashed = (ours: readonly string[]): string[] => ours.map(squash).filter((o) => o !== '');
+
 /** THE DECORATION LIST (the owner's corrected rule 2): the characters a row may carry around our text at its two ends and
  *  still be ours. The box's and a card's border characters, the prompt glyph (and its older `>`), the turn markers and
  *  spaces. A closed list, no pattern: a character not on it is foreign. */
@@ -26,8 +30,9 @@ export const FRAMES_DECORATION: readonly string[] = Object.freeze([
 ]);
 const DECOR = new Set(FRAMES_DECORATION);
 
-/** A row's three spans by code point: the decoration it starts with, its content, the decoration it ends with. */
-function spans(row: string): { readonly lead: string; readonly content: string; readonly tail: string } {
+/** A row's three spans by code point: the decoration it starts with, its content, the decoration it ends with. Exported
+ *  for the shape rule's other-row class (`framesShape.ts`, wave 198), which reads a row's edges by this one rule. */
+export function spans(row: string): { readonly lead: string; readonly content: string; readonly tail: string } {
   const cps = Array.from(row);
   let a = 0;
   while (a < cps.length && DECOR.has(cps[a]!)) a++;
@@ -427,7 +432,7 @@ function reduceOnce(
 ): ReduceAnswer {
   // Rule 1: the shape gate.
   if (!frameTextFits(frame, pane)) return { kind: 'refused', refusal: 'not-a-frame' };
-  const oursSq = ours.map(squash).filter((o) => o !== '');
+  const oursSq = oursSquashed(ours);
   const priv = privates.filter((p) => p !== '');
   const count = { cwd: 0, path: 0, model: 0, account: 0 };
   const scanned: string[] = [];
