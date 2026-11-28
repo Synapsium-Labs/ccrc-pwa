@@ -94,7 +94,8 @@ const isPlainObject = (v: unknown): v is Record<string, unknown> => {
  *  overrides and isolates. A part or a why may span lines. */
 const CONTROL = /[\u0000-\u0008\u000B-\u001F\u007F-\u009F\u{2028}\u{2029}\u{202A}-\u{202E}\u{2066}-\u{2069}]/u;
 /** The same, with no exception: a project or a path is one line, so a tab or a line break in one refuses too. */
-const LINE_CONTROL = /[\u0000-\u001F\u007F-\u009F\u{2028}\u{2029}\u{202A}-\u{202E}\u{2066}-\u{2069}]/u;const utf8Bytes = (s: string): number => new TextEncoder().encode(s).length;
+const LINE_CONTROL = /[\u0000-\u001F\u007F-\u009F\u{2028}\u{2029}\u{202A}-\u{202E}\u{2066}-\u{2069}]/u;
+const utf8Bytes = (s: string): number => new TextEncoder().encode(s).length;
 
 /** A text of 1 to `max` UTF-16 units (the request record's measure) with no control character. */
 function readText(v: unknown, max: number): Read<string> {
