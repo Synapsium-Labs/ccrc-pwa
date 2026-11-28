@@ -20,8 +20,8 @@
 // than a part is cut like a fence (`cutComment`): each part that ends inside it ends with `-->` on a line of its own (a newline
 // first when it ends mid-line), the next begins with `<!--` on a line of its own, at line ends, a line too long at a code point
 // boundary (never inside the opener, the closer or a surrogate pair), so no part shows commented text. An opener with no `-->` is
-// text, and a closed comment inside a list item or a quote is NOT a candidate (the library draws it inside the container's block:
-// measured, still cut inside by P1 there). When no block start fits, that unit
+// text, and a closed comment inside a list item or a quote is NOT a candidate (the library draws it inside the container's block);
+// the container is kept whole instead, by the rule below. When no block start fits, that unit
 // is cut by its block, in sizes counted in UTF-8 bytes with the reopen and close lines included:
 //   - a list or quote of two or more items: between its items, each part starting at one (greedy again, one level); an item that
 //     alone is too large is cut as a unit of its own;
@@ -38,7 +38,29 @@
 //     unit's slice, its offsets moved by the unit's start, the first part keeping the current `continued` and the rest continued
 //     (inside a list item every part that starts in it, P1's own reopen apart, begins with the item's marker alone, so indented
 //     text is the item's, not code).
-// When the lines that close and reopen do not fit (a window of a few dozen bytes), the unit falls back to P1 whole.
+// When the lines that close and reopen do not fit (a window of a few dozen bytes), the unit falls back to P1 whole, or is kept whole
+// when it holds a comment opener (the rule below).
+// THE CONSERVATIVE RULE (wave 64, the coordinator's ruling for ticket `x2-fu-comments-in-parts`): the cutter never cuts inside a
+// unit whose text holds a comment opener, `<!--`, anywhere (closed or not, in code or not: it reads the text, not the parse). A
+// top-level unit, a list item, a fence, a quote's own block, and the text before the first block that alone is larger than a part
+// and holds one is one part, whole, above the part size (`holdsOpener`, `whole`, `p1OrWhole`). Cuts between units stay: a list or
+// a quote is still cut between its items, each item then read by the same rule. A top-level comment unit is still closed and
+// reopened by `cutComment` where it has room, the text after its closer line in its last part; where it has none (its closer line
+// beside the reopen line, a window too small, or the text after the closer line that no part holds) it is whole too, never P1's,
+// so no part of it starts at dashes. The unread tail (`raw`) is P1's, as it was, but for one that starts at a closed top-level
+// comment (the blocks read stops at a comment longer than its cap): that comment is a comment unit, the tail after it; where the blocks stop at a block that starts with
+// dashes (no candidate there), the unit that runs into the tail is read by the rule only up to it (`rawFrom`): when that much holds
+// an opener it is cut there, by the rule as any unit is, and the tail is P1's, a blank line before its first part (which starts at
+// dashes: no front matter); P1's later parts may still start at dashes, as the unread tail's do (its own residual); and when it
+// holds none the unit is cut exactly as before. A text with no opener is cut byte for byte as
+// before (a case pins a corpus's digest measured on the cutter before the rule). The largest whole part: a unit's two ends are cut
+// candidates one window confirmed, so it is at most a blocks window, `READER_BLOCKS_MAX_BYTES` (measured: a list item of
+// 2 096 966 bytes, four render gates, is one part; one past the window ends the blocks read there, the unread tail), except a run
+// of blocks that each start with three dashes, which joins the unit before it (no part starts at dashes) and can carry it past the
+// window. A part above the render gate gets what any Markdown above the gate gets (`ReaderFrame.tsx`'s G2): `DocMarkdown`'s own
+// question, Format anyway or Show as text, and the console's own view, which shows a comment as text; the render job refuses it
+// `over-limit` (the pre-pass then knows no ids for it), so it never reaches the frame or its caps, and Print prints it as its plain
+// text with the over-gate sentence (`printWords.ts`).
 // The cut is INCREMENTAL (`MarkdownCutter`): fed each window's confirmed blocks it answers the parts that are final so far (a part
 // is final once the units from its start overflow a part, whatever follows), and the rest at the end, which together are
 // `splitMarkdownPartsAt` of the same blocks. `cutMarkdownText` drives it for delivery: the render job, each window's budget, what a
@@ -71,34 +93,51 @@
 //     line indented six columns or more in an item. The fuzz's library judge counts it: 36 lines in 27 of 8 000 documents.
 //   And the unread tail (`tailFrom`): all nine, as P1 has them, for the rest of a text whose blocks were not read.
 //   10 (a closed comment cut inside, so its text shows: the block cutter's own class, X2 P6.1 review 4116 F3, ruled a residual on
-//     2026-11-27): none for a comment at the top level (above) whose opener line starts with `<!--` (after at most three spaces) and
-//     whose closer line has only white space after its first `-->`. It REMAINS for a closed comment inside a list item or a quote that
-//     is larger than a part (the container's text goes to P1, which reads no comment; measured at 200 bytes on an item, a lone item, a
-//     quote and an item holding a fence then the comment: commented text in 4 of 5, 4 of 4, 4 of 4 and 4 of 5 parts); for the
-//     top-level shapes the library draws inside a paragraph, which go to P1 as a paragraph does (review 4126 F2, ruled a residual on
-//     2026-11-27): text after the first `-->` on its line and text before `<!--` on its line (measured at 200 bytes: hidden text in
-//     3 of 5 parts for each; at the gate, a 576 089-byte old table behind `<!--` and `--> (removed …)`: 2 of 4); for a comment the
-//     cutter hands to P1 itself, one whose closer line does not fit a part beside the `<!--` reopen line or one in a window too
-//     small for its close and reopen lines; and on P1's own paths: the unread tail, the console with no render job, and the
-//     whole-text fallback of a cutter that throws. Measured on this cutter on 2026-11-28 (wave 62), each still shown, with no cure
-//     claimed: an opener indented four columns, or by a tab, that continues a paragraph (review 4131 O1; at 200 bytes, all 30
-//     hidden lines shown; at the gate, a 576 051-byte paragraph shows all 36 000); a quote whose comment lines are lazy, carrying no
-//     `>` (wrong at 91 of 91 sizes from 30 to 120 bytes; at the gate, a 544 034-byte quote shows all 34 000); a list item whose
-//     content column is past its marker and one space, `-   x` or `10.  x` (wrong at 111 of 111 sizes from 60 to 170; at the gate,
-//     all 24 000 lines of a 528 043-byte item); and lines of dashes after a top-level comment whose closer line, with the 5-byte
-//     `<!--` reopen line before it, does not fit a part (the fallback above), where a part may begin at the dashes and be read as
-//     front matter (the shown lines lost at 52 of 171 sizes, measured by wave 62's review; the same input's hidden lines shown at
-//     105 of 177 sizes from 24 to 200 bytes, which is that fallback's own shape). The shape "text before `<!--` on its line" above
-//     was measured that day too, with a `<!--->` or `<!-->` opener after text on its line: wrong at 111 of 111 sizes from 40 to 150
-//     (review 4192 F2: once named here "a part beginning at the opener", a cut P1 does not make there). The inputs are in the plan's
-//     class 10 note of that day. Beside them, by structure:
-//     any unit the block cutter hands to P1 whole, since P1 reads no comment. The cure for these is carried to its own wave
-//     (`x2-fu-comment-in-container`, `x2-fu-comment-paragraph-shapes`). (2026-11-28, review 4131 A2, scoped by review 4192 F1: a
-//     `<!-->` or `<!--->` opener at the start of its line with only white space after it on that line, once recorded here as a
-//     third paragraph shape, hides nothing: the library reads it as a block comment that closes on that line, so the lines after it
-//     are shown. With text after it on its line, it is no block comment, and the paragraph's inline rule hides that text and the
-//     lines after it up to the later `-->`: that is the shape "text after the first `-->` on its line". After text on its line, it
-//     hides up to the later `-->` like any opener: the shape "text before `<!--` on its line".)
+//     2026-11-27): none on the block cutter for the shapes measured, but one footnote shape (below), since wave 64's conservative
+//     rule (above): no unit that holds an opener is cut inside but a top-level comment, closed and reopened. That holds where a
+//     comment is inside one block of the render that starts where its container does: the library reads a comment opened in a list
+//     item or a footnote definition up to the document's first closer (the container then runs on through it), one in a quote up to
+//     the quote's end, and a blocks window that ends inside such a comment ends before the block that holds it (`openComment`),
+//     never at an opener's line indented four columns or more, which read from there is code (`foldBlockWindow`). Both since wave
+//     64's fix round 1 (review 4221 F1), which also reads a footnote definition's label `[^label]:` as a container prefix. Before it,
+//     a comment opened on a definition's first line was cut inside across a window's end, and one opened on a later, indented line
+//     of a definition, holding only the opener, with no block of the definition before it, was read from that line as code (a named
+//     definition with an empty first line: two parts showed all 9 400 hidden lines at the gate). Measured,
+//     with the library's render of the whole document as control, each now showing no hidden text and every shown word as often as
+//     the whole: a comment in a list item followed by another item, and in a quote, at the gate; a lone item and an item holding a
+//     fence then the comment at 200 bytes only (P6.1 at 200 bytes: 4 of 5, 4 of 4, 4 of 4 and 4 of 5 parts showed the four); a
+//     footnote definition's comment across the window's end at the gate, the definition alone or in a list item, named by a
+//     reference or not, and named with an empty first line and the opener on the next line; the
+//     paragraph shapes, text after the first `-->` on its line (the 576 089-byte old table) and text before `<!--` on its line (a
+//     `<!--->` or `<!-->` opener there too, every size from 40 to 150); an opener indented four columns, six, or by a tab, that
+//     continues a paragraph; a quote's lazy lines (every size from 30 to 120); a list item whose content column is past its marker
+//     and one space (60 to 170, and at the gate); a closer line longer than a part; and lines of dashes after a top-level comment
+//     whose closer line does not fit beside the reopen line (24 to 200: no part starts at the dashes). Across windows of 1 024 to
+//     3 000 bytes, cut at 700, no block starts inside the comment and no part shows it, for every shape the library reads past its
+//     container: a footnote definition's first line (its label then the opener directly, a label of other characters or one holding
+//     an opener, indented, or holding a list marker), a later indented line of one but for the shape left below (by spaces or a
+//     tab; named or not; its first line text, empty, a closed comment or a link reference definition), a list item's first or
+//     later line, and an opener after a `<details>` line; and the blocks are the whole read's, but for a definition named from an
+//     earlier window, which its own window draws in no block (by the windows, not the comment). The library confines the opener of
+//     a quote, a table cell, a link reference definition, a definition-list shape and a heading to that container or line
+//     (measured: it shows what follows), so they need none. It REMAINS on the block cutter for one footnote shape, older than wave 64
+//     and pinned as a known leak (ticket `x2-fu-footnote-item-block-start`): a named definition whose first line draws no block
+//     (such as an empty one, a closed comment, a link reference definition, a `<details>`, `</details>` or `<summary>` line, or an
+//     unreferenced nested definition, review 4228 A1; named in a window, a reference inside the hidden text included, review 4228
+//     L1, and then not with the whole text in one window), then any block indented under it (a paragraph, a list, a quote),
+//     then the opener (`[^1]:` then `    para`, `    - a`, `    > q` or a tab, then `    <!--`; or `    - <!--`). The whole render
+//     hides the region; every part size measured (400, 700, 2 000 bytes and the gate) shows all of it, with the whole text read in
+//     one window too. The render's tree takes a footnote item's block from its inner blocks, so the definition's block starts at
+//     its first drawn line, indented four columns: a cut candidate, and a part that starts there reads it as code; a window's cap
+//     lands there too. It
+//     REMAINS on P1's own paths:
+//     the unread tail (but for a tail that starts at a closed top-level comment, which is where the blocks read stops when such a
+//     comment is longer than its cap: since wave 64 that comment is a comment unit, closed and reopened, and the tail starts after
+//     it, `commentAt`), the console with no render job (whose own view shows a comment as text whole or cut, so the cut changes
+//     nothing on screen; its Print renders P1's parts through the library, so there a part may print what the whole would hide),
+//     and the whole-text fallback of a cutter that throws. (The shapes' history: X2 P6.1's fix rounds and wave 62,
+//     in the plan's class 10 notes; a `<!-->` or `<!--->` opener at the start of its line with only white space after it hides
+//     nothing, review 4131 A2.)
 // The line cutter's own description follows.
 //
 // THE LINE CUTTER (P1). The cut, in this order of preference, taking the latest cut of the best kind that keeps the part within `maxBytes`:
@@ -576,13 +615,27 @@ const COMMENT_PREFIX_MAX = 256;
 /** The most lines holding a `<!--` that `openComment` examines in one window; past it the next such line is treated as open. */
 const COMMENT_LINES_MAX = 4096;
 
-/** Whether `s[from, to)` is only a container prefix: quote marks (`>`), spaces and tabs, and list markers (`-`, `*`, `+`, or one to
- *  nine digits and `.` or `)`), each marker followed by a space or tab. One forward pass, no backtracking. */
+/** Whether `s[from, to)` is only a container prefix: quote marks (`>`), spaces and tabs, list markers (`-`, `*`, `+`, or one to
+ *  nine digits and `.` or `)`), each marker followed by a space or tab, and footnote-definition labels (`[^label]:`, wave 64 fix
+ *  round 1, review 4221 F1). The footnote rule (markdown-it-footnote, which the library uses) reads a definition's lines with the
+ *  document's end as theirs, so a comment opened in one hides everything up to its closer, top-level blocks included, as one opened
+ *  in a list item does. Its label as that rule reads it: `[^`, then any characters but a space up to the first `]`, at least one,
+ *  then `:`, which may be followed by the opener directly. A label that the opener interrupts (no `]:` before it) is read as a
+ *  prefix too, fail closed: the line may hold a later opener in that definition, and a prefix read wrongly only shortens a window.
+ *  One forward pass, no backtracking. */
 function containerPrefix(s: string, from: number, to: number): boolean {
   let i = from;
   while (i < to) {
     const c = s.charCodeAt(i);
     if (c === 32 || c === 9 || c === 62) { i += 1; continue; }
+    if (c === 91 && s.charCodeAt(i + 1) === 94) {
+      let k = i + 2;
+      while (k < to && s.charCodeAt(k) !== 93 && s.charCodeAt(k) !== 32) k += 1;
+      if (k >= to) return true;
+      if (s.charCodeAt(k) === 32 || k === i + 2 || s.charCodeAt(k + 1) !== 58 || k + 1 >= to) return false;
+      i = k + 2;
+      continue;
+    }
     let j = i;
     if (c === 45 || c === 42 || c === 43) j += 1;
     else if (c >= 48 && c <= 57) {
@@ -630,6 +683,19 @@ function openComment(slice: string, from: number, all: readonly TextBlock[], pro
   return -1;
 }
 
+/** Whether the line that starts at `ls` is indented four columns or more (a tab runs to the next multiple of four), as markdown-it
+ *  reads indented code at the top level. Reads at most four characters. */
+function indentedFour(text: string, ls: number): boolean {
+  let col = 0;
+  for (let i = ls; col < 4; i += 1) {
+    const c = text.charCodeAt(i);
+    if (c === 32) col += 1;
+    else if (c === 9) col += 4 - (col % 4);
+    else return false;
+  }
+  return true;
+}
+
 /** Folds the job's answer for `win` into confirmed blocks in offsets of `text`: the answer's lines (the window's own, one more
  *  than the text's for a `shifted` one) become offsets, and every block but the last is confirmed unless the window reached the
  *  text's end: the last may run past the window, or be cut short by it. A window that ends inside a block comment confirms only
@@ -650,7 +716,16 @@ export function foldBlockWindow(text: string, win: BlockWindow, blocks: readonly
   const open = openComment(slice, win.from, all, probe);
   if (open >= 0) {
     const holding = all.find((b) => b.start <= open && open < b.end);
-    const cap = holding !== undefined ? holding.start : open;
+    // The next window never starts at an opener's line indented four columns or more: read from there it would be code, and the
+    // comment's inner lines blocks. Such a line is a later line of a footnote definition, which may lie in no block (a definition
+    // no reference in the window names draws none) or begin the block that holds it (a named one whose first drawn line it is).
+    // Then the window is capped at the start of the last block before the opener; else at the block that holds it, as before (wave
+    // 64, fix round 1, review 4221 F1). A top-level comment's own line is read the same from there, so its window still ends at it.
+    // A named definition's block may also start at an EARLIER indented line (its first line draws no block, content indented under
+    // it comes first): that start is the known leak the header records (ticket `x2-fu-footnote-item-block-start`), a cut candidate
+    // in the whole read too, so its cure is the block's start, not this cap.
+    const before = (): number => all.reduce((s, b) => (b.start < open && b.start > s ? b.start : s), win.from);
+    const cap = holding !== undefined && (holding.start < open || !indentedFour(text, open)) ? holding.start : before();
     limit = limit < 0 ? cap : Math.min(limit, cap);
   }
   const confirmed = limit < 0 ? [] : all.filter((b) => b.end <= limit);
@@ -715,7 +790,12 @@ export async function collectMdBlocks(
 
 /** A stretch of the text the greedy cut works on: from one cut candidate to the next. `block` is the block that starts at its
  *  start (none for text before the first block, and none for the unread tail, `raw`). */
-interface Unit { readonly start: number; readonly end: number; readonly block: TextBlock | undefined; readonly heading: boolean; readonly raw: boolean; readonly comment?: boolean }
+interface Unit {
+  readonly start: number; readonly end: number; readonly block: TextBlock | undefined; readonly heading: boolean; readonly raw: boolean; readonly comment?: boolean;
+  /** Where the unread tail starts inside this unit: the blocks stopped at a block that starts with dashes, where no part starts, so
+   *  no `raw` candidate was made there and the unit runs on to the text's end (wave 64). */
+  readonly rawFrom?: number;
+}
 
 /** Where the rest of a unit starts after a fence in a list item (`fenceStep`), and the UTF-8 bytes from there to the unit's end. */
 interface FenceRest { readonly at: number; readonly bytes: number }
@@ -795,6 +875,27 @@ class BlockCutter {
     }));
   }
 
+  /** Whether `text.slice(a, b)` holds a comment opener, `<!--` (the conservative rule, wave 64). It reads the text, not the parse: an
+   *  opener in code counts too. A slice of the unit, so a unit is read once at each level it is cut at. */
+  private holdsOpener(a: number, b: number): boolean {
+    const e = Math.min(b, this.ruleEnd);
+    if (this.probe !== undefined) this.probe.chars += Math.max(0, e - a);
+    return e - a >= 4 && this.text.slice(a, e).includes('<!--');
+  }
+
+  /** The offset past which `holdsOpener` reads nothing: the unread tail's start while a unit that runs into it is cut (`cutUnit`). */
+  private ruleEnd = Number.POSITIVE_INFINITY;
+
+  /** `[from, to)` as one part, whatever its size: a unit the conservative rule keeps whole. */
+  private whole(from: number, to: number, continued: boolean): MdPart[] {
+    return [{ start: from, end: to, continued, reopen: null, close: null }];
+  }
+
+  /** P1's cut of `[from, to)` (as `p1`), unless the text holds a comment opener: then `[from, to)` whole (the conservative rule). */
+  private p1OrWhole(from: number, to: number, continued: boolean): MdPart[] {
+    return this.holdsOpener(from, to) ? this.whole(from, to, continued) : this.p1(from, to, continued, false);
+  }
+
   /** Greedy parts over `units`, cutting only at unit starts: the latest start that fits (at the top level, the latest heading's
    *  first), and a unit that alone is larger than a part is cut by `cutUnit`. The parts cover the units. At the top level a part
    *  is continued unless it starts at a heading; inside a unit every part but the first is. */
@@ -839,19 +940,48 @@ class BlockCutter {
   }
 
   /** The parts of one unit that alone is larger than a part: by its block's own rules (a comment unit as a fence is cut), else P1 on
-   *  the unit's slice. */
+   *  the unit's slice. A unit whose text holds a comment opener is never cut inside, except a comment unit by `cutComment`: it is one
+   *  part (the conservative rule, wave 64). The unread tail (`raw`) is P1's, as it was. A unit that runs into the unread tail
+   *  (`rawFrom`) is read by the rule only up to the tail: when that much holds an opener it is cut there as a unit of its own and the
+   *  tail is P1's, its first part beginning with a blank line (it starts at dashes, which a part would read as front matter); else the
+   *  unit is cut exactly as before, the rule reading nothing of the tail. */
   cutUnit(u: Unit, continued: boolean): MdPart[] {
-    if (u.comment === true) return this.cutComment(u.start, u.end, continued) ?? this.p1(u.start, u.end, continued, false);
-    if (u.block === undefined) return this.p1(u.start, u.end, continued, u.raw);
-    return this.cutBlock(u.block, u.start, u.end, continued, false) ?? this.p1(u.start, u.end, continued, false);
+    if (u.rawFrom !== undefined) {
+      if (this.holdsOpener(u.start, u.rawFrom)) {
+        // The known part is a unit of its own, cut by the rule as any is (its block ends at or before the tail: the window that
+        // confirmed it holds both ends); the tail is P1's.
+        const known = this.bytes(u.start, u.rawFrom) <= this.max ? this.whole(u.start, u.rawFrom, continued) : this.cutKnown({ ...u, end: u.rawFrom }, continued);
+        const tail = new BlockCutter(this.text, this.max - 1, this.probe).p1(u.rawFrom, u.end, true, true);
+        tail[0] = { ...tail[0]!, reopen: '\n' + (tail[0]!.reopen ?? '') };
+        return [...known, ...tail];
+      }
+      const saved = this.ruleEnd;
+      this.ruleEnd = u.rawFrom;
+      try {
+        return this.cutKnown(u, continued);
+      } finally {
+        this.ruleEnd = saved;
+      }
+    }
+    return this.cutKnown(u, continued);
+  }
+
+  /** `cutUnit` of a unit as its blocks say, `rawFrom` aside. */
+  private cutKnown(u: Unit, continued: boolean): MdPart[] {
+    if (u.comment === true) return this.cutComment(u.start, u.end, continued) ?? this.whole(u.start, u.end, continued);
+    if (u.block === undefined) return u.raw ? this.p1(u.start, u.end, continued, true) : this.p1OrWhole(u.start, u.end, continued);
+    return this.cutBlock(u.block, u.start, u.end, continued, false) ?? this.p1OrWhole(u.start, u.end, continued);
   }
 
   /** The parts of `[from, to)`, a block and the text after it up to the next one, cut at the block's own seams; null when it has
-   *  none to cut at (the caller falls back to P1): a list or quote with two or more items at the items' starts, a fence
+   *  none to cut at (the caller falls back to P1, or keeps the unit whole when it holds an opener): a list or quote with two or more items at the items' starts, a fence
    *  closed and reopened (the unit's block, or one a list item or a one-item quote holds). `item`: the block is a list item, which
-   *  is always cut (a fence it holds closed and reopened, else P1 with the item's marker reopening each part that starts inside it). */
+   *  is always cut (a fence it holds closed and reopened, else P1 with the item's marker reopening each part that starts inside it).
+   *  A list item, or a fence, whose `[from, to)` holds a comment opener is one part instead (the conservative rule, wave 64); a list
+   *  or a quote is still cut between its items, each item then read by the same rule. */
   private cutBlock(blk: TextBlock, from: number, to: number, continued: boolean, item: boolean): MdPart[] | null {
     const items = blk.items ?? [];
+    if ((item || blk.kind === 'fence') && this.holdsOpener(from, to)) return this.whole(from, to, continued);
     if (item) {
       const fence = items.find((i) => i.kind === 'fence');
       return (fence === undefined ? null : this.cutFence(fence, from, to, continued, blk, null)) ?? this.p1InItem(from, to, continued, blk, false);
@@ -874,7 +1004,7 @@ class BlockCutter {
       cand.push({ start: it.start, block: it });
     }
     const units: Unit[] = cand.map((c, i) => ({ start: c.start, end: i + 1 < cand.length ? cand[i + 1]!.start : to, block: c.block, heading: false, raw: false }));
-    return this.greedy(units, false, continued, (u, cont) => this.cutBlock(u.block!, u.start, u.end, cont, asItems) ?? this.p1(u.start, u.end, cont, false));
+    return this.greedy(units, false, continued, (u, cont) => this.cutBlock(u.block!, u.start, u.end, cont, asItems) ?? this.p1OrWhole(u.start, u.end, cont));
   }
 
   /** A list item's marker alone on a line (`-\n`, `1.\n`): what a part that starts inside the item begins with, so the text after
@@ -1084,18 +1214,40 @@ class BlockCutter {
     return out;
   }
 
+  /** The end of a closed top-level comment that starts at `off` (a line start): its opener line (up to three spaces, then `<!--`)
+   *  through the line that holds its first `-->`, with only white space after it there (`gapComments`' rule, read from the text alone,
+   *  as the library reads a block comment); null when the text at `off` is no such comment. For the unread tail (wave 64, item 2): the
+   *  blocks read stops at a comment longer than its cap, which `openComment` grew the window for. Linear in the comment. */
+  commentAt(off: number): number | null {
+    const t = this.text;
+    let o = off;
+    while (o - off < 3 && t.charCodeAt(o) === 32) o += 1;
+    if (!t.startsWith('<!--', o)) return null;
+    const p = t.indexOf('-->', o);
+    if (this.probe !== undefined) this.probe.chars += (p < 0 ? t.length : p) - off;
+    if (p < 0) return null;
+    let stop = p + 3;
+    while (stop < t.length && t.charCodeAt(stop) !== 10 && t.charCodeAt(stop) !== 13) stop += 1;
+    if (t.slice(p + 3, stop).trim() !== '') return null;
+    const end = stop >= t.length ? t.length : stop + (t.charCodeAt(stop) === 13 && t.charCodeAt(stop + 1) === 10 ? 2 : 1);
+    // A closer line that does not fit a part beside the reopen line is one `cutComment` cannot cut: such a comment would be one part
+    // as long as itself, past a window, so it is left to the unread tail (P1), as before. Measured as `cutComment` measures it, from
+    // the closer to its line's end, the terminator counted (review 4221 A4: it counted a byte past the line, or two past the text).
+    if (COMMENT_OPEN.length + this.bytesWithin(p, end, this.max) > this.max) return null;
+    return end;
+  }
+
   /** The parts of the comment unit `[from, to)`: a closed comment that alone is larger than a part, cut as a fence is (X2 P6.1 review
    *  F3). It starts at the opener line, and ends after the line that holds its first `-->`; what is left of the unit after that line
-   *  is P1's. Each part that ends inside the comment ends with `-->` on a line of its own (a newline first when the part ends in the
+   *  goes in its last part (below). Each part that ends inside the comment ends with `-->` on a line of its own (a newline first when the part ends in the
    *  middle of a line) and the next begins with `<!--` on a line of its own, so no part holds commented text outside a comment. The
    *  cuts are at line ends, a line too long for a part at a code point boundary (never between a surrogate pair); never inside the
    *  opener (the first part holds `<!--` whole) and never after the first `-->` begins (the part with the closer takes it, and what
    *  follows it on its line, whole). Sizes count the added lines. What the unit holds after the closer's line (it runs on when the
-   *  line after the comment is dashes, where no part starts) goes in the last part when it fits, as what follows a fence does; else
-   *  it is P1's, whose first part never starts at a line of dashes (which the library reads as front matter): the last part takes
-   *  those lines first while they fit, the closer in a part of its own when the open one has no room. Null when they do not fit (a
-   *  window of a few dozen bytes), or the closer's line is more than a part (white space after it): the caller falls back to P1 on
-   *  the unit. */
+   *  line after the comment is dashes, where no part starts) goes in the last part, as what follows a fence does, the closer in a
+   *  part of its own when the open one has no room; never in a part of its own, which may start at dashes (front matter). Null when
+   *  it does not fit even so, when the close and reopen lines do not fit (a window of a few dozen bytes), or when the closer's line is
+   *  more than a part (white space after it): the caller keeps the unit whole (the conservative rule, wave 64; until then P1 cut it). */
   private cutComment(from: number, to: number, continued: boolean): MdPart[] | null {
     const text = this.text;
     const max = this.max;
@@ -1157,38 +1309,23 @@ class BlockCutter {
       restart(pos);
     }
     // What the unit holds after the closer's line (the lines before the next block: the unit runs on when the line after the comment
-    // is dashes, where no part starts). It goes in the last part when it fits, as what follows a fence does (`fenceStep`): a tail
-    // of its own would be a part that may start at dashes, which the library reads as front matter (both rules of `---\n---\n` vanish).
+    // is dashes, where no part starts). It goes in the last part, as what follows a fence does (`fenceStep`), never in a part of its
+    // own: such a part may start at dashes, which the library reads as front matter (both rules of `---\n---\n` vanish), and P1, which
+    // cut it until wave 64, may start a later part there too (measured: the shown line of `--- SHOWNW ---` lost at 129 to 140 bytes).
+    // The closer takes a part of its own when the open one has no room for it; when not even that part holds it, the unit is kept
+    // whole (null: the conservative rule).
     if (end < to) {
-      const room = budget - used - finalBytes;
-      if (room >= 0 && this.bytesWithin(end, to, room) <= room) {
-        push(to, null);
-        return parts;
+      const fits = (): boolean => {
+        const room = budget - used - finalBytes;
+        return room >= 0 && this.bytesWithin(end, to, room) <= room;
+      };
+      if (!fits()) {
+        push(pos, COMMENT_CLOSE);
+        restart(pos);
+        if (!fits()) return null;
       }
     }
-    // It does not fit: the tail is P1's, and P1's first part must not start at dashes, so the lines of dashes right after the closer
-    // go in the last part while they fit; when the part has no room for them, the closer takes a part of its own (the most room a
-    // last part has). What no part can hold (a line of dashes longer than a part) is left to P1, as a long line always is.
-    let tail = end;
-    const absorbDashes = (room: number): void => {
-      tail = end;
-      let left = room;
-      while (tail < to && text.startsWith('---', tail)) {
-        const le = this.lineEnd(tail);
-        const lb = this.bytesWithin(tail, le, left);
-        if (lb > left) break;
-        left -= lb;
-        tail = le;
-      }
-    };
-    absorbDashes(budget - used - finalBytes);
-    if (tail < to && text.startsWith('---', tail) && pos > cur) {
-      push(pos, COMMENT_CLOSE);
-      restart(pos);
-      absorbDashes(budget - used - finalBytes);
-    }
-    push(tail, null);
-    if (tail < to) for (const q of this.p1(tail, to, true, false)) parts.push(q);
+    push(to, null);
     return parts;
   }
 
@@ -1217,6 +1354,7 @@ export class MarkdownCutter {
   private readonly sizes: number[] = [];
   private known = 0;
   private gapFrom = 0; // the offset up to which the gaps between blocks have been read for comments
+  private rawAt: number | null = null; // the unread tail's start when it starts at dashes, where no candidate is made
   private at = 0;
   private continued = false;
   private begun = false;
@@ -1271,12 +1409,22 @@ export class MarkdownCutter {
     const text = this.text;
     if (this.emitted === 0) {
       if (utf8Bytes(text) <= this.max) return [{ start: 0, end: text.length, continued: false, reopen: null, close: null }];
-      if (tailFrom === 0) return splitMarkdownParts(text, this.max, this.probe).parts;
+      if (tailFrom === 0 && this.cutter.commentAt(0) === null) return splitMarkdownParts(text, this.max, this.probe).parts;
     }
     this.gap(tailFrom ?? text.length);
     this.gapFrom = Math.max(this.gapFrom, tailFrom ?? text.length);
     const last = this.cand[this.cand.length - 1]!;
-    if (tailFrom !== null && tailFrom > last.start && !text.startsWith('---', tailFrom)) this.cand.push({ start: tailFrom, block: undefined, raw: true });
+    // A tail that starts at a closed top-level comment (the blocks read stopped at a comment longer than its cap) is a comment unit,
+    // closed and reopened; the unread tail starts after it (wave 64, item 2).
+    const closed = tailFrom !== null && tailFrom >= last.start ? this.cutter.commentAt(tailFrom) : null;
+    if (closed !== null && tailFrom === last.start) this.cand[this.cand.length - 1] = { ...last, comment: closed };
+    else if (closed !== null) this.cand.push({ start: tailFrom!, block: undefined, raw: false, comment: closed });
+    const raw = closed ?? tailFrom;
+    if (raw !== null && raw > last.start && raw < text.length) {
+      // No part starts at dashes, so a tail that does has no candidate: the last unit runs on into it, and says where it starts.
+      if (!text.startsWith('---', raw)) this.cand.push({ start: raw, block: undefined, raw: true });
+      else this.rawAt = raw;
+    }
     this.known = text.length;
     return this.step(true);
   }
@@ -1290,7 +1438,12 @@ export class MarkdownCutter {
   /** The unit that starts at candidate `i`, its end known (the next candidate, or the text's end once `final`). */
   private unitAt(i: number, final: boolean): Unit {
     const c = this.cand[i]!;
-    return { start: c.start, end: i + 1 < this.cand.length ? this.cand[i + 1]!.start : final ? this.text.length : this.known, block: c.block, heading: c.block?.kind === 'heading', raw: c.raw, ...(c.comment === undefined ? {} : { comment: true }) };
+    const lastFinal = final && i + 1 >= this.cand.length;
+    return {
+      start: c.start, end: i + 1 < this.cand.length ? this.cand[i + 1]!.start : final ? this.text.length : this.known, block: c.block,
+      heading: c.block?.kind === 'heading', raw: c.raw, ...(c.comment === undefined ? {} : { comment: true }),
+      ...(lastFinal && this.rawAt !== null && this.rawAt > c.start ? { rawFrom: this.rawAt } : {}),
+    };
   }
 
   /** The greedy cut as far as it is decided: the parts, in order, from the unit the cut stopped at. */
@@ -1355,7 +1508,6 @@ export class MarkdownCutter {
 export function splitMarkdownPartsAt(text: string, maxBytes: number, blocks: readonly TextBlock[], tailFrom: number | null, probe?: Probe): { parts: MdPart[] } {
   if (probe !== undefined) probe.chars += text.length;
   if (utf8Bytes(text) <= maxBytes) return { parts: [{ start: 0, end: text.length, continued: false, reopen: null, close: null }] };
-  if (tailFrom === 0) return splitMarkdownParts(text, maxBytes, probe);
   const cutter = new MarkdownCutter(text, maxBytes, probe);
   const known = tailFrom === null ? blocks : blocks.filter((b) => b.start < tailFrom);
   const parts = cutter.feed(known, tailFrom ?? text.length);
