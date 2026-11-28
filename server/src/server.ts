@@ -2576,6 +2576,8 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
       // Designation B: Rebind's re-measurement is the reclaim door's own; Restart reads the watcher's last listing and fleet.
       oldBody: async (id) => (deps.coord === undefined ? 'unmeasurable' : (await measureClaimant({ coord: deps.coord, io: deps.io, cfg: deps.cfg, tmux: deps.tmux }, id, deps.time.clock.wall())).state),
       body: (id) => overlordBodyOf({ sessionId: id, listedIds: watcher?.currentRegistryIds() ?? null, session: watcher?.currentFleet()?.find((x) => x.id === id) ?? null }),
+      // A start asks the history op in remote mode only (overlord-v1's guard, call 1941): the configuration's mode, never the links'.
+      fleetMode: () => deps.cfg.fleetMode,
     },
   });
   registerResponseRoutes(app, { coord: deps.coord, time: deps.time, gate: accountGate, notice, actorOf: consoleActor });

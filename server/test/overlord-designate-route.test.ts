@@ -138,7 +138,7 @@ interface Rig {
   time: ReturnType<typeof fakeTime>;
 }
 
-async function rig(opts: { serial?: 'real' | 'off'; lanes?: 'live' | 'unset'; links?: readonly HistoryLink[] } = {}): Promise<Rig> {
+async function rig(opts: { serial?: 'real' | 'off'; lanes?: 'live' | 'unset'; links?: readonly HistoryLink[]; fleetMode?: 'local' | 'remote' } = {}): Promise<Rig> {
   const dir = path.join(mkTmp('ccrc-overlord-route-'), '.ccrc');
   mkdirSync(dir, { recursive: true });
   copyFileSync(template, path.join(dir, 'coord.db'));
@@ -165,6 +165,7 @@ async function rig(opts: { serial?: 'real' | 'off'; lanes?: 'live' | 'unset'; li
     facts: {
       ccdWords: () => facts.ccdWords, serverWords: ['continuity-v1'], builds: () => facts.builds, roster: () => ROSTER,
       limits: async () => HEALTHY, shares: async () => ({ kind: 'absent' }), authority: () => facts.authority,
+      ...(opts.fleetMode === undefined ? {} : { fleetMode: () => opts.fleetMode! }),
     },
   });
   await app.ready();
@@ -890,21 +891,28 @@ describe('the lane guard on Start (overlord-v1, call 1887)', () => {
     expect([res.statusCode, res.json().error]).toEqual([REFUSAL_STATUS['overlord-exists'], 'overlord-exists']);
   });
 
-  it('E18: links that serve the history op none or several times refuse capability-missing naming it; one serves; no link is not asked', async () => {
+  // The shapes production builds (call 1941, review 4172 F1 and F8): `server.ts` hands the chooser `[deps.fleetState]` and the mode
+  // from `cfg.fleetMode`. Local mode's fleet state is `index.ts`'s own (connected, no agent ops); remote mode's is the link's.
+  it('E18: local mode is not asked; in remote mode one serving link passes, a link without the op or a link that is down refuses', async () => {
+    const LOCAL_STATE = { connected: true };
     const serving = { connected: true, agentOps: ['overlord-history'] };
-    const cases: [readonly HistoryLink[] | undefined, number, string | null][] = [
-      [[{ connected: true, agentOps: [] }], 501, 'missing: overlord-history; no connected agent advertises overlord-history'],
-      [[{ ...serving, connected: false }], 501, 'missing: overlord-history; no connected agent advertises overlord-history'],
-      [[serving, serving], 501, 'missing: overlord-history; more than one connected agent advertises overlord-history'],
-      [[serving], 200, null],
-      [[], 200, null],
-      [undefined, 200, null],
+    const missing = 'missing: overlord-history; no connected agent advertises overlord-history';
+    const cases: [string, 'local' | 'remote' | undefined, readonly HistoryLink[], number, string | null][] = [
+      ['local mode, its own fleet state', 'local', [LOCAL_STATE], 200, null],
+      ['remote, one serving agent', 'remote', [serving], 200, null],
+      ['remote, a connected agent without the op', 'remote', [{ connected: true, agentOps: [] }], 501, missing],
+      ['remote, an agent too old to list its ops', 'remote', [{ connected: true }], 501, missing],
+      ['remote, the link down', 'remote', [{ ...serving, connected: false }], 501, missing],
+      ['no mode handed (a test server): local', undefined, [LOCAL_STATE], 200, null],
     ];
-    for (const [links, status, detail] of cases) {
-      const r = await rig(links === undefined ? {} : { links });
+    for (const [name, fleetMode, links, status, detail] of cases) {
+      const r = await rig({ links, ...(fleetMode === undefined ? {} : { fleetMode }) });
       const res = await post(r);
-      expect(res.statusCode, JSON.stringify(links)).toBe(status);
-      if (detail !== null) expect(res.json(), JSON.stringify(links)).toEqual({ ok: false, error: 'capability-missing', detail, needs: ['overlord-history'] });
+      expect(res.statusCode, name).toBe(status);
+      if (detail !== null) {
+        expect(res.json(), name).toEqual({ ok: false, error: 'capability-missing', detail, needs: ['overlord-history'] });
+        expectNothingWritten(r);
+      }
     }
   });
 
@@ -920,13 +928,23 @@ describe('the lane guard on Start (overlord-v1, call 1887)', () => {
     expect(NO_OVERLORD_STORE.coord.laneArmSetting('continuity')).toMatchObject({ kind: 'unreadable' });
   });
 
-  it('CENSUS: the lanes are read by the start facts alone, and only Start and Rebind ask for them', () => {
+  it('CENSUS: the store\'s lane reader is called by the lane helper alone, which the start facts and Restart call, and no one else', () => {
     const ROUTES = path.resolve(import.meta.dirname, '../src/coord/overlordRoutes.ts');
     const named = (n: string) => (c: { name: string | null }): boolean => c.name !== null && (c.name === n || c.name.endsWith(`.${n}`));
     const all = callsIn(symbolOf(ROUTES, 'registerOverlordRoutes'));
-    expect(all.filter(named('laneArmSetting')).map((c) => c.line))
-      .toEqual(callsIn(symbolOf(ROUTES, 'registerOverlordRoutes.startFactsOf')).filter(named('laneArmSetting')).map((c) => c.line));
+    const lines = (s: string, n: string) => callsIn(symbolOf(ROUTES, s)).filter(named(n)).map((c) => c.line);
+    // The reader: once, inside `laneViewOf`.
+    expect(all.filter(named('laneArmSetting')).map((c) => c.line)).toEqual(lines('registerOverlordRoutes.laneViewOf', 'laneArmSetting'));
     expect(all.filter(named('laneArmSetting'))).toHaveLength(1);
+    // The helper: the exact set of callers (call 1941), the start facts once and Restart's handler (an arrow inside its
+    // `app.post` registration, read by that call's span) once.
+    const restartRoute = all.filter((c) => c.callee === 'app.post' && (c.args[0]?.text ?? '').replace(/['"`]/g, '') === '/api/overlord/restart');
+    expect(restartRoute).toHaveLength(1);
+    const inRestart = all.filter(named('laneViewOf')).filter((c) => c.start > restartRoute[0]!.start && c.end <= restartRoute[0]!.end);
+    expect(all.filter(named('laneViewOf')).map((c) => c.line).sort((a, b) => a - b))
+      .toEqual([...lines('registerOverlordRoutes.startFactsOf', 'laneViewOf'), ...inRestart.map((c) => c.line)].sort((a, b) => a - b));
+    expect([lines('registerOverlordRoutes.startFactsOf', 'laneViewOf').length, inRestart.length]).toEqual([1, 1]);
+    // The start facts: Start and Rebind, once each.
     const askers = ['registerOverlordRoutes.designate', 'registerOverlordRoutes.rebind']
       .map((s) => callsIn(symbolOf(ROUTES, s)).filter(named('startFactsOf')).length);
     expect(askers).toEqual([1, 1]);

@@ -114,7 +114,7 @@ export const LANES_LIVE: readonly LaneArmRowView[] = ([CONTINUITY_LANE, LAUNCH_P
 
 export const dfacts = (over: Partial<Facts> = {}): Facts => ({
   read: NONE, ccdWords: ALL_CCD, serverWords: SERVER_WORDS, builds: 'agreed', probe: ANSWER, model: 'opus', accountPools: SET_AB,
-  accounts: afacts(), home: { wrapper: 'lane-a', score: 5 }, lanes: LANES_LIVE, historyAgent: 'agent', ...over,
+  accounts: afacts(), home: { wrapper: 'lane-a', score: 5 }, lanes: LANES_LIVE, fleetMode: 'remote', historyAgent: 'agent', ...over,
 });
 
 // --------------------------------------------------------------------------------------------------- overlordAccounts
@@ -303,15 +303,21 @@ export function designateVerdictCases(m: DesignationModule): Record<string, Suit
       expect(refuse(verdict({ lanes: shadow, accountPools: { pools: ['Bad Name'], untagged: false } }))).toBe('overlord-lanes-unarmed');
       expect(refuse(verdict({ lanes: shadow, accountPools: { pools: [], untagged: false } }))).toBe('overlord-lanes-unarmed');
     },
-    'E18: links that serve the history op none or several times are a missing word, the detail saying which; one serves; no link is not asked': () => {
+    // The shapes production builds (`server.ts` hands the history chooser `[deps.fleetState]`, so at most one link): in remote mode
+    // the one link serves the op, or it does not (connected without the op, or down); in local mode the server's own fleet state
+    // is never asked (call 1893, review 4172 F1). `many-agents` needs two links, which no composition builds, so no row asks it.
+    'E18: in remote mode a link that does not serve the history op is a missing word, the detail saying so; one that serves passes': () => {
       expect(verdict({ historyAgent: 'no-agent' })).toEqual({ act: 'refuse', word: 'capability-missing', needs: ['overlord-history'],
         detail: 'missing: overlord-history; no connected agent advertises overlord-history' });
-      expect(verdict({ historyAgent: 'many-agents' })).toEqual({ act: 'refuse', word: 'capability-missing', needs: ['overlord-history'],
-        detail: 'missing: overlord-history; more than one connected agent advertises overlord-history' });
       expect(refuse(verdict({ historyAgent: 'agent' }))).toBe('create');
-      expect(refuse(verdict({ historyAgent: 'no-link' }))).toBe('create');
       const v = verdict({ historyAgent: 'no-agent', ccdWords: ALL_CCD.filter((w) => w !== 'pool-set') });
       expect(v).toMatchObject({ needs: ['pool-set', 'overlord-history'] });
+    },
+    'E18: in local mode the history op is not asked, whatever the chooser reads over the server\'s own fleet state': () => {
+      expect(refuse(verdict({ fleetMode: 'local', historyAgent: 'no-agent' }))).toBe('create');
+      expect(refuse(verdict({ fleetMode: 'local', historyAgent: 'agent' }))).toBe('create');
+      expect(verdict({ fleetMode: 'local', historyAgent: 'no-agent', ccdWords: ALL_CCD.filter((w) => w !== 'pool-set') }))
+        .toEqual({ act: 'refuse', word: 'capability-missing', detail: 'missing: pool-set', needs: ['pool-set'] });
     },
     'step 4: an unspellable set is an input refusal, before the count': () => {
       expect(verdict({ accountPools: { pools: ['Bad Name'], untagged: false } })).toEqual({ act: 'refuse-input', why: 'unspellable' });
@@ -573,8 +579,11 @@ const DESIGNATE_SET: MutantSet<DesignationModule> = { modulePath: MODULE, mutant
       new: "  { const u = unarmedLanes(f.lanes); if (u.length > 0) return { act: 'refuse', word: 'overlord-lanes-unarmed', lanes: u, detail: 'x' }; }\n  // 2. every missing word, ccd's, then the server's, then the probe's.\n" },
     { id: 'L6 the lanes asked after the spelling', old: "  const unarmed = unarmedLanes(f.lanes);\n  if (unarmed.length > 0) {",
       new: "  const unarmed = unarmedLanes(f.lanes);\n  if (poolSetSpelling(f.accountPools).kind === 'unspellable') return { act: 'refuse-input', why: 'unspellable' };\n  if (unarmed.length > 0) {" },
-    { id: 'H1 many agents read as served', old: "f.historyAgent === 'no-agent' || f.historyAgent === 'many-agents' ? f.historyAgent : null", new: "f.historyAgent === 'no-agent' ? f.historyAgent : null" },
-    { id: 'H2 no link read as none', old: "f.historyAgent === 'no-agent' || f.historyAgent === 'many-agents' ? f.historyAgent : null", new: "f.historyAgent !== 'agent' ? 'no-agent' : null" },
+    // Review 4172 F1 and F8: the arm is decided by the fleet mode, over the shapes production builds; the old H1 (many agents read
+    // as served) and H2 (no link read as none) asked branches no composition reaches, and are dropped for these.
+    { id: 'H1 local mode is asked', old: "f.fleetMode === 'remote' && f.historyAgent !== 'agent'", new: "f.historyAgent !== 'agent'" },
+    { id: 'H2 a link that does not serve reads as served', old: "f.fleetMode === 'remote' && f.historyAgent !== 'agent'", new: "f.fleetMode === 'remote' && f.historyAgent === 'many-agents'" },
+    { id: 'H3 remote mode is not asked', old: "f.fleetMode === 'remote' && f.historyAgent !== 'agent'", new: "f.fleetMode === 'local' && f.historyAgent !== 'agent'" },
   ], suite: designateVerdictCases };
 const ACCOUNTS_SET: MutantSet<DesignationModule> = { modulePath: MODULE, mutants: [
     { id: 'A1 an API-key lane listed', old: "if (provider !== 'anthropic') return;", new: '' },
@@ -824,7 +833,8 @@ export function rebindVerdictCases(m: DesignationModule): Record<string, SuiteCa
       expect(word(verdict({ lanes, read: NONE }))).toBe('not-found');
       expect(word(verdict({ lanes, read: boundRead({ pending: PEND() }) }))).toBe('overlord-attempt-pending');
       expect(word(verdict({ lanes, old: 'alive' }))).toBe('overlord-body-alive');
-      expect(word(verdict({ lanes, historyAgent: 'many-agents' }))).toBe('capability-missing');
+      expect(word(verdict({ lanes, historyAgent: 'no-agent' }))).toBe('capability-missing');
+      expect(word(verdict({ lanes, fleetMode: 'local', historyAgent: 'no-agent' }))).toBe('overlord-lanes-unarmed');
     },
     'step 4: an alive body, and one that cannot be measured, refuse overlord-body-alive; dead passes': () => {
       expect(verdict({ old: 'alive' })).toMatchObject({ act: 'refuse', word: 'overlord-body-alive' });
@@ -959,6 +969,31 @@ export function restartVerdictCases(m: DesignationModule): Record<string, SuiteC
       expect(ref(pendingAt(NOW - 1), { kind: 'up' })).toEqual({ ...alive, detail: 'alive' });
       expect(ref(pendingAt(NOW - 1), { kind: 'unmeasured', why: 'x' })).toEqual({ ...alive, detail: 'unmeasured' });
     },
+    // Call 1941 (review 4172 F3): Restart reads one lane, the anchor slot, and refuses with the start's word naming it alone.
+    'the anchor slot live: a restartable body is accepted as before': () => {
+      const live = laneView(ANCHOR_SLOT_LANE, 'live');
+      expect(m.restartVerdict(bound, { kind: 'asleep' }, NOW, live)).toEqual({ ok: true, endAttempt: null });
+      expect(m.restartVerdict(pendingAt(NOW - 1), { kind: 'gone', cause: 'stopped' }, NOW, live)).toEqual({ ok: true, endAttempt: 'overlord-new-owl' });
+    },
+    'the anchor slot not live: a restartable body refuses overlord-lanes-unarmed naming the anchor slot only, and ends nothing': () => {
+      const cases = [[laneView(ANCHOR_SLOT_LANE, 'shadow'), 'shadow'], [laneView(ANCHOR_SLOT_LANE, 'absent'), 'shadow'],
+        [laneView(ANCHOR_SLOT_LANE, 'live', 'a gate'), 'gated'], [laneView(ANCHOR_SLOT_LANE, 'unreadable'), 'unread'],
+        [laneView(ANCHOR_SLOT_LANE, 'nonsense'), 'unread']] as const;
+      for (const [view, reads] of cases) {
+        const want = { ok: false, error: 'overlord-lanes-unarmed', detail: `not live: anchor-slot (${reads})`, lanes: [{ lane: 'anchor-slot', reads }] };
+        expect(m.restartVerdict(bound, { kind: 'asleep' }, NOW, view), reads).toEqual(want);
+        expect(m.restartVerdict(bound, { kind: 'gone', cause: 'absent' }, NOW, view), reads).toEqual(want);
+        expect(m.restartVerdict(pendingAt(NOW - 1), { kind: 'asleep' }, NOW, view), reads).toEqual(want);
+      }
+    },
+    'the anchor slot not live: every other answer is unchanged, in its order': () => {
+      const shadow = laneView(ANCHOR_SLOT_LANE, 'shadow');
+      expect(m.restartVerdict(null, { kind: 'asleep' }, NOW, shadow)).toEqual({ ok: false, error: 'not-found' });
+      expect(m.restartVerdict(pendingAt(NOW + 1), { kind: 'asleep' }, NOW, shadow)).toEqual({ ok: false, error: 'overlord-attempt-pending' });
+      expect(m.restartVerdict(bound, { kind: 'up' }, NOW, shadow)).toEqual({ ...alive, detail: 'alive' });
+      expect(m.restartVerdict(bound, { kind: 'down', since: 5 }, NOW, shadow)).toEqual({ ...alive, detail: 'restarting' });
+      expect(m.restartVerdict(bound, { kind: 'unmeasured', why: 'x' }, NOW, shadow)).toEqual({ ...alive, detail: 'unmeasured' });
+    },
   };
 }
 
@@ -981,12 +1016,18 @@ const RESTART_SET: MutantSet<DesignationModule> = { modulePath: MODULE, mutants:
     { id: 'S2 a restarting body may be restarted', old: "case 'down': return { ok: false, error: 'overlord-body-alive', detail: 'restarting' };", new: "case 'down': return { ok: true, endAttempt: null };" },
     { id: 'S3 an unmeasured body may be restarted', old: "case 'unmeasured': return { ok: false, error: 'overlord-body-alive', detail: 'unmeasured' };", new: "case 'unmeasured': return { ok: true, endAttempt: null };" },
     { id: 'S4 no binding is restartable', old: "if (binding === null) return { ok: false, error: 'not-found' };", new: '' },
-    { id: 'S5 an asleep body is not restartable', old: "case 'asleep': case 'gone': return { ok: true,", new: "case 'asleep': return { ok: false, error: 'overlord-body-alive', detail: 'alive' };\n    case 'gone': return { ok: true," },
+    { id: 'S5 an asleep body is not restartable', old: "case 'asleep': case 'gone': {", new: "case 'asleep': return { ok: false, error: 'overlord-body-alive', detail: 'alive' };\n    case 'gone': {" },
     { id: 'S6 restart ignores a pending attempt', old: "if (p !== null && now < p.deadlineAt) return { ok: false, error: 'overlord-attempt-pending' };", new: '' },
     { id: 'S7 the pending step after the body steps', old: 'if (p !== null && now < p.deadlineAt)', new: "if (p !== null && now < p.deadlineAt && (body.kind === 'asleep' || body.kind === 'gone'))" },
     { id: 'S8 the deadline is ignored', old: 'if (p !== null && now < p.deadlineAt)', new: 'if (p !== null)' },
     { id: 'S9 the deadline ends one tick late', old: 'if (p !== null && now < p.deadlineAt)', new: 'if (p !== null && now <= p.deadlineAt)' },
     { id: 'S10 the overdue attempt is not named', old: 'endAttempt: p === null ? null : p.sessionId', new: 'endAttempt: null' },
+    // Call 1941 (review 4172 F3): the anchor slot's step.
+    { id: 'S11 the anchor slot is not read', old: 'const anchorReads = anchor === undefined ? null : laneReadingOf(anchor);', new: 'const anchorReads = null as LaneReading | null;' },
+    { id: 'S12 only a shadow anchor slot refuses', old: 'if (anchorReads !== null)', new: "if (anchorReads === 'shadow')" },
+    { id: 'S13 the anchor slot is read before the binding', old: "if (binding === null) return { ok: false, error: 'not-found' };",
+      new: "if (anchor !== undefined && laneReadingOf(anchor) !== null) return { ok: false, error: 'overlord-lanes-unarmed', lanes: [], detail: '' };\n  if (binding === null) return { ok: false, error: 'not-found' };" },
+    { id: 'S14 the refusal names every start lane', old: 'lanes: [{ lane: ANCHOR_SLOT_LANE, reads: anchorReads }]', new: 'lanes: DESIGNATE_LANES.map((lane) => ({ lane, reads: anchorReads }))' },
   ], suite: restartVerdictCases };
 const DEADLINE_SET: MutantSet<DesignationModule> = { modulePath: MODULE, mutants: [
     { id: 'T1 expires one tick early', old: 'if (now >= p.deadlineAt)', new: 'if (now >= p.deadlineAt - 1)' },

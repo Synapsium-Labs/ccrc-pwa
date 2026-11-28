@@ -46,7 +46,7 @@ import {
   type OverlordBodyState,
 } from './overlordDesignation.js';
 import { laneArmRowViewOf } from './laneArm.js';
-import type { LaneArmRowView } from '../../../shared/lane-arm.js';
+import { ANCHOR_SLOT_LANE, type LaneArmLane, type LaneArmRowView } from '../../../shared/lane-arm.js';
 import type { ActorRefused, AuthorityAppender, AuthorityRefused, RowUnreadable } from './overlordDesignationStore.js';
 import { ladderRead, ladderWire, NO_WITNESS_YET, type LadderConditionInputs, type NarrowingWitness } from './overlordLadderRead.js';
 import { isRung, isLadderCauseKey, type Rung } from '../../../shared/overlord-ladder.js';
@@ -113,7 +113,8 @@ export type OverlordCoord = Pick<CoordStore,
   'designationRead' | 'designatePending' | 'rebindPending' | 'bindPendingGeneration' | 'failPending' | 'retire' | 'stopDone'
   | 'raiseItem' | 'accountPoolEdges' | 'accountHolds'
   | 'setModelClass' | 'setAccountSet'
-  // The store's one reader of a lane-arm row (overlord-v1's guard): the lanes a start needs, read by Start and Rebind only.
+  // The store's one reader of a lane-arm row (overlord-v1's guard): the lanes a start needs, read by Start and Rebind, and the
+  // anchor slot, read by Restart (call 1941).
   | 'laneArmSetting'>;
 
 export interface OverlordRouteDeps {
@@ -178,6 +179,10 @@ export interface OverlordRouteDeps {
     readonly oldBody?: (sessionId: string) => Promise<OldBodyState>;
     /** Restart's reading of the bound body (`overlordBodyOf` over the watcher's last listing and fleet). Absent: unmeasured. */
     readonly body?: (sessionId: string) => OverlordBodyState;
+    /** The server's fleet mode, from its configuration (`config.ts#FleetMode`; `server.ts` hands `deps.cfg.fleetMode`): a start asks
+     *  the history op in remote mode only (call 1941, review 4172 F1). Absent (a test server, a script): local, as a server with no
+     *  fleet link by configuration, so a rig that hands none is not asked. */
+    readonly fleetMode?: () => 'local' | 'remote';
   };
 }
 
@@ -333,21 +338,24 @@ export function registerOverlordRoutes(app: FastifyInstance, deps: OverlordRoute
    *  empty list. */
   const accountFactsOf = (): Promise<AccountFacts & { shares: SharesRead }> => readAccountFacts(deps);
 
-  /** What a start needs beside the words (overlord-v1's guard, call 1887), read once per Start or Rebind and decided by the
-   *  decider: each lane's view by the lane-arm owner's own function over the store's one reader (a read that throws is the
-   *  owner's unreadable row), and the history op through the history door's own chooser over the same agent links. No fleet
-   *  link at all is this server's configuration (local mode, or a server built without them), so the op is not asked. */
-  const startFactsOf = (): { lanes: readonly LaneArmRowView[]; historyAgent: HistoryAgentFact } => {
-    const lanes = DESIGNATE_LANES.map((lane) => {
-      try { return laneArmRowViewOf(lane, coord.laneArmSetting(lane)); } catch (err) {
-        return laneArmRowViewOf(lane, { kind: 'unreadable', detail: err instanceof Error ? err.message : String(err) });
-      }
-    });
-    const links = deps.chat?.links() ?? [];
-    return { lanes, historyAgent: links.length === 0 ? 'no-link' : historyAgentFor(links).kind };
+  /** One lane's view by the lane-arm owner's own function over the store's one reader; a read that throws is the owner's
+   *  unreadable row. The one caller of that reader in this file, asked by a start (the three lanes) and by Restart (the anchor
+   *  slot only, call 1941). */
+  const laneViewOf = (lane: LaneArmLane): LaneArmRowView => {
+    try { return laneArmRowViewOf(lane, coord.laneArmSetting(lane)); } catch (err) {
+      return laneArmRowViewOf(lane, { kind: 'unreadable', detail: err instanceof Error ? err.message : String(err) });
+    }
   };
+  /** What a start needs beside the words (overlord-v1's guard, calls 1887 and 1941), read once per Start or Rebind and decided by
+   *  the decider: each lane's view, the server's fleet mode from its configuration, and the history op through the history door's
+   *  own chooser over the same agent links. The decider asks the op in remote mode only. */
+  const startFactsOf = (): { lanes: readonly LaneArmRowView[]; fleetMode: 'local' | 'remote'; historyAgent: HistoryAgentFact } => ({
+    lanes: DESIGNATE_LANES.map((lane) => laneViewOf(lane)),
+    fleetMode: facts.fleetMode?.() ?? 'local',
+    historyAgent: historyAgentFor(deps.chat?.links() ?? []).kind,
+  });
   /** A refused start names each unread lane by its reading only; the store's own words go to this one log line (call 1887). */
-  const logUnreadLanes = (door: 'Start' | 'Rebind', lanes: readonly LaneArmRowView[]): void => {
+  const logUnreadLanes = (door: 'Start' | 'Rebind' | 'Restart', lanes: readonly LaneArmRowView[]): void => {
     for (const v of lanes) {
       if (laneReadingOf(v) !== 'unread') continue;
       const why = v.detail ?? (v.stored === 'unknown' ? 'it holds a token this build does not know' : `it reads ${v.stored}`);
@@ -592,10 +600,16 @@ export function registerOverlordRoutes(app: FastifyInstance, deps: OverlordRoute
       const binding = read.kind === 'designated' ? { sessionId: read.sessionId, pending: p === null ? null : { sessionId: p.sessionId, deadlineAt: p.deadlineAt } } : null;
       const state = binding === null ? null : facts.body?.(binding.sessionId) ?? null;
       const now = deps.clock.wall();
-      const v = restartVerdict(binding, state ?? { kind: 'unmeasured', why: 'the fleet has not been read' }, now);
+      // The anchor slot only (call 1941): the one lane whose absence changes what a revived body is told it is.
+      const anchor = laneViewOf(ANCHOR_SLOT_LANE);
+      const v = restartVerdict(binding, state ?? { kind: 'unmeasured', why: 'the fleet has not been read' }, now, anchor);
       if (!v.ok) {
         if (v.error === 'not-found') return refuseRoute(reply, 'not-found', { detail: 'no Overlord is bound, so there is nothing to restart' });
         if (v.error === 'overlord-attempt-pending') return refuseRoute(reply, 'overlord-attempt-pending', { detail: 'an attempt is pending on the designation' });
+        if (v.error === 'overlord-lanes-unarmed') {
+          logUnreadLanes('Restart', [anchor]);
+          return refuseRoute(reply, 'overlord-lanes-unarmed', { detail: v.detail, lanes: v.lanes });
+        }
         return refuseRoute(reply, 'overlord-body-alive', { detail: v.detail });
       }
       const id = binding!.sessionId;
