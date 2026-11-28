@@ -13,6 +13,7 @@ import { DISPATCH_ABANDON_DEFAULT_MS } from '../../shared/dispatch-abandon.js';
 import { backupStaleHoursOf } from '../../shared/backup.js';
 import { privateTrackerKeysOf } from './linking/publicTextClasses.js';
 import type { FingerprintAnswer } from './accounts/mask.js';
+import { matchesShape } from './accounts/shapes.js';
 import { artifactConfig, type ArtifactConfig } from './artifacts/policy.js';
 import { DEPS_SHED_AFTER_HOURS_DEFAULT, DEPS_SHED_PER_PASS_DEFAULT } from './depsShed.js';
 import {
@@ -575,7 +576,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): CcrcConfig {
       origin: env.CCRC_ARTIFACT_ORIGIN, content: env.CCRC_ARTIFACT_CONTENT_ORIGIN,
       port: env.CCRC_ARTIFACT_PORT, exposeMode: env.CCRC_EXPOSE_MODE,
     },
-    consoleOrigin, port);
+    // D-9161: the shape half of the answer mask (`accounts/shapes.ts`, its one home, which the masker reads), so an origin a
+    // credential shape matches turns the tier off. An exact origin holds no escape and no PEM line, the masker's other halves.
+    consoleOrigin, port, matchesShape);
   if (artifact.state === 'off' && (artifact.why === 'partial' || artifact.why === 'invalid')) {
     console.warn(`ccrc-server: artifact tier off — ${artifact.detail}`);
   }

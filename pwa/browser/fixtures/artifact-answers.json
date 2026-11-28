@@ -1,0 +1,379 @@
+{
+  "format": 1,
+  "token": "golden-fixture-token-0123456789-abcdefghijk",
+  "entries": [
+    {
+      "name": "wrapper, opened from the console",
+      "request": {
+        "method": "GET",
+        "host": "{{ARTIFACT_HOST}}",
+        "path": "/a/golden-fixture-token-0123456789-abcdefghijk",
+        "headers": {
+          "sec-fetch-dest": "document",
+          "sec-fetch-mode": "navigate",
+          "sec-fetch-site": "cross-site"
+        }
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "cache-control": "no-store",
+          "content-length": "1510",
+          "content-security-policy": "default-src 'none'; style-src 'sha256-CfAsZMRpFi3TVta5OnEc27MdVORs98YywMg6wiXJIBc='; img-src data:; frame-src {{CONTENT_ORIGIN}}/c/golden-fixture-token-0123456789-abcdefghijk/ {{CONTENT_ORIGIN}}/clear; base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
+          "content-type": "text/html; charset=utf-8",
+          "cross-origin-opener-policy": "same-origin-allow-popups",
+          "referrer-policy": "no-referrer",
+          "x-content-type-options": "nosniff",
+          "x-robots-tag": "noindex, nofollow"
+        },
+        "body": "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width, initial-scale=1\"><title>Artifact · project-a · specs/x/page.html · at abcdef0</title><style>:root{color-scheme:light dark}html,body{height:100%;margin:0}body{display:flex;flex-direction:column;font:14px/1.4 system-ui,sans-serif;background:#fff;color:#111}.bar{display:flex;flex-wrap:wrap;align-items:center;gap:4px 16px;padding:6px 12px;background:#fff4c2;color:#3b2a00;border-bottom:2px solid #b45309}.warn{font-weight:600}.bar a{color:#7c2d12}iframe{flex:1 1 auto;width:100%;border:0;background:#fff}@media (prefers-color-scheme:dark){body{background:#111;color:#eee}.bar{background:#3b2a00;color:#ffedb3;border-bottom-color:#f59e0b}.bar a{color:#fcd34d}}</style></head><body><div class=\"bar\"><span class=\"what\">Artifact · project-a · specs/x/page.html · at abcdef0</span><span class=\"warn\">Runs its own code · This is not ccrc: never type your ccrc passphrase here</span><a class=\"clear\" href=\"{{CONTENT_ORIGIN}}/clear\" target=\"artifact\">Clear this host's data</a><span class=\"hint\">Close this tab when you are done; Revoke in ccrc ends the link.</span></div><iframe name=\"artifact\" src=\"{{CONTENT_ORIGIN}}/c/golden-fixture-token-0123456789-abcdefghijk/page.html\" sandbox=\"allow-scripts allow-same-origin allow-forms allow-modals allow-downloads allow-pointer-lock\" allow=\"fullscreen; clipboard-write\" referrerpolicy=\"no-referrer\" title=\"The artifact's page\"></iframe></body></html>",
+        "encoding": "utf8"
+      }
+    },
+    {
+      "name": "the page in the frame",
+      "request": {
+        "method": "GET",
+        "host": "{{CONTENT_HOST}}",
+        "path": "/c/golden-fixture-token-0123456789-abcdefghijk/page.html",
+        "headers": {
+          "sec-fetch-dest": "iframe",
+          "sec-fetch-mode": "navigate",
+          "sec-fetch-site": "same-site"
+        }
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "accept-ranges": "bytes",
+          "cache-control": "no-store",
+          "content-length": "2505",
+          "content-security-policy": "default-src 'none'; script-src {{CONTENT_ORIGIN}}/c/golden-fixture-token-0123456789-abcdefghijk/ 'unsafe-inline' 'unsafe-eval' 'wasm-unsafe-eval' blob: data:; style-src {{CONTENT_ORIGIN}}/c/golden-fixture-token-0123456789-abcdefghijk/ 'unsafe-inline' data:; img-src {{CONTENT_ORIGIN}}/c/golden-fixture-token-0123456789-abcdefghijk/ data: blob:; font-src {{CONTENT_ORIGIN}}/c/golden-fixture-token-0123456789-abcdefghijk/ data:; media-src {{CONTENT_ORIGIN}}/c/golden-fixture-token-0123456789-abcdefghijk/ data: blob:; connect-src {{CONTENT_ORIGIN}}/c/golden-fixture-token-0123456789-abcdefghijk/ data: blob:; worker-src {{CONTENT_ORIGIN}}/c/golden-fixture-token-0123456789-abcdefghijk/ blob:; frame-src {{CONTENT_ORIGIN}}/c/golden-fixture-token-0123456789-abcdefghijk/; child-src {{CONTENT_ORIGIN}}/c/golden-fixture-token-0123456789-abcdefghijk/ blob:; manifest-src 'none'; object-src 'none'; base-uri {{CONTENT_ORIGIN}}/c/golden-fixture-token-0123456789-abcdefghijk/; form-action 'none'; frame-ancestors {{ARTIFACT_ORIGIN}} {{CONTENT_ORIGIN}}; sandbox allow-scripts allow-same-origin allow-forms allow-modals allow-downloads allow-pointer-lock",
+          "content-type": "text/html; charset=utf-8",
+          "cross-origin-resource-policy": "same-origin",
+          "permissions-policy": "camera=(), microphone=(), geolocation=(), usb=(), serial=(), hid=(), bluetooth=(), payment=(), display-capture=(), fullscreen=(self), clipboard-write=(self)",
+          "referrer-policy": "no-referrer",
+          "vary": "Sec-Fetch-Dest, Service-Worker",
+          "x-content-type-options": "nosniff",
+          "x-dns-prefetch-control": "off",
+          "x-robots-tag": "noindex, nofollow"
+        },
+        "body": "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><title>artifact fixture</title>\n<script src=\"classic.js\"></script>\n<script src=\"sw.js\"></script>\n<script type=\"module\" src=\"mod.mjs\"></script>\n</head><body>\n<img id=\"icon\" src=\"icon.svg\" alt=\"\">\n<a id=\"dl\" href=\"data.txt\" download=\"data.txt\">download</a>\n<script>\nconst log = (name, value) => console.log('PROBE ' + name + ' ' + JSON.stringify(value));\nconst said = (e) => ({ threw: true, name: e && e.name, message: e && e.message });\nconst probe = async (name, f) => { try { log(name, await f()); } catch (e) { log(name, said(e)); } };\nconst wait = (ms) => new Promise((r) => setTimeout(r, ms));\n(async () => {\n  await probe('parent-document', () => { parent.document; return { threw: false }; });\n  await probe('storage', () => {\n    const consoleKey = localStorage.getItem('ccrc-console-fixture-key');\n    localStorage.setItem('own-key', 'own-value');\n    return { origin: location.origin, consoleKey, own: localStorage.getItem('own-key') };\n  });\n  await probe('sw', async () => {\n    const r = await navigator.serviceWorker.register('sw.js', { updateViaCache: 'all' });\n    return { registered: true, scope: r.scope };\n  });\n  await probe('svg', () => new Promise((resolve) => {\n    const img = document.getElementById('icon');\n    const done = () => resolve({ loaded: img.naturalWidth > 0, naturalWidth: img.naturalWidth });\n    if (img.complete) done(); else { img.onload = done; img.onerror = done; }\n  }));\n  await probe('fetch-html', async () => { const r = await fetch('frag.html'); return { status: r.status, text: await r.text() }; });\n  await probe('wasm', async () => {\n    const m = await WebAssembly.instantiateStreaming(fetch('add.wasm'));\n    return { sum: m.instance.exports.add(2, 3) };\n  });\n  await probe('worker', () => new Promise((resolve, reject) => {\n    const w = new Worker('worker.mjs', { type: 'module' });\n    w.onmessage = (ev) => resolve({ message: ev.data });\n    w.onerror = (ev) => reject(new Error(ev.message || 'worker error'));\n    setTimeout(() => reject(new Error('no message from the worker in 20 s')), 20000);\n  }));\n  await probe('alert', () => { alert('artifact'); return { returned: true }; });\n  await probe('download', () => { document.getElementById('dl').click(); return { clicked: true }; });\n  await wait(500);\n  log('done', {});\n  await wait(100);\n  log('top-nav', { about: 'navigating to https://example.invalid/' });\n  location = 'https://example.invalid/';\n})();\n</script>\n</body></html>",
+        "encoding": "utf8"
+      }
+    },
+    {
+      "name": "clear page in the frame",
+      "request": {
+        "method": "GET",
+        "host": "{{CONTENT_HOST}}",
+        "path": "/clear",
+        "headers": {
+          "sec-fetch-dest": "iframe",
+          "sec-fetch-mode": "navigate",
+          "sec-fetch-site": "same-site"
+        }
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "cache-control": "no-store",
+          "clear-site-data": "\"cache\", \"storage\"",
+          "content-length": "115",
+          "content-security-policy": "default-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors {{ARTIFACT_ORIGIN}}",
+          "content-type": "text/html; charset=utf-8",
+          "referrer-policy": "no-referrer",
+          "x-content-type-options": "nosniff",
+          "x-robots-tag": "noindex, nofollow"
+        },
+        "body": "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><title>ccrc artifacts</title></head><body></body></html>",
+        "encoding": "utf8"
+      }
+    },
+    {
+      "name": "classic script",
+      "request": {
+        "method": "GET",
+        "host": "{{CONTENT_HOST}}",
+        "path": "/c/golden-fixture-token-0123456789-abcdefghijk/classic.js",
+        "headers": {
+          "sec-fetch-dest": "script",
+          "sec-fetch-mode": "no-cors",
+          "sec-fetch-site": "same-origin"
+        }
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "accept-ranges": "bytes",
+          "cache-control": "no-store",
+          "content-length": "63",
+          "content-security-policy": "default-src 'none'; script-src {{CONTENT_ORIGIN}}/c/golden-fixture-token-0123456789-abcdefghijk/ 'unsafe-inline' 'unsafe-eval' 'wasm-unsafe-eval' blob: data:; style-src {{CONTENT_ORIGIN}}/c/golden-fixture-token-0123456789-abcdefghijk/ 'unsafe-inline' data:; img-src {{CONTENT_ORIGIN}}/c/golden-fixture-token-0123456789-abcdefghijk/ data: blob:; font-src {{CONTENT_ORIGIN}}/c/golden-fixture-token-0123456789-abcdefghijk/ data:; media-src {{CONTENT_ORIGIN}}/c/golden-fixture-token-0123456789-abcdefghijk/ data: blob:; connect-src {{CONTENT_ORIGIN}}/c/golden-fixture-token-0123456789-abcdefghijk/ data: blob:; worker-src {{CONTENT_ORIGIN}}/c/golden-fixture-token-0123456789-abcdefghijk/ blob:; frame-src {{CONTENT_ORIGIN}}/c/golden-fixture-token-0123456789-abcdefghijk/; child-src {{CONTENT_ORIGIN}}/c/golden-fixture-token-0123456789-abcdefghijk/ blob:; manifest-src 'none'; object-src 'none'; base-uri {{CONTENT_ORIGIN}}/c/golden-fixture-token-0123456789-abcdefghijk/; form-action 'none'; frame-ancestors {{ARTIFACT_ORIGIN}} {{CONTENT_ORIGIN}}; sandbox allow-scripts allow-same-origin allow-forms allow-modals allow-downloads allow-pointer-lock",
+          "content-type": "text/javascript; charset=utf-8",
+          "cross-origin-resource-policy": "same-origin",
+          "permissions-policy": "camera=(), microphone=(), geolocation=(), usb=(), serial=(), hid=(), bluetooth=(), payment=(), display-capture=(), fullscreen=(self), clipboard-write=(self)",
+          "referrer-policy": "no-referrer",
+          "vary": "Sec-Fetch-Dest, Service-Worker",
+          "x-content-type-options": "nosniff",
+          "x-dns-prefetch-control": "off",
+          "x-robots-tag": "noindex, nofollow"
+        },
+        "body": "console.log('PROBE classic ' + JSON.stringify({ ran: true }));\n",
+        "encoding": "utf8"
+      }
+    },
+    {
+      "name": "module script",
+      "request": {
+        "method": "GET",
+        "host": "{{CONTENT_HOST}}",
+        "path": "/c/golden-fixture-token-0123456789-abcdefghijk/mod.mjs",
+        "headers": {
+          "sec-fetch-dest": "script",
+          "sec-fetch-mode": "cors",
+          "sec-fetch-site": "same-origin"
+        }
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "accept-ranges": "bytes",
+          "cache-control": "no-store",
+          "content-length": "87",
+          "content-security-policy": "default-src 'none'; script-src {{CONTENT_ORIGIN}}/c/golden-fixture-token-0123456789-abcdefghijk/ 'unsafe-inline' 'unsafe-eval' 'wasm-unsafe-eval' blob: data:; style-src {{CONTENT_ORIGIN}}/c/golden-fixture-token-0123456789-abcdefghijk/ 'unsafe-inline' data:; img-src {{CONTENT_ORIGIN}}/c/golden-fixture-token-0123456789-abcdefghijk/ data: blob:; font-src {{CONTENT_ORIGIN}}/c/golden-fixture-token-0123456789-abcdefghijk/ data:; media-src {{CONTENT_ORIGIN}}/c/golden-fixture-token-0123456789-abcdefghijk/ data: blob:; connect-src {{CONTENT_ORIGIN}}/c/golden-fixture-token-0123456789-abcdefghijk/ data: blob:; worker-src {{CONTENT_ORIGIN}}/c/golden-fixture-token-0123456789-abcdefghijk/ blob:; frame-src {{CONTENT_ORIGIN}}/c/golden-fixture-token-0123456789-abcdefghijk/; child-src {{CONTENT_ORIGIN}}/c/golden-fixture-token-0123456789-abcdefghijk/ blob:; manifest-src 'none'; object-src 'none'; base-uri {{CONTENT_ORIGIN}}/c/golden-fixture-token-0123456789-abcdefghijk/; form-action 'none'; frame-ancestors {{ARTIFACT_ORIGIN}} {{CONTENT_ORIGIN}}; sandbox allow-scripts allow-same-origin allow-forms allow-modals allow-downloads allow-pointer-lock",
+          "content-type": "text/javascript; charset=utf-8",
+          "cross-origin-resource-policy": "same-origin",
+          "permissions-policy": "camera=(), microphone=(), geolocation=(), usb=(), serial=(), hid=(), bluetooth=(), payment=(), display-capture=(), fullscreen=(self), clipboard-write=(self)",
+          "referrer-policy": "no-referrer",
+          "vary": "Sec-Fetch-Dest, Service-Worker",
+          "x-content-type-options": "nosniff",
+          "x-dns-prefetch-control": "off",
+          "x-robots-tag": "noindex, nofollow"
+        },
+        "body": "console.log('PROBE module ' + JSON.stringify({ ran: true }));\nexport const ran = true;\n",
+        "encoding": "utf8"
+      }
+    },
+    {
+      "name": "module worker script",
+      "request": {
+        "method": "GET",
+        "host": "{{CONTENT_HOST}}",
+        "path": "/c/golden-fixture-token-0123456789-abcdefghijk/worker.mjs",
+        "headers": {
+          "sec-fetch-dest": "worker",
+          "sec-fetch-mode": "same-origin",
+          "sec-fetch-site": "same-origin"
+        }
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "accept-ranges": "bytes",
+          "cache-control": "no-store",
+          "content-length": "31",
+          "content-security-policy": "default-src 'none'; script-src {{CONTENT_ORIGIN}}/c/golden-fixture-token-0123456789-abcdefghijk/ 'unsafe-inline' 'unsafe-eval' 'wasm-unsafe-eval' blob: data:; style-src {{CONTENT_ORIGIN}}/c/golden-fixture-token-0123456789-abcdefghijk/ 'unsafe-inline' data:; img-src {{CONTENT_ORIGIN}}/c/golden-fixture-token-0123456789-abcdefghijk/ data: blob:; font-src {{CONTENT_ORIGIN}}/c/golden-fixture-token-0123456789-abcdefghijk/ data:; media-src {{CONTENT_ORIGIN}}/c/golden-fixture-token-0123456789-abcdefghijk/ data: blob:; connect-src {{CONTENT_ORIGIN}}/c/golden-fixture-token-0123456789-abcdefghijk/ data: blob:; worker-src {{CONTENT_ORIGIN}}/c/golden-fixture-token-0123456789-abcdefghijk/ blob:; frame-src {{CONTENT_ORIGIN}}/c/golden-fixture-token-0123456789-abcdefghijk/; child-src {{CONTENT_ORIGIN}}/c/golden-fixture-token-0123456789-abcdefghijk/ blob:; manifest-src 'none'; object-src 'none'; base-uri {{CONTENT_ORIGIN}}/c/golden-fixture-token-0123456789-abcdefghijk/; form-action 'none'; frame-ancestors {{ARTIFACT_ORIGIN}} {{CONTENT_ORIGIN}}; sandbox allow-scripts allow-same-origin allow-forms allow-modals allow-downloads allow-pointer-lock",
+          "content-type": "text/javascript; charset=utf-8",
+          "cross-origin-resource-policy": "same-origin",
+          "permissions-policy": "camera=(), microphone=(), geolocation=(), usb=(), serial=(), hid=(), bluetooth=(), payment=(), display-capture=(), fullscreen=(self), clipboard-write=(self)",
+          "referrer-policy": "no-referrer",
+          "vary": "Sec-Fetch-Dest, Service-Worker",
+          "x-content-type-options": "nosniff",
+          "x-dns-prefetch-control": "off",
+          "x-robots-tag": "noindex, nofollow"
+        },
+        "body": "self.postMessage('worker-ok');\n",
+        "encoding": "utf8"
+      }
+    },
+    {
+      "name": "service worker script, loaded by a script tag",
+      "request": {
+        "method": "GET",
+        "host": "{{CONTENT_HOST}}",
+        "path": "/c/golden-fixture-token-0123456789-abcdefghijk/sw.js",
+        "headers": {
+          "sec-fetch-dest": "script",
+          "sec-fetch-mode": "no-cors",
+          "sec-fetch-site": "same-origin"
+        }
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "accept-ranges": "bytes",
+          "cache-control": "no-store",
+          "content-length": "50",
+          "content-security-policy": "default-src 'none'; script-src {{CONTENT_ORIGIN}}/c/golden-fixture-token-0123456789-abcdefghijk/ 'unsafe-inline' 'unsafe-eval' 'wasm-unsafe-eval' blob: data:; style-src {{CONTENT_ORIGIN}}/c/golden-fixture-token-0123456789-abcdefghijk/ 'unsafe-inline' data:; img-src {{CONTENT_ORIGIN}}/c/golden-fixture-token-0123456789-abcdefghijk/ data: blob:; font-src {{CONTENT_ORIGIN}}/c/golden-fixture-token-0123456789-abcdefghijk/ data:; media-src {{CONTENT_ORIGIN}}/c/golden-fixture-token-0123456789-abcdefghijk/ data: blob:; connect-src {{CONTENT_ORIGIN}}/c/golden-fixture-token-0123456789-abcdefghijk/ data: blob:; worker-src {{CONTENT_ORIGIN}}/c/golden-fixture-token-0123456789-abcdefghijk/ blob:; frame-src {{CONTENT_ORIGIN}}/c/golden-fixture-token-0123456789-abcdefghijk/; child-src {{CONTENT_ORIGIN}}/c/golden-fixture-token-0123456789-abcdefghijk/ blob:; manifest-src 'none'; object-src 'none'; base-uri {{CONTENT_ORIGIN}}/c/golden-fixture-token-0123456789-abcdefghijk/; form-action 'none'; frame-ancestors {{ARTIFACT_ORIGIN}} {{CONTENT_ORIGIN}}; sandbox allow-scripts allow-same-origin allow-forms allow-modals allow-downloads allow-pointer-lock",
+          "content-type": "text/javascript; charset=utf-8",
+          "cross-origin-resource-policy": "same-origin",
+          "permissions-policy": "camera=(), microphone=(), geolocation=(), usb=(), serial=(), hid=(), bluetooth=(), payment=(), display-capture=(), fullscreen=(self), clipboard-write=(self)",
+          "referrer-policy": "no-referrer",
+          "vary": "Sec-Fetch-Dest, Service-Worker",
+          "x-content-type-options": "nosniff",
+          "x-dns-prefetch-control": "off",
+          "x-robots-tag": "noindex, nofollow"
+        },
+        "body": "self.addEventListener('install', function () {});\n",
+        "encoding": "utf8"
+      }
+    },
+    {
+      "name": "service worker registration",
+      "request": {
+        "method": "GET",
+        "host": "{{CONTENT_HOST}}",
+        "path": "/c/golden-fixture-token-0123456789-abcdefghijk/sw.js",
+        "headers": {
+          "sec-fetch-dest": "serviceworker",
+          "sec-fetch-mode": "same-origin",
+          "sec-fetch-site": "same-origin",
+          "service-worker": "script"
+        }
+      },
+      "response": {
+        "status": 403,
+        "headers": {
+          "cache-control": "no-store",
+          "content-length": "10",
+          "content-security-policy": "default-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
+          "content-type": "text/plain; charset=utf-8",
+          "referrer-policy": "no-referrer",
+          "vary": "Sec-Fetch-Dest, Service-Worker",
+          "x-content-type-options": "nosniff",
+          "x-robots-tag": "noindex, nofollow"
+        },
+        "body": "Forbidden.",
+        "encoding": "utf8"
+      }
+    },
+    {
+      "name": "svg image",
+      "request": {
+        "method": "GET",
+        "host": "{{CONTENT_HOST}}",
+        "path": "/c/golden-fixture-token-0123456789-abcdefghijk/icon.svg",
+        "headers": {
+          "sec-fetch-dest": "image",
+          "sec-fetch-mode": "no-cors",
+          "sec-fetch-site": "same-origin"
+        }
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "accept-ranges": "bytes",
+          "cache-control": "no-store",
+          "content-length": "135",
+          "content-security-policy": "default-src 'none'; script-src {{CONTENT_ORIGIN}}/c/golden-fixture-token-0123456789-abcdefghijk/ 'unsafe-inline' 'unsafe-eval' 'wasm-unsafe-eval' blob: data:; style-src {{CONTENT_ORIGIN}}/c/golden-fixture-token-0123456789-abcdefghijk/ 'unsafe-inline' data:; img-src {{CONTENT_ORIGIN}}/c/golden-fixture-token-0123456789-abcdefghijk/ data: blob:; font-src {{CONTENT_ORIGIN}}/c/golden-fixture-token-0123456789-abcdefghijk/ data:; media-src {{CONTENT_ORIGIN}}/c/golden-fixture-token-0123456789-abcdefghijk/ data: blob:; connect-src {{CONTENT_ORIGIN}}/c/golden-fixture-token-0123456789-abcdefghijk/ data: blob:; worker-src {{CONTENT_ORIGIN}}/c/golden-fixture-token-0123456789-abcdefghijk/ blob:; frame-src {{CONTENT_ORIGIN}}/c/golden-fixture-token-0123456789-abcdefghijk/; child-src {{CONTENT_ORIGIN}}/c/golden-fixture-token-0123456789-abcdefghijk/ blob:; manifest-src 'none'; object-src 'none'; base-uri {{CONTENT_ORIGIN}}/c/golden-fixture-token-0123456789-abcdefghijk/; form-action 'none'; frame-ancestors {{ARTIFACT_ORIGIN}} {{CONTENT_ORIGIN}}; sandbox allow-scripts allow-same-origin allow-forms allow-modals allow-downloads allow-pointer-lock",
+          "content-type": "image/svg+xml; charset=utf-8",
+          "cross-origin-resource-policy": "same-origin",
+          "permissions-policy": "camera=(), microphone=(), geolocation=(), usb=(), serial=(), hid=(), bluetooth=(), payment=(), display-capture=(), fullscreen=(self), clipboard-write=(self)",
+          "referrer-policy": "no-referrer",
+          "vary": "Sec-Fetch-Dest, Service-Worker",
+          "x-content-type-options": "nosniff",
+          "x-dns-prefetch-control": "off",
+          "x-robots-tag": "noindex, nofollow"
+        },
+        "body": "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"16\" height=\"16\" viewBox=\"0 0 16 16\"><rect width=\"16\" height=\"16\" fill=\"#2f6f9f\"/></svg>\n",
+        "encoding": "utf8"
+      }
+    },
+    {
+      "name": "fetch of an html fragment",
+      "request": {
+        "method": "GET",
+        "host": "{{CONTENT_HOST}}",
+        "path": "/c/golden-fixture-token-0123456789-abcdefghijk/frag.html",
+        "headers": {
+          "sec-fetch-dest": "empty",
+          "sec-fetch-mode": "cors",
+          "sec-fetch-site": "same-origin"
+        }
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "accept-ranges": "bytes",
+          "cache-control": "no-store",
+          "content-length": "40",
+          "content-security-policy": "default-src 'none'; script-src {{CONTENT_ORIGIN}}/c/golden-fixture-token-0123456789-abcdefghijk/ 'unsafe-inline' 'unsafe-eval' 'wasm-unsafe-eval' blob: data:; style-src {{CONTENT_ORIGIN}}/c/golden-fixture-token-0123456789-abcdefghijk/ 'unsafe-inline' data:; img-src {{CONTENT_ORIGIN}}/c/golden-fixture-token-0123456789-abcdefghijk/ data: blob:; font-src {{CONTENT_ORIGIN}}/c/golden-fixture-token-0123456789-abcdefghijk/ data:; media-src {{CONTENT_ORIGIN}}/c/golden-fixture-token-0123456789-abcdefghijk/ data: blob:; connect-src {{CONTENT_ORIGIN}}/c/golden-fixture-token-0123456789-abcdefghijk/ data: blob:; worker-src {{CONTENT_ORIGIN}}/c/golden-fixture-token-0123456789-abcdefghijk/ blob:; frame-src {{CONTENT_ORIGIN}}/c/golden-fixture-token-0123456789-abcdefghijk/; child-src {{CONTENT_ORIGIN}}/c/golden-fixture-token-0123456789-abcdefghijk/ blob:; manifest-src 'none'; object-src 'none'; base-uri {{CONTENT_ORIGIN}}/c/golden-fixture-token-0123456789-abcdefghijk/; form-action 'none'; frame-ancestors {{ARTIFACT_ORIGIN}} {{CONTENT_ORIGIN}}; sandbox allow-scripts allow-same-origin allow-forms allow-modals allow-downloads allow-pointer-lock",
+          "content-type": "text/html; charset=utf-8",
+          "cross-origin-resource-policy": "same-origin",
+          "permissions-policy": "camera=(), microphone=(), geolocation=(), usb=(), serial=(), hid=(), bluetooth=(), payment=(), display-capture=(), fullscreen=(self), clipboard-write=(self)",
+          "referrer-policy": "no-referrer",
+          "vary": "Sec-Fetch-Dest, Service-Worker",
+          "x-content-type-options": "nosniff",
+          "x-dns-prefetch-control": "off",
+          "x-robots-tag": "noindex, nofollow"
+        },
+        "body": "<p id=\"frag\">a same-origin fragment</p>\n",
+        "encoding": "utf8"
+      }
+    },
+    {
+      "name": "fetch of a wasm module",
+      "request": {
+        "method": "GET",
+        "host": "{{CONTENT_HOST}}",
+        "path": "/c/golden-fixture-token-0123456789-abcdefghijk/add.wasm",
+        "headers": {
+          "sec-fetch-dest": "empty",
+          "sec-fetch-mode": "cors",
+          "sec-fetch-site": "same-origin"
+        }
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "accept-ranges": "bytes",
+          "cache-control": "private, max-age=3600, immutable",
+          "content-length": "41",
+          "content-security-policy": "default-src 'none'; script-src {{CONTENT_ORIGIN}}/c/golden-fixture-token-0123456789-abcdefghijk/ 'unsafe-inline' 'unsafe-eval' 'wasm-unsafe-eval' blob: data:; style-src {{CONTENT_ORIGIN}}/c/golden-fixture-token-0123456789-abcdefghijk/ 'unsafe-inline' data:; img-src {{CONTENT_ORIGIN}}/c/golden-fixture-token-0123456789-abcdefghijk/ data: blob:; font-src {{CONTENT_ORIGIN}}/c/golden-fixture-token-0123456789-abcdefghijk/ data:; media-src {{CONTENT_ORIGIN}}/c/golden-fixture-token-0123456789-abcdefghijk/ data: blob:; connect-src {{CONTENT_ORIGIN}}/c/golden-fixture-token-0123456789-abcdefghijk/ data: blob:; worker-src {{CONTENT_ORIGIN}}/c/golden-fixture-token-0123456789-abcdefghijk/ blob:; frame-src {{CONTENT_ORIGIN}}/c/golden-fixture-token-0123456789-abcdefghijk/; child-src {{CONTENT_ORIGIN}}/c/golden-fixture-token-0123456789-abcdefghijk/ blob:; manifest-src 'none'; object-src 'none'; base-uri {{CONTENT_ORIGIN}}/c/golden-fixture-token-0123456789-abcdefghijk/; form-action 'none'; frame-ancestors {{ARTIFACT_ORIGIN}} {{CONTENT_ORIGIN}}; sandbox allow-scripts allow-same-origin allow-forms allow-modals allow-downloads allow-pointer-lock",
+          "content-type": "application/wasm",
+          "cross-origin-resource-policy": "same-origin",
+          "permissions-policy": "camera=(), microphone=(), geolocation=(), usb=(), serial=(), hid=(), bluetooth=(), payment=(), display-capture=(), fullscreen=(self), clipboard-write=(self)",
+          "referrer-policy": "no-referrer",
+          "vary": "Sec-Fetch-Dest, Service-Worker",
+          "x-content-type-options": "nosniff",
+          "x-dns-prefetch-control": "off",
+          "x-robots-tag": "noindex, nofollow"
+        },
+        "body": "AGFzbQEAAAABBwFgAn9/AX8DAgEABwcBA2FkZAAACgkBBwAgACABags=",
+        "encoding": "base64"
+      }
+    },
+    {
+      "name": "download",
+      "request": {
+        "method": "GET",
+        "host": "{{CONTENT_HOST}}",
+        "path": "/c/golden-fixture-token-0123456789-abcdefghijk/data.txt",
+        "headers": {
+          "sec-fetch-dest": "empty",
+          "sec-fetch-mode": "navigate",
+          "sec-fetch-site": "same-origin"
+        }
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "accept-ranges": "bytes",
+          "cache-control": "private, max-age=3600, immutable",
+          "content-length": "18",
+          "content-security-policy": "default-src 'none'; script-src {{CONTENT_ORIGIN}}/c/golden-fixture-token-0123456789-abcdefghijk/ 'unsafe-inline' 'unsafe-eval' 'wasm-unsafe-eval' blob: data:; style-src {{CONTENT_ORIGIN}}/c/golden-fixture-token-0123456789-abcdefghijk/ 'unsafe-inline' data:; img-src {{CONTENT_ORIGIN}}/c/golden-fixture-token-0123456789-abcdefghijk/ data: blob:; font-src {{CONTENT_ORIGIN}}/c/golden-fixture-token-0123456789-abcdefghijk/ data:; media-src {{CONTENT_ORIGIN}}/c/golden-fixture-token-0123456789-abcdefghijk/ data: blob:; connect-src {{CONTENT_ORIGIN}}/c/golden-fixture-token-0123456789-abcdefghijk/ data: blob:; worker-src {{CONTENT_ORIGIN}}/c/golden-fixture-token-0123456789-abcdefghijk/ blob:; frame-src {{CONTENT_ORIGIN}}/c/golden-fixture-token-0123456789-abcdefghijk/; child-src {{CONTENT_ORIGIN}}/c/golden-fixture-token-0123456789-abcdefghijk/ blob:; manifest-src 'none'; object-src 'none'; base-uri {{CONTENT_ORIGIN}}/c/golden-fixture-token-0123456789-abcdefghijk/; form-action 'none'; frame-ancestors {{ARTIFACT_ORIGIN}} {{CONTENT_ORIGIN}}; sandbox allow-scripts allow-same-origin allow-forms allow-modals allow-downloads allow-pointer-lock",
+          "content-type": "text/plain; charset=utf-8",
+          "cross-origin-resource-policy": "same-origin",
+          "permissions-policy": "camera=(), microphone=(), geolocation=(), usb=(), serial=(), hid=(), bluetooth=(), payment=(), display-capture=(), fullscreen=(self), clipboard-write=(self)",
+          "referrer-policy": "no-referrer",
+          "vary": "Sec-Fetch-Dest, Service-Worker",
+          "x-content-type-options": "nosniff",
+          "x-dns-prefetch-control": "off",
+          "x-robots-tag": "noindex, nofollow"
+        },
+        "body": "a downloaded file\n",
+        "encoding": "utf8"
+      }
+    }
+  ]
+}

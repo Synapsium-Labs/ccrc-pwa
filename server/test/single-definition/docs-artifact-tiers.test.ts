@@ -48,9 +48,18 @@ describe('single-definition: no shared policy between tiers', () => {
     expect(holders).toEqual([]);
   });
 
+  /** The walls tier: every module under `docs/mockup/`, and the two views that apply its policy (`MockupFrame.tsx` puts the
+   *  sandbox on the frame, `MockupView.tsx` draws the viewer and imports the budgets). Widened in X5 A5 from the folder alone
+   *  (review 3947's A8), so the views that carry the walls' policy are held to the same rule as the policy's own module. */
+  const wallsTier = (): string[] => [
+    ...sources(path.join(ccrcRoot, 'pwa', 'src', 'docs', 'mockup')),
+    path.join(ccrcRoot, 'pwa', 'src', 'docs', 'MockupFrame.tsx'),
+    path.join(ccrcRoot, 'pwa', 'src', 'docs', 'MockupView.tsx'),
+  ];
+
   it('no module of the walls tier imports shared/artifacts', () => {
-    const dir = path.join(ccrcRoot, 'pwa', 'src', 'docs', 'mockup');
-    const files = sources(dir);
+    const files = wallsTier();
+    // The folder walk must find the policy module; the two views are named by hand, and a missing one throws at the read below.
     expect(files.map(rel)).toContain('pwa/src/docs/mockup/policy.ts');
     const holders = files.filter((f) => ARTIFACTS_SPEC.test(readFileSync(f, 'utf8'))).map(rel);
     expect(holders).toEqual([]);

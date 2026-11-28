@@ -45,6 +45,8 @@ import type {
 import type { DocsSettings, DocsSettingsResponse } from '../../../shared/docsTracker';
 import type { DocsFolderLoaders } from '../docs/folderPage';
 import type { RangeLoader } from '../docs/range/readRange';
+import { artifactRefusalOf, type ArtifactAnswer, type ArtifactDoors } from '../docs/artifact/tier';
+import type { ArtifactListOk, ArtifactMintOk, ArtifactRevokeOk, ArtifactScopeOk } from '../../../shared/artifacts';
 import type { ClaudeRollTargets } from '../../../shared/claudeVersion';
 import type { PlainAutoMemoryChoice, PlainAutoMemoryView } from '../../../shared/plainAutoMemory';
 import type { CoordinatorAdvisorSetting, CoordinatorAdvisorView } from '../../../shared/coordinatorAdvisor';
@@ -1320,7 +1322,7 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
      * never rejects for a server answer (`docs/failures.ts`): it rejects only when the caller's signal aborts, or for
      * a defect. `file` and `raster` refuse each other's paths by throwing `wrong-representation` before any request.
      */
-    docs: ((): DocsLoaders & DocsHistoryLoader & { readonly range: RangeLoader; readonly folders: DocsFolderLoaders; readonly settings: {
+    docs: ((): DocsLoaders & DocsHistoryLoader & { readonly range: RangeLoader; readonly folders: DocsFolderLoaders; readonly artifacts: ArtifactDoors; readonly settings: {
       read(signal?: AbortSignal): Promise<DocsAnswer<DocsSettingsResponse>>;
       write(settings: DocsSettings): Promise<DocsAnswer<DocsSettingsResponse>>;
     } } => {
@@ -1355,6 +1357,17 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
           return slot;
         }
       };
+      // X5 A5.1: the artifact doors' reader. A refusal of the scope read or the mint ({ok: false, error} with one of
+      // ARTIFACT_REFUSALS) resolves as refused with its word; a 401 and every other answer is the docs reads' union.
+      const artifactRead = async <T>(path: string, fields: readonly string[], init: RequestInit): Promise<ArtifactAnswer<T>> => {
+        try {
+          return await readDocsEnvelope<T>(await request(path, init, unlimited), fields);
+        } catch (err) {
+          if (init.signal?.aborted) throw init.signal.reason;
+          const word = err instanceof ApiError && err.status !== 401 ? artifactRefusalOf(err.body) : null;
+          return word !== null ? { s: 'refused', word } : docsAnswerFromError(err);
+        }
+      };
       const folders: DocsFolderLoaders = {
         labels: () => read<DocsFoldersLabelsResponse>(docsApi.folders(), ['folders'], { headers: marker }),
         // The ONE caller of the paths URL: Settings' Docs folders section (`docs-ring.test.ts`).
@@ -1380,6 +1393,15 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
       };
       return {
         folders,
+        artifacts: {
+          list: () => artifactRead<ArtifactListOk>(docsApi.artifacts(), ['available', 'live'], { headers: marker }),
+          scope: (project, pin, signal) => artifactRead<ArtifactScopeOk>(docsApi.artifactScope(project, pin), ['files'], { headers: marker, signal }),
+          mint: (ask) => artifactRead<ArtifactMintOk>(docsApi.artifactMint(), ['url'], {
+            method: 'POST', headers: { ...marker, 'content-type': 'application/json' }, body: JSON.stringify(ask),
+          }),
+          revoke: (id) => artifactRead<ArtifactRevokeOk>(docsApi.artifactRevoke(id), ['revoked'], { method: 'POST', headers: marker }),
+          revokeAll: () => artifactRead<ArtifactRevokeOk>(docsApi.artifactRevokeAll(), ['revoked'], { method: 'POST', headers: marker }),
+        },
         settings: {
           read: (signal) => read<DocsSettingsResponse>(docsApi.settings(), ['settings'], { headers: marker, signal }),
           write: (settings) => readWrite<DocsSettingsResponse>(docsApi.settings(), ['settings'], {

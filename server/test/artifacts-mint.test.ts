@@ -347,6 +347,14 @@ describe('artifact mint doors: the scope read and the mint (X5 A2.3)', () => {
     expect(r.store!.list()).toHaveLength(1);
   });
 
+  it('scope: the answer names the artifact and content hosts, so the launch sheet offers neither (D-9162)', async () => {
+    const r = await rig({ tree: { ok: true, answer: treeOf(standardEntries()) } });
+    const s = (await scope(r)).json() as ArtifactScopeOk;
+    expect(s.artifactHost).toBe('art.example.test');
+    expect(s.contentHost).toBe('content.example.test');
+    expect(Object.keys(s).sort()).toEqual(['artifactHost', 'bytes', 'contentHost', 'files', 'ok', 'uncommitted', 'unsized']);
+  });
+
   it('the URL is `https://<artifact-host>/a/<token>`, and the expiry is an idle hour on', async () => {
     const r = await rig();
     const m = (await mint(r)).json() as ArtifactMintOk;
