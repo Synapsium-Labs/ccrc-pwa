@@ -25,6 +25,7 @@ import {
   type BuildFileFacts, type CaptureTimings,
 } from './capture.js';
 import { deliveryStartsLate } from './captureDelivery.js';
+import { FRAMES_RECIPE_COMPLETE } from '../../../shared/framesCapture.js';
 import { framesStartsLate } from './captureFrames.js';
 import type { CaptureRun } from './captureRunner.js';
 import { writeRefusal, type ProbeRole } from './probes.js';
@@ -118,8 +119,11 @@ export class CaptureDesk {
   /** A submission: refused with its typed reason, or queued. */
   /** Whether this desk runs the delivery recipe: its runner is wired, with the delivery driver (call 1148). */
   delivers(): boolean { return this.d.runner?.delivers === true; }
-  /** Whether this desk runs the frames recipe: its runner is wired with the frames driver. */
-  frames(): boolean { return this.d.runner?.frames === true; }
+  /** Whether this desk runs the frames recipe: its runner is wired with the frames driver, and THIS tree's recipe is not
+   *  held (wave 198, the capture owner's call 1968: `framesCapture.ts#FRAMES_RECIPE_COMPLETE`, read by the test box's own
+   *  process, the tree that would run the recipe, never by the fleet agent that forwards the job). False, the service
+   *  refuses the submission at the frame, which the server's lane records as not run. */
+  frames(complete: boolean = FRAMES_RECIPE_COMPLETE): boolean { return complete && this.d.runner?.frames === true; }
 
   submit(f: CaptureSubmit, sink: CaptureSink): void {
     const standing = this.standing(f);

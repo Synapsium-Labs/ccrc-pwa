@@ -8,7 +8,9 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { CAPTURE_STEPS, CAPTURE_TOKEN, capturePaths, captureBuildsDir, captureEnv, captureWrites, staleCaptureDirs } from '../src/testbox/capture.js';
-import { recorderPath } from '../src/testbox/captureRecord.js';
+import { recorderPath, STATUSLINE_REPLY } from '../src/testbox/captureRecord.js';
+import { CAPTURE_EVENTS } from '../../shared/claudeBuildCapture.js';
+import { FRAMES_STATUS_TEXT } from '../../shared/framesReduce.js';
 import { CAPTURE_SHELL, CAPTURE_START, CaptureRunner, capturePaneCommand, executableFile, groupLife, tmuxLauncher, type BuildLife, type CaptureLauncher, type CaptureRunnerDeps } from '../src/testbox/captureRunner.js';
 import { startStandIn } from '../src/testbox/captureStub.js';
 import { boundedExec } from '../src/testbox/exec.js';
@@ -173,6 +175,33 @@ describe('the capture environment (spec Table 3): no credential, no updater, no 
     };
     await runner(root, { launcher: watching }).run('tmpd', GOOD);
     expect(mode).toBe(0o700);
+  }, 120_000);
+
+  // Wave 198, carried from #3487's reviews (review 4086's F-I): no case read the settings file the runner writes. This one
+  // reads it, as the build would, at the build's start, and runs its status line: the frames reducer's rule 8 fails closed
+  // on any other status text, so a runner that dropped the status line would refuse every frame.
+  it('the settings.json the runner writes names the recorder for every event and the status line, which prints the frames status text', async () => {
+    const root = freshRoot();
+    place(root, GOOD);
+    let settings: { hooks: Record<string, { hooks: { type: string; command: string }[] }[]>; statusLine: { type: string; command: string } } | null = null;
+    let printed: string | null = null;
+    const watching: CaptureLauncher = {
+      start: async (spec) => {
+        const env = new Map(spec.env);
+        settings = JSON.parse(readFileSync(path.join(env.get('CLAUDE_CONFIG_DIR')!, 'settings.json'), 'utf8'));
+        const ran = spawnSync('/bin/sh', ['-c', settings!.statusLine.command], { input: '{}', env: Object.fromEntries(spec.env), encoding: 'utf8', timeout: 30_000 });
+        printed = ran.stdout;
+        return pipeLauncher.start(spec);
+      },
+    };
+    await runner(root, { launcher: watching }).run('settings', GOOD);
+    const s = settings as typeof settings;
+    const recorder = RECORDER.map((a) => `'${a}'`).join(' ');
+    expect(s?.statusLine).toEqual({ type: 'command', command: `${recorder} statusline` });
+    expect(Object.keys(s?.hooks ?? {}).sort()).toEqual([...CAPTURE_EVENTS].sort());
+    for (const ev of CAPTURE_EVENTS) expect(s?.hooks[ev]?.[0]?.hooks).toEqual([{ type: 'command', command: `${recorder} ${ev}` }]);
+    expect(printed).toBe(`${STATUSLINE_REPLY}\n`); // one line: the build draws a status line's first line
+    expect(STATUSLINE_REPLY).toBe(FRAMES_STATUS_TEXT);
   }, 120_000);
 
   it('the runner hands the launcher exactly that environment, as the whole of it', async () => {

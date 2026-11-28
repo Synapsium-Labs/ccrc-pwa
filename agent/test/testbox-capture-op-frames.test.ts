@@ -3,9 +3,17 @@
 // the wire through a REAL agent over loopback. The recipe rides the submission only when asked; build trust's frame is
 // unchanged; a state frame off its submission's shape is no answer, in both directions; and the agent takes the recipe
 // field only as `delivery`.
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+// The recipe's hold (wave 198): read through this toggle, true but in the held case.
+const hold = vi.hoisted(() => ({ complete: true }));
+vi.mock('../../shared/framesCapture.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../shared/framesCapture.js')>();
+  return { ...actual, get FRAMES_RECIPE_COMPLETE() { return hold.complete; } };
+});
 import { WebSocketServer, type WebSocket as WsSocket } from 'ws';
 import type { RunningAgent } from '../src/server.js';
 import { captureTestbox } from '../src/testboxOp.js';
@@ -120,6 +128,20 @@ describe('captureTestbox with the frames recipe', () => {
     expect(b.frames).toEqual([{ t: 'capture.submit', captureId: ID, build: BUILD, recipe: 'frames', part: PART }]);
     expect(r).toMatchObject({ outcome: 'answered', result: null, frames: { word: 'framed', build: BUILD, part: PART } });
     expect(r).not.toHaveProperty('delivery');
+  });
+
+  // Wave 198, the capture owner's call 1968: the fleet agent only forwards the job, and its tree can stand at a third
+  // release, so it never consults the recipe's hold; the box's own tree does (`captureDesk.ts#frames`).
+  it('the forwarding arm does not consult the hold: held on this tree, it still forwards the frames job and relays the answer', async () => {
+    hold.complete = false;
+    try {
+      const b = await box((ws) => send(ws, state({ frames: null }), state({ state: 'ended', position: null, frames: RESULT })));
+      const r = await run(world(b.url), 'frames');
+      expect(b.frames).toEqual([{ t: 'capture.submit', captureId: ID, build: BUILD, recipe: 'frames', part: PART }]);
+      expect(r).toMatchObject({ outcome: 'answered', frames: { word: 'framed', build: BUILD, part: PART } });
+    } finally { hold.complete = true; }
+    const src = readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'src', 'testboxOp.ts'), 'utf8');
+    expect(src).not.toContain('FRAMES_RECIPE_COMPLETE');
   });
 
   it('a result for another part than the one submitted is no answer', async () => {
