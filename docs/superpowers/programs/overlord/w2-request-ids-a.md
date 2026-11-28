@@ -168,14 +168,22 @@ one, and stamps news for an open one; it keeps the peer quotas.
   is refused. On `main` the owner test is the programme's coordinator binding, which outlives the last run (nothing retires a
   programme any more), so the report is accepted; it is refused once the binding names another session. Both are pinned.
 - **`request-owner-read-in-the-store`**: `requestOwnerOf` is the store's `requestById` through the L1 `requestOwnerReadOf`;
-  it throws, and each door answers a throw as its own unreadable case.
+  it throws, and each door answers a throw as its own unreadable case. All three doors read it through one `CoordStore`
+  delegate, `requestOwner(id)`, so the goals door (`ledgersRoutes.ts`) names no database handle: only `store.ts`,
+  `rundefsTx.ts` and `routes.ts` may (the core vocabulary census; found red on the fast run).
 - **`news-cut-in-the-writer`**: the 200-character cut is the writer's; the mail door's subject bound (200 bytes) already keeps
   every subject under it.
 - **`mail-origin-not-widened`**: the plan widened `mailOrigin` with `toId` and `requestId`; it already carried `toId`, and the
   matcher never reads `requestId`.
 - **`peer-counts-skip-reports`**: the peer bound's three counts leave out reports (measured: without it, 60 run-less reports
   spent the sender's peer hour and held reports filled the outstanding pair forever).
-- **`stall-mail-stuck-reads-the-hold`**: the mail-stuck arm leaves out a held report (section 3).
+- **`stall-mail-stuck-reads-the-hold`**: the mail-stuck arm leaves out a held report (section 3). The pure stall module may
+  import values only from its fixed list (the stall vocabulary suite), so it does not call the hold rule itself. The watcher
+  reads the held delivery ids through `envelope.ts#heldDeliveryIdsOf` and passes them in as a fact, `heldDeliveryIds`, at the
+  worker and coordinator judgements. Absent, nothing is held. A census case pins both call sites. This was found red on the
+  fast run, where the first form had imported `heldUntilAcked` into the stall module.
+- **`news-writer-is-a-non-stamper`**: the sequence stamp census lists `stampRequestNewsInTx` with the request kind's
+  non-stampers. It writes the line of news and its time, and no state word.
 - **`forms-census-narrowed-by-hold`** (call 1943).
 - **`console-two-rows`** (call 1940, clarified): one console source file, two rows, and one case pair in its words suite.
 - **`masker-already-in-the-route-deps`** (item 5): no port was added; the mail door uses the composition's `deps.masker`.
@@ -193,7 +201,7 @@ Deciders registered at floor 1 (every mutant killed), each run through the floor
 | `requestMail.ts#mailDesignationOf` | 10 | not registered | 1 |
 | `requestMail.ts#requestMailVerdict` | 41 | not registered | 1 |
 | `peerBound.ts#reportMailVerdict` | 15 | not registered | 1 |
-| `envelope.ts#fixedLineMailOf` (the report row, `heldUntilAcked`, `fixedLinePushOf`) | +12 (F25 to F36) | 1 | 1 |
+| `envelope.ts#fixedLineMailOf` (the report row, `heldUntilAcked`, `fixedLinePushOf`, `heldDeliveryIdsOf`) | +16 (F25 to F40) | 1 | 1 |
 | `shared/ledgers.ts#goalRatification` | 12 (+2: the request arm ratified, and answering `effect-unmeasured`) | 1 | 1 |
 | `shared/ledgers.ts#modificationSource` | 4 (+2: the request ignored, an item preferred over it) | 1 | 1 |
 | `shared/ledgers.ts#parseRatifiedBy` | 4 (the id check dropped, `request` always unreadable, another kind taking the id, the kind guard bypassed) | not registered | 1 |
@@ -226,7 +234,15 @@ Hand mutations, each red and then restored byte for byte (measured with `git dif
 - **The run door's idempotent retry** (the same programme, wave and claimant against a `planned` row) keeps the first row's
   `requestId`.
 - **An urgent report** is not measured: the urgent arm's sender rule runs after the verdict, on the bound session.
-- **The tests' type check** of the console package ran clean here; the server's tests' type check is CI's arbiter.
+- **The tests' type check.** The console package's ran clean here. The server's tests' type check found two of my test
+  files red on the fast run: a mail kind that is not a `MailKind`, and an optional field read without a guard. Both are fixed.
+  The whole-directory check is killed by the test slice's memory cap on this box. So the server's tests were checked here
+  with a project of this branch's server test files and every file they import (152 test files, the watcher included), and it
+  is clean. CI's tests' type check is the arbiter.
+- **Five guard suites were not run here before the first push**: the core vocabulary census, the stall vocabulary suite,
+  the sequence stamp census, the literal source pin ratchet and the tests' type check. Each was found red on the fast run,
+  each is fixed in the second push, and each now passes alone through `ccrc test`. The readers suite now reads the store
+  through the symbol scan, so the ratchet's count for `store.ts` is unchanged.
 
 ## 9. What PR B reads from this one
 

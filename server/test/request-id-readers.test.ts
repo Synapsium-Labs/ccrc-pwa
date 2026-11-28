@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { openCoordDb } from '../src/coord/db.js';
 import { CoordStore } from '../src/coord/store.js';
 import { mkTmp } from './tmpHelpers.js';
+import { sourceOfSymbol } from './scan/symbols.js';
 
 const SRC = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'src');
 const build = (): CoordStore => new CoordStore(openCoordDb(path.join(mkTmp('ccrc-reqid-'), 'coord.db')));
@@ -56,10 +57,11 @@ describe('modificationsForRequest', () => {
 describe('the request read of runs', () => {
   // The literal WHERE the store uses, copied here; the second assertion keeps the copy from drifting.
   const WHERE = 'WHERE r.requestId = ? AND r.program = ? ORDER BY r.id';
-  const storeText = (): string => readFileSync(path.join(SRC, 'coord', 'store.ts'), 'utf8');
+  // Read through the symbol scan (`scan/symbols.ts`), not as raw file text: the literal-pin ratchet counts a raw read.
+  const STORE = 'server/src/coord/store.ts';
 
   it('the store source contains the literal, and EXPLAIN QUERY PLAN of it names runs_request', () => {
-    expect(storeText()).toContain(WHERE);
+    expect(sourceOfSymbol(STORE, 'CoordStore.runsForRequest')).toContain(WHERE);
     const coord = build();
     const plan = (coord.db.prepare(`EXPLAIN QUERY PLAN SELECT r.id FROM runs r JOIN programs p ON p.slug = r.program ${WHERE}`).all(1, 'a') as { detail: string }[])
       .map((r) => r.detail).join('\n');
@@ -76,9 +78,8 @@ describe('the request read of runs', () => {
     expect(defs('runsForRequest')).toEqual(['coord/store.ts']);
     // ledgersStore's function and the CoordStore delegate beside `addModification`: the delegate is the only other definition.
     expect(defs('modificationsForRequest')).toEqual(['coord/ledgersStore.ts', 'coord/store.ts']);
-    const store = storeText();
-    expect(store.match(/^\s*modificationsForRequest\(/gm)).toHaveLength(1);
-    expect(store).toMatch(/modificationsForRequest\([^)]*\)[^{]*\{\s*return ledgers\.modificationsForRequest\(this\.db, /);
+    // `symbolOf` throws unless the store declares the delegate exactly once.
+    expect(sourceOfSymbol(STORE, 'CoordStore.modificationsForRequest')).toMatch(/\{\s*return ledgers\.modificationsForRequest\(this\.db, /);
   });
 
   it('no file under server/src but store.ts and ledgersStore.ts reads `requestId = ?`', () => {

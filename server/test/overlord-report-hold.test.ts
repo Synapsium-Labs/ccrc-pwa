@@ -9,7 +9,7 @@ import { writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { NotifyLog } from '../src/notifylog.js';
 import type { CoordStore } from '../src/coord/store.js';
-import { renderMailNudge, FIXED_LINE_MAIL, fixedLinePushOf, heldUntilAcked } from '../src/coord/envelope.js';
+import { renderMailNudge, FIXED_LINE_MAIL, fixedLinePushOf, heldDeliveryIdsOf, heldUntilAcked } from '../src/coord/envelope.js';
 import { mailHoldsSleep } from '../src/sleep.js';
 import { stallMailStuckVerdicts } from '../src/coord/stall.js';
 import type { StallArming, StallSessionInput, StallWorker, TurnMark, TurnMarkRead } from '../src/coord/stall.js';
@@ -24,6 +24,7 @@ import { providerRetrySubject } from '../../shared/provider-retry.js';
 import { INBOX_WAKE_SUBJECT, renderInboxWakeBody } from '../../shared/overlordInbox.js';
 import { SPOT_PROBE_SUBJECT } from '../src/continuity/renewalFeed.js';
 import { mkTmp, removeTmpFixtures } from './tmpHelpers.js';
+import { sourceOfSymbol } from './scan/symbols.js';
 import { ID, PEER, NOW, emptyBox, echoedBox, seedRegistry, literalSends, keyPresses, sendCalls, primed, designate, queueMail, rowOf,
   sweepFar, sweepMany, expectUntouched } from './helpers/reportHoldSweep.js';
 
@@ -238,17 +239,32 @@ describe('the stall watch', () => {
       bgKinds: [], bgIds: [], err: null, restartAt: null, lostBg: 0, lostKinds: [], lostIds: [], graceUntil: null };
     const markRead: TurnMarkRead = { ok: true, ...mark };
     const input: StallSessionInput = { sessionId: ID, role: 'coordinator', run: null, worker, mark: markRead, liveStartedAt: NOW - 30 * H, markUnreadableSince: null,
-      mail: read.mail, deliveries: read.deliveries, notices: [], arming, coordinationPaused: false };
+      mail: read.mail, deliveries: read.deliveries, notices: [], arming, coordinationPaused: false,
+      heldDeliveryIds: heldDeliveryIdsOf(read.mail, read.deliveries) };
+    // The table's hold, read the way the watcher reads it (envelope's `heldDeliveryIdsOf`), names the report's delivery.
+    expect([...input.heldDeliveryIds!]).toEqual([id]);
     const said = stallMailStuckVerdicts(input, later).map((v) => (v.act === 'notify' ? `notify:${v.arm}` : v.act));
     // The held report is not a candidate at all: the arm reads the table's hold, the rule the sweep holds it by.
     expect(said).toEqual([]);
+    // the field is what holds it: without it, the same report reads as stuck
+    const { heldDeliveryIds: _held, ...bare } = input;
+    expect(stallMailStuckVerdicts(bare, later).map((v) => (v.act === 'notify' ? v.arm : v.act))).toEqual(['mail-stuck']);
     // the control: the same session's ordinary queued mail, equally old, is read as stuck, and is the only candidate
     queueMail(coord, PEER, ID, ID, 'ordinary news');
     const read2 = coord.stallMailFor(ID, [], NOW - H);
     if (!read2.ok) throw new Error('read2');
-    const verdicts = stallMailStuckVerdicts({ ...input, mail: read2.mail, deliveries: read2.deliveries }, later);
+    const verdicts = stallMailStuckVerdicts({ ...input, mail: read2.mail, deliveries: read2.deliveries,
+      heldDeliveryIds: heldDeliveryIdsOf(read2.mail, read2.deliveries) }, later);
     expect(verdicts).toHaveLength(1);
     expect(verdicts[0]).toMatchObject({ act: 'notify', arm: 'mail-stuck' });
+  });
+
+  it('7b. the watcher passes the hold into both stall judgements that run the mail-stuck arm (the worker and the coordinator)', () => {
+    // Read through the symbol scan, so deleting either line in watch.ts reds here. The third judgement (role `other`) runs no
+    // mail-stuck arm (`stallMailStuckVerdicts` answers [] for it), so it carries none.
+    for (const method of ['FleetWatcher.judgeStall', 'FleetWatcher.judgeStallCoordinator']) {
+      expect(sourceOfSymbol('server/src/watch.ts', method), method).toContain('heldDeliveryIds: heldDeliveryIdsOf(read.mail, read.deliveries)');
+    }
   });
 });
 

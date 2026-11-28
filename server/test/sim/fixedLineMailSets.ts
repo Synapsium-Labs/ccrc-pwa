@@ -70,6 +70,11 @@ export function fixedLineMailOfCases(m: EnvelopeModule): Record<string, SuiteCas
       expect(m.heldUntilAcked(OVERLORD, { ...origin, fromId: 'timer', subject: 'timer: 1 due (4)' }, designated), 'the timer line holds for the card, not here').toBe(false);
       expect(m.heldUntilAcked(OVERLORD, { ...origin, toId: OVERLORD }, designated)).toBe(false);
       expect(m.heldUntilAcked(OVERLORD, null, designated)).toBe(false);
+      // the stall watch's read of the same hold: delivery ids, each found by its mail id; a delivery whose mail is not read holds nothing
+      const heldMail = [{ id: 10, ...origin }, { id: 11, fromId: 'coord-a', subject: 'peer news', toId: OTHER }];
+      const heldDeliveries = [{ id: 100, mailId: 11, toId: OTHER }, { id: 101, mailId: 10, toId: OVERLORD }, { id: 102, mailId: 99, toId: OVERLORD }];
+      expect([...m.heldDeliveryIdsOf(heldMail, heldDeliveries)]).toEqual([101]);
+      expect([...m.heldDeliveryIdsOf([], heldDeliveries)]).toEqual([]);
       expect(m.fixedLinePushOf({ fromId: 'coord-a', subject: 'x', mailToId: 'overlord' })).toBe('record-only');
       for (const x of [{ fromId: 'timer', subject: 'timer: 1 due (4)', mailToId: 'overlord' }, { fromId: 'coord-a', subject: 'x', mailToId: OTHER },
         { fromId: 'operator', subject: operatorMessageSubject(1), mailToId: OVERLORD }]) expect(m.fixedLinePushOf(x)).toBeUndefined();
@@ -214,6 +219,10 @@ const FIXED_LINE_MAIL_OF_SET: MutantSet<EnvelopeModule> = {
     { id: 'F34 no mail held as the report', old: '  if (origin === null) return false;\n', new: '  if (origin === null) return true;\n' },
     { id: 'F35 the hold read off the delivery', old: "subject: origin.subject, toId, mailToId: origin.toId }", new: 'subject: origin.subject, toId, mailToId: toId }' },
     { id: 'F36 no push word', old: 'return FIXED_LINE_MAIL.find((r) => r.matches(m))?.push;', new: 'return undefined;' },
+    { id: 'F37 the stall read holds every delivery', old: ".filter((d) => heldUntilAcked(d.toId, mail.find((m) => m.id === d.mailId) ?? null, { kind: 'not-designated' }))", new: '.filter(() => true)' },
+    { id: 'F38 the stall read finds the mail by the delivery id', old: 'mail.find((m) => m.id === d.mailId) ?? null', new: 'mail.find((m) => m.id === d.id) ?? null' },
+    { id: 'F39 the stall read holds a delivery whose mail is unread', old: 'mail.find((m) => m.id === d.mailId) ?? null', new: 'mail.find((m) => m.id === d.mailId) ?? mail[0] ?? null' },
+    { id: 'F40 the stall read names the mail id', old: '    .map((d) => d.id));', new: '    .map((d) => d.mailId));' },
     { id: 'F24 the timer row never matched', old: "m.fromId === TIMER_MAIL_SENDER && m.mailToId === OVERLORD_IDENTITY", new: 'false' },
   ],
   suite: fixedLineMailOfCases,

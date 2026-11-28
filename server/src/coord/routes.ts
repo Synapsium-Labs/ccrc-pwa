@@ -18,7 +18,7 @@ import type { TurnVerdict } from './archiveDoor.js';
 import { configDirFor } from '../config.js';
 import { peerDeliverable, archiveContradicted } from './peers.js';
 import { peerMailVerdict, reportMailVerdict } from './peerBound.js';
-import { requestOwnerOf, stampRequestNewsInTx } from './overlordRequestStore.js';
+import { stampRequestNewsInTx } from './overlordRequestStore.js';
 import { mailDesignationOf, requestMailVerdict, type RequestRefusal } from './requestMail.js';
 import { mailKeyVerdict, type MailKeyVerdict } from './mailKey.js';
 import { claimLivenessProbe, claimMailHint, lapseWindowStart, normalizeClaimPath, rechainTargets, recentlyLapsedClaims, type LivenessVerdict } from './claims.js';
@@ -1115,7 +1115,7 @@ export function registerCoordRoutes(
         `no registry row for ${toId}`);
     }
     const asked = toOverlord || requestId !== null ? requestMailVerdict({ toOverlord, requestId,
-      request: () => { try { return requestOwnerOf(coord.db, requestId!); } catch { return 'unmeasured'; } },
+      request: () => { try { return coord.requestOwner(requestId!); } catch { return 'unmeasured'; } },
       senderOwns: (owner) => { try { return coord.claimsProgramme(fromId, owner, senderIdentity.uuid); } catch { return 'unmeasured'; } },
       designation: () => mailDesignationOf(coord.designationRead()) }) : null;
     if (asked !== null && !asked.ok) {
@@ -1755,7 +1755,7 @@ export function registerCoordRoutes(
       sessionMark: (s) => sessionMarkOf(s),
       // D-8181: the plan facts (`planGate`), read through the plan port, or over the coord handle where a build has none.
       plan: (slug) => planFactsOf(deps.plan ?? planStorePort(coord.db), coord, slug, String(body.claimedBy)),
-      requestOwner: (id) => { try { return requestOwnerOf(coord.db, id); } catch { return 'unmeasured'; } },
+      requestOwner: (id) => { try { return coord.requestOwner(id); } catch { return 'unmeasured'; } },
     });
     if (!pre.ok) return sendOpenRunRefusal(reply, pre.refusal);
     const { open, home: homeVerdict } = pre;

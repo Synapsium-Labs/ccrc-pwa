@@ -92,6 +92,7 @@ export const STAMPED_TABLES: Readonly<Record<SequenceKind, StampedTable>> = {
     stampers: [`${RQ}#applyRequestInsertInTx`, `${RQ}#applyRequestMoveInTx`],
     nothing: {
       [`${RQ}#setParentClockInTx`]: 'a parent\'s follow-up clock only, a bookkeeping write that changes no state word (F2)',
+      [`${RQ}#stampRequestNewsInTx`]: 'a request\'s line of news and its time only, written in the report mail\'s transaction; it changes no state word (Overlord W2, request ids A)',
     },
   },
 };

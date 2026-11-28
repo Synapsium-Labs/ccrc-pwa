@@ -231,7 +231,7 @@ import {
   toRunSummary, type MarkReleaseNotifiedResult,
   type OpenSibling, type RunRow,
 } from './coord/store.js';
-import { fixedLinePushOf, heldUntilAcked, mailNudgeOf, sweepDesignationOf } from './coord/envelope.js';
+import { fixedLinePushOf, heldDeliveryIdsOf, heldUntilAcked, mailNudgeOf, sweepDesignationOf } from './coord/envelope.js';
 import { operatorNudgeFor } from './operatorModel/operatorNudge.js';
 import { finishFixedLineAck, settleNudge } from './operatorModel/nudgeLane.js';
 import { createInboxWakeLane } from './coord/overlordInboxWake.js';
@@ -7398,6 +7398,7 @@ export class FleetWatcher {
     const si: StallSessionInput = {
       sessionId: id, role: 'worker', run: primary, worker, mark, liveStartedAt: lr?.startedAt ?? null,
       markUnreadableSince, mail: read.mail, deliveries: read.deliveries, notices, arming, coordinationPaused: paused,
+      heldDeliveryIds: heldDeliveryIdsOf(read.mail, read.deliveries),
     };
     for (const sv of [...stallRestartedVerdicts(si, now), stallOrphanEVerdict(si, now), stallFailedVerdict(si, now), ...stallMailStuckVerdicts(si, now), stallOrphanDVerdict(si, now)]) {
       this.applyStallSession(store, si, primary.project, sv, now);
@@ -7451,6 +7452,7 @@ export class FleetWatcher {
       sessionId: id, role: 'coordinator', run: null, worker, mark, liveStartedAt: lr?.startedAt ?? null,
       markUnreadableSince: this.stallMarkUnreadableSince.get(id) ?? null,
       mail: read.mail, deliveries: read.deliveries, notices: [], arming, coordinationPaused: paused,
+      heldDeliveryIds: heldDeliveryIdsOf(read.mail, read.deliveries),
       longLived: role !== null && longLivedOf(role, false) === true,
     };
     const project = s?.project ?? c.runs[0]?.project ?? '';

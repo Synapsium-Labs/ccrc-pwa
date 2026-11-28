@@ -17,7 +17,7 @@ const request = (coord: CoordStore, id: number): number => {
   return id;
 };
 
-const MAIL = { fromId: 'lane-a', fromUuid: 'u', toId: 'lane-b', runId: null, kind: 'note' as const, subject: 's', body: 'b', artifacts: [] };
+const MAIL = { fromId: 'lane-a', fromUuid: 'u', toId: 'lane-b', runId: null, kind: 'status' as const, subject: 's', body: 'b', artifacts: [] };
 const col = (coord: CoordStore, sql: string, ...args: number[]): unknown => (coord.db.prepare(sql).get(...args) as Record<string, unknown>).requestId;
 const openRunFor = (coord: CoordStore, program: string, claimedBy: string, requestId?: number | null): number =>
   (coord.openRun({ program, title: program, project: 'project-a', wave: 1, waveOf: null, claimedBy, ...(requestId === undefined ? {} : { requestId }) }) as { id: number }).id;
@@ -60,7 +60,7 @@ describe('the request id columns', () => {
   it('insertSystemMailTx stores NULL with no requestId and the id when given one', () => {
     const coord = build();
     const r = request(coord, 3);
-    const base = { fromId: 'ccrc' as never, toId: 'lane-b', runId: null, kind: 'note' as const, subject: 's', body: 'b' };
+    const base = { fromId: 'operator' as const, toId: 'lane-b', runId: null, kind: 'status' as const, subject: 's', body: 'b' };
     const plain = tx(coord.db, () => insertSystemMailTx(coord, null, base));
     const tagged = tx(coord.db, () => insertSystemMailTx(coord, null, { ...base, requestId: r }));
     expect(col(coord, 'SELECT requestId FROM mail WHERE id = ?', plain.mailId)).toBeNull();

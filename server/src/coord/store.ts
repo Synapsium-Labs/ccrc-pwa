@@ -75,6 +75,8 @@ import * as ladder from './overlordLadderStore.js';
 import * as readiness from './overlordReadinessStore.js';
 import { txWithAuthorityReceipt } from './overlordAuthorityJournal.js';
 import * as sequence from './overlordSequenceStore.js';
+import { requestOwnerOf } from './overlordRequestStore.js';
+import type { RequestOwnerRead } from './requestMail.js';
 import * as outbox from './pushOutboxStore.js';
 import * as census from './approvalCensusStore.js';
 import * as parks from './approvalParkStore.js';
@@ -7871,6 +7873,10 @@ export class CoordStore {
       'SELECT at FROM mail WHERE runId IS NULL AND fromId = ? AND at > ? AND answersMail IS NULL AND toId <> ? ORDER BY at, id',
     ).all(fromId, now - PEER_MAIL_WINDOW_MS, OVERLORD_IDENTITY) as { at: number }[]).map((r) => r.at);
   }
+
+  /** One request's owner and whether it is open (Overlord W2, request ids A): the doors' one read of it, so no door
+   *  outside the store names the database handle. Throws as `requestOwnerOf` does; each caller reads a throw as unmeasured. */
+  requestOwner(id: number): RequestOwnerRead { return requestOwnerOf(this.db, id); }
 
   /** The `at` of every mail `fromId` has sent to the Overlord (`toId` is its role word) in the hour before `now`, ascending
    *  (Overlord W2, request ids A): the report rate's count is its length. Same window and bound as `peerMailAtsInLastHour`

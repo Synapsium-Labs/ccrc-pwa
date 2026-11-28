@@ -309,6 +309,18 @@ export function heldUntilAcked(toId: string, origin: { readonly fromId: string; 
   return row !== 'generic' && row.hold === 'acked';
 }
 
+/** The ids of `deliveries` whose mail (found in `mail` by id) the table holds until acked: the stall watch's mail-stuck arm
+ *  skips them (`StallSessionInput.heldDeliveryIds`). The report row is never `designatedOnly` (the table's census), so no
+ *  designation is read. A delivery whose mail is not in `mail` is not held, as `heldUntilAcked` reads a null origin. */
+export function heldDeliveryIdsOf(
+  mail: readonly { readonly id: number; readonly fromId: string; readonly subject: string; readonly toId: string }[],
+  deliveries: readonly { readonly id: number; readonly mailId: number; readonly toId: string }[],
+): ReadonlySet<number> {
+  return new Set(deliveries
+    .filter((d) => heldUntilAcked(d.toId, mail.find((m) => m.id === d.mailId) ?? null, { kind: 'not-designated' }))
+    .map((d) => d.id));
+}
+
 /** The push word of a new delivery's mail (`FleetWatcher.pushNewMail`): the matching row's, with no designation filter, which no
  *  push word needs. Absent: today's push rule. */
 export function fixedLinePushOf(m: { readonly fromId: string; readonly subject: string; readonly mailToId: string }): 'record-only' | undefined {

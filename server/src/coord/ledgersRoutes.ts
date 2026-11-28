@@ -46,7 +46,6 @@ import { TERMINAL_RUN_STATES } from '../../../shared/api.js';
 import { endRequestEndedMail, itemMailSubject, tickMail } from './ledgersMail.js';
 import { callViewOf, clearedCallViewOf } from './coordCalls.js';
 import { insertSystemMailTx } from './rundefsTx.js';
-import { requestOwnerOf } from './overlordRequestStore.js';
 import { programmeRequestVerdict } from './requestMail.js';
 import type { PlanStorePort } from './planStore.js';
 import type { PlanEndOutcome } from '../../../shared/plan.js';
@@ -606,7 +605,7 @@ export function registerLedgerCoordinatorRoutes(app: FastifyInstance, deps: Ledg
     // is its own retryable answer, never that word.
     if (requestId !== null) {
       let read;
-      try { read = requestOwnerOf(coord.db, requestId); } catch { return refuseRoute(reply, 'unmeasured', { detail: 'the request record could not be read' }); }
+      try { read = coord.requestOwner(requestId); } catch { return refuseRoute(reply, 'unmeasured', { detail: 'the request record could not be read' }); }
       const v = programmeRequestVerdict(read, requestId, slug);
       if (!v.ok) return refuseRoute(reply, v.refuse, { detail: v.detail });
     }

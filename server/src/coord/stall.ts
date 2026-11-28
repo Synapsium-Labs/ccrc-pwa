@@ -6,7 +6,6 @@ import type { StallArm } from '../../../shared/stall-watch.js';
 import { isHookEvent, type HookEvent } from '../../../shared/hook-events.js';
 import { sessionRoleOf } from '../roleOf.js';
 import { actsOnClaimant } from './rundefs.js';
-import { heldUntilAcked } from './envelope.js';
 import type { ChildMark, MailGate, RunState } from '../../../shared/api.js';
 import type { MailTurnMode } from '../turnidle.js';
 import { stallWatchSays, turnWordOf } from '../sessionReading.js';
@@ -1667,6 +1666,9 @@ export interface StallSessionInput {
   /** The session's role is long-lived (Table 3.3.9a, from `roleFactsOf`): the restarted arm's rung 1 reaches it run-less too
    *  (Overlord W1a, the renewal hand-offs, Task 7). Absent: not long-lived. */
   readonly longLived?: boolean;
+  /** The ids of `deliveries` the fixed-line table holds until acked (a report to the Overlord; Overlord W2, request ids A),
+   *  read by the caller through `heldDeliveryIdsOf` (envelope.ts): mail-stuck never reads one as stuck. Absent: none is held. */
+  readonly heldDeliveryIds?: ReadonlySet<number>;
 }
 
 /** The one gate word mail-stuck reads. It is typed against Task 10's Record, so a rename there is a compile error
@@ -1942,14 +1944,9 @@ function stallMailStuckInner(input: StallSessionInput, d: StallDeliveryRow, now:
 export function stallMailStuckVerdicts(input: StallSessionInput, now: number): StallVerdict[] {
   if (input.role === 'other') return [];
   // A delivery the fixed-line table holds until acked (a report to the Overlord, request ids A) is waiting by design, never
-  // stuck: the same rule the mail sweep holds it by. Its row is never `designatedOnly` (the table's census), so no designation
-  // is read here.
-  const held = (d: StallDeliveryRow): boolean => {
-    const m = input.mail.find((r) => r.id === d.mailId);
-    return m !== undefined && heldUntilAcked(d.toId, m, { kind: 'not-designated' });
-  };
+  // stuck: the caller reads the same rule the mail sweep holds it by (`heldDeliveryIdsOf`, envelope.ts) into the input.
   return input.deliveries
-    .filter((d) => d.toId === input.sessionId && d.state === 'queued' && !held(d))
+    .filter((d) => d.toId === input.sessionId && d.state === 'queued' && !(input.heldDeliveryIds?.has(d.id) ?? false))
     .sort((a, b) => a.id - b.id)
     .map((d) => stallMailDisabledHold(stallMailStuckInner(input, d, now), input.arming));
 }

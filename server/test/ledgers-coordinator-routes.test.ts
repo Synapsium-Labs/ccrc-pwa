@@ -892,7 +892,7 @@ describe('a modification made for a request (Overlord W2, request ids A)', () =>
     await post(r, MODS, { ...as(), text: 'One.' });
     await post(r, MODS, { ...as(), text: 'Two.', itemId: mine });
     const g = r.coord.goalsFor('prog-a');
-    const sourceOf = (text: string) => g.modifications.find((m) => m.text === text)!.ratification.source;
+    const sourceOf = (text: string) => g.modifications.find((m) => m.text === text)!.ratification!.source;
     expect([sourceOf('One.'), sourceOf('Two.')]).toEqual([{ kind: 'coordinator' }, { kind: 'item' }]);
     expect(r.coord.db.prepare('SELECT requestId FROM programme_modifications').all()).toEqual([{ requestId: null }, { requestId: null }]);
   });
