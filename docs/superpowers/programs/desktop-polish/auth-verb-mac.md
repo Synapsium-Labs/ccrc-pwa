@@ -158,7 +158,8 @@ cannot be made; it no longer stands where it can.
   final newline, a class outside the four) refuses with `ccrc install --role <the clamped role>`, which re-lands the job
   and boots it in again. A `PATH` outside its grammar is not cured by an install from the same shell, which writes the
   same PATH, so it refuses with "an install puts the PATH of the shell it runs in into the job, so run `ccrc install`
-  from a shell whose PATH holds only absolute directories with no <, >, &, quote or backslash in them; or set the keys
+  from a shell whose PATH holds only absolute directories, in printable ASCII only, with no <, >, &, quote or backslash
+  in them; or set the keys
   by hand". Neither prints a byte of the job; the field name is all that is named.
 - **The home (A2).** The writer puts `$HOME` raw into XML and inside single quotes in the job's shell line, so on a Mac
   `cmd_auth` refuses, right after the operator-only checks and before any read of the box, a home that is not in C5's
@@ -193,6 +194,10 @@ cannot be made; it no longer stands where it can.
   no value, with the hand route:
   - inside the job's own environment block, a line that is not a key (letters, digits and `_`, not starting with a
     digit), ` => ` and a value;
+  - inside it too, a second line for any one key (fix round 4, review 4180 F1, ruled for the class in mail 40891): a
+    dictionary holds a key once, so a second line can only come from a held value's newline, and before the round the
+    last line won and only it was compared. It refuses before anything is taken from the second line, naming the key
+    through the key grammar and no value, for `PATH`, `HOME`, `XPC_SERVICE_NAME`, `OSLogRateLimit` and any key alike;
   - a second environment block or arguments block;
   - a second `path` or `program` line;
   - a line of two tabs, or a block's closing line, outside any block, which is what a value holding a newline and a
@@ -205,9 +210,12 @@ cannot be made; it no longer stands where it can.
   a block of another name at the top level after a closing line would be passed over as that block. Before the round,
   a value holding a newline, a closing line and a key after it, a doubled block, a restated path or program, a
   truncated print, a line with no arrow and a line with no key were each read as the job ccrc installs (each a row,
-  red on the tip before the round). Whether a real `launchctl print` escapes control bytes in a value is unmeasured.
+  red on the tip before the round). Whether a real `launchctl print` escapes control bytes in a value is unmeasured;
+  that premise, the passed-over block and a stray line inside the arguments block (which the reader passes over, with
+  no effect today) are issue #3654.
 - **What a real launchd printed** (the first full run, 46033893311, on the hosted image `macos-26-arm64`, 2026-11-27;
-  headings and key names only). The job: `arguments`; `inherited environment` (`SSH_AUTH_SOCK`); `default environment`
+  headings and key names only). The four keys printed the same on both builds of that image the four full runs drew:
+  20261123.0526.1 (runs 1 and 3) and 20261117.0516.1 (runs 2 and 4). The job: `arguments`; `inherited environment` (`SSH_AUTH_SOCK`); `default environment`
   (`PATH`); `environment` (`OSLogRateLimit`, `PATH`, `HOME`, `XPC_SERVICE_NAME`); `resource coalition`; `jetsam
   coalition`; `resource limits`. The domain: `security context`; `environment` (`SSH_AUTH_SOCK`); `services`;
   `unmanaged processes`; `endpoints`; `externally-hosted endpoints`; `task-special ports`; `disabled services`.
@@ -236,8 +244,8 @@ cannot be made; it no longer stands where it can.
   desktop's (an SSH login, say) a value set in the desktop's domain may read as unset (review 4154 R2, ruling 3). Nobody
   has measured which domain answers there, nor that the job's inherited block shows such a value. The one dangerous key
   is `CCRC_HOST`, on `off`: the others fail shut. Both stronger measures, a read pinned to the desktop's domain and a
-  refusing-only read of the job's inherited list, go on the ticket `auth-verb-mac-inherited-section` with this
-  scenario, not in this wave (ruling 3).
+  refusing-only read of the job's inherited list, go on issue #3654 (the ticket `auth-verb-mac-inherited-section`)
+  with this scenario, not in this wave (ruling 3).
 - **What stays outside (B2), once:** any other variable of the domain (a preload variable, a node option, an exported
   shell function) reaches the job as it reaches the unit on Linux. It is the class the wave-181 note states (anything
   that changes what node runs before the server reads its keys), named here for the Mac: the verb reads only its own
@@ -334,7 +342,8 @@ domain read answers for the caller's launchd domain, section 2.2), what a real o
 print`'s shape on another release (inside the job's own environment block, and for the lines it takes once, the reader
 refuses a shape it does not know as not measured, so a change there refuses; lines it does not use, and other blocks,
 it passes over, section 2.2), whether `getenv` tells an empty value from an unset key, and which `node` the job's `PATH`
-finds first.
+finds first. The reader's limits (the caller's domain, the inherited and default sections, the unmeasured escaping of a
+value, and the arguments block) are issue #3654.
 
 ## 4. Mutants of Part 2
 
@@ -583,7 +592,7 @@ four questions (mail 40529). What the round holds:
   holds none, or the hand route, because an install from the same shell writes the same field again.
 - **Ruling 2**, the two "cannot decide" rows: section 2.5. The cause was the fixture, not the verb.
 - **Ruling 3**, the caller's domain: sections 2.2 and 3 and the README's limits; the stronger reads go on the ticket
-  `auth-verb-mac-inherited-section`.
+  `auth-verb-mac-inherited-section`, now issue #3654.
 - **4a, the print reader** (section 2.2): the shapes it now refuses as not measured, with the scope stated. One shape
   more than the ruling listed: an environment line with no key before its arrow. An empty key named nothing the table
   could refuse by name, so on the tip such a job passed.
@@ -616,7 +625,7 @@ every one killed:
 | R4a-6 | the key's grammar not asked | an environment line with no key before its arrow |
 | R4a-7 | another line in the environment block passed over | an environment line with no arrow |
 | R4a-8 | a block open at the end taken | a print that ends inside the environment block |
-| R4a-9 | the not-measured answer not acted on | the six shapes it reaches |
+| R4a-9 | the not-measured answer not acted on | all eight odd rows (this table said six; review 4180 A7 replayed it) |
 | R4b | the NUL not asked | the installer's bytes, then a NUL and more after its last line |
 | R4c | the copy's name printed raw | a leftover copy whose suffix is not in the closed form, both platforms |
 | R4d-1 | the stub guard's regex as before | its reader case (a flag before the argument) |
@@ -682,6 +691,75 @@ and the 22 census files. All are green but one:
 no `typescript` under `pwa/`, so the suite stopped at its import, and a direct `tsc` over the server's test project was
 killed by the test slice's memory cap while other heavy runs held it.
 
+### 4.10 Fix round 4: review 4180 of `261db2b6e8`
+
+The coordinator's ruling (mail 40891) on review 4180, item by item:
+- **F1, a repeated key.** Inside the job's own environment block a key printed a second time refuses as not measured,
+  before anything is taken from the second line, naming the key (its grammar already held) and no value: "printed a
+  second `<KEY>` line in the job's environment block, a shape this verb does not read". The ruling is for the class,
+  so every key alike. Before the round the reader assigned on every matching line, so the last `PATH` or `HOME` won and
+  only it was compared: the reviewer drove `on` through the fixture harness with a hostile `PATH` line followed by the
+  file's own, and the verb wrote and restarted.
+- **A2.** A leftover copy whose suffix the printer holds is described, not named: "a copy beside `<ccrc.env>` whose
+  name this verb does not print", since the held word would name a path that does not exist.
+- **A3 to A6, rows only.** `path` and `Home` in F1's whole-name row; a key padded with a space, before it or before its
+  arrow, in the odd table; a closing line outside any block (the arm's second half); a print cut inside the arguments
+  block and inside another block; a `ProcessType` line with no closing tag after its value. Each pins what the tip
+  already did.
+- **A7.** Section 4.8's R4a-9 row now says all eight odd rows.
+- **A8.** The remedy for a job `PATH` outside its grammar, the README and D-9158 add "printable ASCII only".
+- **A9.** The README says what section 2.2 says: the scope, the passed-over block, and the unmeasured premise.
+- **A10.** The reader's comment and section 2.2 name both hosted image builds the four keys were printed on.
+- **A11.** Issue #3654 is cited where the note and the README name these limits.
+- Not in this round: A1, a stray line inside the arguments block, limit 4 of #3654.
+
+**Red first.** The new test file against the tip's `ccd/ccrc` (`261db2b6e8`), in a scratch worktree: 11 rows red, 306
+passed, 15 skipped. They are the nine repeated-key rows (each key twice, the hostile value first and second, and the
+reviewer's X1b shape, `PATH` again through a `HOME` value that holds a newline) and the held copy's description on
+both platforms. The A3 to A6 rows pass there, as rows that pin the tip should. On this round's tree: 317 passed, 15
+skipped of 332.
+
+**Mutants.** 44, under the coordinator's five terms (mail 39574): a scratch worktree detached at `261db2b6e8` holding
+this round's `ccd/ccrc` and test file, the file put back and its sha256 compared after each mutant, nothing committed
+or pushed during the run, the script (`run4.py`, section 4.8's `run3.py` pointed at the new scratch) in the temp root.
+Every one was killed, and the restored file's sha256 equals the branch's. This round's:
+
+| Mutant | What it does | Red rows |
+|---|---|---|
+| F1-a | the repeated-key check dropped | the nine repeated-key rows |
+| F1-b | the check for `PATH` and `HOME` only | the four rows of `XPC_SERVICE_NAME` and `OSLogRateLimit` |
+| A3-a | `path` and `Home` read as `PATH` and `HOME` | F1's rows for `path` and `Home` |
+| A3-b | the key trimmed of spaces | the two padded-key rows |
+| A4 | the outside-a-block arm cut to its two-tab half | the closing line after the environment block closed |
+| A5 | the open-at-the-end check for the environment block only | the print cut inside the arguments block, and inside another block |
+| A6 | a sentinel line's closing text not compared | the `ProcessType` line with no closing tag |
+| A2 | the held copy named, as before | the held copy's description, both platforms |
+| R4c | the copy's name printed raw | the same row |
+
+The 35 earlier mutants that touch the compare, the reader or the key table were re-run on this round's tree, by case
+name, each red as before: P1 to P8, P10, P12 to P20 (P16 and P16b), P26, P27, P30, O1, O2, O4, R4b and R4a-1 to R4a-9
+(R4a-9 on 22 rows: the eight odd rows of section 4.8, this round's five more and its nine repeated-key rows).
+
+**Suites on this round's tree**, each alone through `ccrc test`, all green:
+- the verb's suite: 317 passed and 15 skipped of 332;
+- doctor core-auth: 77 passed and 10 skipped;
+- install landing: 44 passed and 1 skipped;
+- expose: 67 passed and 3 skipped;
+- the expose-artifacts file: 23 passed;
+- the offered-commands guard: 12 passed;
+- the harness census: 13 passed;
+- the 22 census files that read the `ccd` tree, the raw-spawn census among them: all passed;
+- section 4.9's class, the guard suites that read the test files as text: `ccd-workspaces` 125, `child-reclaim-generation`
+  24, `git-env-strip` 7, `history-touched` 79 and 1 skipped, `skill-size-ratchet` 32, `topology-clean` 62,
+  `closeout-claims` 8, anchors 9 and citations 4, all passed;
+- growth-check, armed, on the commit: 100 passed, with `ccd/ccrc` at 15266 code lines against the merge base's 15126
+  (+140, the waiver's limit) by the check's own counter;
+- deviation-refs, on the commit: 35 passed.
+
+`typecheck-tests` again could not run here: the test box's checkout has no `typescript` under `pwa/`. A `tsc` over a
+project of the verb's test file alone, which extends the server's test project, exits 0. The PR's fast run on the head
+is the evidence for the whole suite.
+
 ## 5. Notes
 
 - `ccd/ccrc` is held by claim 7531 for #3478. Its holder said yes (mail 39670) to this exact change of the file
@@ -698,15 +776,17 @@ killed by the test slice's memory cap while other heavy runs held it.
   the planted file is never compared and `launchctl` is asked nothing. So the reach refusal there needs no job the
   proof accepts. This branch changes that case's Darwin expectation to the reach refusal (red on the merge before the
   change, as measured), under claim 7602, so the case now shows the Mac reach check is reached.
-- Growth: `ccd/ccrc` grows by 138 code lines against the merge-base (26 of them Part 1's, 9 fix round 1's key table,
-  7 fix round 3's), past the per-PR limit of 40, under D-9158's waiver (`server/test/growth-waivers/D-9158-ccd-ccrc.json`,
-  its limit the measured 138, by the growth check's own counter: 15126 code lines at the merge base, 15264 at this
-  round's tree). The nine are the cost of the coordinator's ruling on the fourth key (mail 40092), not growth of this
+- Growth: `ccd/ccrc` grows by 140 code lines against the merge-base (26 of them Part 1's, 9 fix round 1's key table,
+  7 fix round 3's, 2 fix round 4's), past the per-PR limit of 40, under D-9158's waiver
+  (`server/test/growth-waivers/D-9158-ccd-ccrc.json`, its limit the measured 140, by the growth check's own counter:
+  15126 code lines at the merge base, 15266 at this round's tree). The nine are the cost of the coordinator's ruling on the fourth key (mail 40092), not growth of this
   wave's own: the table's function, `_auth_job_env_ok`, eight lines, and the one line of the environment loop that calls
   it. The table's comment counts no line. The coordinator accepted 131 as the waiver's figure in mail 40130, and
   ruled that fix round 3 sets it to the figure measured on the final tip. Fix round 2 changes no line of `ccd/ccrc`.
   Fix round 3's seven are the print reader's new arms (the outside-a-block line, the key's grammar, the other
-  environment line, the open block at the end, and the not-measured refusal's two lines) and the held copy name.
+  environment line, the open block at the end, and the not-measured refusal's two lines) and the held copy name. Fix
+  round 4's two are the repeated-key check in the environment arm and the held copy's description (the `||` line);
+  its `seen` local joins an existing `local` line.
 
 - One shell call of this wave was refused by the session hook: a Python heredoc rewriting two blocks of this wave's own
   test file, whose text named fixture passphrase file names; no file that guard protects was its target. It was

@@ -1223,6 +1223,8 @@ describe(`ccrc auth on a Mac: the job proved (wave 193) [${IS_DARWIN ? 'darwin' 
     // Fix round 3 (ruling 4b): the read stops at a NUL, so a NUL is a difference wherever it stands.
     ["the installer's bytes, then a NUL and more after its last line", (j) => `${j}\u0000<key>NODE_OPTIONS</key>\n`],
     ['a NUL inside it', (j) => j.replace('<key>HOME</key>', '<key>HO\u0000ME</key>')],
+    // Fix round 4 (review 4180 A6): text after a value on a line the compare reads by its value is a difference too.
+    ['a ProcessType line with no closing tag after its value', (j) => j.replace('<string>Background</string>', '<string>Background')],
   ];
   for (const [name, edit] of edits) {
     it(`refuses on and off a job file that is not the installer's: ${name}, naming the file, never a byte of it`, async () => {
@@ -1332,7 +1334,8 @@ describe(`ccrc auth on a Mac: the job proved (wave 193) [${IS_DARWIN ? 'darwin' 
         new RegExp(`launchd holds the job app\\.ccrc\\.ccrc with ${k} in its own environment`)]),
     // Fix round 3 (review 4154 F1): PATH and HOME by their whole names only. A suffix or a prefix match of either would
     // let these through beside a valid PATH and HOME.
-    ...(['NODE_PATH', 'DYLD_LIBRARY_PATH', 'PYTHONPATH', 'PATHX', 'HOMEX', 'HOMEBREW_PREFIX'] as const).map((k):
+    // Fix round 4 (review 4180 A3): and by their exact case, so a case-folded match would let `path` and `Home` through.
+    ...(['NODE_PATH', 'DYLD_LIBRARY_PATH', 'PYTHONPATH', 'PATHX', 'HOMEX', 'HOMEBREW_PREFIX', 'path', 'Home'] as const).map((k):
       [string, (h: string, j: string) => string, RegExp] => [`with ${k} beside a valid PATH and HOME, not their exact names`,
       (h, j) => printOf(h, j, { env: [['OSLogRateLimit', '64'], ['PATH', JOB_PATH], ['HOME', h], [k, '/tmp/x'], ['XPC_SERVICE_NAME', MAC_LABEL]] }),
       new RegExp(`launchd holds the job app\\.ccrc\\.ccrc with ${k} in its own environment, which .*app\\.ccrc\\.ccrc\\.plist does not set`)]),
@@ -1417,6 +1420,20 @@ describe(`ccrc auth on a Mac: the job proved (wave 193) [${IS_DARWIN ? 'darwin' 
     // An empty key named nothing the table could refuse by name, so before this round the job passed with it.
     ['an environment line with no key before its arrow', (h: string) => envBlock(printOf(h, job(h)), ['\t\t => /tmp/x.js']),
       odd("a line in the job's environment block that is not a key, => and a value")],
+    // Fix round 4 (review 4180 A3 to A5): rows that pin what the tip already does, each red on the reviewer's mutant.
+    // A key padded with a space is no key of the grammar, so a trim of the key would read it as a second PATH.
+    ['an environment key with a space before it', (h: string) => envBlock(printOf(h, job(h)), ['\t\t PATH => /tmp/x']),
+      odd("a line in the job's environment block that is not a key, => and a value")],
+    ['an environment key with a second space before its arrow', (h: string) => envBlock(printOf(h, job(h)), ['\t\tPATH  => /tmp/x']),
+      odd("a line in the job's environment block that is not a key, => and a value")],
+    // A4: a closing line outside any block, the arm's second half.
+    ['a closing line after the environment block closed', (h: string) => printOf(h, job(h)).replace('\tdomain = ', '\t}\n\tdomain = '),
+      odd('a line outside any block that belongs inside one')],
+    // A5: a print cut inside the arguments block, and inside another block, is open at its end too.
+    ['a print that ends inside the arguments block', (h: string) => { const p = printOf(h, job(h)); return p.slice(0, p.indexOf('\t}', p.indexOf('\targuments = {'))); },
+      odd('a block still open at the end of the print')],
+    ['a print that ends inside another block', (h: string) => { const p = printOf(h, job(h)); return p.slice(0, p.indexOf('\t}', p.indexOf('\tinherited environment = {'))); },
+      odd('a block still open at the end of the print')],
   ] as const) {
     it(`refuses on and off as not measured ${name}, naming no value`, async () => {
       const b = box('ccrc-auth-mac-odd-', portLines());
@@ -1426,6 +1443,32 @@ describe(`ccrc auth on a Mac: the job proved (wave 193) [${IS_DARWIN ? 'darwin' 
         await expectRefused(b, r, bytes(envFile(b.home)), words);
         expect(r.out).toMatch(/this verb cannot prove the job on this box without that read; set the keys by hand/);
         expect(r.out).not.toMatch(/0\.0\.0\.0|\/tmp\/evil|--require|\/tmp\/x/);
+      }
+    });
+  }
+  // Fix round 4 (review 4180 F1, ruled 40891): a key printed twice in the job's own environment block. A dictionary
+  // holds a key once, so a second line can only come from a held value's newline; whichever line is the hostile one, it
+  // refuses as not measured before anything is taken from the second, naming the key and no value. Every key of the
+  // table, and the reviewer's X1b shape, the repeat arriving through a HOME value that holds a newline.
+  const hostile: Record<string, string> = { OSLogRateLimit: '7777777', PATH: '/tmp/evil:/usr/bin', HOME: '/tmp/elsewhere', XPC_SERVICE_NAME: 'app.other' };
+  const repeated = (h: string, k: string, hostileFirst: boolean): [string, string][] => {
+    const base: [string, string][] = [['OSLogRateLimit', '64'], ['PATH', JOB_PATH], ['HOME', h], ['XPC_SERVICE_NAME', MAC_LABEL]];
+    return base.flatMap(([n, v]): [string, string][] => (n !== k ? [[n, v]] : hostileFirst ? [[n, hostile[n]!], [n, v]] : [[n, v], [n, hostile[n]!]]));
+  };
+  for (const [name, print, key] of [
+    ...Object.keys(hostile).flatMap((k) => [true, false].map((first): [string, (h: string) => string, string] =>
+      [`${k} twice, the hostile value ${first ? 'first' : 'second'}`, (h) => printOf(h, job(h), { env: repeated(h, k, first) }), k])),
+    ['PATH again, through a HOME value that holds a newline (X1b)', (h: string) => printOf(h, job(h),
+      { env: [['OSLogRateLimit', '64'], ['PATH', '/tmp/evil:/usr/bin'], ['HOME', `${h}\n\t\tPATH => ${JOB_PATH}`], ['XPC_SERVICE_NAME', MAC_LABEL]] }), 'PATH'],
+  ] as [string, (h: string) => string, string][]) {
+    it(`refuses on and off as not measured a job launchd holds with ${name}, naming the key and no value`, async () => {
+      const b = box('ccrc-auth-mac-twice-', portLines());
+      writeFileSync(join(b.home, 'lc-print'), print(b.home));
+      for (const sub of ['on', 'off']) {
+        const r = await runTty(b.home, ['auth', sub]);
+        await expectRefused(b, r, bytes(envFile(b.home)), odd(`a second ${key} line in the job's environment block`));
+        expect(r.out).toMatch(/this verb cannot prove the job on this box without that read; set the keys by hand/);
+        expect(r.out).not.toMatch(/\/tmp\/evil|\/tmp\/elsewhere|app\.other|7777777/);
       }
     });
   }
@@ -1616,15 +1659,18 @@ onEach('ccrc auth: a signal in the proof window (review 3934 F3)', () => {
     }
   });
   // Fix round 3 (ruling 4c, review 4154 A2): the copy's name ends in bytes from disk, so its suffix goes through the one
-  // printer (C5): an escape sequence or a newline in it never reaches the terminal.
-  it('names a leftover copy whose suffix is not in the closed form by the held word, on and off', async () => {
+  // printer (C5): an escape sequence or a newline in it never reaches the terminal. Fix round 4 (review 4180 A2): a held
+  // suffix would name a path that does not exist, so the copy is described beside ccrc.env, never named.
+  it('describes a leftover copy whose suffix is not in the closed form, naming no path that does not exist, on and off', async () => {
     const b = box('ccrc-auth-leftover-odd-', portLines());
     const left = join(b.home, '.ccrc', 'ccrc.env.auth-restore.4242\x1b[2J\nx');
     writeFileSync(left, 'CCRC_HOST=127.0.0.1\n', { mode: 0o600 });
     for (const sub of ['on', 'off']) {
       const r = await runTty(b.home, ['auth', sub]);
       expect(r.code, r.out).not.toBe(0);
-      expect(r.out).toContain(`${envFile(b.home)}.auth-restore.[a value this verb does not print] is a copy of`);
+      expect(r.out).toContain(`auth ${sub}: a copy beside ${envFile(b.home)} whose name this verb does not print is a copy of`);
+      expect(r.out).toContain(`delete a copy beside ${envFile(b.home)} whose name this verb does not print, then re-run`);
+      expect(r.out).not.toContain('.auth-restore.');
       expect(r.out).not.toContain('\x1b[2J');
       expect(restarts(b.home)).toEqual([]);
     }

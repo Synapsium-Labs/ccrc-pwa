@@ -6640,7 +6640,7 @@ _auth_job_cmp() {   # <unit dir> <recorded role or "">
   for v in "${ajc_have[@]:i+2:3}"; do v="${v#    <string>}"; v="${v%</string>}"; AJ_ARGS+=("${v//&amp;/"&"}"); done
   [ "$pbad" -eq 0 ] && { AUO_WHY=""; AUO_FIX=""; return 0; }
   AUO_WHY="the PATH in $jf holds an entry this verb does not read as a plain absolute directory, so what that PATH could carry into the job was not proved"
-  AUO_FIX="an install puts the PATH of the shell it runs in into the job, so run ccrc install --role $AIR_ROLE from a shell whose PATH holds only absolute directories with no <, >, &, quote or backslash in them$AIR_NONE; or set the keys by hand (the README's 'The session gate')"
+  AUO_FIX="an install puts the PATH of the shell it runs in into the job, so run ccrc install --role $AIR_ROLE from a shell whose PATH holds only absolute directories, in printable ASCII only, with no <, >, &, quote or backslash in them$AIR_NONE; or set the keys by hand (the README's 'The session gate')"
   return 1
 }
 # `_auth_job_loaded` is `_auth_unit_own`'s second half on a Mac: launchd reads a job file only when the job is loaded,
@@ -6653,7 +6653,8 @@ _auth_job_cmp() {   # <unit dir> <recorded role or "">
 # not read: the domain's environment is `_auth_unit_sources`'s Mac read.
 # The keys the job's own environment block may hold, each with its rule: B1's closed set (the coordinator's rulings,
 # mails 39576 and 40092). These four, and no other, were measured on a real launchd: the GitHub-hosted runner image
-# macos-26-arm64 (20261123.0526.1), on 2026-11-27, in wave 193's first full run. PATH and HOME are compared with the job
+# macos-26-arm64, on two builds: 20261123.0526.1 in wave 193's first and third full runs and 20261117.0516.1 in its
+# second and fourth (2026-11-27 and 28). PATH and HOME are compared with the job
 # file's values after the read; XPC_SERVICE_NAME is launchd's own name for the job; OSLogRateLimit is the system's
 # logging rate limit, which launchd adds to every job, one to nine digits, and no source of the sign-in setting.
 _auth_job_env_ok() {   # <key> <value> <label> -> rc 0 when the job may hold that key with that value
@@ -6665,7 +6666,7 @@ _auth_job_env_ok() {   # <key> <value> <label> -> rc 0 when the job may hold tha
   esac
 }
 _auth_job_loaded() {   # <unit dir> <recorded role or "">
-  local jf label out rc=0 line sect="" path="" prog="" k v a=0 e=0 extra="" odd="" lpath=$'\n' lhome=$'\n' LC_ALL=C
+  local jf label out rc=0 line sect="" path="" prog="" k v a=0 e=0 extra="" odd="" seen="" lpath=$'\n' lhome=$'\n' LC_ALL=C
   local -a ajl_args=()
   label="$(_svc_label ccrc.service)"; jf="$1/$label.plist"
   _auth_install_role "${2:-}"
@@ -6676,8 +6677,9 @@ _auth_job_loaded() {   # <unit dir> <recorded role or "">
   [ "$rc" -eq 0 ] && [ -n "$out" ] \
     || { AUO_WHY="launchctl print $(_svc_domain)/$label did not answer, so what launchd holds for the job was not measured"; return 2; }
   # Fix round 3 (ruling 4a, review 4154 R1): a shape the reader does not know, where it reads, refuses as not measured,
-  # naming no value: inside the job's own environment block, a line that is not a key, ` => ` and a value; a second
-  # environment or arguments block; a second path or program line; a line of two tabs, or a block's closing line,
+  # naming no value: inside the job's own environment block, a line that is not a key, ` => ` and a value, or a second
+  # line for one key (fix round 4); a second environment or arguments block; a second path or program line; a line of
+  # two tabs, or a block's closing line,
   # outside any block (what a value holding a newline and a closing line would leave); a block still open at the end.
   # The job's top-level lines the reader does not use are passed over by name, as before, and so is every line inside
   # another block.
@@ -6693,6 +6695,9 @@ _auth_job_loaded() {   # <unit dir> <recorded role or "">
       args:$'\t\t'*) ajl_args+=("${line#$'\t\t'}") ;;
       env:$'\t\t'*" => "*) k="${line#$'\t\t'}"; v="${k#* => }"; k="${k%% => *}"
         [[ "$k" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || { odd="a line in the job's environment block that is not a key, => and a value"; break; }
+        # A key printed twice (fix round 4, review 4180 F1): a dictionary holds a key once, so a second line can only be
+        # a held value's newline; it refuses before anything is taken from it, naming the key (its grammar held above).
+        case " $seen " in *" $k "*) odd="a second $k line in the job's environment block"; break ;; esac; seen+=" $k"
         # B1's closed set, key by key (`_auth_job_env_ok`); any other key, or a value outside its rule, refuses, named.
         case "$k" in PATH) lpath="$v" ;; HOME) lhome="$v" ;; esac
         _auth_job_env_ok "$k" "$v" "$label" || extra="$k" ;;
@@ -6902,11 +6907,13 @@ cmd_auth() {
   # A copy that a run left (review 3934 F3): the file as it was before that run, which was killed, or whose restore
   # failed and kept it (review 3971 R5). Which of the two the box keeps is the operator's to say, so nothing runs past
   # it. After the lock, so a running act's own copy is never misread.
-  # The copy's name ends in bytes from disk, so that suffix goes through the one printer (fix round 3, ruling 4c; C5).
+  # The copy's name ends in bytes from disk, so that suffix goes through the one printer (fix round 3, ruling 4c; C5);
+  # a held suffix would name a path that does not exist, so the copy is then described, not named (fix round 4, A2).
   local left
   for left in "$BOX_ENV_FILE".auth-restore.*; do
     [ -e "$left" ] || [ -L "$left" ] || continue
-    left="$BOX_ENV_FILE.auth-restore.$(_box_said "${left#"$BOX_ENV_FILE.auth-restore."}")"
+    left="$BOX_ENV_FILE.auth-restore.$(_box_said "${left#"$BOX_ENV_FILE.auth-restore."}")" \
+      || left="a copy beside $BOX_ENV_FILE whose name this verb does not print"
     _ccrc_die "auth $sub: $left is a copy of $BOX_ENV_FILE as it was before a run of ccrc auth that did not finish (it was killed, or it could not put the file back and kept the copy), so which of the two this box keeps is yours to say: compare them, keep the one you want as $BOX_ENV_FILE, delete $left, then re-run. Nothing was changed."
   done
 
