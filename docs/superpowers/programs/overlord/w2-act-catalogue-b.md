@@ -39,8 +39,10 @@ The plan is a snapshot of 2026-11-16. Measured on `main` at `9d3a88b0eb`:
   failure contract), `overlordPolicyAsk.ts` (L1: `askPolicy`, which reads a throw, an answer that throws when read and an
   answer of any other shape as `policy-refused`) and `overlordPolicyDefault.ts` (`allowAllPolicy`).
 - **The censuses** (`server/test/single-definition/overlord-may-act.test.ts`): the importer census (no file, the wrapper
-  included, re-exports anything of the decider), the allow's census and the strengths' one home, each with CONTROL cases that
-  go red.
+  included, re-exports anything of the decider, whether by an `export … from` or by a local export of a binding it imported:
+  a named or default export, an exported constant, a local alias, a namespace member or a type; review 4224 F1, read from the
+  syntax tree in the census itself, so the shared parser is unchanged), the allow's census and the strengths' one home, each
+  with CONTROL cases that go red.
 
 ## The decider's steps, in order, and the answer word of each
 
@@ -66,6 +68,42 @@ beside an unread cover answers `unmeasured`; a `defer` stands.
 | 15, by grant | | `allow-by-grant`, authority `grant` |
 | 16, the mode (every allow) | the cell and the arming | `armed`: mode `live` or `shadow`; `proposal`: the word becomes `staged`, mode `proposal`; `allow` and `by-grant`: mode `act` |
 
+## Every fact the decider reads, in the positive form (review 4224)
+
+The ruling of round 2 asked for the decider to be read once more for one shape: a union read as "is it this one word", with
+everything else going on. Each read is listed here as fixed (with its case and mutant) or closed, and why. A value outside a
+fact's type can only come from a cast; within the types no answer changed, and the oracle, changed apart, agrees over the sweeps.
+
+| Where | The read before | Now | Mutants |
+|---|---|---|---|
+| Step 10, the answer facts' kind | only `not-an-answer` refused; any other kind went on, and steps 11 and 13 skipped it, so a cast kind reached an allow | `answer` goes on, `not-an-answer` as before, any other kind is `unmeasured` at `evidence` (F2) | D76 |
+| Step 3, a stated entry's five booleans | truthy | each must be `true` | D9, D10 rewritten, D69 |
+| Step 3, a request's naming | `unmeasured` unread, then truthy covers | `true` covers, `false` is no, anything else unread | D12, D13 rewritten |
+| Step 3, a command's `live` and `forThisProposal` | truthy | each must be `true` | D14, D15 rewritten, D70, D71 |
+| Step 3, whether a command's targets moved | `unmeasured` unread, then falsy covers | `false` covers, `true` is no, anything else unread | D16, D17 rewritten |
+| Step 5, isolation | `unmeasured` refused, `shared-user` refused, anything else went on | a measured `separate-user` or `separate-host` goes on (derived from the isolation words less `shared-user`), `shared-user` refuses, anything else is `unmeasured` | D23, D25 rewritten, D72, D73 |
+| Step 6, the cell | the four words branched, anything else minted mode `act` | a cell outside the four passing words (the rung cell words less `refuse`) is `unmeasured` at `cell` | D74 |
+| Step 7, the arming | `unmeasured` refused, anything else went on to a `shadow` allow | `true` is live, `false` shadow, anything else `unmeasured` | D27, D28 rewritten, D75 |
+| Step 2, the effect's ceiling | a falsy `pass` refused, a truthy one went on | only `pass === true` goes on | D6 rewritten, D68 |
+| `grantCovers`, the recommendation | `unmeasured` unread, then truthy covers | `true` covers, `false` is no, anything else unread | G16, G17 rewritten, G23 |
+| `grantCovers`, uses today | absent or `unmeasured` unread, then `<` | anything but a number is unread | G12, G13 rewritten, G22 |
+| Every read the decider writes | a template literal, which throws on a Symbol or an object with no prototype | the one helper `said`, which renders a value through `shown` and a fixed word when it cannot (F3) | D77, D78 |
+
+Closed by their type and their producer, with no change:
+
+- **The evidence verdict and `askOrAct`** (steps 10 and 11): read in the positive form already. Only `enough` and `act` go on;
+  a cast value refuses (`evidence-too-weak` or `ask-is-cheaper`), never an allow.
+- **The caller's strength and every least strength** (step 4): an unknown strength has no rank, so `strengthAtLeast` answers
+  false and the step refuses `identity-too-weak`.
+- **Who started the programme, the grant's state, scope, expiry and model class**: each compares with its one passing value
+  (`operator`, `live`, equal ids, `now < expiresAt`, an equal class), so anything else is no or unread.
+- **The kinds of the entry, the request and the command, and the grant list**: a kind other than `cited` or `bound`, or no
+  command, adds no cover, so fewer paths, never an allow.
+- **The catalogue's rows** (`answer`, `carrier`, `mayCarry`, `covers`, `ceiling`, `leastStrength`): the producer is the frozen
+  L0 catalogue, and the row lookup is a test seam that W2's wrapper never passes (W11).
+- **A grant's `n` and its fact lists** (`suspendedNow`, `usesToday`): W3's reader is their producer and refuses a malformed row.
+  A non-array `suspendedNow` makes the decider throw, which fails closed (no allow), not open.
+
 ## Departures, by slug
 
 - **`the-best-cover-answers`**: the plan's step 3 tries the covers in one order and runs the first that covers. No fixed order is
@@ -89,7 +127,9 @@ beside an unread cover answers `unmeasured`; a `defer` stands.
   every effect, every cell, eleven fact sets) and 2,000 seeded first-match cases with grants and commands. The sweep runs eleven
   fixed fact sets, not the plan's full product of every fact; the seeded draw and the named cases vary the rest. Fix round 1's
   three oracle rules (the evidence path, the blind check's positive form, an unknown condition kind) were written apart again,
-  from the rule text, by a subagent that did not open the decider.
+  from the rule text, by a subagent that did not open the decider, and so were fix round 2's nine positive-form rules (the
+  table above). The oracle still copies the rule list, so it confirms the decider follows the rules and cannot catch a fault
+  in the rules themselves; the cast-value cases are what hold a value outside the types.
 - **`entry-and-request-never-tie`**: the plan's cover order puts an entry before a request, but no class takes both covers, so
   the two never cover the same members; a named case pins that, and the other tie orders are tested.
 - **`the-arming-is-read-before-the-blind-check`**: the plan reads the arming when the allow is minted, after the blind check. An
@@ -155,13 +195,17 @@ The one row added to Table 11.6, in its neighbours' form, beside `identity-too-w
 Measured with the in-tree runner (`server/test/sim/mutation-floors.test.ts`, the five keys alone). The plan's three figures were
 estimates; these are counts. Every set is new, at floor 1, every mutant killed.
 
-| Decider | Before (main) | After the build | After fix round 1 (review 4213) | The plan's least |
-|---|---|---|---|---|
-| `server/src/coord/overlordMayAct.ts#overlordMayAct` | none | 63 of 63 (each step's comparison, each cover's fact, each binding field, the allow's freeze, registry and spend, the best path and the rank) | 66 of 66 (D40 and D41 rewritten to the positive form; D65 the blind check read in the negative form, D66 the evidence emptied, D67 the kebab guard admitting every word) | 24 |
-| `server/src/coord/overlordMayAct.ts#grantCovers` | none | 19 of 19 (each check, each condition, each unread fact, and the order of a failing and an unread one) | 21 of 21 (G20 an unknown kind read as the recommendation, G21 an unknown kind covering) | 10 |
-| `server/src/coord/overlordMayActW2.ts#mayActW2` | none | 10 of 10 (each dormant fact passed through, each gathered fact dropped) | 11 of 11 (W11 a row lookup passed through) | 5 |
-| `server/src/coord/overlordPolicyAsk.ts#askPolicy` | none | 8 of 8 (a throw rethrown or passing, a malformed answer passing, the reason and cause, the adapter asked twice) | 11 of 11 (P1 to P8 on the new text; P9 the thrown text forwarded, P10 the answer read outside the try, P11 a non-object answer passing) | none named |
-| `shared/overlord-identity.ts#strengthAtLeast` | none | 4 of 4 (the comparison and the derived order) | 4 of 4 | none named |
+| Decider | Before (main) | After the build | After fix round 1 (review 4213) | After fix round 2 (review 4224) | The plan's least |
+|---|---|---|---|---|---|
+| `server/src/coord/overlordMayAct.ts#overlordMayAct` | none | 63 of 63 (each step's comparison, each cover's fact, each binding field, the allow's freeze, registry and spend, the best path and the rank) | 66 of 66 (D40 and D41 rewritten to the positive form; D65 the blind check read in the negative form, D66 the evidence emptied, D67 the kebab guard admitting every word) | 77 of 77 (D6, D9, D10, D12 to D18, D23, D25, D27, D28 and D44 rewritten on the new text; D68 to D76 each fact's negative form restored, D76 the answer kind's; D77 and D78 a read written without `shown`) | 24 |
+| `server/src/coord/overlordMayAct.ts#grantCovers` | none | 19 of 19 (each check, each condition, each unread fact, and the order of a failing and an unread one) | 21 of 21 (G20 an unknown kind read as the recommendation, G21 an unknown kind covering) | 23 of 23 (G12, G13, G16, G17 and G21 rewritten; G22 a use count of another type read as a number, G23 a recommendation of another type read as yes) | 10 |
+| `server/src/coord/overlordMayActW2.ts#mayActW2` | none | 10 of 10 (each dormant fact passed through, each gathered fact dropped) | 11 of 11 (W11 a row lookup passed through) | 11 of 11 | 5 |
+| `server/src/coord/overlordPolicyAsk.ts#askPolicy` | none | 8 of 8 (a throw rethrown or passing, a malformed answer passing, the reason and cause, the adapter asked twice) | 11 of 11 (P1 to P8 on the new text; P9 the thrown text forwarded, P10 the answer read outside the try, P11 a non-object answer passing) | 11 of 11 | none named |
+| `shared/overlord-identity.ts#strengthAtLeast` | none | 4 of 4 (the comparison and the derived order) | 4 of 4 | 4 of 4 | none named |
+
+Fix round 2's two type cases (the condition fields keyed both ways) are compile-time, which the textual runner cannot reach. They
+were measured by hand: with the extra-key check removed the extra-kind case's directive goes unused (TS2578), and with the
+constraint removed the missing-kind case's does; each was restored.
 
 The review's two surviving mutants of its own, the kebab guard admitting every word and every evidence emptied, are D67 and D66.
 
