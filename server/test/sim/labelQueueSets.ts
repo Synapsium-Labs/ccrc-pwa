@@ -1,7 +1,7 @@
 // The label queue's mutant sets (Overlord W2, plan w2-label-queue.md Task 2 Step 3; the floors rule is D-8217): `cardRowsOf`,
 // `labelsNeeded`, `pickLabelCards`, `labelFor` and `cardShown` in server/src/coord/labelQueue.ts, and `cardAnswerVerdict` and
-// `cardView` in server/src/coord/labelCards.ts, each run against suite cases that load the mutated copy. Each `old` text
-// occurs once in its module.
+// `cardView` in server/src/coord/labelCards.ts, each run against suite cases that load the mutated copy; and the read's two
+// deciders, `handOverOrder` and `readDraws` (review fix round 2). Each `old` text occurs once in its module.
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { expect } from 'vitest';
@@ -531,8 +531,53 @@ const CARD_FIELDS_SET: MutantSet<Cards> = {
   },
 };
 
+// The read's two deciders (the coordinator's ruling C1, call 1975; their sets and floors by review 4210's residual, call 2024).
+const HAND_OVER_SET: MutantSet<Queue> = {
+  modulePath: QUEUE_TS,
+  mutants: [
+    { id: 'HO1', old: '|| a.id - b.id', new: '|| b.id - a.id' },
+    { id: 'HO2', old: '|| a.id - b.id', new: '' },
+    { id: 'HO3', old: '(a.week < b.week ? -1 : a.week > b.week ? 1 : 0)', new: '(a.week < b.week ? 1 : a.week > b.week ? -1 : 0)' },
+    { id: 'HO4', old: '(a.week < b.week ? -1 : a.week > b.week ? 1 : 0)', new: '0' },
+  ],
+  suite(m): Record<string, SuiteCase> {
+    const c = (id: number, week: string) => ({ id, week });
+    return {
+      'oldest pick week first, then by id, whatever the input order': () => {
+        const cards = [c(4, '2026-W49'), c(9, '2026-W48'), c(2, '2026-W49'), c(7, '2026-W48'), c(1, '2027-W01')];
+        expect(m.handOverOrder(cards).map((x) => x.id)).toEqual([7, 9, 2, 4, 1]);
+        expect(m.handOverOrder([...cards].reverse()).map((x) => x.id)).toEqual([7, 9, 2, 4, 1]);
+      },
+      'the input is not reordered in place': () => {
+        const cards = [c(2, '2026-W49'), c(1, '2026-W48')];
+        m.handOverOrder(cards);
+        expect(cards.map((x) => x.id)).toEqual([2, 1]);
+      },
+    };
+  },
+};
+
+const READ_DRAWS_SET: MutantSet<Queue> = {
+  modulePath: QUEUE_TS,
+  mutants: [
+    { id: 'RD1', old: 'return drawn < LABEL_CARDS_PER_WEEK;', new: 'return drawn <= LABEL_CARDS_PER_WEEK;' },
+    { id: 'RD2', old: 'return drawn < LABEL_CARDS_PER_WEEK;', new: 'return true;' },
+    { id: 'RD3', old: 'return drawn < LABEL_CARDS_PER_WEEK;', new: 'return drawn < LABEL_CARDS_PER_WEEK - 1;' },
+    { id: 'RD4', old: 'return drawn < LABEL_CARDS_PER_WEEK;', new: 'return drawn > 0 && drawn < LABEL_CARDS_PER_WEEK;' },
+  ],
+  suite(m): Record<string, SuiteCase> {
+    return {
+      'draws while fewer than ten are drawn, and stops at ten': () => {
+        expect([0, 1, 9, 10, 11].map((n) => m.readDraws(n))).toEqual([true, true, true, false, false]);
+      },
+    };
+  },
+};
+
 /** One set per decider; registered in mutation-floors.test.ts with a floor each. */
 export const LABEL_QUEUE_MUTANT_SETS: Record<string, MutantSet<never>> = {
+  [`${KEY_Q}handOverOrder`]: HAND_OVER_SET as MutantSet<never>,
+  [`${KEY_Q}readDraws`]: READ_DRAWS_SET as MutantSet<never>,
   [`${KEY_Q}cardRefNeeds`]: REF_NEEDS_SET as MutantSet<never>,
   [`${KEY_Q}stateDrawability`]: DRAWABILITY_SET as MutantSet<never>,
   [`${KEY_Q}cardHoldsSlot`]: HOLDS_SLOT_SET as MutantSet<never>,

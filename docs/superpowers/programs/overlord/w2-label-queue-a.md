@@ -39,7 +39,7 @@ what the ledger should learn; no plan, spec or ledger text is edited here.
 3. **The gap.** Ruled in call 1913; built as ruled, see below.
 4. **"The newest record."** The newest by the store's own order (`id`) among the records of the row's current revision, whatever
    host, model or line generation. No new index. Two records of one state from two hosts pin it (`label-queue-store`).
-5. **The floors file.** Twelve new floors at 1; none lowered, no key changed.
+5. **The floors file.** Twelve new floors at 1 (fourteen after fix round 2); none lowered, no key changed.
 6. **The operator-message census.** `GET /api/labels` joins `OPERATOR_MESSAGE_DOORS` beside the chat's thread.
 7. **No row in shadow.** Pinned in the lane test (no write, no log line) and the doors' test (empty list).
 8. **Harness-neutral.** Everything here is server-owned: a lane, two HTTP doors and coord.db tables. Nothing relies on a
@@ -110,6 +110,9 @@ what the ledger should learn; no plan, spec or ledger text is edited here.
 | Fix round 1, C1, the read's cap, by hand: the cap dropped at the read; the order made the store's (no sort); ties by id descending | 3 | the cap absent: the read drew all twenty | 3/3 killed: the cap by both sequences; no sort by the decider case and the rollback sequence; the tie order by the decider case, both sequences and the order-picked case |
 | Fix round 1, C6, C7, R5, by hand: the read asks the store before its gate; a message read's unmeasured made absent (review 4185's mutant 5b); a throwing mail read made absent; the newest record keyed by host kind; keyed by line generation | 5 | unpinned by the old cases (review 4185's C6, C7 and R5; its mutant 5b survived all 14 door cases) | 5/5 killed, each by its new case |
 | Fix round 1, C3: an unreadable waiting record counted absent; a bad inline part judged drawable | 2 | the code as it was | both cases red on the old code, green on the fix |
+| Fix round 2, F1, by hand: the skipped cards counted toward the read's cap | 1 | survived every label suite (review 4210) | killed by both new route cases: it draws seven, holds back five |
+| Fix round 2, F2, by hand: a held-back card's record read before it is counted; the cap asked only just before a card is drawn (every held-back card's record and texts read) | 2 | both survived every label suite (review 4210) | both killed by the new read-spy case |
+| Fix round 2, `labelQueueSets.ts`: `handOverOrder` (ties reversed, ties dropped, weeks reversed, weeks ignored) and `readDraws` (at most eleven, always, at most nine, never at none) | 8 | the hand row of round 1 only, no floor | 8/8 killed, each set 1.0, each with a floor of 1 in the floors file (applied as the packet its holder agreed) |
 
 ## What PR B reads
 
@@ -135,7 +138,8 @@ Both doors are session-gated, behind the account gate (`{ cap: null }`, no step-
 - **`answers`:** a yes-or-no row answers `['yes', 'no', 'not-sure']`. A choice row answers each `{ option }`, then `'none'`,
   then `'not-sure'`.
 - **No model answer.** No card carries a verdict, probability, band or line.
-- **`open`:** the cards `cardShown` shows. Skipped and held-back cards are counted in it.
+- **`open`:** the cards `cardShown` shows. Skipped cards whose record or text did not resolve, and held-back cards, are counted
+  in it; a card on a row that cannot be read is counted only under the `unmeasured` skip.
 - **At most ten cards.** The read draws the shown cards oldest pick week first, then by id, and stops after ten drawn
   (`LABEL_CARDS_PER_WEEK`). **`heldBack`** counts the shown cards past those, whose records were not read this time. A skipped
   card takes none of the ten. An answer for a held-back card is accepted like any other.
@@ -199,6 +203,18 @@ was built at. On the coordinator's go, this branch took one merge of `main` at `
 - **S7:** the unattended quiz script's comment cites `server/src/time/rules.ts#utcIsoWeek`.
 - **Words:** C5 (point a above and the two comments), S4 (`cross-context-pure-import`, `door-port-as-built`), S6 (the four
   counts in Step 0).
+
+## Fix round 2 (review 4210, the coordinator's call 2024)
+
+Tests and words only; no product line changed.
+
+- **F1:** a route case reads three skipped cards before twelve drawable ones, all shown, the skipped in the oldest week. It draws
+  ten, holds back two, and counts each skip once. One case covers the three skip words because they take one path in the route:
+  the cap is asked before a card's record is read, and a skipped card is never drawn.
+- **F2:** the same read with spies on the record read, the message read and the mail read. The records read are exactly the
+  skipped cards' and the drawn cards', and no message or mail read names a held-back card's ref.
+- **F3:** the `open` bullet above now says what the code does.
+- **The residual:** `handOverOrder` and `readDraws` each have a mutant set in `labelQueueSets.ts` and a floor of 1.
 
 ## Known limits
 

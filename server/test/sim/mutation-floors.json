@@ -418,5 +418,7 @@
   "server/src/coord/labelQueue.ts#stateDrawability": 1,
   "server/src/coord/labelQueue.ts#cardHoldsSlot": 1,
   "server/src/coord/labelQueue.ts#pickRowFactsOf": 1,
+  "server/src/coord/labelQueue.ts#handOverOrder": 1,
+  "server/src/coord/labelQueue.ts#readDraws": 1,
   "server/src/coord/labelCards.ts#cardFieldsOf": 1
 }

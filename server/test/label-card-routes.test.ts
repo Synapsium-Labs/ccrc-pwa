@@ -432,3 +432,62 @@ describe('the read\'s own unmeasured mappings for a ref, through the routes file
     expect(await read(TEXT, { mailOrigin: () => { throw new Error('busy'); } })).toMatchObject({ cards: [], skipped: UNMEASURED });
   });
 });
+
+describe('the read\'s cap counts drawn cards only, and never reads a held-back card (review 4210, F1 and F2)', () => {
+  // Three skipped cards come first in the hand-over order (the oldest week): one whose record is absent, one whose record cannot
+  // be read, and one whose ref kind has no reader. Then twelve drawable cards. Every skip word takes the same path in the route:
+  // the cap is asked before the card's record is read, and a skipped card is never pushed, so one case covers all three.
+  const passGate: AccountGate = () => ({ pass: true, actor: gateActorOf('Fixture browser', 'abcdef0123456789'), sessionIdHash: 'h' });
+  const rb = DECISION_QUESTIONS['readback.omits'];
+  const sw = DECISION_QUESTIONS['scope.widens'];
+  const row = (id: number, week: string, q: typeof rb) => ({ id, week, row: q.id as DecisionRowId, revision: q.revision, stateHash: `s${id}`,
+    recordId: 1000 + id, pickedAt: id, closedAt: null, closedBy: null, outcome: null });
+  const SKIPPED = [row(1, '2026-W47', rb), row(2, '2026-W47', rb), row(3, '2026-W47', sw)];
+  const DRAWABLE = Array.from({ length: 12 }, (_, i) => row(10 + i, '2026-W48', rb));
+  const all = [...DRAWABLE, ...SKIPPED];   // the store's order is not the hand-over order
+  function rig() {
+    const record = vi.fn((recordId: number): ReturnType<LabelCardStore['record']> => {
+      if (recordId === 1001) return 'absent';
+      if (recordId === 1002) return 'unreadable';
+      if (recordId === 1003) return { refs: { cited: '903', goals: 'prog-a/pin/5' }, inline: null };
+      const id = recordId - 1000;
+      return { refs: { request: String(100 + id), readback: String(200 + id) }, inline: null };
+    });
+    const messageById = vi.fn((id: number) => ({ kind: 'measured' as const, value: { text: `Request ${id}.` } }));
+    const mailOrigin = vi.fn((id: number) => ({ body: `Readback ${id}.` }));
+    const store: LabelCardStore = { openCards: () => all, card: () => 'absent', rowMode: () => 'shadow', record, pickedThisWeek: () => 0,
+      close: () => 'closed' };
+    return { store, record, messageById, mailOrigin };
+  }
+  async function read(r: ReturnType<typeof rig>): Promise<LabelCardsAnswer> {
+    const app = Fastify({ logger: false });
+    registerLabelCardRoutes(app, { gate: passGate, store: () => r.store, messages: () => ({ messageById: r.messageById }),
+      mail: () => ({ mailOrigin: r.mailOrigin }), now: () => 5 });
+    await app.ready();
+    apps.push(app);
+    const res = await app.inject({ method: 'GET', url: '/api/labels' });
+    expect(res.statusCode, res.body).toBe(200);
+    return res.json() as LabelCardsAnswer;
+  }
+
+  it('three skipped cards before twelve drawable ones: ten drawn, two held back, each skip counted once (F1)', async () => {
+    const body = await read(rig());
+    expect(body.cards.map((c) => c.id)).toEqual(DRAWABLE.slice(0, 10).map((c) => c.id));
+    expect(body).toMatchObject({ open: 15, heldBack: 2, skipped: { absent: 1, unmeasured: 1, noReader: 1 } });
+  });
+
+  it('the records read are exactly the skipped and the drawn cards\', and no text is read for a held-back card (F2)', async () => {
+    const r = rig();
+    await read(r);
+    const drawn = DRAWABLE.slice(0, 10).map((c) => c.id);
+    const heldBack = DRAWABLE.slice(10).map((c) => c.id);
+    expect(r.record.mock.calls.map(([recordId]) => recordId - 1000).sort((a, b) => a - b)).toEqual([1, 2, 3, ...drawn]);
+    expect(r.messageById.mock.calls.map(([id]) => id - 100).sort((a, b) => a - b)).toEqual(drawn);
+    expect(r.mailOrigin.mock.calls.map(([id]) => id - 200).sort((a, b) => a - b)).toEqual(drawn);
+    for (const id of heldBack) {
+      expect(r.record).not.toHaveBeenCalledWith(1000 + id);
+      expect(r.messageById).not.toHaveBeenCalledWith(100 + id);
+      expect(r.mailOrigin).not.toHaveBeenCalledWith(200 + id);
+    }
+  });
+});
