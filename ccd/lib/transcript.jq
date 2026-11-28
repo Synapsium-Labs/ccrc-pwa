@@ -436,6 +436,11 @@ def loads_body($o; $x; $id; $rid; $lp; $rc; $ver; $wd; $cf; $at):
 # `reply_report($w; $k; $id; $turnAt; $at; $max)` is the report's body over a window: the `reply` kind's six fields and `fromId`.
 # It carries no `fromUuid`: the hook adds the event's own session id at each send (`_hook_reply_send`), so a body spooled before the
 # registry's uuid moved is sent under the current one (review 4173 F3). `droppedBefore` is the hook's spool's to add, never this body's.
+# THE OPERATOR-MESSAGE NUDGE LINE (moved here from the session hook's `DOOR_NUDGE_JQ` by chat PR B's fix round 1, call 1953, text
+# unchanged, so the hook's picked-up arm and the reply's answered ids read ONE grammar): a string that is EXACTLY
+# `renderOperatorMessageNudge` (server/src/coord/envelope.ts) answers its message id as a number, a canonical positive safe integer;
+# anything else answers nothing. session-hook-door-reports.test.ts holds it to the renderer, character by character.
+def nudge: "ccrc-mail: you have new mail. Operator message " as $h | ": read it with your messages door." as $t | if startswith($h) and endswith($t) and length > ($h | length) + ($t | length) then .[($h | length):-($t | length)] | select((length <= 15 or (length == 16 and . <= "9007199254740991")) and (explode | all(. >= 48 and . <= 57) and .[0] != 48)) | tonumber else empty end;
 def tr_isuuid: type == "string" and length == 36 and ([explode[] | select((. == 45 or (. >= 48 and . <= 57) or (. >= 97 and . <= 102)) | not)] == []);
 def tr_nonblank: explode as $c | def f($i): if $i >= ($c | length) then false elif ($c[$i] | jsws) then f($i + 1) else true end; f(0);
 def tr_rows($w): [$w | split("\n")[] | select(length > 0) | [turn_row] | .[]

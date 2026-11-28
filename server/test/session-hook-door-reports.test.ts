@@ -131,6 +131,8 @@ describe('the witness: one report per door tool call, keyed by the call digest',
     expect(text.split(last), 'the last deny arm is where this copy adds its own').toHaveLength(2);
     const copy = path.join(home, 'hook-denying.sh');
     fs.writeFileSync(copy, text.replace(last, `${last}[[ "\${tool:-}" == mcp__door__denied ]] && pre_json=$(_hook_deny_json "fixture deny")\n`));
+    // The arm includes the transcript library from beside the hook (`ROSTER_CARD_LIB`), as the installed hook finds it.
+    fs.symlinkSync(path.resolve(__dirname, '../../ccd/lib'), path.join(home, 'lib'));
     hookPath = copy;
     const { out } = run(pre(toolName('denied'), { text: 'x' }));
     expect(out, 'precondition: the call was denied').toContain('"permissionDecision":"deny"');
@@ -253,15 +255,24 @@ describe('picked up, characterized: the reports each prompt sends', () => {
 });
 
 describe('the nudge pattern is the renderer\'s (one jq definition, held to renderOperatorMessageNudge)', () => {
+  // The grammar lives in the transcript library since chat PR B's fix round 1 (call 1953): the hook's picked-up arm includes it, and
+  // the reply's answered ids read the same definition. The cases below run the library's own definition, as strongly as before.
   const hookText = fs.readFileSync(HOOK, 'utf8');
-  const def = /^DOOR_NUDGE_JQ='([^']+)'$/m.exec(hookText)?.[1];
+  const LIB_DIR = path.resolve(__dirname, '../../ccd/lib');
+  const libText = fs.readFileSync(path.join(LIB_DIR, 'transcript.jq'), 'utf8');
+  const def = /^def nudge: .+;$/m.exec(libText)?.[0];
   const nudge = (line: string): string[] => {
-    const r = spawnSync('jq', ['-nr', '--arg', 'l', line, `${def} $l | nudge`], { encoding: 'utf8' });
+    const r = spawnSync('jq', ['-nr', '-L', LIB_DIR, '--arg', 'l', line, 'include "transcript"; $l | nudge'], { encoding: 'utf8' });
     expect(r.status, r.stderr).toBe(0);
     return r.stdout.split('\n').filter((l) => l !== '');
   };
 
-  it('the hook carries it as one definition', () => { expect(def, 'DOOR_NUDGE_JQ is one single-quoted assignment').toBeTypeOf('string'); });
+  it('the library carries it as one definition, and the hook includes it and spells no copy', () => {
+    expect(def, 'one `def nudge:` line in ccd/lib/transcript.jq').toBeTypeOf('string');
+    expect(libText.match(/^def nudge:/gm), 'defined once').toHaveLength(1);
+    expect(/^DOOR_NUDGE_JQ='include "transcript"; '$/m.test(hookText), 'the hook\'s arm includes the library').toBe(true);
+    expect(hookText, 'no second copy of the line\'s text in the hook').not.toContain('Operator message " as $h');
+  });
 
   it('the renderer\'s line, for several ids, matches and yields its id', () => {
     for (const id of [1, 7, 10, 42, 99999, 123456789012345, 1234567890123456, 9007199254740991]) {
