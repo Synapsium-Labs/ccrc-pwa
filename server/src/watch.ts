@@ -3039,6 +3039,8 @@ export class FleetWatcher {
       this.sweepQuestions(registryRead);
       // D-5300 (plan Task 17): the daily digest's beat. Synchronous, guarded inside, and throttled to once a minute.
       this.sweepDigest();
+      // The act journal's head-signing beat (Overlord W2, act journal A): synchronous, never throws, at most once an hour.
+      this.sweepActHeadSign();
       // NEVER awaited, same reasoning as `sweepDivergences` above: in remote
       // mode this is one agent-WS `readdir` plus one `readFileFrom` per live
       // generation per sweep. Awaiting it would put the dialog detector and
@@ -10275,6 +10277,12 @@ export class FleetWatcher {
     const coord = this.deps.coord;
     if (!coord) return;
     this.runLaneSync('digestBeat', () => this.digestBeat(coord, now));
+  }
+
+  /** The act journal's signed head (`coord/overlordActHeadLane.ts`): one pass on the wall clock; absent, nothing runs. */
+  sweepActHeadSign(): void {
+    const lane = this.deps.actHead;
+    if (lane) this.runLaneSync('actHeadSign', () => { lane.pass(this.deps.time.clock.wall()); });
   }
 
   private digestBeat(coord: WatcherCoordPort, now: number): void {

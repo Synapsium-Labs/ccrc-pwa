@@ -322,7 +322,8 @@ const TABLES = ['run_events', 'mail_deliveries', 'feed_events', 'lifecycle_event
   'continuity_hook_reports', 'continuity_witness_checks', 'coordinator_state', 'overlord_sequence', 'overlord_sequence_pruned', 'limit_samples',
   'programme_events', 'programme_picks', 'continuity_timer_refusals',
   'overlord_invariant_findings', 'overlord_readiness', 'overlord_readiness_items', 'overlord_account_holds',
-  'overlord_requests', 'overlord_request_messages', 'overlord_request_moves', 'overlord_acts'] as const;
+  'overlord_requests', 'overlord_request_messages', 'overlord_request_moves', 'overlord_acts', 'overlord_act_journal_head',
+  'overlord_act_heads'] as const;
 
 /** Each table's writers, `file#Class.method`, sorted and unique, read off the one scan (`sqlStatements.ts#sqlWrites`). `tables`
  *  is the table list to read: coord.db's by default, and the private store's for its own describe (Overlord W1 private store A). */
@@ -411,6 +412,11 @@ describe(TABLES_PIN, () => {
       // The Overlord authority journal's head row (Overlord W1, H27): one writer, `writeHeadRow`, inside its caller's transaction,
       // called by the apply step of `appendInTx` and by Confirm the restore's `appendConfirmInTx` (authority journal C).
       overlord_authority_head: ['server/src/coord/overlordAuthorityJournal.ts#writeHeadRow'],
+      // The Overlord act journal's head row (Overlord W2, act journal A): one writer in PR A, `writeActHeadRow`, the append step's
+      // after the last record and before the caller's apply, inside its transaction; act journal B adds Confirm's adopt.
+      overlord_act_journal_head: ['server/src/coord/overlordActJournal.ts#writeActHeadRow'],
+      // One signed (or unsigned) head a day, written by the head-signing lane through its one writer.
+      overlord_act_heads: ['server/src/coord/overlordActHeadStore.ts#recordActHeadInTx'],
       // The one sequence (Overlord W1, §10.4): one inserter, called inside each stamped writer's transaction, and one deleter,
       // which alone raises the prune floor in the same transaction.
       overlord_sequence: ['pruneSequenceThrough', 'stampSequenceInTx'].map((f) => `server/src/coord/overlordSequenceStore.ts#${f}`),

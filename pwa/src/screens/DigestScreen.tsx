@@ -26,6 +26,8 @@ import { digestKey, forget, peek, put } from '../lib/screenCache';
 import { doorMark } from '../command/door';
 import { useFleetStore, type FleetStore } from '../stores/fleet';
 import { DigestDrift } from './DigestDrift';
+import type { DigestActHead } from '../../../shared/actJournalHead';
+import { actHeadDigestLine } from '../overlord/actHeadWords';
 import { HandledElsewhere } from '../responses/HandledElsewhere';
 import { useOpenedReceipt } from '../responses/useOpenedReceipt';
 import { digestLineKey } from '../../../shared/responses';
@@ -297,6 +299,9 @@ export function DigestScreen({ day: asked, load = LOAD, correct = CORRECT, store
           )}
           {shown.drift !== undefined && shown.drift.lines.length > 0 && (
             <DigestDrift drift={shown.drift} until={utcClock(shown.toMs)} store={store} />
+          )}
+          {actHeadDigestLine((shown as DigestAnswer & DigestActHead).actHead) !== null && (
+            <p className="digest-act-head" data-act-head-digest>{actHeadDigestLine((shown as DigestAnswer & DigestActHead).actHead)}</p>
           )}
           {state === 'error' && error !== null && <p className="digest-error" role="alert">{error}</p>}
         </>

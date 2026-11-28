@@ -28,7 +28,7 @@ import {
 } from './overlordAuthority.js';
 import {
   AUTHORITY_STATE_CAUSES, AUTHORITY_STATE_WHYS, AUTHORITY_STATE_WORDS, authorityCoherence, authorityTailHeal,
-  type AuthorityFileSeen, type AuthorityRowsSeen, type AuthorityState, type CoherenceCause, type CoherenceVerdict,
+  type AuthorityFileSeen, type AuthorityRowsSeen, type AuthorityState, type CoherenceCause, type CoherenceVerdict, type OverlordJournalName,
 } from './overlordAuthorityCoherence.js';
 import { TERM_RAISED_WORDS, type ConfirmEntry } from './overlordRestore.js';
 
@@ -61,8 +61,9 @@ export type AuthorityWriterFailure = CoherenceCause | AuthorityUnreadable;
 /** L2, declared here by its consumer; the guard implements it (review F10). */
 export interface AuthorityGuardPort {
   state(): AuthorityState;
-  /** The writer's failure at or after the append (`trailing`), or the verdict of a head mismatch it measured. */
-  writerFailed(cause: AuthorityWriterFailure): void;
+  /** The writer's failure at or after the append (`trailing`), or the verdict of a head mismatch it measured. The act journal's
+   *  writer names itself (`'acts'`); the authority journal's writer passes no journal (Overlord W2, act journal question 12). */
+  writerFailed(cause: AuthorityWriterFailure, journal?: OverlordJournalName): void;
   /** The writer's report after a successful append and head-row apply (never on `row-only` or a refusal). */
   appended?(): void;
 }

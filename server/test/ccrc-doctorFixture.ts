@@ -1807,8 +1807,13 @@ export const anyVerdictFor = (out: string, name: string): string | undefined =>
  *  console's exposure file with no artifact keys, so no artifact names are set. Measured the same way: with the check in
  *  the table and this `+ 1` absent, every `(N skipped)` pin that reads this constant reds (`ccrc-doctor-core.test.ts`: 2
  *  cases, 24 skipped measured where 23 was pinned; `ccrc-doctor-exposure.test.ts`: 1 case, 25 where 24; and
- *  `ccrc-doctor-codex-host.test.ts`: 2 cases, 24 where 23). `ccrc-doctor-artifacts.test.ts` plants the keys. */
-export const HEALTHY_SKIPS = (process.platform === 'darwin' ? 3 : 0) + 24;
+ *  `ccrc-doctor-codex-host.test.ts`: 2 cases, 24 where 23). `ccrc-doctor-artifacts.test.ts` plants the keys.
+ *
+ *  RAISED BY ONE AGAIN, on every platform (Overlord W2, act journal A): `overlord-journals` SKIPs - `healthy()` places no
+ *  deploy/overlord-journals-verify.mjs, so nothing in the fixture tree reads an Overlord journal. Measured the same way: with
+ *  the check in the table and this `+ 1` absent, `ccrc-doctor-core.test.ts` reds in 2 cases (26 skipped measured where 25 was
+ *  pinned, and 25 where 24). `ccrc-doctor-overlord-journals.test.ts` plants the helper and drives every grade. */
+export const HEALTHY_SKIPS = (process.platform === 'darwin' ? 3 : 0) + 25;
 
 // ── the session gate: the flag, and the passphrase it needs ───────────────
 // Stage 3a, Task 9. TWO FACTS, ONE VERDICT — `CCRC_AUTH` (out of `ccrc.env`,

@@ -60,6 +60,7 @@ import type { DesignateBody, DesignationView, OverlordModelClass, RebindSaw } fr
 import type { PoolSet } from '../../../shared/poolset';
 import type { LadderWire, NarrowingState, Rung } from '../../../shared/overlord-ladder';
 import type { ReadinessWire } from '../../../shared/overlord-readiness';
+import type { ActHeadReadWire } from '../../../shared/actJournalHead';
 import {
   readChatEarlierAnswer, readChatSendAnswer, readChatThreadAnswer, type ChatEarlierAnswer, type ChatSendAnswer, type ChatThreadAnswer, type GenerationKey,
 } from '../../../shared/overlordChat';
@@ -372,6 +373,10 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
     /** The readiness word (Overlord W1 home B, Task 4), read only by `stores/overlord.ts`: `ReadinessWire` as served, `absent` on
      *  an older server's 404; a 503 `unavailable` throws, which the store reads as unmeasured. */
     overlordReadiness: (opts?: ReadOpts) => getJsonOrAbsent<ReadinessWire>('/api/overlord/readiness', opts),
+    /** The act journal's signed head (Overlord W2, act journal A), read only by `overlord/useActHead.ts`: the newest head, the key's
+     *  public half, and the digest at `at` (the head this device kept); `absent` on an older server's 404. */
+    overlordActHead: (at: number | null, opts?: ReadOpts) =>
+      getJsonOrAbsent<ActHeadReadWire>(at === null ? '/api/overlord/act-head' : `/api/overlord/act-head?at=${at}`, opts),
     /** The ladder's operator doors (home B, Task 4). A lowering answers `narrowing` (the "taking effect" line keys on it, never on
      *  `changed`); a raise above `chat` refuses `capability-missing`, and the server asks the step-up for every raise. */
     overlordRung: (rung: Rung) => postJson<{ readonly changed: boolean; readonly rung: Rung; readonly narrowing?: NarrowingState | null }>('/api/overlord/rung', { rung }),

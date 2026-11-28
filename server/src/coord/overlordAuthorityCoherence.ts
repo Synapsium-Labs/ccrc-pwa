@@ -45,11 +45,20 @@ export type CoherenceVerdict =
   | { kind: 'unmeasured'; why: 'journal' | 'rows' };
 
 /** The guard's state: a coherence verdict, a rollback a witness found (PR B), or an unmeasured privacy head (PR B). Declared
- *  here, in L1, so the writer's L2 port can name it. */
+ *  here, in L1, so the writer's L2 port can name it. `journal` names the act journal when its writer told the guard (Overlord W2,
+ *  act journal plan question 12, slug `guard-names-the-journal`); absent, it is the authority journal's, as every state before it
+ *  was, so an older reader of the state is unchanged. */
 export type AuthorityState =
   | { kind: 'coherent' }
-  | { kind: 'rolled-back'; cause: CoherenceCause | 'witness-epoch' | 'witness-heads' }
-  | { kind: 'unmeasured'; why: 'journal' | 'rows' | 'privacy-head' };
+  | { kind: 'rolled-back'; cause: CoherenceCause | 'witness-epoch' | 'witness-heads'; journal?: OverlordJournalName }
+  | { kind: 'unmeasured'; why: 'journal' | 'rows' | 'privacy-head'; journal?: OverlordJournalName };
+
+/** The journals that tell the one guard besides the authority journal, which is named by absence. */
+export type OverlordJournalName = 'acts';
+
+/** The journal a non-coherent state is about, as a refusal's detail names it. */
+export const journalNameOf = (s: AuthorityState): 'the act journal' | 'the authority journal' =>
+  s.kind !== 'coherent' && s.journal === 'acts' ? 'the act journal' : 'the authority journal';
 
 const samePosition = (a: ChainedPosition, b: ChainedPosition): boolean =>
   a.sequence === b.sequence && a.journalId === b.journalId && a.digest === b.digest;

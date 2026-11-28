@@ -48,6 +48,7 @@ import type { ActorRefused, AuthorityAppender, AuthorityRefused, RowUnreadable }
 import { ladderRead, ladderWire, NO_WITNESS_YET, type LadderConditionInputs, type NarrowingWitness } from './overlordLadderRead.js';
 import { isRung, isLadderCauseKey, type Rung } from '../../../shared/overlord-ladder.js';
 import type { ReadinessLane } from './overlordReadinessLane.js';
+import type { readActHeadAnswer } from './overlordActHeadLane.js';
 import { INVARIANTS_READ_ROWS_MAX, invariantsReadAnswer, type FindingsRead, type InvariantPassFact } from './overlordSequenceDoor.js';
 import type { FindingMode, FindingTally } from './invariantFindingsStore.js';
 import type { SequenceRead } from './overlordSequenceStore.js';
@@ -122,6 +123,9 @@ export interface OverlordRouteDeps {
   readonly ladder?: { readonly coord: Pick<CoordStore, 'ladderRows' | 'ladderRungRead' | 'setRung' | 'clearLatch'>; readonly inputs: LadderConditionInputs; readonly witness?: NarrowingWitness; readonly serverCaps: readonly string[]; readonly journal?: AuthorityAppender };
   /** The readiness word's read (`ReadinessLane.read`, §6.4), called per request; null when no lane is wired (a test, a script). */
   readonly readiness?: () => ReturnType<ReadinessLane['read']> | null;
+  /** The act journal's signed head read (W2 act journal A, `coord/overlordActHeadLane.ts#readActHeadAnswer`); absent when the
+   *  journal is not wired (a test, a script), and the door answers `unavailable`. */
+  readonly actHead?: (at: number | null) => ReturnType<typeof readActHeadAnswer>;
   /** The operator's read of the invariant monitor (sequence C): its mode and last pass, and the findings store's reads, each list
    *  asked for one row past the cut so a cut can be told. Absent (no monitor, no store, a test): the read answers 503. */
   readonly invariants?: {
@@ -702,6 +706,16 @@ export function registerOverlordRoutes(app: FastifyInstance, deps: OverlordRoute
   app.get('/api/overlord/readiness', async (_req, reply) => {
     const read = deps.readiness?.() ?? null;
     if (read === null || !read.ok) return refuseRoute(reply, 'unavailable', { detail: 'the readiness word could not be read' });
+    return read.wire;
+  });
+
+  // The act journal's signed head (W2 act journal A, §7.6): session-gated, no box token, no step-up, a read that writes nothing.
+  // `at` is the head the console kept; its digest is answered, `absent` past the head, or `unmeasured`. Ids, words and hashes only.
+  app.get('/api/overlord/act-head', async (req, reply) => {
+    const q = (req.query ?? {}) as { at?: unknown };
+    if (q.at !== undefined && (typeof q.at !== 'string' || !/^[1-9][0-9]{0,15}$/.test(q.at))) return refuseRoute(reply, 'bad-request');
+    const read = deps.actHead?.(q.at === undefined ? null : Number(q.at)) ?? null;
+    if (read === null || !read.ok) return refuseRoute(reply, 'unavailable', { detail: read === null ? 'the act journal is not wired on this server' : read.why });
     return read.wire;
   });
 

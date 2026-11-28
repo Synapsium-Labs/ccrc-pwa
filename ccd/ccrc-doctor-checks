@@ -213,7 +213,7 @@ CCRC_DOCTOR_CHECKS=(
   pools
   pool-sync cap-floor overlord-mods   # one line, as `flock timeout`: _check_cap-floor (Overlord W1 pool set) and then _check_overlord-mods (sandbox A2) are at the END of this file, just before the four model-advance checks
   transcripts transcript_work   # one line, as `flock timeout`: _check_transcript_work is at the END of this file
-  update-sync server-caps approval-verifier-runnable approval-key approval-key-colocated approval-digest-mismatch   # one line, as `flock timeout`: _check_server-caps is APPENDED near the end of this file, just before _check_oom-policy; the four approval checks are at the very END
+  update-sync server-caps approval-verifier-runnable approval-key approval-key-colocated approval-digest-mismatch overlord-journals   # one line, as `flock timeout`: _check_server-caps is APPENDED near the end of this file, just before _check_oom-policy; the four approval checks are at the very END, and _check_overlord-journals (Overlord W2 act journal A) is the last function of this file
   graphify
   graphify-path playwright browser-mcp   # one line, as `flock timeout`: _check_playwright and then _check_browser-mcp are at the END of this file
   build
@@ -12942,5 +12942,51 @@ _check_model-release-lookup() {
     "warn"$'\x1f'*) _dr_warn model-release-lookup "${v#*$'\x1f'}" "each Codex lane's catalogue is asked as the last good release, or the built-in floor, until a read succeeds; check that this box reaches https://registry.npmjs.org (the reason above is the last try's); the probe tries again at the next hourly refresh" ;;
     "pass"$'\x1f'*) _dr_pass model-release-lookup "${v#*$'\x1f'}" ;;
     *) _dr_skip model-release-lookup "the Codex release lookup record is unavailable or could not be measured"; return 3 ;;
+  esac
+}
+
+# ── overlord-journals: do the Overlord's two chained journals verify? ──────
+# (Overlord W2, act journal plan Task A4, question 9; spec §7.6 H27, "Doctor
+# verifies the chain".) One check for both journals, the authority journal and
+# the act journal, each a hash-chained file in ~/.ccrc that no snapshot carries.
+# The chain's hashes are RFC 8785 JSON under SHA-256, so the check runs a Node
+# helper, deploy/overlord-journals-verify.mjs, which reads each file read-only
+# through the server build's own file adapter (no second verifier) and prints
+# one JSON line per journal: ids, words and counts, never a record's text.
+# It never heals: the server cuts a torn tail aside at its next boot.
+#
+# The grades (the plan's Table 3): `absent` and `ok` PASS; `torn-tail` WARN;
+# `malformed` and `unreadable` FAIL, naming Confirm the restore; a build that is
+# missing, no node, or a helper that prints anything but its two lines, WARN as
+# unmeasured, never PASS. A tree that ships no helper (one placed before it)
+# reads nothing: SKIP, as `sigstore-root` does with no verifier. A box that
+# records CCRC_ROLE=fleet runs no server and holds neither journal: SKIP.
+_check_overlord-journals() {
+  local tree helper role="" out line re words="" grade=pass
+  tree="$(cd "$CCRC_HERE/.." 2>/dev/null && pwd)" || tree="$CCRC_HERE/.."
+  helper="$tree/deploy/overlord-journals-verify.mjs"
+  [ -f "${BOX_ENV_FILE:-}" ] && [ -r "${BOX_ENV_FILE:-}" ] && role="$(_box_env_value "$BOX_ENV_FILE" CCRC_ROLE)"
+  [ "$role" = fleet ] && { _dr_skip overlord-journals "this box records CCRC_ROLE=fleet, so it runs no ccrc server and holds no Overlord journal"; return 3; }
+  local unfix="reinstall this box's tree with ccrc update --force, which places the helper and the server build it reads; until then nothing here says whether the journals verify"
+  [ -f "$helper" ] || { _dr_skip overlord-journals "this tree ships no journal verifier (deploy/overlord-journals-verify.mjs), so nothing here reads an Overlord journal"; return 3; }
+  command -v node >/dev/null 2>&1 || { _dr_warn overlord-journals "unmeasured: node is not on PATH, so the Overlord journals' chains were not read" "$unfix"; return 2; }
+  out="$(node "$helper" "$HOME/.ccrc" </dev/null 2>/dev/null)" || true
+  re='^\{"journal":"(authority|acts)","state":"(absent|ok|torn-tail|malformed|unreadable)"(,"(sequence|code|why)":"?([a-z0-9-]{1,64})"?)?\}$'
+  while IFS= read -r line; do
+    [[ "$line" =~ $re ]] || continue
+    case "${BASH_REMATCH[2]}" in
+      absent) words+="; ${BASH_REMATCH[1]}: no record yet" ;;
+      ok) words+="; ${BASH_REMATCH[1]}: verified to record ${BASH_REMATCH[5]}" ;;
+      torn-tail) words+="; ${BASH_REMATCH[1]}: a torn tail after record ${BASH_REMATCH[5]}, which the server cuts aside at its next boot"; [ "$grade" = pass ] && grade=warn ;;
+      *) words+="; ${BASH_REMATCH[1]}: ${BASH_REMATCH[2]} (${BASH_REMATCH[5]})"; grade=fail ;;
+    esac
+  done <<< "$out"
+  if [[ "$words" != "; authority: "*"; acts: "* ]] || [ "$(grep -c . <<< "$out")" != 2 ]; then
+    _dr_warn overlord-journals "unmeasured: the journal verifier gave no answer this check reads (its server build may be missing), so the Overlord journals' chains were not read" "$unfix"; return 2
+  fi
+  case "$grade" in
+    pass) _dr_pass overlord-journals "${words#; }" ;;
+    warn) _dr_warn overlord-journals "${words#; }" "nothing to do: the server's boot heal keeps the cut bytes in a quarantine directory beside the journal; restart ccrc.service to cut it now" ;;
+    *) _dr_fail overlord-journals "${words#; }" "open the console and Confirm the restore: it sets a malformed journal aside and starts a new chain; for an unreadable one, first check that the file in ~/.ccrc is the server user's own, mode 0600"; return 1 ;;
   esac
 }

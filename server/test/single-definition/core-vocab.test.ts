@@ -891,7 +891,10 @@ describe('Build 7 nouns', () => {
       // The Overlord's act rows (W2 act rows A, §10.1): the table's SQL takes the caller's handle inside its transaction, and the
       // count port's composition (`overlordCeilingWiring.ts`) hands the reader the open store's handle for gate step 10; each
       // names it by `import type`.
-      'overlordActsStore.ts', 'overlordCeilingWiring.ts']);
+      'overlordActsStore.ts', 'overlordCeilingWiring.ts',
+      // The Overlord act journal (W2 act journal A, §7.6): the writer's head row and the signed heads' SQL take the caller's handle,
+      // and the lane and the head read carry the one the composition root gives them; each by `import type`.
+      'overlordActJournal.ts', 'overlordActHeadStore.ts', 'overlordActHeadLane.ts']);
     const coordFiles = sources(coordDir);
 
     it('visits the whole directory — a moved directory must turn this red, not disarm it', () => {

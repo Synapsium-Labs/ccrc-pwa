@@ -17,6 +17,7 @@ import { PageScaffold } from '@ccrc/ui';
 import { ConfirmItsYou } from '../accounts/ConfirmItsYou';
 import { useStepUp, type StepUpDeps } from '../accounts/useStepUp';
 import { useDesignationState, useOverlordStore } from '../stores/overlord';
+import { ActHeadLiveLine } from './ActHeadLine';
 import { BodyPart } from './BodyPart';
 import { CapacityLine } from './CapacityLine';
 import { ChatPart } from './ChatPart';
@@ -50,6 +51,7 @@ export function OverlordPlace({ stepUpDeps = NO_STEP_UP_DEPS }: { readonly stepU
           <p className="ov-place-word" data-designation-word>{designationWordOf(designation)}</p>
         </header>
         <ReadinessPart doors={doors} />
+        <ActHeadLiveLine />
         <BodyPart stepUp={stepUp} />
         <LadderPart doors={doors} />
         <SincePart />

@@ -163,6 +163,8 @@ import type { ProjectAddAnswer } from '../../shared/projectAdd.js';
 import { classifyTitleFailure, planRetitle } from './workspaceTitle.js';
 import { queueProgramKickoff } from './coord/kickoff.js';
 import { buildDigest, correctDigestRow, digestDayFor, digestWindow, parseDigestCorrectBody, parseDigestDay, readDigestHour } from './coord/digest.js';
+import { actHeadRecordedOf, newestActHeadAtOrBefore } from './coord/overlordActHeadStore.js';
+import type { DigestActHead } from '../../shared/actJournalHead.js';
 import { toRunSummary, type CoordStore } from './coord/store.js';
 import { incarnationsOfSessions, withChildIds, withLastMoves, withVerdicts, withWorkerSeen } from './coord/runWire.js';
 import { AuthSecretUnusable, readAuthSecret, verifyPassphrase, type AuthSecret } from './auth/secret.js';
@@ -2566,7 +2568,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   // path as `stopCreated`, and the first prompt through the renewal lane's `SessionHost`.
   registerOverlordRoutes(app, {
     gate: accountGate, identity, serial: coordRoutes.serial, ...overlordStore, exchange: deps.overlordAuthorityExchange, consoleFacts: (req) => ({ armed: deps.cfg.authEnabled, device: deps.cfg.authEnabled ? sessionAuth(req).device : null }), host: renewalHostOf(deps, deps.coord ?? { startsOf: () => ({ ok: false, detail: 'no coordination store' }) }, null),
-    ladder: ladderDeps, restore: deps.overlordRestore, readiness: () => deps.overlordReadiness?.read() ?? null,
+    ladder: ladderDeps, restore: deps.overlordRestore, readiness: () => deps.overlordReadiness?.read() ?? null, actHead: deps.actHead?.read,
     // The chat's two reads (W1 chat): the one runner, the store's page, the identity's generations, the readiness changes, the link.
     chat: { readRunner, messages: deps.operatorModel,
       generationsOf: (i) => (deps.coord === undefined ? { ok: false, detail: 'no coordination store' } : generationsOf(deps.coord.db, i)),
@@ -2985,9 +2987,12 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     const built = buildDigest(deps.coord, fromMs, toMs, Math.min(toMs, Date.now()));
     if (!built.ok) return refuseRoute(reply, 'digest-unreadable', { detail: built.detail });
     const mark = deps.coord.digestDay(day);
-    const answer: DigestAnswer = {
+    // The act journal's newest head at or before the day (W2 act journal A): its line, or `unmeasured`, never folded into none.
+    const head = newestActHeadAtOrBefore(deps.coord.db, day);
+    const answer: DigestAnswer & DigestActHead = {
       v: 1, day, hourUtc, fromMs, toMs, ...built.digest,
       sentAt: mark?.sentAt ?? null, pushed: mark !== null && mark.count > 0,
+      ...(head.kind === 'unmeasured' ? { actHead: 'unmeasured' as const } : head.value === 'absent' ? {} : { actHead: actHeadRecordedOf(head.value) }),
     };
     return answer;
   });

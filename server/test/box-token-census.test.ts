@@ -240,6 +240,8 @@ const OVERLORD_OPERATOR_DOORS = ['/api/overlord/designation', '/api/overlord/des
   '/api/overlord/ladder', '/api/overlord/readiness',
   // the operator's read of the invariant monitor (Overlord W1 sequence C): the session gate, no box token, no step-up
   '/api/overlord/invariants',
+  // the act journal's signed head (Overlord W2, act journal A): the session gate, no box token, no step-up, a read that writes nothing
+  '/api/overlord/act-head',
   '/api/overlord/rung', '/api/overlord/pause', '/api/overlord/latches/:cause/clear',
   // the console's witness exchange (Overlord W1 authority journal, Task 6): the account gate, no step-up, no box token
   '/api/overlord/witness',
@@ -594,7 +596,7 @@ describe('the box-token surface is derived, and no prose site under-claims it', 
     expect([...new Set(regs.map((k) => k.slice(k.indexOf(' ') + 1)))].sort(),
       'overlordRoutes.ts and OVERLORD_OPERATOR_DOORS disagree — a door was registered, or a name listed, on one side only')
       .toEqual([...OVERLORD_OPERATOR_DOORS].sort());
-    expect(regs.length, 'the Overlord doors file registers eighteen routes (seven designation, four ladder, two restore, the witness exchange, the readiness read, the invariants read and the chat\'s two reads)').toBe(18);
+    expect(regs.length, 'the Overlord doors file registers nineteen routes (seven designation, four ladder, two restore, the witness exchange, the readiness read, the invariants read, the chat\'s two reads and the act journal\'s head read)').toBe(19);
     expect(lanesIn(OVERLORD_SRC), 'a designation door consults the box token — they are the operator\'s').toEqual([]);
     for (const key of regs) expect(GATE_SRC, `${key} is EXEMPT — the operator's doors sit behind the auth gate`).not.toContain(`  ['${key}',`);
     for (const door of OVERLORD_OPERATOR_DOORS) {

@@ -45,6 +45,8 @@ import { LANDING_INFRASTRUCTURE_CODES, LANDING_MUTATION_CODES } from '../../shar
 import { isDelegationModelKebab } from '../src/coord/delegation-model.js';
 import { isDelegationJournalKebab } from '../src/coord/delegation-journal.js';
 import { isOverlordAuthorityKebab } from '../src/coord/overlordAuthorityJournal.js';
+import { isOverlordActsKebab } from '../src/coord/overlordActRecords.js';
+import { isActHeadKebab } from '../src/coord/overlordActHead.js';
 import { isWitnessKebab } from '../src/coord/overlordAuthorityWitness.js';
 import { isWitnessLinkKebab } from '../src/coord/overlordAuthorityWitnessLink.js';
 import { isDelegationCheckpointKebab } from '../src/coord/delegation-durability.js';
@@ -1149,6 +1151,11 @@ describe('the rejection table is total, in both directions', () => {
         // typed tables (or from `shared/api.ts`'s delegation vocabularies, read and never re-spelled), never NOT_CODES, for the
         // reason every union above gives.
         || isDelegationModelKebab(tok) || isDelegationJournalKebab(tok) || isDelegationCheckpointKebab(tok) || isOverlordAuthorityKebab(tok)
+        // OVERLORD W2, THE ACT JOURNAL (PR A): `coord/overlordActRecords.ts` spells its record kinds and its file stems (`overlord-acts`,
+        // `overlord-acts-torn`), and `coord/overlordActHead.ts` the words a head is recorded unsigned with. None is a mail rejection or a
+        // run refusal: they ride the journal file and the head's row. Admitted through each file's own exported guard, derived from its
+        // tables, never NOT_CODES.
+        || isOverlordActsKebab(tok) || isActHeadKebab(tok)
         || isDelegationIngestKebab(tok) || isDelegationCorrelationKebab(tok) || isDelegationCensusKebab(tok)
         // THE AUTHORITY WITNESS (Overlord W1 authority journal, Task 6): `coord/overlordAuthorityWitness.ts` names where a witness lives
         // (`'other-host'`), its verdict (`'no-witness'`) and whether a narrowing is held (`'not-yet'`); its link adapter names its

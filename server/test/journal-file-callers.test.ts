@@ -14,6 +14,7 @@ const PORT_BINDERS = ['server/src/chainedJournalFile.ts', 'server/src/coord/land
 /** The files that bind the chained-journal file adapter: authority journal A's writer, and the private store's open, which
  *  binds the privacy journal (private store A). */
 const CHAINED_BINDERS: string[] = [
+  'server/src/coord/overlordActJournal.ts',
   'server/src/coord/overlordAuthorityJournal.ts',
   'server/src/operatorModel/store.ts',
 ];
@@ -21,6 +22,8 @@ const CHAINED_BINDERS: string[] = [
  *  (the Overlord authority journal's `healTornTail`, and the privacy journal's heal at the store's open, private store A). */
 const CUT_CALLS = [
   'server/src/chainedJournalFile.ts: file.cutAside',
+  // Overlord W2, the act journal (PR A): its torn-tail heal at boot, through the adapter's one cut, into `overlord-acts-torn`.
+  'server/src/coord/overlordActJournal.ts: this.file.cutAside',
   'server/src/coord/overlordAuthorityJournal.ts: this.file.cutAside',
   'server/src/operatorModel/store.ts: file.cutAside',
 ];

@@ -18,6 +18,7 @@ import path from 'node:path';
 import {
   APPROVAL_SIGNING_KEY_FILE, approvalRulingBytes, isApprovalRefusal, isApprovalReleaseReason, type ApprovalRulingRecord,
 } from '../../../shared/api.js';
+import { actHeadPreimage, type ActHead } from '../../../shared/actJournalHead.js';
 import type { NodeRole } from '../../../shared/node-role.js';
 import type { ApprovalsTopologyWire } from '../../../shared/overrides.js';
 import type { FleetMode } from '../config.js';
@@ -33,6 +34,10 @@ export const APPROVALS_DISABLED_FILE = 'approvals-disabled';
 export interface ApprovalSigner {
   /** The base64 Ed25519 signature over the record's canonical bytes, or `null` for a record with no canonical form. */
   signRuling(record: ApprovalRulingRecord): string | null;
+  /** The base64 Ed25519 signature over an act journal head's domain-tagged preimage (`shared/actJournalHead.ts#actHeadPreimage`;
+   *  Overlord W2, act journal plan question 7), or `null` for a head out of shape. The method builds the preimage itself, so no
+   *  caller can ask the key to sign arbitrary bytes, and the tag keeps it from ever being an approval ruling's. */
+  signActHead(head: ActHead): string | null;
   /** The public key, PEM SPKI, as `GET /api/approvals/key` serves it. */
   publicKeyPem(): string;
 }
@@ -73,6 +78,10 @@ export function loadOrCreateApprovalSigner(ccrcDir: string): ApprovalSigner {
   return {
     signRuling(record) {
       const bytes = approvalRulingBytes(record);
+      return bytes === null ? null : sign(null, Buffer.from(bytes, 'utf8'), priv).toString('base64');
+    },
+    signActHead(head) {
+      const bytes = actHeadPreimage(head);
       return bytes === null ? null : sign(null, Buffer.from(bytes, 'utf8'), priv).toString('base64');
     },
     publicKeyPem: () => pubPem,
