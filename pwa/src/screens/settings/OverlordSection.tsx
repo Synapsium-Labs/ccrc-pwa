@@ -17,9 +17,10 @@
 // its own `step-up-required` is final. A press by the operator is always a first send. Any other `ask`, another card's answer
 // included, drops a retry not yet sent. The hook itself still retries nothing (`useStepUp`); the other cards, the decision rows
 // among them, are pressed again after the confirm, as before (slug `rows-keep-the-press-after-the-confirm`). A card that hands a
-// retry is held whole while its step shows (`held`, review 4167 F2 and F3, ruled call 1930): every input and every act of it, so
-// no keystroke or other act meets the retry, and another card's answer frees it. The retry is made by the card outside every send,
-// so the closure kept here can reach no value a send read (F1).
+// retry is held whole while its step shows and, once the confirm lands, until its retry has been sent (`held`, review 4167 F2 and
+// F3, ruled call 1930; review 4191 F1): every input and every act of it, so no keystroke or other act meets the retry, and another
+// card's answer frees it. The retry's own send in flight holds the card from there, by the card's door. The retry is made by the
+// card outside every send, so the closure kept here can reach no value a send read (F1).
 //
 // THE CARDS' GATE (plan question 3): the Overlord, the model class and the account set act on the designation and are drawn from
 // the store's read through `overlordGateOf`. The backstop, the retention and the account facts act on their own rows, so they are
@@ -65,7 +66,10 @@ export function OverlordSection({ stepUpDeps = NO_STEP_UP_DEPS }: { readonly ste
   const confirmFor = useCallback((card: string): ReactNode => (asking === card
     ? <ConfirmItsYou stepUp={stepUp} subject="the Overlord's settings" /> : null), [asking, stepUp]);
   if (gate.kind === 'absent') return <p className="settings-note" role="status" data-settings-overlord="absent">{W.absent}</p>;
-  const held = (card: string): boolean => stepUp.needed && asking === card;
+  // Held while the card's step shows, and after the confirm until its retry has been sent (review 4191 F1): the confirm puts the
+  // step away in one render and the retry is sent after it, from the effect above. A retry that sends a request holds the card by
+  // its door's `busy` from there; one that sends nothing frees it.
+  const held = (card: string): boolean => asking === card && (stepUp.needed || pending?.card === card);
   const ctx: SectionCtx = { stepUp, gate, confirmFor, ask, held };
   return (
     <div className="ovs-section" data-settings-overlord={gate.kind}>

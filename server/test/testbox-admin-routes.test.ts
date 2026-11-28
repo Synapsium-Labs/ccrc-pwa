@@ -131,8 +131,12 @@ async function openApp(o: Opts = {}): Promise<Rig> {
   return rig;
 }
 
-const login = async (a: FastifyInstance): Promise<string> => {
-  const res = await a.inject({ method: 'POST', url: '/api/auth/login', payload: { passphrase: PASSPHRASE } });
+/** `device`, when given, is the login's user-agent, which the session keeps as its device label and every event's actor carries. */
+const login = async (a: FastifyInstance, device?: string): Promise<string> => {
+  const res = await a.inject({
+    method: 'POST', url: '/api/auth/login', payload: { passphrase: PASSPHRASE },
+    ...(device === undefined ? {} : { headers: { 'user-agent': device } }),
+  });
   expect(res.statusCode, res.body).toBe(204);
   const set = res.headers['set-cookie'];
   const line = Array.isArray(set) ? set[0]! : String(set);
@@ -142,7 +146,7 @@ const stepUp = async (a: FastifyInstance, cookie: string): Promise<void> => {
   const res = await a.inject({ method: 'POST', url: '/api/auth/step-up/passphrase', headers: { cookie }, payload: { passphrase: PASSPHRASE } });
   expect(res.statusCode, res.body).toBe(200);
 };
-const fresh = async (a: FastifyInstance): Promise<string> => { const c = await login(a); await stepUp(a, c); return c; };
+const fresh = async (a: FastifyInstance, device?: string): Promise<string> => { const c = await login(a, device); await stepUp(a, c); return c; };
 
 const post = (r: Rig, sub: string, body: unknown, cookie?: string, extra: Record<string, string> = {}) =>
   r.app.inject({
@@ -332,17 +336,41 @@ describe('the answer is the re-read status, never the request (spec §2.1)', () 
     expect(res.headers['cache-control']).toBe('no-store');
   });
 
-  it('a POST answers the status read AFTER the act, not what the act printed or the caller sent', async () => {
+  // The second row forces the collision #3667 met by chance: its session's device label holds the port's digits, so every event's
+  // actor does. The search below must stay green there and still go red when the route echoes the request.
+  it.each([
+    ['', undefined],
+    [', though the actor holds the port\'s digits', 'device 2222'],
+  ])('a POST answers the status read AFTER the act, not what the act printed or the caller sent%s', async (_title, device) => {
     const r = await openApp();
-    const cookie = await fresh(r.app);
+    const cookie = await fresh(r.app, device);
     r.stub('key', { out: { ok: true, line: 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIPUBLICKEYLINE ccrc-testbox' } });
     r.stub('status', { out: CONNECTED });
-    const res = await post(r, 'key', { fields: { address: '192.0.2.10', port: 2222, user: 'root' } }, cookie);
+    // The user sent is not the status's login (`root`), so an echo of it is told apart from the status read.
+    const sent = { address: '192.0.2.10', port: 2222, user: 'deploy' };
+    const res = await post(r, 'key', { fields: sent }, cookie);
     expect(res.statusCode, res.body).toBe(200);
-    const j = res.json() as { status: unknown; result: { line: string } };
+    const j = res.json() as { status: unknown; events: { actor: unknown; at: unknown }[]; result: unknown };
+    expect(Object.keys(j).sort()).toEqual(['events', 'ok', 'result', 'status']);
     expect(j.status).toEqual(CONNECTED);
-    expect(j.result.line).toBe('ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIPUBLICKEYLINE ccrc-testbox');
-    expect(JSON.stringify(j)).not.toContain('2222');
+    expect(j.result).toEqual({ line: 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIPUBLICKEYLINE ccrc-testbox' });
+    // Nothing the caller sent comes back: not the port, not the address, not the user as sent. The search runs over KNOWN text, so
+    // it cannot collide (#3667). An event carries two values this test does not choose: its actor, which ends in eight hex
+    // characters of a random session's id hash, and its time, from the clock. Each is held to its grammar first (the session's own
+    // device label and eight hex characters; an integer), which can carry none of the three values sent, and is then replaced by a
+    // placeholder. What is left is the stubs' text, the ledger's vocabulary, the fixture's node id and a row id, none of which holds
+    // any of them, so an echo anywhere in the answer still shows and chance never does.
+    expect(j.events.length).toBeGreaterThan(0);
+    const actor = new RegExp(`^${device ?? 'lightMyRequest'} [0-9a-f]{8}$`);
+    const known = JSON.stringify({
+      ...j,
+      events: j.events.map((e) => {
+        expect(e.actor).toMatch(actor);
+        expect(Number.isSafeInteger(e.at), 'an event time is an integer').toBe(true);
+        return { ...e, actor: '<actor>', at: '<at>' };
+      }),
+    });
+    for (const value of [String(sent.port), sent.address, sent.user]) expect(known, value).not.toContain(value);
     // the act ran first, the status read after it
     expect(r.calls.map((c) => c.sub)).toEqual(['key', 'status']);
   });

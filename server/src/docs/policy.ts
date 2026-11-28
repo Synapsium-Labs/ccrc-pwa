@@ -789,8 +789,14 @@ export const DOCS_LANE_BYTES = 3145728;
 export const DOCS_LANE_LARGE_RAW = 1048576;
 /** The most jobs queued behind a read lane; `docs-busy {lane:'read'}` past it (section 6.3). */
 export const DOCS_LANE_QUEUE = 32;
-/** The longest a queued read job waits for admission; `docs-busy {lane:'read'}` past it (section 6.3). */
+/** The longest a queued read job waits for admission; `docs-busy {lane:'read'}` past it (section 6.3). A console range
+ *  prepare waits `DOCS_LANE_PREPARE_MAX_WAIT_MS` instead (X5-FU, D-9172; `laneWaitMs`). */
 export const DOCS_LANE_MAX_WAIT_MS = 10000;
+/** The longest a queued CONSOLE range prepare waits for admission (X5-FU, D-9146's residual): long enough to wait out the one
+ *  prepare `laneAdmit`'s fifth clause lets run (measured worst case about 23 s), so a console range read beside an artifact page's
+ *  first load waits instead of answering `docs-busy`. An artifact job keeps `DOCS_LANE_MAX_WAIT_MS` (`laneWaitMs`). Its own literal,
+ *  never an alias of a neighbour. */
+export const DOCS_LANE_PREPARE_MAX_WAIT_MS = 30000;
 
 /** The most artifact jobs queued behind a read lane (X5 A3.3): their own bound, never counted against
  *  `DOCS_LANE_QUEUE`, so a page of artifact requests cannot fill the queue the console's reads share. Its own literal,
@@ -856,10 +862,11 @@ export function laneStep(load: LaneLoad, job: DocsJob): 'start' | 'skip' | 'stop
 }
 
 /**
- * Which FIFO's head the read lane starts next (X5 A3.3). The console head comes first: when one waits, `'reader'` if
- * `laneAdmit` admits it, else `null`, so an artifact job never passes a waiting console job. Only when no console job
- * waits is the artifact head considered: `'artifact'` if `laneAdmit` admits it, else `null`. Each FIFO is judged by
- * its head only, as the lane always did; the lane's pump decides nothing itself.
+ * Which FIFO's head the read lane starts next (X5 A3.3). The console head comes first: when the lane passes one,
+ * `'reader'` if `laneAdmit` admits it, else `null`, so an artifact job never passes that console job. The lane passes the
+ * first console job its walk does not skip, so a console prepare held back only because a prepare already runs is passed
+ * (X5-FU, D-9172). Only when it passes none is the artifact head considered: `'artifact'` if `laneAdmit` admits it, else
+ * `null`. Each FIFO is judged by its head only, as the lane always did; the lane's pump decides nothing itself.
  */
 export function laneNext(load: LaneLoad, consoleHead: DocsJob | null, artifactHead: DocsJob | null): DocsJobSource | null {
   if (consoleHead !== null) return laneAdmit(load, consoleHead) ? 'reader' : null;
@@ -1957,6 +1964,15 @@ export function lanePrepare(job: DocsJob): boolean {
  */
 export function laneArtifactRead(job: DocsJob): boolean {
   return job.source === 'artifact' && !lanePrepare(job);
+}
+
+/**
+ * How long a queued read job may wait for admission (X5-FU, D-9146's residual): `DOCS_LANE_PREPARE_MAX_WAIT_MS` for a console range
+ * prepare, which only another prepare holds back for long and which waits that prepare out; `DOCS_LANE_MAX_WAIT_MS` for every other
+ * job, an artifact prepare included (the artifact jobs pass a waiting console prepare, so none of them waits behind it).
+ */
+export function laneWaitMs(job: DocsJob): number {
+  return lanePrepare(job) && job.source !== 'artifact' ? DOCS_LANE_PREPARE_MAX_WAIT_MS : DOCS_LANE_MAX_WAIT_MS;
 }
 
 /**

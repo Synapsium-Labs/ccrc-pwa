@@ -4834,15 +4834,48 @@ export const MIGRATIONS: readonly string[] = [
   `,
 
   // ── 136: user_version 135 -> 136 ──────────────────────────────────────────
+  // The Overlord's act rows (spec §10.1, C25, H24, H27, Table 10.1a; plan `docs/superpowers/plans/2026-11-16-overlord-w2/w2-act-rows.md`
+  // Tasks A2 and A3): `overlord_acts`, one row per act, with every column of Table 10.1a, so W3 adds behaviour and no column (question
+  // 11): the W2 index's `outcomeAt`, the spec's later `reason`, and `programme`, the act's target programme that the ceiling counts
+  // by. ONE owner of its SQL, `coord/overlordActsStore.ts`. The id is issued by `nextActId`, never AUTOINCREMENT, so a refused or
+  // rolled-back write reserves none. `overlord_acts_natural` holds one live act per natural key (I3): a row settled `refused` frees
+  // it. `overlord_acts_op_key` holds one act per operation key in a session's generation. NEW TABLE only: an older build takes rule
+  // 3 and never names it. RE-MEASURE the slot before merge (it must print 135 before this entry is counted):
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  CREATE TABLE overlord_acts (
+    id INTEGER PRIMARY KEY, at INTEGER NOT NULL, sequence INTEGER NOT NULL, kind TEXT NOT NULL, effect TEXT, class TEXT,
+    effectiveClass TEXT, evidenceClass TEXT, requestId INTEGER, targets TEXT NOT NULL, programme TEXT, naturalKey TEXT NOT NULL,
+    naturalKind TEXT NOT NULL, naturalId INTEGER NOT NULL, naturalRevision INTEGER NOT NULL CHECK (naturalRevision >= 0),
+    widens INTEGER NOT NULL DEFAULT 0 CHECK (widens IN (0, 1)), widenedProgramme TEXT, summary TEXT NOT NULL, why TEXT NOT NULL,
+    reason TEXT, authority TEXT NOT NULL, dissent TEXT, reversibility TEXT NOT NULL, outcome TEXT, outcomeAt INTEGER,
+    state TEXT NOT NULL CHECK (state IN ('pending', 'done', 'refused', 'unknown', 'staged', 'effective', 'vetoed', 'voided', 'preempted', 'shadow')),
+    overturnedAt INTEGER, overturnNote TEXT, seenAt INTEGER, dependsSince INTEGER, divergedAt INTEGER, pushedAt INTEGER,
+    term INTEGER NOT NULL, generationId INTEGER NOT NULL, model TEXT, lane TEXT, actorKind TEXT NOT NULL, actorSubject TEXT NOT NULL,
+    actorIssuer TEXT NOT NULL, identityStrength TEXT NOT NULL, isolation TEXT NOT NULL, opKey TEXT NOT NULL, opDoor TEXT NOT NULL,
+    opCallSha256 TEXT NOT NULL, opSessionId TEXT NOT NULL, opGenerationId INTEGER NOT NULL, options TEXT, chosen TEXT,
+    recommended TEXT, citedIds TEXT, probability REAL, checks TEXT NOT NULL DEFAULT '[]', stagedUntil INTEGER, stagedOutcome TEXT,
+    performerSession TEXT, performedAt INTEGER,
+    CHECK (widens = 1 OR widenedProgramme IS NULL)
+  );
+  CREATE UNIQUE INDEX overlord_acts_natural ON overlord_acts (naturalKey) WHERE state <> 'refused';
+  CREATE UNIQUE INDEX overlord_acts_op_key ON overlord_acts (opSessionId, opGenerationId, opKey);
+  CREATE INDEX overlord_acts_by_state ON overlord_acts (state);
+  CREATE INDEX overlord_acts_by_kind ON overlord_acts (kind, at);
+  CREATE INDEX overlord_acts_by_effect ON overlord_acts (effect, at);
+  `,
+
+  // ── 137: user_version 136 -> 137 ──────────────────────────────────────────
   // The Overlord act journal's two tables (spec §7.6 H27; plan `docs/superpowers/plans/2026-11-16-overlord-w2/w2-act-journal.md`
   // Tasks A2 and A3): `overlord_act_journal_head`, the singleton head row of `~/.ccrc/overlord-acts.jsonl` (the sequence, journal
   // id and digest of the last record whose act row committed, and the request floor only Confirm's adopt writes, act journal B),
   // whose one writer in PR A is `coord/overlordActJournal.ts`'s append step; and `overlord_act_heads`, one signed (or unsigned,
   // with its word) head a day, whose one writer is `coord/overlordActHeadStore.ts#recordActHeadInTx`. Neither holds a word of the
   // operator's. NEW TABLES only: an older build takes rule 3 and never names them. The slot is the next free one by position on
-  // `main` when this was written; three open pieces take the same slot, so the second to land renumbers this entry and its pins
-  // (`coord-db.test.ts`'s version pins, the run-close switch's and the limit samples store's undo lists). RE-MEASURE the slot
-  // before merge (it must print 135 before this entry is counted):
+  // `main` when this was written; open pieces that land first take the next slots, so this entry and its pins
+  // (`coord-db.test.ts`'s version pins, the run-close switch's and the limit samples store's undo lists) move up at landing.
+  // RE-MEASURE the slot before merge (it must print 136 before this entry is counted):
   //     git fetch origin main
   //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
   `

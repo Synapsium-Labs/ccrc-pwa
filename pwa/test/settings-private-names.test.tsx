@@ -272,6 +272,31 @@ describe('Upload', () => {
     expect(box().value).toBe('');
   });
 
+  it('the card is held until its retry is sent: when the retry reads the box, the box, Upload and Clear are held, and its answer frees them', async () => {
+    // Review 4191 F1 to F3. The confirm puts the step away in one render, and the section sends the retry after it, from an effect.
+    // The retry's request is made inside that effect, before anything renders again, so the controls read from inside the request
+    // are the page as it stands when the retry reads the box. Held only while the step shows, they read enabled there.
+    status.mockResolvedValue({ state: 'list', rows: 3, uploadedAt: AT });
+    const atRetry: { box: boolean; upload: boolean; clear: boolean }[] = [];
+    upload.mockRejectedValueOnce(stepUpRequired()).mockImplementationOnce(async () => {
+      atRetry.push({ box: box().disabled, upload: up().disabled, clear: clr().disabled });
+      return OK;
+    });
+    show();
+    await settle();
+    type(TEXT);
+    press('names-upload');
+    await waitFor(() => expect(card()!.querySelector('[data-step-up]')).not.toBeNull());
+    await confirmStep();
+    await waitFor(() => expect(upload).toHaveBeenCalledTimes(2));
+    expect(upload).toHaveBeenNthCalledWith(2, { rows: ROWS });
+    expect(atRetry).toEqual([{ box: true, upload: true, clear: true }]);
+    // The hold does not stick: the retry's answer frees the card.
+    await waitFor(() => expect(box().disabled).toBe(false));
+    expect(box().value).toBe('');
+    expect(clr().disabled).toBe(false);
+  });
+
   it('the whole card is held while Upload\'s step shows: the box, Upload and Clear, so no edit or other act reaches the retry, and the door is idle', async () => {
     // Review 4167 F2 (c) and F3. The hold is by attribute: the disabled box takes no keystroke (its only handler is its presence
     // report, which sends nothing) and a disabled button gets no click. The door is idle while the step shows, and nothing of the

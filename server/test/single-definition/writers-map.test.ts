@@ -322,7 +322,8 @@ const TABLES = ['run_events', 'mail_deliveries', 'feed_events', 'lifecycle_event
   'continuity_hook_reports', 'continuity_witness_checks', 'coordinator_state', 'overlord_sequence', 'overlord_sequence_pruned', 'limit_samples',
   'programme_events', 'programme_picks', 'continuity_timer_refusals',
   'overlord_invariant_findings', 'overlord_readiness', 'overlord_readiness_items', 'overlord_account_holds',
-  'overlord_requests', 'overlord_request_messages', 'overlord_request_moves', 'overlord_act_journal_head', 'overlord_act_heads'] as const;
+  'overlord_requests', 'overlord_request_messages', 'overlord_request_moves', 'overlord_acts', 'overlord_act_journal_head',
+  'overlord_act_heads'] as const;
 
 /** Each table's writers, `file#Class.method`, sorted and unique, read off the one scan (`sqlStatements.ts#sqlWrites`). `tables`
  *  is the table list to read: coord.db's by default, and the private store's for its own describe (Overlord W1 private store A). */
@@ -478,6 +479,9 @@ describe(TABLES_PIN, () => {
       overlord_requests: ['applyRequestInsertInTx', 'applyRequestMoveInTx', 'setParentClockInTx'].map((f) => `server/src/coord/overlordRequestStore.ts#${f}`),
       overlord_request_messages: ['server/src/coord/overlordRequestStore.ts#applyRequestInsertInTx'],
       overlord_request_moves: ['server/src/coord/overlordRequestStore.ts#appendMove'],
+      // The Overlord's act rows (W2 act rows A, §10.1): one module owns the table. The insert and the settle are the journal's two
+      // applies, each run inside the act journal's call after its record; nothing else writes a row (C25, H24).
+      overlord_acts: ['applySettle', 'applyWrite'].map((f) => `server/src/coord/overlordActsStore.ts#${f}`),
       // The daily backstop (Overlord W1 renewal readings A): its seed row, and its door's one writer.
       renewal_backstop_settings: ['server/src/continuity/continuityStore.ts#setBackstop', 'server/src/coord/schema.ts#(module)'],
       // What a programme says is left (Overlord W2 remaining work A): one writer of both tables, reached only from the

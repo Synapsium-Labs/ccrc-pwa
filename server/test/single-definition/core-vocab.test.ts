@@ -888,6 +888,10 @@ describe('Build 7 nouns', () => {
       // The Overlord's request record (W2 request record A, §5.1): the three tables' SQL takes the caller's handle inside its
       // transaction, and names it by `import type`.
       'overlordRequestStore.ts',
+      // The Overlord's act rows (W2 act rows A, §10.1): the table's SQL takes the caller's handle inside its transaction, and the
+      // count port's composition (`overlordCeilingWiring.ts`) hands the reader the open store's handle for gate step 10; each
+      // names it by `import type`.
+      'overlordActsStore.ts', 'overlordCeilingWiring.ts',
       // The Overlord act journal (W2 act journal A, §7.6): the writer's head row and the signed heads' SQL take the caller's handle,
       // the lane and the head read carry the one the composition root gives them, and the act store's port (the interim copy until
       // #3664 lands, then gone from this list) names it in its signature; each by `import type`.
