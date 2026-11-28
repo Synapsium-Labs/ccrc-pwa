@@ -1,7 +1,7 @@
 // Overlord W2, act journal plan Task A2: the act journal's writer (`server/src/coord/overlordActJournal.ts#OverlordActJournal`, L3),
 // its head row and its torn-tail heal. Real journals under `mkTmp`, a real coordination database file, the real guard behind a
-// spy; never the live HOME. Until #3664 lands, `overlord_acts` is a one-column stand-in, created here (the writer reads only
-// whether it holds a row).
+// spy; never the live HOME. `overlord_acts` is a one-column stand-in here, created by the rig (the writer reads only whether it
+// holds a row); the real table, under act rows A's real writer, is `overlord-act-journal-store.test.ts`'s.
 import { afterEach, describe, expect, it } from 'vitest';
 import { DatabaseSync } from 'node:sqlite';
 import { appendFileSync, constants as FS, existsSync, readdirSync, readFileSync } from 'node:fs';
@@ -31,7 +31,7 @@ function rig() {
   const leaf = path.join(dir, OVERLORD_ACTS_BASENAME);
   const db = new DatabaseSync(path.join(dir, 'coord.db'));
   db.exec(HEAD_MIGRATION);
-  db.exec('CREATE TABLE overlord_acts (id INTEGER PRIMARY KEY)');   // the stand-in until #3664 lands
+  db.exec('CREATE TABLE overlord_acts (id INTEGER PRIMARY KEY)');   // the stand-in (the head migration alone runs here)
   const fault = { now: 'none' as Fault };
   let wrote = false;
   let writes = 0;

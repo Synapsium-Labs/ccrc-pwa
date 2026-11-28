@@ -29,8 +29,9 @@ import {
 import type { AuthorityGuardPort, AuthorityWriterFailure } from './overlordAuthorityJournal.js';
 import {
   OVERLORD_ACTS_BASENAME, OVERLORD_ACTS_FORMAT, OVERLORD_ACTS_TORN_DIR, actJournalFold, actJournalHighest, actRecordEntry,
-  canonicalActRecord, type ActJournalAppend, type ActJournalHighest, type ActJournalPort, type ActJournalView, type OverlordActRecord,
+  canonicalActRecord, type ActJournalHighest, type ActJournalView, type OverlordActRecord,
 } from './overlordActRecords.js';
+import type { ActJournalAppend, ActJournalPort } from './overlordActsStore.js';
 
 /** The file, bound once (the callers census's one binder of this journal). */
 export function overlordActsFileAt(ccrcDir: string, ops?: AppendOnlyFsOps): ChainedJournalFile<OverlordActRecord> {

@@ -14,9 +14,10 @@
 // THE RECORD KINDS ARE PREFIXED (slug `act-record-kinds-are-prefixed`): `act-intent`, `act-settle` and `act-open-request`, the
 // ruling's three kinds under the journal's prefix, because the kernel has no domain tag and the kinds census holds every format's
 // kinds disjoint. A one-step act appends one `act-settle` with `from: null` (slug `one-step-act-one-record`).
-import type { DatabaseSync } from 'node:sqlite';
 import { isSessionIdShape } from '../../../shared/api.js';
 import { isOverlordActKind, type OverlordActKind } from '../../../shared/overlord.js';
+import { ACT_STATES, ACT_TARGET_KINDS, ACT_TARGET_REF_KINDS, type ActTargetRef } from '../../../shared/overlordActs.js';
+import type { ActJournalRecord, ActRecordBody, ActRecordNatural } from './overlordActs.js';
 import {
   ACTOR_KINDS, CALLER_STRENGTHS, readActorColumns, type ActorKind, type CallerStrength,
 } from '../../../shared/overlord-identity.js';
@@ -31,41 +32,8 @@ import type { ChainedFileRead } from '../chainedJournalFile.js';
 export const OVERLORD_ACTS_BASENAME = 'overlord-acts.jsonl';
 export const OVERLORD_ACTS_TORN_DIR = 'overlord-acts-torn';
 
-// ── INTERIM (stage 1 of act journal A): the act store's record type and its three word lists ─────────────────────────────
-// The one record type is act rows A's `ActJournalRecord` (`server/src/coord/overlordActs.ts`), and the three lists are its L0
-// file's (`shared/overlordActs.ts`), both in #3664, not yet on `main`. Until it lands this block mirrors them, in this one place;
-// stage 2 replaces the whole block with imports and `export type OverlordActRecord = ActJournalRecord` (an alias, never a second
-// shape, F7), and a single-definition case then holds that no copy survives. This block never reaches a push.
-const ACT_STATES = ['pending', 'done', 'refused', 'unknown', 'staged', 'effective', 'vetoed', 'voided', 'preempted', 'shadow'] as const;
-type ActState = (typeof ACT_STATES)[number];
-const ACT_TARGET_KINDS = ['message', 'delivery', 'request', 'note'] as const;
-const ACT_TARGET_REF_KINDS = ['programme', 'session', 'item', 'ask', 'run', 'request', 'message', 'delivery', 'note'] as const;
-type ActTargetRefKind = (typeof ACT_TARGET_REF_KINDS)[number];
-interface ActTargetRef { readonly kind: ActTargetRefKind; readonly id: string; readonly revision: number }
-type ActRecordNatural =
-  | { readonly kind: 'row'; readonly target: string; readonly id: number; readonly revision: number }
-  | { readonly kind: 'start'; readonly requestId: number };
-interface ActRecordBody {
-  readonly opKey: string; readonly actId: number; readonly act: string; readonly effect: string | null;
-  readonly natural: ActRecordNatural; readonly targets: readonly ActTargetRef[]; readonly requestId: number | null;
-  readonly authority: string; readonly term: number; readonly generationId: number;
-  readonly actor: { readonly kind: string; readonly subject: string }; readonly identityStrength: string; readonly isolation: string;
-}
-type ActJournalRecord =
-  | ({ readonly kind: 'act-intent' } & ActRecordBody)
-  | ({ readonly kind: 'act-settle'; readonly from: 'pending' | 'unknown' | null; readonly to: ActState } & ActRecordBody)
-  | { readonly kind: 'act-open-request'; readonly opKey: string; readonly requestId: number; readonly actId: number };
-/** The act store's L2 port (`overlordActsStore.ts#ActJournalPort`, declared there by its consumer), which the act journal's
- *  writer implements. Structural, so stage 2's swap to the store's declaration is an import line. */
-export interface ActJournalPort {
-  appendInTx(db: DatabaseSync, records: readonly ActJournalRecord[], apply: () => void): ActJournalAppend;
-}
-export type ActJournalAppend =
-  | { readonly ok: true; readonly sequence: number }
-  | { readonly ok: false; readonly error: 'not-in-transaction' | 'authority-rolled-back' | 'authority-unmeasured' | 'journal-append'; readonly detail: string };
-// ── end INTERIM ────────────────────────────────────────────────────────────────────────────────────────────────────────
-
-/** The act store's one record type, under the journal's name (F7). */
+/** The act store's one record type (`overlordActs.ts#ActJournalRecord`), under the journal's name: an alias, never a second
+ *  shape (F7). Its word lists are act rows A's L0 file's, imported, and a single-definition case holds that no copy lives here. */
 export type OverlordActRecord = ActJournalRecord;
 export type OverlordActRecordKind = OverlordActRecord['kind'];
 
