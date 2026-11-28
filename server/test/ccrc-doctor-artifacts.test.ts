@@ -16,6 +16,9 @@ installDoctorHooks();
 interface Names { a: string; b: string; port: number }
 const label = (): string => 't' + randomBytes(6).toString('hex');
 const names = (): Names => ({ a: `${label()}.duckdns.org`, b: `${label()}.duckdns.org`, port: 7791 });
+// The cases that assert the Linux unit reader's words run as Linux on every runner: on a Mac `_box_unit_env_shell` words an
+// undecided line otherwise (review 4211 A1), as `FORCE_LINUX` does in ccrc-expose-artifacts.test.ts.
+const AS_LINUX = { OSTYPE: 'linux-gnu' };
 
 /** The three keys as `ccrc expose artifacts` writes them, appended to the fixture's exposure file; `omit` drops keys. */
 function plantKeys(home: string, n: Names, omit: string[] = []): void {
@@ -355,7 +358,7 @@ describe('ccrc doctor: artifacts (X5-FU)', () => {
     const home = artifactBox('ccrc-doctor-art-spaced-', n);
     const env = join(home, '.ccrc', 'ccrc.env');
     writeFileSync(env, readFileSync(env, 'utf8').replace('CCRC_PORT=7788\n', 'CCRC_PORT =7788\n'));
-    const r = runDoctor(home);
+    const r = runDoctor(home, ['doctor'], AS_LINUX);
     expect(artifactLine(r.stdout), r.stdout).toMatch(/^FAIL artifacts: .*\/\.ccrc\/ccrc\.env names CCRC_PORT in a shape this reader does not decide \(a space around '='/);
     expect(remedyFor(r.stdout, 'artifacts')).toMatch(/^ {2}remedy: rewrite the line naming CCRC_PORT in .*\/\.ccrc\/ccrc\.env, .*, then restart: /);
   }, SLOW);
@@ -365,14 +368,15 @@ describe('ccrc doctor: artifacts (X5-FU)', () => {
     const home = artifactBox('ccrc-doctor-art-expport-', names());
     const exp = join(home, '.ccrc', 'exposure.env');
     writeFileSync(exp, readFileSync(exp, 'utf8') + 'CCRC_PORT=07789\n');
-    const r = runDoctor(home);
+    const r = runDoctor(home, ['doctor'], AS_LINUX);
     expect(artifactLine(r.stdout), r.stdout).toMatch(/^FAIL artifacts: .*\/\.ccrc\/exposure\.env names CCRC_PORT, and every ccrc expose write rewrites that file without it/);
     const remedy = remedyFor(r.stdout, 'artifacts');
     expect(remedy).toMatch(/^ {2}remedy: move the CCRC_PORT line to .*\/\.ccrc\/ccrc\.env, then restart: /);
     expect(remedy).not.toContain('exposure.env');
-    // A line there in a shape the reader does not decide: the remedy is still to move it, never to rewrite it in place.
+    // A line there in a shape the Linux reader does not decide: the remedy is still to move it, never to rewrite it in place.
+    // (On a Mac the shell reader's rewrite-or-delete remedy comes first, and the next run says to move it: the follow-up.)
     writeFileSync(exp, readFileSync(exp, 'utf8').replace('CCRC_PORT=07789\n', 'CCRC_PORT =7789\n'));
-    const u = runDoctor(home);
+    const u = runDoctor(home, ['doctor'], AS_LINUX);
     expect(artifactLine(u.stdout), u.stdout).toMatch(/^FAIL artifacts: .*\/\.ccrc\/exposure\.env names CCRC_PORT in a shape this reader does not decide/);
     expect(remedyFor(u.stdout, 'artifacts')).toMatch(/^ {2}remedy: remove the CCRC_PORT line from .*\/\.ccrc\/exposure\.env and write it in .*\/\.ccrc\/ccrc\.env as KEY=value, digits only, then restart: /);
   }, 2 * SLOW);

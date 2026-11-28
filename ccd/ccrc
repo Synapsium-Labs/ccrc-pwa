@@ -7652,7 +7652,7 @@ _exp_art_cport() {
   if [ "$rc" -ge 2 ]; then
     EXP_CPORT_WHY=${BUE_WHY:-"$CCRC_EXPOSURE_FILE cannot be read, so the port ccrc.service receives was not measured"}
     EXP_CPORT_FIX=${BUE_FIX:-"look at what is really there (ls -ld $CCRC_EXPOSURE_FILE)"}
-    # A CCRC_PORT line in the exposure file is never rewritten in place: the next write drops it, so its home is ccrc.env.
+    # A CCRC_PORT line in the exposure file is never rewritten in place: the next write drops it, so its home is ccrc.env. This arm matches the Linux reader's words only: on a Mac an undecided line, and anywhere a file undecided as a whole, gets the reader's own remedy first, then one naming ccrc.env on the next run.
     case "$BUE_WHY" in
       "$CCRC_EXPOSURE_FILE names CCRC_PORT "*) EXP_CPORT_FIX="remove the CCRC_PORT line from $CCRC_EXPOSURE_FILE and write it in $BOX_ENV_FILE as KEY=value, digits only" ;;
     esac

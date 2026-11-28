@@ -318,6 +318,8 @@ function stubHostname(home: string, line: string): void {
 
 /** The console arms, run for real on the pty under the poison, to seed a box. */
 const POISON: RunOpts = { extra: FORCE_LINUX };
+/** runPiped's own default, named at the call by the cases that assert the Linux unit reader's words (review 4211 A1). */
+const AS_LINUX: RunOpts = { rec: 'ok', extra: FORCE_LINUX };
 async function seedDuckdns(home: string, sub: string, bind = ''): Promise<void> {
   quietSs(home);
   const r = await runTty(home, ['duckdns'], [sub, TOKEN, bind], POISON);
@@ -738,7 +740,7 @@ describe('ccrc expose artifacts: the arm', () => {
       const home = box('ccrc-art-badport-');
       seedFile(home, byoEnv('https://ccrc.example.test', 'example.test'));
       writeFileSync(join(home, '.ccrc', 'ccrc.env'), `CCRC_PORT=${port}\n`);
-      const r = runPiped(home, flags);
+      const r = runPiped(home, flags, AS_LINUX);
       expect(r.code, `${port}: ${r.stderr}`).toBe(1);
       expect(r.stderr, port).toContain(`CCRC_PORT="${port}" is not a plain port number: write it as digits only (1 to 65535, no leading zero). Nothing was written.`);
       expect(bytesAt(exposurePath(home)), port).toBe(byoEnv('https://ccrc.example.test', 'example.test'));
@@ -747,7 +749,7 @@ describe('ccrc expose artifacts: the arm', () => {
       const home = box('ccrc-art-port-');
       seedFile(home, byoEnv('https://ccrc.example.test', 'example.test'));
       writeFileSync(join(home, '.ccrc', 'ccrc.env'), line);
-      const r = runPiped(home, flags);
+      const r = runPiped(home, flags, AS_LINUX);
       expect(r.code, `${line}: ${r.stderr}`).toBe(0);
       expect(r.stderr, line).toBe('');
       expect(bytesAt(exposurePath(home)), line).toContain('CCRC_ARTIFACT_PORT=7790\n');
@@ -927,6 +929,18 @@ describe('ccrc expose artifacts: a name the answer mask would alter (X5-FU item 
     expect(bashMasked(values, '_art_hidden'), 'and none is withheld from a refusal').toEqual(want);
   });
 
+  it('mask: a shaped label last in the host, and directly before the port, answers as matchesShape answers it (review 4211 A2)', () => {
+    // Every corpus origin puts a `.` after the label, so a mirror that needs a following `.` or `-` passed it: these end the
+    // host with the shape, bare and before `:8443`, beside the same with no shape (`ask-`, a letter before it).
+    const values = [`sk-${hex(8)}`, `x-sk-${hex(8)}`, `ask-${hex(8)}`].flatMap((l: string): string[] =>
+      [`https://art.${l}`, `https://art.${l}:8443`]);
+    for (const v of values) expect(isExactHttpsOrigin(v), `${v}: the grammar accepts it`).toBe(true);
+    const want = values.map((v: string): boolean => matchesShape(v));
+    expect(want, 'the server masks the four shaped ones only').toEqual([true, true, true, true, false, false]);
+    expect(bashMasked(values)).toEqual(want);
+    expect(bashMasked(values, '_art_hidden')).toEqual(want);
+  });
+
   it('mask: over origins the grammar accepts, the bash answer is matchesShape\'s', () => {
     const labels: string[] = [
       'art', 'content', 'sk', 'sk-', `sk-${hex(7)}`, `sk-${hex(8)}`, `a-sk-${hex(8)}`, `ask-${hex(8)}`, `${hex(3)}sk-${hex(9)}`,
@@ -1078,7 +1092,7 @@ describe('ccrc expose artifacts: the console port (X5-FU item 4)', () => {
       const home = box('ccrc-art-spaced-');
       seedFile(home, byoEnv('https://ccrc.example.test', 'example.test'));
       writeFileSync(join(home, '.ccrc', 'ccrc.env'), line);
-      const r = runPiped(home, flags);
+      const r = runPiped(home, flags, AS_LINUX);
       expect(r.code, `${JSON.stringify(line)}: ${r.stderr}`).toBe(1);
       expect(r.stderr, line).toContain('ccrc.env names CCRC_PORT in a shape this reader does not decide');
       expect(r.stderr, line).toContain('as KEY=value: no space before or after \'=\', no export');
@@ -1089,7 +1103,7 @@ describe('ccrc expose artifacts: the console port (X5-FU item 4)', () => {
     const cr = box('ccrc-art-spaced-cr-');
     seedFile(cr, byoEnv('https://ccrc.example.test', 'example.test'));
     writeFileSync(join(cr, '.ccrc', 'ccrc.env'), 'A=1\rCCRC_PORT=7790\n');
-    const rc = runPiped(cr, flags);
+    const rc = runPiped(cr, flags, AS_LINUX);
     expect(rc.code, rc.stderr).toBe(1);
     expect(rc.stderr).toContain('has a carriage return inside a line');
     expect(bytesAt(exposurePath(cr))).toBe(byoEnv('https://ccrc.example.test', 'example.test'));
@@ -1098,7 +1112,7 @@ describe('ccrc expose artifacts: the console port (X5-FU item 4)', () => {
       const home = box('ccrc-art-spaced-ok-');
       seedFile(home, byoEnv('https://ccrc.example.test', 'example.test'));
       writeFileSync(join(home, '.ccrc', 'ccrc.env'), line);
-      const r = runPiped(home, flags);
+      const r = runPiped(home, flags, AS_LINUX);
       expect(r.code, `${JSON.stringify(line)}: ${r.stderr}`).toBe(0);
       expect(r.stderr, line).toBe('');
     }
@@ -1108,8 +1122,9 @@ describe('ccrc expose artifacts: the console port (X5-FU item 4)', () => {
     const home = box('ccrc-art-spaced-carry-');
     await seedByo(home, 'https://ccrc.example.test', 'example.test');
     const [ao, co] = ['https://art.example.invalid', 'https://content.example.invalid'];
-    expect(runPiped(home, ['expose', 'artifacts', '--artifact-origin', ao, '--content-origin', co]).code).toBe(0);
+    expect(runPiped(home, ['expose', 'artifacts', '--artifact-origin', ao, '--content-origin', co], AS_LINUX).code).toBe(0);
     writeFileSync(join(home, '.ccrc', 'ccrc.env'), 'CCRC_PORT =7788\n');
+    // POISON runs as Linux too (FORCE_LINUX): the words below are the Linux unit reader's.
     const again = await runTty(home, ['byo'], ['https://ccrc.example.test', 'example.test', ''], POISON);
     expect(again.code, again.stdout).toBe(0);
     expect(again.stdout).toContain('artifacts turned off: ');
@@ -1163,11 +1178,10 @@ describe('ccrc expose artifacts: the console port (X5-FU item 4)', () => {
     const base = byoEnv('https://ccrc.example.test', 'example.test') + 'CCRC_PORT=7800\n';
     seedFile(home, base);
     writeFileSync(join(home, '.ccrc', 'ccrc.env'), 'CCRC_PORT=7790\n');
-    const r = runPiped(home, flags);
+    const r = runPiped(home, flags, AS_LINUX);
     expect(r.code, r.stderr).toBe(1);
     expect(r.stderr).toContain('names CCRC_PORT, and every ccrc expose write rewrites that file without it, so the console\'s port after the next '
-      + 'write is not that one: move the CCRC_PORT line to ');
-    expect(r.stderr).toContain('. Nothing was written.');
+      + `write is not that one: move the CCRC_PORT line to ${join(home, '.ccrc', 'ccrc.env')}. Nothing was written.`);
     expect(bytesAt(exposurePath(home))).toBe(base);
   });
 });
