@@ -103,7 +103,7 @@ describe('the helper: one JSON line per journal, read only', () => {
 
 /** A fixture tree for the check: `deploy/` holds the real helper (or `helperText`), and `server/dist/server/src/` shims that
  *  re-export the sources (or none, `build: false`); a `node` on PATH loads tsx. `CCRC_HERE` points at its `ccd/`. */
-function check(o: { role?: string; build?: boolean; helperText?: string | null } = {}): { code: number; out: string } {
+function check(o: { role?: string; build?: boolean; helperText?: string | null; noNode?: boolean } = {}): { code: number; out: string } {
   const tree = path.join(home, 'tree');
   fs.mkdirSync(path.join(tree, 'ccd'), { recursive: true });
   fs.mkdirSync(path.join(tree, 'deploy'), { recursive: true });
@@ -122,6 +122,18 @@ function check(o: { role?: string; build?: boolean; helperText?: string | null }
   const script = `source ${shq(CCRC)}; source ${shq(CHECKS)}; BOX_ENV_FILE=${shq(path.join(ccrcDir, 'box.env'))}; CCRC_HERE=${shq(path.join(tree, 'ccd'))}; _check_overlord-journals`;
   const env = ghContainedEnv(home, { ...process.env, HOME: home });
   env.PATH = `${bin}:${env.PATH ?? ''}`;
+  if (o.noNode === true) {
+    // Every command on PATH, first one of each name winning, linked into one directory, less `node`.
+    const only = path.join(home, 'no-node-bin');
+    fs.mkdirSync(only, { recursive: true });
+    const linked = new Set<string>(['node']);
+    for (const dir of (env.PATH ?? '').split(':').filter((d) => d !== '' && d !== bin)) {
+      let names: string[] = [];
+      try { names = fs.readdirSync(dir); } catch { continue; }
+      for (const n of names) if (!linked.has(n)) { linked.add(n); fs.symlinkSync(path.join(dir, n), path.join(only, n)); }
+    }
+    env.PATH = only;
+  }
   const r = spawnSync(BASH, ['-c', script], { encoding: 'utf8', env });
   return { code: r.status ?? -1, out: `${r.stdout}${r.stderr}` };
 }
@@ -173,8 +185,13 @@ describe('doctor: overlord-journals (Table 3)', () => {
     expect(r.out).toMatch(/^WARN overlord-journals: unmeasured: the journal verifier gave no answer/m);
     expect(r.code).toBe(2);
   });
-  it('no helper in the tree is unmeasured: WARN', () => {
-    expect(check({ helperText: null }).out).toMatch(/^WARN overlord-journals: unmeasured: this tree ships no runnable journal verifier/m);
+  it('a tree that ships no helper reads nothing: SKIP, as sigstore-root does with no verifier', () => {
+    expect(check({ helperText: null })).toMatchObject({ code: 3, out: expect.stringMatching(/^SKIP overlord-journals: this tree ships no journal verifier/m) });
+  });
+  it('no node on PATH is unmeasured: WARN', () => {
+    const r = check({ noNode: true });
+    expect(r.out).toMatch(/^WARN overlord-journals: unmeasured: node is not on PATH/m);
+    expect(r.code).toBe(2);
   });
   it('a helper that prints nothing, one line, or a line out of shape is unmeasured: WARN', () => {
     for (const text of ['', 'console.log(\'{"journal":"authority","state":"absent"}\');',

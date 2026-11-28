@@ -1969,6 +1969,9 @@ export const FLEET_BOX_CLASSES: Readonly<Record<string, string>> = {
   // The Overlord W1 sandbox A2 (plan Task 7): PASS at every stage, as `delegation-hooks` is: the install registers only
   // ccrc's hook in each rostered home and installs no plugin, so no home carries a mod.
   "overlord-mods": "PASS",
+  // Overlord W2, act journal A: SKIP at every stage: a fleet box records CCRC_ROLE=fleet, runs no server and holds neither
+  // Overlord journal, and the fixture tree (TREE_FILES) ships no deploy/overlord-journals-verify.mjs either.
+  "overlord-journals": "SKIP",
   "pane-scope-stop": "PASS",
   "path": "PASS",
   "playwright": "SKIP",
