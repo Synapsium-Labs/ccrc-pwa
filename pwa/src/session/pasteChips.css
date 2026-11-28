@@ -47,8 +47,11 @@
   white-space: nowrap;
   font-weight: var(--weight-regular);
 }
-/* The break notice: the chip's own audited ground and ink, its two controls the same ghost Buttons as a chip's. */
-.paste-broken {
+/* The break notice: the chip's own audited ground and ink, its two controls the same ghost Buttons as a chip's. The
+   long-paste notices (desktop-polish wave 194: the saving line, and a chip whose save failed with its Retry and "send
+   as typed text") take the same ground, ink and controls, so no new pair needs auditing. */
+.paste-broken,
+.paste-notice {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
@@ -61,7 +64,8 @@
   color: var(--ink-primary);
   font: var(--weight-regular) var(--fs-xs) / 1.3 var(--family-ui);
 }
-.paste-broken-text {
+.paste-broken-text,
+.paste-notice-text {
   flex: 1 1 16rem;
   min-width: 0;
   margin: 0;

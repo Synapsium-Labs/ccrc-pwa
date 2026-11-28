@@ -134,6 +134,8 @@ const TEST_LOCAL_HELPERS: Readonly<Record<string, readonly string[]>> = {
   'ccrc-doctor-codex-fix.test.ts': ['_check_failed', '_check_warned', '_fix_failed', '_fix_warned'],
   'ccrc-doctor-fleet.test.ts': ['_check_alpha', '_check_beta', '_check_boom', '_check_dual', '_check_gamma', '_check_liar',
     '_check_mute', '_check_nothing', '_check_omega', '_check_sneak', '_check_weird'],
+  // The gate block install runs, cut out of cmd_install and run as one function on a simulated Mac (desktop polish wave 193).
+  'ccrc-install-landing.test.ts': ['_gate'],
   'ccrc-models.test.ts': ['_fk_cfg', '_fk_log', '_fk_probe', '_fk_rc', '_fk_ret'],
   // The helper census's PLANTED fixture keeps ccd's two retired refusal helpers (D-7072), so its name-family
   // disagreement row still has two names to disagree. Its lock-runner fixture (D-7076) defines `${R}_not`, a longer

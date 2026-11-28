@@ -501,6 +501,19 @@ export const SETTINGS_CARDS = {
       scope: SETTINGS_SCOPE.fleet, title: 'Account facts',
       purpose: 'For each account: whether Fable bills credits, whether its continuity is recorded, and any hold on it.',
     },
+    // Overlord W2 Settings: the decision model's host and rows, and the private-name list. Each writes through its own door.
+    decisionHost: {
+      scope: SETTINGS_SCOPE.fleet, title: 'Decision model host',
+      purpose: 'Where the Overlord asks its small questions, and the key it asks with. The key is never shown back.',
+    },
+    decisionRows: {
+      scope: SETTINGS_SCOPE.fleet, title: 'Decision model rows',
+      purpose: 'Each question the decision model may be asked: off, shadow (asked and recorded) or armed, and its daily ceiling.',
+    },
+    privateNames: {
+      scope: SETTINGS_SCOPE.fleet, title: 'Private-name list',
+      purpose: 'Names the relay checks outgoing text for. The list is never shown back.',
+    },
   },
 } as const satisfies Record<SettingsSectionId, Record<string, SettingsCardText>>;
 

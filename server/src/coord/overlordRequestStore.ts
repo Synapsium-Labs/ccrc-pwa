@@ -139,25 +139,33 @@ export function highestRequestId(db: DatabaseSync): number | null {
   return num((db.prepare('SELECT max(id) AS m FROM overlord_requests').get() as { m: unknown }).m);
 }
 
-/** The citations the private store's boot pass reads (Task A4): every cited message id, and the root-cited ones. `absent` when the
- *  migration that creates the table is not applied, `unmeasured` when the read throws: three answers, never folded. */
+/** One citation row's two ids, for the boot pass's line naming citations that meet no message row (review 4190 F4). */
+export interface CitationPair { readonly requestId: number; readonly messageId: number }
+/** The citations the private store's boot pass reads (Task A4): every cited message id, the root-cited ones, and each row's
+ *  request and message ids, by request then message. `absent` when the migration that creates the table is not applied,
+ *  `unmeasured` when the read throws: three answers, never folded. */
 export type CitedMessagesRead =
-  | { readonly kind: 'measured'; readonly cited: ReadonlySet<number>; readonly rootCited: ReadonlySet<number> }
+  | { readonly kind: 'measured'; readonly cited: ReadonlySet<number>; readonly rootCited: ReadonlySet<number>; readonly citing: readonly CitationPair[] }
   | { readonly kind: 'absent' } | { readonly kind: 'unmeasured'; readonly why: string };
 export function citedMessagesForBoot(db: DatabaseSync): CitedMessagesRead {
   try {
     const t = db.prepare("SELECT 1 AS one FROM sqlite_master WHERE type = 'table' AND name = 'overlord_request_messages'").get();
     if (t === undefined) return { kind: 'absent' };
-    const rows = db.prepare('SELECT messageId, root FROM overlord_request_messages').all() as { messageId: unknown; root: unknown }[];
+    const rows = db.prepare('SELECT requestId, messageId, root FROM overlord_request_messages ORDER BY requestId, messageId').all() as
+      { requestId: unknown; messageId: unknown; root: unknown }[];
     const cited = new Set<number>();
     const rootCited = new Set<number>();
+    const citing: CitationPair[] = [];
     for (const r of rows) {
       const id = num(r.messageId);
       if (id === null) return { kind: 'unmeasured', why: 'a citation row holds no integer message id' };
+      const requestId = num(r.requestId);
+      if (requestId === null) return { kind: 'unmeasured', why: 'a citation row holds no integer request id' };
       cited.add(id);
       if (num(r.root) === 1) rootCited.add(id);
+      citing.push({ requestId, messageId: id });
     }
-    return { kind: 'measured', cited, rootCited };
+    return { kind: 'measured', cited, rootCited, citing };
   } catch (e) {
     return { kind: 'unmeasured', why: errText(e) };
   }

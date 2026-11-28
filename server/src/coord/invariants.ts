@@ -16,6 +16,7 @@
 import type { SequenceWireLine } from '../../../shared/overlord-sequence.js';
 import { TIMER_MAIL_SENDER } from '../../../shared/continuity-timers.js';
 import { rungRank } from '../../../shared/overlord-ladder.js';
+import { UNCLOCKED_REQUEST_STATES, isRequestState, isTerminalRequestState } from '../../../shared/overlordRequests.js';
 import type { AuthorityState } from './overlordAuthorityCoherence.js';
 import type { RestoreSide } from './overlordRestore.js';
 
@@ -71,7 +72,7 @@ export const INVARIANT_MAP = {
     says: 'authority widens only by the operator',
     tables: ['overlord_sequence', 'overlord_ladder'], waitsOn: 'the rung arm: the ladder row\'s actor columns', w1: 'tables-absent',
   },
-  I12: { says: 'every open request has a follow-up time or an open child that does', tables: ['requests'], waitsOn: 'W2 request record A, its second part: the predicate and its gatherer', w1: 'predicate-not-built' },
+  I12: { says: 'every open request has a follow-up time or an open child that does', tables: ['requests'], waitsOn: null, w1: 'runs' },
   I13: {
     says: 'after a restore, the store serves nothing retired, replaced or wiped, and no id twice',
     tables: ["the private store's messages", 'the privacy journal'], waitsOn: 'ticket invariant-message-predicates; the entries: W2', w1: 'predicate-not-built',
@@ -147,8 +148,12 @@ export interface I17Facts {
   readonly timers: readonly { readonly id: number; readonly setter: string; readonly state: string; readonly mailId: number | null }[];
   readonly mails: ReadonlyMap<number, { readonly fromId: string; readonly toId: string }>;
 }
+/** I12's facts (W2 request record A): every open request, as the request store reads it. `state` is the stored word. */
+export interface I12Facts {
+  readonly requests: readonly { readonly id: number; readonly state: string; readonly followUpAt: number | null; readonly parentRequestId: number | null }[];
+}
 /** The facts each running row reads. A row joins here with its predicate. */
-export interface InvariantFacts { I2: I2Facts; I5: I5Facts; I7: I7Facts; I17: I17Facts }
+export interface InvariantFacts { I2: I2Facts; I5: I5Facts; I7: I7Facts; I12: I12Facts; I17: I17Facts }
 
 /** What the gatherer gives the predicates: the window's lines (above the prune floor), and each running row's facts. */
 export interface InvariantInput {
@@ -284,11 +289,36 @@ export const i17Timers: LivePredicate<I17Facts> = (_lines, f) => {
   return measuredVerdict(findings, unmeasured);
 };
 
+/** I12 (§10.4, Table 11.7a; plan w2-requests.md Table 9), first match per open request: a state `needs-you`, `done-unverified` or
+ *  `blocked` holds; a set `followUpAt` holds; an open child, every one of which holds, holds; otherwise a finding, subject
+ *  `request:<id>`. A terminal row is skipped, and a state word this build cannot name is judged as a clocked open state (it must
+ *  carry a clock). The walk carries a visited set, so a planted cycle is a finding, never a loop. */
+export const i12FollowUpClock: LivePredicate<I12Facts> = (_lines, f) => {
+  const open = f.requests.filter((r) => !(isRequestState(r.state) && isTerminalRequestState(r.state)));
+  const byId = new Map(open.map((r) => [r.id, r]));
+  const childrenOf = new Map<number, number[]>();
+  for (const r of open) if (r.parentRequestId !== null) childrenOf.set(r.parentRequestId, [...(childrenOf.get(r.parentRequestId) ?? []), r.id]);
+  const holds = (id: number, seen: ReadonlySet<number>): boolean => {
+    const r = byId.get(id);
+    if (r === undefined || seen.has(id)) return false;
+    if (isRequestState(r.state) && UNCLOCKED_REQUEST_STATES.includes(r.state)) return true;
+    if (r.followUpAt !== null) return true;
+    const kids = childrenOf.get(id) ?? [];
+    const next = new Set([...seen, id]);
+    return kids.length > 0 && kids.every((k) => holds(k, next));
+  };
+  const findings: Finding[] = [...open].sort((a, b) => a.id - b.id).filter((r) => !holds(r.id, new Set()))
+    .map((r) => ({ invariant: 'I12' as const, subject: `request:${r.id}`, seq: null,
+      message: `an open request in ${r.state} has no follow-up time and no open child that holds` }));
+  return measuredVerdict(findings, []);
+};
+
 /** The running rows' predicates, and whether each reads the window's lines. */
 const PREDICATES: { readonly [K in keyof InvariantFacts]: { readonly run: LivePredicate<InvariantFacts[K]>; readonly readsLines: boolean } } = {
   I2: { run: i2Structural, readsLines: false },
   I5: { run: i5Term, readsLines: true },
   I7: { run: i7Authority, readsLines: false },
+  I12: { run: i12FollowUpClock, readsLines: false },
   I17: { run: i17Timers, readsLines: false },
 };
 const hasPredicate = (name: InvariantName): name is keyof InvariantFacts => Object.hasOwn(PREDICATES, name);

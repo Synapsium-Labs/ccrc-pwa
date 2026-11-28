@@ -1486,12 +1486,29 @@ above stays the route for a box behind a TLS-terminating proxy of your own, and 
 `CCRC_ORIGIN` or `CCRC_RP_ID` holds a value it did not write:
 that box looks armed for another address, and turning sign-in off there is a hand edit too. Such a box that has not yet
 set `CCRC_ORIGIN` looks loopback-only to the verb; armed for localhost, it signs in through the proxy but cannot act, so
-run `ccrc auth off` there and use the hand edit. The verb is Linux only for now: on a Mac it refuses, changing nothing,
-and the hand edit above is the route there (issue #3475). It cannot see a drop-in placed outside the user unit
+run `ccrc auth off` there and use the hand edit. On a Mac (issue #3475) the verb acts on the console's launchd job when
+the job file is what `ccrc install` writes for this home, but for the two fields the install takes from its own moment:
+its `PATH` must be plain absolute directories in printable ASCII only (no `<`, `>`, `&`, quote or backslash, no empty or relative entry) and its
+`ProcessType` one of launchd's four classes. An edited job, a link, a re-saved or binary plist and a job an older
+install wrote all refuse, naming the file, with `ccrc install --role <the recorded role>` as the way on; a `PATH` the
+verb does not read refuses with the way on that cures it, an install from a shell whose `PATH` is plain, in printable
+ASCII only. launchd must hold that file as it is (`launchctl print`: its path, program, arguments and environment). In
+the job's own environment block and in the lines read once, a shape the verb does not read (a key printed twice among
+them) refuses as not measured; the print's other blocks are not read, and a value that opened a block of another name
+after a closing line would be passed over as that block. That case, and every shape a held newline would
+make, rests on whether a real print escapes a newline in a value, which nobody has measured. The caller's launchd domain must set none of the verb's keys and no
+`BASH_ENV`, and `ccrc.env` must be plain `NAME=value` lines, since the job sources it with bash. That domain read
+answers for the domain of the shell the verb runs in, while the job and its restart are the desktop session's: from a
+login session other than the desktop's (an SSH login, say) a value set in the desktop's domain may read as unset, which
+is unmeasured. The one key that is dangerous there is `CCRC_HOST`, on `off`. These limits (the caller's domain, the
+inherited and default sections, the unmeasured escaping and the arguments block) are issue #3654. A home whose path holds a character outside
+letters, digits and `._/@:+,%=~-[]` refuses before anything is read.
+Anywhere else on a Mac the hand edit above is the route. It cannot see a drop-in placed outside the user unit
 directory that systemd has not loaded yet, or anything that changes what node runs before the server reads its keys: a
 node option such as `NODE_OPTIONS`, or a `PATH` that finds another `node` first (the unit starts node through
-`/usr/bin/env`), set in `ccrc.env`, in the exposure file or in the service manager's own environment, of which the verb
-reads only its own keys.
+`/usr/bin/env`; on a Mac the job's own `PATH`, which the install writes, is that `PATH`), set in `ccrc.env`, in the
+exposure file or in the service manager's own environment, of which the verb reads only its own keys. The Mac path is
+measured on a GitHub-hosted macOS runner, not on a Mac in use (the task note says what that leaves unmeasured).
 
 **On a box exposed with `ccrc expose`, skip the edit.** The verb writes `CCRC_AUTH=on` and
 `CCRC_ORIGIN` into `~/.ccrc/exposure.env` itself — and `CCRC_RP_ID` too, on every arm but

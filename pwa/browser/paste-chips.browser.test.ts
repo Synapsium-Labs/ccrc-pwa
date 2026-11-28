@@ -28,6 +28,7 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { chromium, type Browser, type Page } from 'playwright-core';
 import { INSTRUMENT, PHOSPHOR, REFINED } from '@ccrc/ui';
+import { PASTE_TYPED_LABEL } from '../src/session/longPasteWords';
 import { resolveChrome } from './harness';
 import { openApp, serveDist, sharedDist, type AppFixture, type AppView, type DistServer } from './app';
 
@@ -86,11 +87,16 @@ afterAll(async () => {
   await server?.close();
 });
 
-/** Open the session screen at `view`, recording every prompt request's body. */
+/** Open the session screen at `view`, recording every prompt request's body. Since desktop-polish wave 194 a send with a
+ *  chip saves its text as a file first; this leg's upload route refuses (502), so every send of a chip goes by the
+ *  operator's "Send as typed text", today's route, whose full-text pins this leg keeps. The pointer route is measured by
+ *  `long-paste-attach.browser.test.ts`. */
 const open = async (view: AppView) => {
   const opened = await openApp(browser!, view, FIXTURE);
   await opened.ctx.grantPermissions(['clipboard-read', 'clipboard-write'], { origin: server!.origin });
   const bodies: unknown[] = [];
+  await opened.page.route('**/api/sessions/*/upload', (route) =>
+    route.fulfill({ status: 502, contentType: 'application/json', body: '{"ok":false,"error":"agent-down"}' }));
   await opened.page.route('**/api/sessions/*/prompt', async (route) => {
     bodies.push(JSON.parse(route.request().postData() ?? 'null'));
     await route.fulfill({ status: 200, contentType: 'application/json', body: '{"ok":true}' });
@@ -116,9 +122,13 @@ const state = (s: Opened) => s.field.evaluate((el: HTMLTextAreaElement) => ({
   value: el.value, focused: document.activeElement === el, sel: [el.selectionStart, el.selectionEnd],
 }));
 
-/** Send with Enter, wait for the first request and then a settling window, and return every body seen. */
-const sendAndSettle = async (s: Opened): Promise<unknown[]> => {
-  await s.page.keyboard.press('Enter');
+/** Send with Enter, wait for the first request and then a settling window, and return every body seen. A draft holding
+ *  a chip stops at its refused save (see `open`), and the send is the tap on "Send as typed text". */
+const sendAndSettle = async (s: Opened, key = 'Enter'): Promise<unknown[]> => {
+  await s.page.keyboard.press(key);
+  const typed = s.page.getByRole('button', { name: PASTE_TYPED_LABEL });
+  await expect.poll(async () => s.bodies.length > 0 || await typed.isVisible(), { timeout: 5_000 }).toBe(true);
+  if (s.bodies.length === 0) await typed.click();
   await expect.poll(() => s.bodies.length, { timeout: 5_000 }).toBeGreaterThan(0);
   await s.page.waitForTimeout(400);
   return s.bodies;
@@ -683,10 +693,7 @@ describe('review 3589: a break is shown and held, and the browser’s undo walks
       await undo(s);
       expect(await shows(s, whole)).toEqual(['#1']);
       // A touch-width view: Enter is a newline there, and Ctrl+Enter sends.
-      await s.page.keyboard.press('Control+Enter');
-      await expect.poll(() => s.bodies.length, { timeout: 5_000 }).toBeGreaterThan(0);
-      await s.page.waitForTimeout(400);
-      expect(s.bodies).toEqual([{ text: `www ${LONG} tail` }]);
+      expect(await sendAndSettle(s, 'Control+Enter')).toEqual([{ text: `www ${LONG} tail` }]);
       expect(s.errors).toEqual([]);
     } finally {
       await s.ctx.close();

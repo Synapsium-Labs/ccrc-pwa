@@ -10,7 +10,8 @@
 // applied becomes `absent`, naming it. A failure to open the span at all makes every arm `unmeasured`.
 import type { DatabaseSync } from 'node:sqlite';
 import { tx } from './tx.js';
-import type { FactsRead, I17Facts, I2Facts, I5Facts, I7Facts, InvariantInput, SequenceLine } from './invariants.js';
+import type { FactsRead, I12Facts, I17Facts, I2Facts, I5Facts, I7Facts, InvariantInput, SequenceLine } from './invariants.js';
+import { openRequests } from './overlordRequestStore.js';
 import { authorityFold } from './overlordAuthority.js';
 import type { AuthorityState } from './overlordAuthorityCoherence.js';
 import type { AuthorityFileRead } from './overlordAuthorityJournal.js';
@@ -98,6 +99,13 @@ function i7Facts(db: DatabaseSync, deps: InvariantFactsDeps): FactsRead<I7Facts>
   });
 }
 
+/** I12's facts: every open request through the request store's one reader (W2 request record A); `absent` before its migration. */
+function i12Facts(db: DatabaseSync): FactsRead<I12Facts> {
+  return guarded(db, ['overlord_requests'], () => measured({
+    requests: openRequests(db).map((r) => ({ id: r.id, state: r.state, followUpAt: r.followUpAt, parentRequestId: r.parentRequestId })),
+  }));
+}
+
 function i17Facts(db: DatabaseSync): FactsRead<I17Facts> {
   return guarded(db, ['continuity_timers', 'mail'], () => {
     const timers = (db.prepare("SELECT id, setter, state, mailId FROM continuity_timers WHERE state <> 'pending' ORDER BY id").all() as
@@ -124,10 +132,13 @@ export function gatherInvariantInput(deps: InvariantFactsDeps): InvariantInput {
   try {
     return tx(db, (): InvariantInput => ({
       lines: windowLines(db),
-      facts: { I2: i2Facts(db), I5: i5Facts(db, deps.designationBaseline), I7: i7Facts(db, deps), I17: i17Facts(db) },
+      facts: { I2: i2Facts(db), I5: i5Facts(db, deps.designationBaseline), I7: i7Facts(db, deps), I12: i12Facts(db), I17: i17Facts(db) },
     }));
   } catch (e) {
     const why = `the gather could not run: ${errText(e)}`;
-    return { lines: unmeasured(why), facts: { I2: unmeasured(why), I5: unmeasured(why), I7: unmeasured(why), I17: unmeasured(why) } };
+    return {
+      lines: unmeasured(why),
+      facts: { I2: unmeasured(why), I5: unmeasured(why), I7: unmeasured(why), I12: unmeasured(why), I17: unmeasured(why) },
+    };
   }
 }

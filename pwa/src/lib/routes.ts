@@ -67,7 +67,7 @@ export const ROUTES: readonly Route[] = [
   { id: 'docs', pattern: /^\/docs(?:\/|$)/, title: 'Docs', top: true, path: '/docs' },
   { id: 'archive', pattern: /^\/archive\/?$/, title: 'Archive', top: true, path: '/archive' },
   { id: 'settings', pattern: /^\/settings\/?$/, title: 'Settings', top: true, path: '/settings' },
-  // The six section pages (D-5504): pages under Settings, so not `top`; each has its own path, so "Go to" offers
+  // The seven section pages (D-5504): pages under Settings, so not `top`; each has its own path, so "Go to" offers
   // "Go to Settings › Updates" and the others (`command/commands.ts`).
   ...SETTINGS_SECTIONS.map((s): Route => ({
     id: `settings-${s.id}`, pattern: new RegExp(`^/settings/${s.id}/?$`), title: s.title, top: false, path: `/settings/${s.id}`,

@@ -241,6 +241,9 @@ const CONTROLS: Record<string, string> = {
   'fleet/AccountKnob.tsx <button> acct-switch':
     'TOKEN. The Accounts card\'s switch (`LaneSwitch`): the kill switch (D-7732) and "Start new sessions here" (D-8195), a 36px track inside a tap-floor box.',
   'fleet/NewSessionSheet.tsx <button> acct-change': 'TOKEN. The change-account line above the project list.',
+  'session/PastedTextChip.tsx <a> msg-paste':
+    'TOKEN. A pasted text the session received as a file, drawn in its place in the user bubble (desktop-polish wave '
+    + '194): a block of its own line that opens the saved file, its rule `.msg-user .msg-paste` holding the floor.',
   'fleet/chips.tsx <button> acct-disclosure':
     'TOKEN. "show other pools (N)" — ONE entry where there were two, because '
     + 'the two sheets that drew it were drawing the same button down to the '
@@ -581,6 +584,11 @@ const CONTROLS: Record<string, string> = {
   'overlord/AccountSetFieldset.tsx <input> (none)':
     'SELECTOR .ov-account-hit. One account pool, or untagged accounts, in the set the Overlord is started on or saved with: a '
     + 'checkbox inside its label, whose rule carries the floor, so the whole label line toggles it.',
+  // Overlord W2 Settings: the secret field's multiline form, the private-name list's box in Settings › Overlord.
+  'accounts/SecretField.tsx <textarea> acct-secret-text font-mono':
+    'TOKEN. The secret field\'s multiline form (the private-name list): `.acct-secret-text` is '
+    + '`min-height: calc(var(--tap-min) * 2)`, two floors tall, because the operator types one name a line into it and it '
+    + 'grows by its own resize handle.',
   'docs/export/exportMarkdown.tsx <a> (none)':
     'INLINE. The links inside an exported document, `EXPORT_COMPONENTS.a` (docs W5 Export): drawn into the saved file, '
     + 'never into the app, and in a sentence or block of text, as for `docs/DocLink.tsx <a> (none)`.',

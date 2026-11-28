@@ -64,6 +64,7 @@ import { PLAN_EPIC_WAVES_MUTANT_SETS } from './planEpicWavesSets.js';
 import { WORK_MAP_MUTANT_SETS } from './workMapSets.js';
 import { DONE_TEST_MUTANT_SETS } from './doneTestSets.js';
 import { LADDER_MUTANT_SETS } from './ladderSets.js';
+import { ACT_CATALOGUE_MUTANT_SETS } from './actCatalogueSets.js';
 import { SEQUENCE_MUTANT_SETS } from './sequenceSets.js';
 import { INVARIANT_MUTANT_SETS } from './invariantSets.js';
 import { READINESS_MUTANT_SETS } from './readinessSets.js';
@@ -80,6 +81,7 @@ import { WITNESS_MUTANT_SETS } from './witnessSets.js';
 import { ISOLATION_MUTANT_SETS } from './isolationSets.js';
 import { CHAT_MUTANT_SETS } from './chatSets.js';
 import { REQUEST_MUTANT_SETS } from './requestSets.js';
+import { ACT_ROWS_MUTANT_SETS } from './overlordActsSets.js';
 import { simulate } from './run.js';
 import {
   CARD_BLOCK_KEY, CARD_BLOCK_SET, CARD_NEVER_EMPTY_KEY, CARD_NEVER_EMPTY_SET, CARD_ONE_LINE_KEY, CARD_ONE_LINE_SET, CARD_TRIM_KEY,
@@ -309,6 +311,7 @@ const MUTANT_SETS: Record<string, MutantSet<never>> = {
   ...WORK_MAP_MUTANT_SETS,
   ...DONE_TEST_MUTANT_SETS,
   ...LADDER_MUTANT_SETS,
+  ...ACT_CATALOGUE_MUTANT_SETS,
   ...SEQUENCE_MUTANT_SETS,
   ...INVARIANT_MUTANT_SETS,
   ...READINESS_MUTANT_SETS,
@@ -325,6 +328,7 @@ const MUTANT_SETS: Record<string, MutantSet<never>> = {
   ...ACCOUNT_LOAD_MUTANT_SETS,
   ...LABEL_QUEUE_MUTANT_SETS,
   ...REQUEST_MUTANT_SETS,
+  ...ACT_ROWS_MUTANT_SETS,
 };
 
 it('rewriteRelativeImports makes ./ and ../ absolute and leaves bare specifiers', () => {

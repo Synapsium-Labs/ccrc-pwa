@@ -62,7 +62,7 @@ const EXPECTED_REASONS: Record<RequestMoveReason, readonly RequestMove[]> = {
 };
 
 describe('vocabulary', () => {
-  it('lists the ten states, the four actors, the two origins and the six columns', () => {
+  it('lists the ten states, the four actors, the two origins and the seven columns', () => {
     expect([...REQUEST_STATES]).toEqual(EXPECTED_STATES);
     expect([...REQUEST_ACTORS]).toEqual(['overlord', 'owner', 'server', 'operator']);
     expect([...REQUEST_ORIGINS]).toEqual(['operator', 'overlord']);

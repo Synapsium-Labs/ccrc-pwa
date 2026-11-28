@@ -22,7 +22,7 @@ what the ledger should learn; no plan, spec or ledger text is edited here.
 | `LabelledCases`, `DecisionStateReads` | In `server/src/coord/decisionModelPort.ts`. `index.ts` passed an empty labels source (`noLabelsYet`). Its `inlineStateReads` resolves only inline fields and `programme` refs. |
 | The row's mode reader | No `decisionRowOf`. The store's `decisionRowRead` (row or `unreadable`) and `decisionRowSideOf` are the owners; this piece reads `decisionRowRead` (point 2). |
 | `quizWeek`'s importers | Five: `quiz.ts` itself (the status mail's key), `quizLane.ts`, `continuity-quiz-lane.test.ts`, `history-quiz-unattended.test.ts`, `sim/quizSets.ts`. The plan named three (point 1). |
-| Migrations | 134, so this piece's was slot 135. Request record A (#3609) landed 135 first, so after one merge of main (below) this piece's is slot 136. |
+| Migrations | 134, so this piece's was slot 135. Request record A (#3609) landed 135 first, so after one merge of main (below) this piece's was slot 136. Act rows part 1 (#3664) landed 136 first, so after a second merge of main (below) this piece's is slot 137. |
 | `LANE_SCHEDULE`'s `mono` rows | 66 (the plan said 46); 67 with the label lane. |
 | Route counts (auth-gate) | 34 route files, 345 routes scanned, 342 HTTP, 222 gated, 120 exempt. Now 35 route files, 347 scanned, 344 HTTP, 224 gated, 120 exempt. |
 | Card rows | `scope.widens`, `relay.method`, `readback.omits`, `readback.adds` (LQ3, derived from the catalogue). |
@@ -215,6 +215,29 @@ Tests and words only; no product line changed.
   skipped cards' and the drawn cards', and no message or mail read names a held-back card's ref.
 - **F3:** the `open` bullet above now says what the code does.
 - **The residual:** `handOverOrder` and `readDraws` each have a mutant set in `labelQueueSets.ts` and a floor of 1.
+
+## The second merge of main (#3664)
+
+Act rows part 1 (#3664) merged with one coordination-database migration at slot 136, the slot this piece had after the first
+merge. On the coordinator's go, after review 4220 accepted the code, this branch took one merge of `main` at `1a2471681e` (a
+merge, no rebase). Nothing changed but the migration's number and what derives from it:
+
+- **The migration moved to slot 137.** The schema keeps the act rows at 136 and puts `label_cards` and `decision_labels` at
+  137, and the comment's re-measure line now expects 136 before this entry.
+- **Files both sides touched**, each resolved to keep both, main's lines first, each after its holder's yes to the exact diff:
+  - `server/src/coord/schema.ts`: the two migrations, in order.
+  - `server/test/coord-db.test.ts`: the version pins go to 137, and both comment lists name `MIGRATIONS[135]` and `[136]`.
+  - `server/test/run-close-switch.test.ts`: the undo list drops both table sets and its prose names 137.
+  - `server/test/limit-samples-store.test.ts`: the undo list drops both sets; limit samples now sits at `N-12`.
+  - `server/test/single-definition/writers-map.test.ts`: both sets of tables.
+  - `server/test/sim/mutation-floors.json`: merged without a conflict and keeps both sides.
+- **The gate's counts did not move:** main added no route and no lane, so they stay 347 scanned, 344 HTTP, 224 gated and 120
+  exempt, over 35 route files, and 67 `mono` rows.
+- **Re-run, each file alone, all green:** the coordination database (one case timed out once under a full test slice and passed
+  alone, then the whole file passed, 155 of 155), limit samples, the run-close switch, the writers map, auth-gate (438),
+  box-token, the lane schedule, the label suites, the act rows store, the stamp census, the mail routes, the handle holders and
+  the mask census; the floors suite's label and act rows sets and its keys check by name; the source type check and the tests'
+  narrow type check.
 
 ## Known limits
 

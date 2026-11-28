@@ -766,3 +766,22 @@ describe('X5 A3.3: admission, budget and snapshots (D-9135)', () => {
     expect(Object.keys(r.store.list()[0]!)).not.toContain('snapshots');
   });
 });
+
+// X5-FU item 2: a charge the hour cannot cover is refused AFTER the read it is for was taken, so the refusal spends the rest of the
+// hour: the door's next request meets `budgetSpent` at admission and reads nothing, and a refusal costs at most one read an hour.
+describe('X5-FU item 2: an over-budget charge spends the hour', () => {
+  it('store: an over-budget charge spends the rest of the hour, and the window still restarts', () => {
+    const r = rig();
+    const m = mintOk(r);
+    expect(r.store.charge(m.id, ARTIFACT_HOURLY_BYTES - 10)).toBe('ok');
+    expect(r.store.charge(m.id, 11), 'one byte more than is left').toBe('over-budget');
+    expect(r.store.lookup(m.token)!.servedThisHour, 'the refusal spends what was left').toBe(ARTIFACT_HOURLY_BYTES);
+    expect(r.store.charge(m.id, 1), 'a charge that would have fitted before the refusal').toBe('over-budget');
+    expect(r.store.charge(m.id, 0), 'a count of nothing still fits a spent hour').toBe('ok');
+    r.set(T0 + 3_000_000);
+    r.store.touch(m.id);
+    r.set(T0 + 3_600_000);
+    expect(r.store.charge(m.id, 5)).toBe('ok');
+    expect(r.store.lookup(m.token)).toMatchObject({ hourStart: T0 + 3_600_000, servedThisHour: 5 });
+  });
+});

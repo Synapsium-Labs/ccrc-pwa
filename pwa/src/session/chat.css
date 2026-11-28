@@ -1906,6 +1906,43 @@ button.metachip:active {
   text-decoration: none;
 }
 
+/* A pasted text the session received as a file (desktop-polish wave 194): a chip in its place inside the user bubble,
+   between the text around it, opening the saved file in a new tab. The document chip's own pair (--ink-on-well on
+   --bg-well), so no new ground or ink needs auditing; a block of its own line, as tall as a tap target. Scoped under
+   `.msg-user` so it outranks that bubble's `a { color: inherit }`, which drew the bubble's ink on the well (1.09:1 in
+   the light palette, measured by the browser leg). */
+.msg-user .msg-paste {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  width: fit-content;
+  max-width: 100%;
+  min-height: var(--tap-min);
+  margin: var(--sp-1) 0;
+  padding: 0 var(--sp-3);
+  font: var(--weight-medium) var(--fs-xs) / var(--lh-normal) var(--family-mono);
+  font-variant-numeric: tabular-nums;
+  color: var(--ink-on-well);
+  background: var(--bg-well);
+  border: 1px solid var(--edge-subtle);
+  border-radius: var(--r-md);
+  text-decoration: none;
+  white-space: nowrap;
+}
+.msg-user .msg-paste-glyph {
+  flex: none;
+}
+
+/* The composer's tray hold (desktop-polish wave 194): a fieldset that only disables the tray's controls while a send
+   saves. It draws no box of its own, so the tray sits where it always did. */
+.attach-tray-hold {
+  display: contents;
+  min-inline-size: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
 /* Desktop drop target. */
 .composer[data-drop='true'] .inputbar {
   border-color: var(--accent);

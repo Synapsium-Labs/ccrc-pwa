@@ -5,15 +5,17 @@
 import { memo, useContext, useState, type ReactNode } from 'react';
 import { Prose } from '@ccrc/ui';
 import type { ChatEvent } from '../../../shared/api';
-import { isImageClip, splitClipPaths } from '../../../shared/api';
+import { isImageClip } from '../../../shared/api';
 import { clipUrl } from '../lib/api';
 import { resetClock } from '../lib/clock';
 import { timeOf } from '../lib/format';
 import { markRuns } from '../lib/chatMarks';
 import { refHref, type ChatRefContext } from '../lib/chatRefs';
-import { messageRepos } from '../lib/chatRepoEvidence';
+import { messageRepos, type MessageRepos } from '../lib/chatRepoEvidence';
 import { ChatLink, ChatMarkdown, openExternal } from '../lib/markdown';
 import { ChatRefsContext } from './chatRefsContext';
+import { partsText, userTurnView } from './pastedTurn';
+import { TurnParts } from './PastedTextChip';
 import './chat.css';
 
 export type MessageEvent = Extract<ChatEvent, { kind: 'user' | 'assistant' | 'system' }>;
@@ -24,9 +26,11 @@ const isUrl = (s: string): boolean => /^https?:\/\//.test(s);
 /** Make bare URLs in plain user text tappable (they open externally). With a context (chat reading Task L, D-8062; spec
  *  R9), the text between them is read by `markRuns`, and each name `refHref` resolves, with what the whole `text` says about
  *  repositories (Task C21), becomes a link through `ChatLink`; every other run, a status word included, stays text, because
- *  user text carries no labels. Without a context, today's output. */
-export function linkify(text: string, ctx: ChatRefContext | null = null): ReactNode[] {
-  const said = ctx === null ? null : messageRepos(text);
+ *  user text carries no labels. Without a context, today's output. `turn` is the evidence of the whole turn `text` is a
+ *  part of (desktop-polish wave 194: a turn with a pasted-text chip is linked part by part, each with the turn's
+ *  evidence, so a repository named before a chip still qualifies a reference after it); without one, `text`'s own. */
+export function linkify(text: string, ctx: ChatRefContext | null = null, turn?: MessageRepos): ReactNode[] {
+  const said = ctx === null ? null : (turn ?? messageRepos(text));
   return text.split(URL_SPLIT).flatMap((part, i): ReactNode[] => {
     if (isUrl(part)) return [<ChatLink key={i} target={{ href: part, external: true }}>{part}</ChatLink>];
     if (ctx === null || said === null) return [part];
@@ -264,12 +268,19 @@ export const MessageBubble = memo(function MessageBubble({
   }
 
   if (event.kind === 'user') {
-    const { paths, rest } = splitClipPaths(event.text);
+    // A pasted text the session received as a file (desktop-polish wave 194) is a chip in its place; the attachment
+    // paths come out of the text parts only, as before (`pastedTurn.ts`).
+    const { paths, parts } = userTurnView(event.text, id);
+    // The turn's evidence, read once over all its text and given to every part (a turn with no pointer has one part,
+    // the text linked as before).
+    const said = refs === null ? undefined : messageRepos(partsText(parts));
     const time = timeOf(event.ts);
     return (
       <>
-        {paths.length > 0 && <ClipThumbs id={id} paths={paths} />}
-        {rest !== '' && <div className="msg-user">{linkify(rest, refs)}</div>}
+        {paths.length > 0 && <ClipThumbs id={id} paths={[...paths]} />}
+        {parts.length > 0 && (
+          <div className="msg-user"><TurnParts id={id} parts={parts} text={(t) => linkify(t, refs, said)} /></div>
+        )}
         <p className="msg-receipt msg-receipt--ok">
           {time} <b aria-label="delivered">✓</b>
         </p>
