@@ -288,7 +288,8 @@ otherwise. An unsettled, over-cap or refused frame, or one the server's check re
   shape.
 - **The slot.** `main` has 135 entries today (measured: `git show origin/main:server/src/coord/schema.ts | grep -c '^  //
   ── [0-9]*: user_version'` printed 135), so 136 is free on `main`, but another open PR names 136. I re-measure at the
-  push, mail the number to the coordinator before it, and re-derive the count suites on that merged tree.
+  push, mail the number to the coordinator before it, and re-derive the count suites on that merged tree. (At the push:
+  the act rows had landed at 136, so the column is entry 137, on `main` absorbed once.)
 - **An older build** opening the file at this version takes `db.ts` rule 3 (it warns, reads as-is and migrates nothing)
   and never names the column. Its `recordFrames` upsert does not set `shape`, so a part it re-records keeps a stale shape:
   that is why the shape carries the row's `at`, and the store reads a shape whose `at` is not the row's as no shape. A

@@ -59,9 +59,11 @@ fakes over fixture homes.
 
 ## 3. Storage and its cost
 
-- **The migration** adds `shape TEXT` to `claude_build_frames` and nothing else, at the next free slot when I push (136 as
-  cut: `main` at ee21bf76ce has 135 entries; two other open pieces name 136, and whoever lands second renumbers on the
-  merged `main`, the capture owner's rule). An older build opening the file takes rule 3 and never names the column.
+- **The migration** adds `shape TEXT` to `claude_build_frames` and nothing else, at the next free slot when I push: 137.
+  It was cut at 136 on `main` at ee21bf76ce (135 entries). The act rows (#3664) then landed at 136 as 1a2471681e, my
+  merge probe exited 1 on the schema and the two count suites, and I absorbed `main` once and renumbered to 137, the first
+  slot `main` left free (the coordinator's notice). Another open piece names 137, so the number can move once more at
+  landing: whoever lands second renumbers on the merged `main`, the capture owner's rule. An older build opening the file takes rule 3 and never names the column.
 - **The binding.** The store writes `{version, hash, at}` with the row's own `at`, and reads a shape whose `at` is not the
   row's as none. An older build's upsert does not name the column, so a part it re-records reads unshaped, never as the old
   shape (a case drives that upsert).
@@ -238,7 +240,48 @@ breaks, its file, the test file run, and the first case named red.
 
 ## 10. Evidence
 
-EVIDENCE_LIST
+Every run here went through the test slice, one file at a time, on a box at load 7 to 11, whose slice killed workers for
+memory on most of the longer files. By the coordinator's ruling, the evidence is three lists: what ran here, the timeouts
+`main` shares (with both figures), and what is left to the quiet runners.
+
+**What ran here.**
+
+- At the build's head before the merge of `main` (`8dd06a47b0`), 121 test files: the suites of the files this wave wrote
+  or changed, every test that reads one of them as text, and the guard suites the earlier loop reached.
+  - 114 green: every frames suite (shape, standing, standing route, lane store, lane capture, lane decider, capture,
+    reduce), the test box pins, the agent's three capture suites (desk frames, op frames, runner), the limit samples store,
+    `routes`, the box token census, the auth gate, the anchors, citations, deviation-refs, docs-grammar, growth and
+    file-split guards, the delivery and landing suites, the mail and ledger suites, `history-recall`, `secret-mask`,
+    `run-cap-derived` and `review-cap`. Two of them, `mail-routes` and `stall-settings-route`, were green on a second
+    run after one flake each (a worker killed for memory, and one timeout).
+  - The other seven are the rows below.
+- At the merge head (`d88281917c`, `main` at `1a2471681e` absorbed once and the column renumbered to 137): the server's
+  typecheck (exit 0), then alone, the limit samples store (8 of 8), the frames lane store (35 of 35), the frames standing
+  route (7 of 7), the frames lane capture (32 of 32), `sqlite-file` (18 of 18), `run-close-switch` (21 of 21),
+  and `coord-db` with its count pin at 137 (155 of 155 on the second run; the first is the timeouts below), all green;
+  `delegation-recovery` is in the last list.
+
+**Timeouts `main` shares** (each a vitest `Test timed out`, no assertion failed; no third attempt, by the ruling):
+
+- `coord-db`, two cases, on this head's first run: the released-identity-reuse table at 22.6 s against its 20 s bound
+  (20.0 s on `main` at `cc113350`, the same bound), and the failure-at-any-statement migration case at 135 s against its
+  120 s bound (129.9 s on `main`). Both passed on this head's second run.
+- `collect-lane-route`: 5, then 4, then 8 of 35 cases timed out at 20 s on this head; 4 of 35 on `main` at `cc113350`
+  (370 s for the file), every one a timeout. This wave changes nothing the collector reads.
+
+**Left to the quiet runners** (the full run on the pushed head):
+
+- `approvals-routes`: 2, then 4 of 55 cases timed out on this head (411 s and 478 s, the slice killing workers); its run
+  on `main` was killed six times for memory and measured nothing, so there is no figure to set beside it.
+- `question-doors` (reads the routes file): one timeout with 20 of 72 cases run, then two with 41 of 72 run, a different
+  case each time, the slice killing workers both times.
+- `run-routes`: one timeout of 288 (2269 s), then a run stopped at 93 of 288 for memory.
+- `coord-store`: 270 of 271 twice, a different single timeout each time (1533 s and 1884 s).
+- `delegation-recovery` (opens the coordination database through the store this wave changes; it pins no schema version),
+  at the merge head: 10 of 465 failed with 6 timeouts (1917 s), then 3 of 465, all three timeouts (1344 s), every one in
+  its crash-injection matrix, the slice killing workers both times. Not measured on `main` here.
+- `single-definition` and the other guard suites the earlier loop did not reach, which the coordinator's ruling stopped
+  where it stood.
 
 ## 11. Process notes
 
