@@ -93,9 +93,9 @@ export const UNMEASURED_WHYS = Object.keys(UNMEASURED_WHY_MAP) as UnmeasuredWhy[
 
 /** A Waiting on you row's longest window: seven days from its reach (§4.3 Table 4.3a), unrelated to token rotation. */
 export const WAITING_WINDOW_MS = 7 * 86_400_000;
-/** A chat reply row's window: seven days from its record (Overlord W1 chat, PR B), the same length as a Waiting on you row's, so
- *  a reply the operator reads within a week seals `opened`. The boot arm re-inserts a missing row only for a reply this young. */
-export const REPLY_WINDOW_MS = 7 * 86_400_000;
+/** A chat reply row's window (Overlord W1 chat, PR B): a Waiting on you row's own window, read from it rather than spelt a second
+ *  time, so a reply the operator reads within it seals `opened`. The boot arm re-inserts a missing row only for a reply this young. */
+export const REPLY_WINDOW_MS = WAITING_WINDOW_MS;
 /** A failed reader defers a seal at most a day past the window's end, then the row seals `unmeasured`, `reader`. */
 export const SEAL_DEFER_MS = 86_400_000;
 /** The operator's retention of response rows, in whole days (§9.4 rule 10; question 16). The minimum covers the longest

@@ -16,6 +16,7 @@ import { accessSync, constants, existsSync, realpathSync, writeFileSync } from '
 import { spawnSync } from 'node:child_process';
 import path from 'node:path';
 import { spawnSyncGroup } from './spawnGroup.js';
+import { ghContainedEnv } from './ccdWsHelpers.js';
 import { mkTmp } from './tmpHelpers.js';
 import { REPLY_READ_MAX_BYTES } from '../../shared/operatorMessages.js';
 
@@ -57,7 +58,7 @@ function reply(jq: string, transcript: string, bytes = REPLY_READ_MAX_BYTES): Ar
   const f = path.join(dir, `t${seq++}.jsonl`);
   writeFileSync(f, transcript, 'utf8');
   const r = spawnSyncGroup(BASH, ['-c', 'tail -c "$3" -- "$2" | "$1" -L "$L" -Rsc "$P"', '_', jq, f, String(bytes)],
-    { encoding: 'utf8', timeout: 60_000, env: { ...process.env, L: LIB, P: PROG } });
+    { encoding: 'utf8', timeout: 60_000, env: ghContainedEnv(dir, { ...process.env, L: LIB, P: PROG }, { systemd: true, tmux: true }) });
   expect(r.status, r.stderr).toBe(0);
   return String(r.stdout).split('\n').filter((l) => l !== '').map((l) => JSON.parse(l) as { entryUuid: string; text: string });
 }
@@ -226,7 +227,7 @@ for (const jq of jqBinaries()) {
         const f = path.join(dir, `r${seq++}.jsonl`);
         writeFileSync(f, jsonl([user(1, 'go'), asst(2, [text(t)])]), 'utf8');
         const r = spawnSyncGroup(BASH, ['-c', '"$1" -L "$L" -Rsc --arg id lane-a-project-a --arg u "$U" --argjson t 111 --argjson a 222 --argjson m "$M" "$P" < "$2"',
-          '_', jq, f], { encoding: 'utf8', timeout: 60_000, env: { ...process.env, L: LIB, U: U(9), M: String(max), P: 'include "transcript"; reply_report(.; $id; $u; $t; $a; $m)' } });
+          '_', jq, f], { encoding: 'utf8', timeout: 60_000, env: ghContainedEnv(dir, { ...process.env, L: LIB, U: U(9), M: String(max), P: 'include "transcript"; reply_report(.; $id; $u; $t; $a; $m)' }, { systemd: true, tmux: true }) });
         expect(r.status, r.stderr).toBe(0);
         const line = String(r.stdout).trim();
         return line === '' ? undefined : (JSON.parse(line) as Rec);
@@ -240,7 +241,7 @@ for (const jq of jqBinaries()) {
         const f = path.join(dir, `r${seq++}.jsonl`);
         writeFileSync(f, jsonl([user(1, 'go')]), 'utf8');
         const r = spawnSyncGroup(BASH, ['-c', '"$1" -L "$L" -Rsc --arg id i --arg u u --argjson t 1 --argjson a 2 --argjson m 20 "$P" < "$2"', '_', jq, f],
-          { encoding: 'utf8', timeout: 60_000, env: { ...process.env, L: LIB, P: 'include "transcript"; reply_report(.; $id; $u; $t; $a; $m)' } });
+          { encoding: 'utf8', timeout: 60_000, env: ghContainedEnv(dir, { ...process.env, L: LIB, P: 'include "transcript"; reply_report(.; $id; $u; $t; $a; $m)' }, { systemd: true, tmux: true }) });
         expect(r.status, r.stderr).toBe(0);
         expect(String(r.stdout)).toBe('');
       });

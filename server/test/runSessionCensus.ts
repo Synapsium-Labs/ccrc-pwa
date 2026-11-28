@@ -307,6 +307,8 @@ export const NOT_BINDING_SITES: readonly NotBindingSite[] = [
     why: "the designation row's bound session against the session whose role or identity is asked (Overlord §3.3.9): the designation fact's own read, no run is read" },
   { file: 'server/src/operatorModel/messages.ts', text: 'designation.sessionId === sessionId',
     why: "the designation's bound session against the session a console prompt names (promptTargetVerdict, private store B): the designation read, no run is read" },
+  { file: 'server/src/operatorModel/replies.ts', text: 'designation.sessionId === sessionId',
+    why: "the designation's bound session against the session a reply report names (replyTargetVerdict, Overlord W1 chat B): the designation read, no run is read" },
   { file: 'server/src/operatorModel/messages.ts', text: 'designation.sessionId === row.sessionId',
     why: "the designation's bound session against the session an operator message was recorded for (nudgeRecovery, the boot pass): the designation read and the message row, no run is read" },
   { file: 'server/src/coord/urgentMail.ts', text: 'd.sessionId === f.senderId',
