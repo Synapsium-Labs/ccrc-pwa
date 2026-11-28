@@ -31,7 +31,9 @@ import { useFleetStore } from '../../stores/fleet';
 const CARDS = SETTINGS_CARDS.overlord;
 
 /** The act a card hands the section with its `step-up-required`, for the confirm to send once more (review 4139 F1, ruled call
- *  1876): `act` names it, so the mark is per act and only the control that asked is held while its step shows. */
+ *  1876): `act` names it, so the mark is per act, and the retry's answer is worded for that act. A card makes it at its own level,
+ *  outside every send, so the closure the section keeps while the step shows can reach no value a send read (review 4167 F1, held
+ *  by `settings-retry-census.test.ts`). */
 export interface StepRetry { readonly act: string; readonly send: () => void }
 
 /** What every card is handed by the section: the one step-up, which card asked for it last, and the designation's gate. */
@@ -43,8 +45,9 @@ export interface SectionCtx {
   /** Shows the step in `card` (null hides it). With `retry`, the confirm sends that act once more by itself: that send is the
    *  retry, and a press by the operator is always a first send. Any other `ask` drops a retry not yet sent. */
   readonly ask: (card: string | null, retry?: StepRetry) => void;
-  /** Whether `card`'s step is showing for `act`'s retry: its control is held, so the value is not sent to a door that will refuse it. */
-  readonly stepShows: (card: string, act: string) => boolean;
+  /** Whether `card`'s step is showing. A card that hands a retry holds itself whole while it does, every input and every act
+   *  (review 4167 F2, F3, ruled call 1930), so nothing typed or pressed meets the retry; another card's answer frees it. */
+  readonly held: (card: string) => boolean;
 }
 
 /** A Settings door's refusal in words, for a card's act: the store's answer decides how `not-found` reads (plan question 3). */

@@ -9,16 +9,21 @@
 // THE NAMES (the brief's ruling 6, ruled call 1815). They are typed into the secret field's multiline form (`SecretField`), an
 // uncontrolled text area whose text lives only in its own DOM node: never in component state, a store, a log line or an error.
 // Upload reads it without emptying it (`peek`), turns it into rows (`nameListRowsOf`, the console's own one-name-a-line format), and
-// sends them; the rows live in the request body and nowhere else, and only the line numbers they came from are kept, to word a
-// refused row. The text stays in the box only where the operator must edit or confirm it (review 4139 A2, slug
-// `names-kept-only-to-be-edited`): a refused row, a refused cap and a first step-up. The door's answer, a 401 and every other
-// refusal empty it (`nameListKeepsText`). The field is emptied on page hide and on a route change by the field itself.
+// sends them; the rows are built inside the request (`rowsBodyOf`) and live in its body and nowhere else, the heap included, and
+// only the line numbers they came from are kept, to word a refused row (review 4167 F1). The text stays in the box only where the
+// operator must edit or confirm it (review 4139 A2, slug `names-kept-only-to-be-edited`): a refused row, a refused cap and a first
+// step-up, so a `bad-request` or an `oversize` keeps it; so does the one server fault that answers `bad-request` with no row (a row
+// it could not hash), which the console's own body cannot cause. The door's answer, a 401 and every other refusal empty it
+// (`nameListKeepsText`). The field is emptied on page hide and on a route change by the field itself.
 //
 // THE CONFIRM STARTS THE RETRY (review 4139 F1, ruled call 1876). Upload and Clear the list each hand the section their own retry
-// with a `step-up-required`, so the mark is per act, and while an act's step shows its control is held. The confirm sends the
-// retry, which reads the box again; the retry's own `step-up-required` is final: worded for its act (A4) and the box emptied (the
-// coordinator's condition 4). A retry that finds the box emptied (the page was hidden while the step showed) sends nothing and
-// says so: it never sends less than the first send carried (F2). A press by the operator is always a first send.
+// with a `step-up-required`, so the mark is per act: the retry's answer is worded for its act. Each retry is made outside every send
+// (`uploadRetry`, `clearRetry`), from the act alone, so the closure the section keeps reaches no name (review 4167 F1). While the
+// step shows the WHOLE CARD is held (F2, F3, ruled call 1930): the box, Upload and Clear, so no edit meets the retry and no other
+// act of the card is in flight when the confirm lands; another card's answer frees it. The confirm sends the retry, which reads the
+// box again; the retry's own `step-up-required` is final: worded for its act (A4) and the box emptied (the coordinator's condition
+// 4). A retry that finds the box emptied (with the card held, only the page hide empties it) sends nothing and says so: it never
+// sends less than the first send carried (F2). A press by the operator is always a first send.
 //
 // NEVER EMPTY BY ACCIDENT (the brief's ruling 4). Text with no name in it sends nothing and says so. "Clear the list", drawn only
 // while a list with names is stored, asks first and sends the door's own clear flag (`{ rows: [], clear: true }`), the only empty
@@ -32,7 +37,7 @@ import { api } from '../../lib/api';
 import {
   NAME_LIST_WORDS as W, nameListKeepsText, nameListRefusalText, nameListRowsOf, nameListStatusOf, uploadAnswerWords,
 } from '../../overlord/nameListWords';
-import { DoorLines, ReadLine, settingsRefusal, useCardDoor, useCardRead, valueOf, type SectionCtx } from './overlordCards';
+import { DoorLines, ReadLine, settingsRefusal, useCardDoor, useCardRead, valueOf, type SectionCtx, type StepRetry } from './overlordCards';
 
 const CARD = SETTINGS_CARDS.overlord.privateNames;
 const dateOf = (ms: number): string => new Date(ms).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' });
@@ -48,6 +53,17 @@ function statusLine(s: NameListStatus): string {
 }
 
 type Act = 'upload' | 'clear';
+type Body = Parameters<typeof api.uploadPrivateNames>[0];
+const clearBody = (): Body => ({ rows: [], clear: true });
+
+/** The upload's body, built inside the request from the box as it stands, so the rows live in the request alone (review 4167 F1).
+ *  The send checked the same text in the same task, before any await, so text that no longer parses here is a fault: it is refused
+ *  before anything is sent (never an emptier upload). */
+function rowsBodyOf(field: SecretFieldHandle | null): Body {
+  const parsed = nameListRowsOf(field?.peek() ?? '');
+  if (!parsed.ok) throw new Error('the names changed between the check and the send; nothing was sent');
+  return { rows: parsed.rows };
+}
 
 export function PrivateNamesCard({ ctx }: { readonly ctx: SectionCtx }): ReactNode {
   const { read, reread } = useCardRead<NameListStatus>(() => api.privateNameList(), nameListStatusOf);
@@ -59,9 +75,10 @@ export function PrivateNamesCard({ ctx }: { readonly ctx: SectionCtx }): ReactNo
   const [askClear, setAskClear] = useState(false);
   if (read.state === 'absent') return null;
   const v = valueOf(read);
-  /** One send of `act`; `retry` is the send the confirm starts, whose own step-up is final. */
-  const send = (act: Act, body: Parameters<typeof api.uploadPrivateNames>[0], words: (a: unknown) => readonly string[], retry: boolean): void => {
-    void door.run(() => api.uploadPrivateNames(body), words, async (o, err) => {
+  /** One send of `act`; `retry` is the send the confirm starts, whose own step-up is final. `body` builds the request's body inside
+   *  the request, so no local of a send holds the names (review 4167 F1). */
+  const send = (act: Act, body: () => Body, words: (a: unknown) => readonly string[], retry: boolean): void => {
+    void door.run(() => api.uploadPrivateNames(body()), words, async (o, err) => {
       if (o === 'step-up' && retry) {
         ctx.ask(null);
         setLocal(act === 'clear' ? W.clearFinal : W.stepUpFinal);
@@ -70,7 +87,7 @@ export function PrivateNamesCard({ ctx }: { readonly ctx: SectionCtx }): ReactNo
         text.current?.clear();
       }
       await reread();
-    }, retry ? undefined : { act, send: act === 'clear' ? () => clear(true) : () => upload(true) });
+    }, retry ? undefined : act === 'clear' ? clearRetry : uploadRetry);
   };
   const upload = (retry: boolean): void => {
     setLocal(null);
@@ -82,13 +99,18 @@ export function PrivateNamesCard({ ctx }: { readonly ctx: SectionCtx }): ReactNo
       return;
     }
     lines.current = parsed.lines;
-    send('upload', { rows: parsed.rows }, uploadAnswerWords, retry);
+    send('upload', () => rowsBodyOf(text.current), uploadAnswerWords, retry);
   };
   const clear = (retry: boolean): void => {
     setLocal(null);
     lines.current = [];
-    send('clear', { rows: [], clear: true }, () => [W.cleared], retry);
+    send('clear', clearBody, () => [W.cleared], retry);
   };
+  // The retries the confirm starts, made here, outside every send, from the act alone (review 4167 F1): the section keeps one while
+  // the step shows, and it can reach no name. Each reads the box again when it is sent; the card is held, so nothing changed it.
+  const uploadRetry: StepRetry = { act: 'upload', send: () => upload(true) };
+  const clearRetry: StepRetry = { act: 'clear', send: () => clear(true) };
+  const held = ctx.held('private-names');
   const listRows = v !== null && v.state === 'list' ? v.rows : 0;
   const clearOffered = listRows > 0;
   return (
@@ -100,17 +122,17 @@ export function PrivateNamesCard({ ctx }: { readonly ctx: SectionCtx }): ReactNo
           <p className="ovs-note" role="status" data-names-state={shownState(v)}>{statusLine(v)}</p>
           <p className="ovs-note">{W.replaces}</p>
           <p className="ovs-note">{W.format}</p>
-          <SecretField label={W.textLabel} handle={text} onPresence={NO_PRESENCE} multiline />
+          <SecretField label={W.textLabel} handle={text} onPresence={NO_PRESENCE} multiline held={held} />
           <div className="ovs-actions">
             <Button
-              variant="primary" size="fit" data-settings-control="names-upload" disabled={door.busy || ctx.stepShows('private-names', 'upload')}
+              variant="primary" size="fit" data-settings-control="names-upload" disabled={door.busy || held}
               onClick={() => upload(false)}
             >
               {door.busy ? W.uploading : W.upload}
             </Button>
             {clearOffered && (
               <Button
-                variant="danger-ghost" size="fit" data-settings-control="names-clear" disabled={door.busy || ctx.stepShows('private-names', 'clear')}
+                variant="danger-ghost" size="fit" data-settings-control="names-clear" disabled={door.busy || held}
                 onClick={() => setAskClear(true)}
               >
                 {W.clear}

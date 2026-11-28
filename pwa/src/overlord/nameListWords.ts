@@ -137,9 +137,11 @@ export function nameListRefusalText(err: unknown, lines: readonly number[], othe
  *  body's cap. Each is met by editing the list. */
 const KEEP_WORDS: ReadonlySet<string> = new Set(['bad-request', 'oversize']);
 
-/** Whether a refused upload leaves the names in the box: only where the operator must edit them, a refused row or a refused cap.
- *  Every other refusal empties it, as the secret field's own rule has it, and a 401 does too: the person at the screen is no
- *  longer proven. A first step-up keeps them too, which is the card's (it is no refusal). */
+/** Whether a refused upload leaves the names in the box: only where the operator must edit them, a refused row or a refused cap,
+ *  read by their words (`bad-request`, `oversize`). The one server fault that answers `bad-request` with no row (a row it could not
+ *  hash, which the console's own body cannot cause) keeps them too. Every other refusal empties it, as the secret field's own rule
+ *  has it, and a 401 does too: the person at the screen is no longer proven. A first step-up keeps them too, which is the card's
+ *  (it is no refusal). */
 export function nameListKeepsText(err: unknown): boolean {
   if (!(err instanceof ApiError) || err.status === 401 || !isObj(err.body)) return false;
   return typeof err.body.error === 'string' && KEEP_WORDS.has(err.body.error);
