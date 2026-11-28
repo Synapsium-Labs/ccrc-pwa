@@ -686,14 +686,19 @@ describe('ccrc expose artifacts: the arm', () => {
   });
 
   it('expose: ccrc auth answers the same beside the artifact tier', async () => {
-    // The sign-in verb (#3405) refuses on a box reached from elsewhere, through the one reach reader, and on a Mac before
-    // it reads the box. Adding the artifact tier to a console exposure must change neither answer and write nothing:
+    // The sign-in verb (#3405) refuses on a box reached from elsewhere, through the one reach reader, on Linux and, since
+    // desktop polish wave 193, on a Mac too, where it asks the reach before it reads the job file or launchd (so the file
+    // planted below is never compared: `launchctl` is asked nothing). Adding the artifact tier to a console exposure must
+    // change neither answer and write nothing:
     // the tier adds no file the reader reads (the exposure file and the Caddyfile already stand), and never the server
     // unit or job file. The verb runs on a pty with `systemctl` and `launchctl` recording, as an operator would run it.
     const [sub, a, c] = [genLabel(), genLabel(), genLabel()];
     for (const os of [FORCE_LINUX, FORCE_DARWIN]) {
       const home = box('ccrc-art-auth-');
-      if (os === FORCE_LINUX) await seedDuckdns(home, sub); else seedFile(home, duckdnsEnv(sub));
+      // On a Mac the console exposure is planted as the Linux run leaves it: the exposure file and the console's Caddyfile,
+      // so the reach reader names the same files before the tier as after it.
+      if (os === FORCE_LINUX) await seedDuckdns(home, sub);
+      else { seedFile(home, duckdnsEnv(sub)); writeFileSync(caddyfilePath(home), caddyfile(`${sub}.duckdns.org`)); }
       const unitDir = join(home, os === FORCE_DARWIN ? 'Library/LaunchAgents' : '.config/systemd/user');
       mkdirSync(unitDir, { recursive: true });
       writeFileSync(join(unitDir, os === FORCE_DARWIN ? 'app.ccrc.ccrc.plist' : 'ccrc.service'),
@@ -714,9 +719,9 @@ describe('ccrc expose artifacts: the arm', () => {
         return out;
       };
       const without = await ask();
-      expect(without[0], 'the reach refusal, or the Mac one').toMatch(os === FORCE_DARWIN
-        ? /auth off: this verb does not act on a Mac yet/ : /auth off: this box is reached from elsewhere \(.*<HOME>\/\.ccrc\/exposure\.env exists/);
-      expect(without[1]).toMatch(os === FORCE_DARWIN ? /auth on: this verb does not act on a Mac yet/ : /auth on: this box is reached from elsewhere/);
+      expect(without[0], 'the reach refusal, on either platform')
+        .toMatch(/auth off: this box is reached from elsewhere \(.*<HOME>\/\.ccrc\/exposure\.env exists/);
+      expect(without[1]).toMatch(/auth on: this box is reached from elsewhere/);
       expect((await runTty(home, ['artifacts'], [a, c], { rec: 'ok', extra: os })).code).toBe(0);
       // The tier is set (the other cases pin the file's bytes); what it must not change is the verb's answer, below.
       expect(bytesAt(exposurePath(home))).toContain(artKeys(`https://${a}.duckdns.org`, `https://${c}.duckdns.org`));

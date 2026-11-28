@@ -149,8 +149,11 @@
 }
 .ovs-field select,
 .ovs-field input { min-height: var(--tap-min); min-width: 0; max-width: 100%; }
-.ovs-accounts { display: grid; gap: var(--sp-2); margin: 0; padding: 0; list-style: none; min-width: 0; }
-.ovs-account { display: grid; gap: var(--sp-1); min-width: 0; padding: var(--sp-1) 0; border-top: 1px solid var(--edge-subtle); }
-.ovs-account-name {
+.ovs-accounts,
+.ovs-rows { display: grid; gap: var(--sp-2); margin: 0; padding: 0; list-style: none; min-width: 0; }
+.ovs-account,
+.ovs-row { display: grid; gap: var(--sp-1); min-width: 0; padding: var(--sp-1) 0; border-top: 1px solid var(--edge-subtle); }
+.ovs-account-name,
+.ovs-row-name {
   margin: 0; font-weight: var(--weight-medium); overflow-wrap: anywhere; background: var(--bg-surface); color: var(--ink-primary);
 }

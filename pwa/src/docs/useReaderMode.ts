@@ -36,7 +36,7 @@ import {
   stepBelowReaderPlace,
 } from './reader/places';
 import {
-  READER_EXIT_SETTLE_MS, READER_MODE_OFF, READER_WAKE_IDLE_MS, readerModeExitFocus, readerModeOffered, readerModeStep, readerTurnOf,
+  READER_EXIT_LANDING_MS, READER_EXIT_SETTLE_MS, READER_MODE_OFF, READER_WAKE_IDLE_MS, readerModeDrawn, readerModeExitFocus, readerModeOffered, readerModeStep, readerTurnOf,
   wakeLockWanted,
   type ReaderModeAct, type ReaderModeEvent, type ReaderModeHow, type ReaderModeState, type ReaderReading, type ReaderTurn,
 } from './reader/readerMode';
@@ -100,7 +100,9 @@ export const READER_PLACES: ReaderModePlaces = Object.freeze({
 /** What the head, the frame's mount and the overlay see of reader mode. */
 export interface ReaderModeContextValue {
   readonly state: ReaderModeState;
-  /** Whether the entry is drawn: a ready frame outside the plain view. The modal-layer test is read at each `enter`. */
+  /** Whether the entry is drawn (`readerModeDrawn`): a ready frame outside the plain view, no figure open. The modal-layer test
+   *  and an exit's own step back still landing are read at each `enter` (wave 62 fix round 1, review 4192 F6: the action stays
+   *  drawn while the step lands, so a focus it holds is not dropped, and a press is refused). */
   readonly offered: boolean;
   /** How the reader turns the page, kept per device (`READER_TURN_STORAGE_KEY`); `screens` until a device chooses. */
   readonly turn: ReaderTurn;
@@ -152,8 +154,8 @@ export interface ReaderModeContainer {
 /** The outside door's face of the same hook (`readerModeHandle.ts`): read at the moment of the act, never a render's copy. */
 export interface ReaderModeControls {
   offered(): boolean;
-  /** `offered()` without the modal-layer clause (the context's render-time offer, read now): what a listing asks, since the
-   *  listing may itself be a layer. */
+  /** `offered()` without the modal-layer clause, read now: what a listing asks, since the listing may itself be a layer. It keeps
+   *  the step's wait, which the context's drawn answer (`readerModeDrawn`) does not read (review 4192 F6). */
   available(): boolean;
   on(): boolean;
   toggle(): void;
@@ -200,6 +202,14 @@ function createController(sink: Sink, initialTurn: ReaderTurn) {
   /** The generation of the wake-lock request in flight: each request takes the next one, and every clearing of `refused` takes
    *  one too, so a request that settles after its period ended (the page visible again, a fresh entry) never marks the new one. */
   let wakeGen = 0;
+  /** This hook's own step back is on its way (wave 62, ticket x6-fu-reentry-flag): set when `stepBelow` stepped over entries, and
+   *  cleared by that step's landing (the dispatcher's `exitReader`) or by `READER_EXIT_LANDING_MS`. `readerModeOffered` reads it, so
+   *  no entry pushes a reader place under a landing still to come. A fact of this hook's own, beside the record's `exitPending`,
+   *  which the dispatcher writes and this hook reads through no port: that mark is also set by an exit waiting on its settle, which
+   *  a re-entry cancels, while this one stands only once a step was taken. Not named `landing`: that name is the landing line's,
+   *  read in the PWA by `conflictWords.ts` alone (the rings' one-owner scan). */
+  let stepping = false;
+  let steppingTimer: ReturnType<typeof setTimeout> | null = null;
   let alive = true;
 
   // ── the wake lock (spec 6.3) ──
@@ -258,9 +268,20 @@ function createController(sink: Sink, initialTurn: ReaderTurn) {
   /** Marks the exit's landing as expected, then steps below the reader place; the mark is cleared again when nothing was
    *  stepped (no landing is coming). The one path of `step-back` and of `leaveDead`. */
   const stepBelow = (): void => {
+    // A torn-down hook steps nothing (review 4192 F7): the teardown is a layout cleanup and the host's unregister a passive one, so
+    // the dispatcher can hand `leaveDead` a pop between them. The same guard as the sink's.
+    if (!alive) return;
     input.places.markExitPending(true);
     if (input.places.stepBack() === 0) input.places.markExitPending(false);
+    else setStepping(true);
   };
+  /** The one writer of `stepping`: an armed wait is bounded by `READER_EXIT_LANDING_MS`. React is not told: what it draws does not
+   *  read the wait (`readerModeDrawn`, review 4192 F6), and every press reads it now (`offered`, `available`). */
+  function setStepping(on: boolean): void {
+    if (steppingTimer !== null) clearTimeout(steppingTimer);
+    steppingTimer = on ? setTimeout(() => { steppingTimer = null; setStepping(false); }, READER_EXIT_LANDING_MS) : null;
+    stepping = on;
+  }
   const requestFullScreen = (): void => {
     const c = container;
     if (c === null) return;
@@ -270,16 +291,6 @@ function createController(sink: Sink, initialTurn: ReaderTurn) {
       () => { if (alive) step({ kind: 'full-screen-granted' }); },
       () => { if (alive) step({ kind: 'full-screen-refused' }); },
     );
-  };
-  /** The Docs head's Reader mode action when one is on the page: the head draws it (the desk row's, the compact row's or the one
-   *  bar's, all named `READER_MODE_TEXT.enter`) only while a ready frame offers reader mode, from React's state, so the page can
-   *  still hold the action of the render before a step. So it is asked for only when this controller's own offer stands after the
-   *  step (`focus-frame`, review 4052 F1). Read from the page, at the act, after the console is shown again. */
-  const headAction = (): HTMLElement | null => {
-    for (const b of document.querySelectorAll<HTMLButtonElement>('button')) {
-      if (b.getAttribute('aria-label') === READER_MODE_TEXT.enter && !b.disabled && b.isConnected) return b;
-    }
-    return null;
   };
   const perform = (act: ReaderModeAct): void => {
     const c = container;
@@ -319,23 +330,14 @@ function createController(sink: Sink, initialTurn: ReaderTurn) {
       case 'stop-reading':
         frame?.setReading('off');
         break;
-      case 'focus-frame': {
-        // `readerModeExitFocus` decides (L1). Only an exit with no frame standing asks the page for a target: the head's action is
-        // looked for then and not otherwise, so every other focus request is the frame's alone, as before. The head draws that
-        // action from React's state, which is one commit behind this controller: a scan of the page can find the action of the
-        // render before this step, and that action unmounts in the next commit (a fall back after entering drops the frame in the
-        // same step, so the head still holds it here). So the action counts only while this controller's own offer says it stays
-        // after the step (`available()`, read now), and otherwise focus goes to the main region (X6 follow-up, review 4052 F1). That
-        // offer needs a ready frame, so with no frame standing it is off: as built, every frameless exit's focus goes to the main
-        // region, and the head-action branch is kept so delivery reads as the L1 rule (`readerModeExitFocus`) states it.
-        const frameless = !state.on && frame === null;
-        const head = frameless && available() ? headAction() : null;
-        const where = readerModeExitFocus({ on: state.on, frameStands: frame !== null, headActionShown: head !== null });
-        if (where === 'frame') frame?.focus();
-        else if (where === 'head-action') head?.focus();
+      case 'focus-frame':
+        // `readerModeExitFocus` decides (L1): the frame, or, for an exit with no frame standing, the main region. The page's Reader
+        // mode action is never a target (wave 62, review 4092 F2): the head draws it from React's state, one commit behind this
+        // controller, and only while a ready frame offers reader mode, so with no frame standing the action on the page is one the
+        // next commit takes away (review 4052 F1).
+        if (readerModeExitFocus({ on: state.on, frameStands: frame !== null }) === 'frame') frame?.focus();
         else focusShownLandmark();
         break;
-      }
       case 'announce':
         // Cleared first, so a repeat of the same sentence is announced again.
         sink.live('');
@@ -405,11 +407,12 @@ function createController(sink: Sink, initialTurn: ReaderTurn) {
     plainView: input.plainView,
     modalMounted: document.querySelector('[role="dialog"]') !== null,
     figureOpen: figure,
+    exitLanding: stepping,
   });
-  /** The offer less the modal-layer clause, the context's render-time answer read now: a listing (the shortcut sheet is a
-   *  dialog itself) asks this, never `offered`. */
+  /** The offer less the modal-layer clause, read now: a listing (the shortcut sheet is a dialog itself) asks this, never
+   *  `offered`. It keeps the step's wait, so the palette lists no Reader mode while the step lands (review 4192 F8). */
   const available = (): boolean => readerModeOffered({
-    frameReady: frame?.ready === true, plainView: input.plainView, modalMounted: false, figureOpen: figure,
+    frameReady: frame?.ready === true, plainView: input.plainView, modalMounted: false, figureOpen: figure, exitLanding: stepping,
   });
   const exit = (cause: 'exit-tap' | 'key'): void => step({ kind: cause });
   const enter = (_by: 'button' | 'key'): void => {
@@ -524,13 +527,16 @@ function createController(sink: Sink, initialTurn: ReaderTurn) {
       const places = input.places;
       const unregister = places.register({
         on: (): boolean => state.on,
-        exitReader: (_closeOverlay: boolean): void => step({ kind: 'place-popped' }),
+        // A crossing landing: while on, Back crossed the reader place; while off, the landing of this hook's own step back, which
+        // ends its wait (`stepping`).
+        exitReader: (_closeOverlay: boolean): void => { step({ kind: 'place-popped' }); setStepping(false); },
         leaveDead: stepBelow,
       });
       if (places.standingOnDead()) stepBelow();
       return unregister;
     },
-    start: (): void => { alive = true; },
+    // A remount on the same controller (StrictMode's simulated one): a wait whose bound the teardown cleared is armed again.
+    start: (): void => { alive = true; if (stepping) setStepping(true); },
     /** The screen unmounting: the decider's `leave` (the console back, the fill cleared, full screen left; no step back, no
      *  focus), then the hook's own teardown: its timers and the wake lock. */
     teardown(): void {
@@ -539,6 +545,8 @@ function createController(sink: Sink, initialTurn: ReaderTurn) {
       for (const act of answer.acts) perform(act);
       if (settleTimer !== null) clearTimeout(settleTimer);
       settleTimer = null;
+      if (steppingTimer !== null) clearTimeout(steppingTimer);
+      steppingTimer = null;
       clearIdle();
       const s = sentinel;
       sentinel = null;
@@ -594,9 +602,10 @@ export function useReaderMode(o: { doc: string | null; plainView: boolean; place
   }, [ctl]);
 
   const value = useMemo<ReaderModeContextValue>(() => ({
-    // `readerModeOffered` owns the rule. The modal-layer test is read at each `enter` and in the handle, not at render.
+    // `readerModeDrawn` owns the rule. The modal-layer test and the step's wait are read at each `enter` and in the handle, not at
+    // render (`readerModeOffered`).
     state, turn, setTurn: ctl.setTurn,
-    offered: readerModeOffered({ frameReady: frame?.ready === true, plainView, modalMounted: false, figureOpen: figure }),
+    offered: readerModeDrawn({ frameReady: frame?.ready === true, plainView, figureOpen: figure }),
     enter: ctl.enter, exit: ctl.exit, menu: ctl.menu, escOverlay: ctl.escOverlay, activity: ctl.activity, dismiss: ctl.dismiss,
     aa: ctl.aa, frame,
     setFrame: ctl.setFrame, dropFrame: ctl.dropFrame, setFigure: ctl.setFigure, setFallback: ctl.setFallback, readingFor: ctl.readingFor,

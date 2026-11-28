@@ -7,7 +7,7 @@
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from 'vitest';
-import { Fragment, useContext, useEffect, useState, type ReactNode } from 'react';
+import { Fragment, StrictMode, useContext, useEffect, useState, type ReactNode } from 'react';
 import { act, cleanup, render, screen } from '@testing-library/react';
 import { flushSync } from 'react-dom';
 import { CommandPalette, Sheet } from '@ccrc/ui';
@@ -17,10 +17,11 @@ import {
   NO_READER_PLACES, ReaderModeContext, useReaderMode,
   type ReaderModeContextValue, type ReaderModeFrame, type ReaderModePlaces,
 } from '../src/docs/useReaderMode';
-import { READER_EXIT_SETTLE_MS, READER_WAKE_IDLE_MS } from '../src/docs/reader/readerMode';
+import { READER_EXIT_LANDING_MS, READER_EXIT_SETTLE_MS, READER_WAKE_IDLE_MS } from '../src/docs/reader/readerMode';
 import { READER_MODE_TEXT } from '../src/docs/reader/readerModeWords';
 import { DocsScreen } from '../src/screens/DocsScreen';
-import { clearAuthLost, raiseAuthLost } from '../src/lib/auth';
+import { clearAuthLost, raiseAuthLost, useAuthLost } from '../src/lib/auth';
+import { LoginScreen } from '../src/components/LoginScreen';
 import { navigate, useLocation } from '../src/lib/router';
 import { IDX_KEY, PLACES_RECORD_KEY, PLACE_KEY } from '../src/lib/historyPlaces';
 import { onPop, readPlaces, resetPopstateForTests } from '../src/lib/popstate';
@@ -145,9 +146,13 @@ interface PlacesFake extends ReaderModePlaces {
   readonly stepBack: ReturnType<typeof vi.fn<() => number>>;
   readonly markExitPending: ReturnType<typeof vi.fn<(on: boolean) => void>>;
   landed: boolean;
+  /** The step back's landing, as the pop dispatcher reports it: the registered host's `exitReader` (wave 62: until it comes, a
+   *  re-entry after an exit that stepped back is refused). */
+  land(): void;
 }
 
 function fakePlaces(order: string[] = []): PlacesFake {
+  let host: Parameters<ReaderModePlaces['register']>[0] | null = null;
   const p: PlacesFake = {
     landed: false,
     placeFree: () => true,
@@ -155,8 +160,9 @@ function fakePlaces(order: string[] = []): PlacesFake {
     stepBack: vi.fn(() => { order.push('step-back'); return 1; }),
     landedBelow: () => p.landed,
     markExitPending: vi.fn(),
-    register: () => () => undefined,
+    register: (h) => { host = h; return () => { host = null; }; },
     standingOnDead: () => false,
+    land: () => { if (host === null) throw new Error('no host registered'); host.exitReader(false); },
   };
   return p;
 }
@@ -176,6 +182,8 @@ function fakeFrame(ready = true): FakeFrame {
 // ─── the harness ───────────────────────────────────────────────────────────────────────────────────────────────────────
 
 let latest: ReaderModeContextValue;
+/** The outside door's controls of the last render (`offered`, `available`: the palette and `r`). */
+let latestControls: ReturnType<typeof useReaderMode>['controls'];
 const reading = (): HTMLElement => document.querySelector('.docs-reading') as HTMLElement;
 const attr = (): string | null => reading().getAttribute('data-reader-mode');
 
@@ -183,8 +191,9 @@ const attr = (): string | null => reading().getAttribute('data-reader-mode');
 function Harness(p: {
   doc?: string | null; plainView?: boolean; places?: ReaderModePlaces; frame?: ReaderModeFrame | null; sheet?: boolean; closedDialog?: boolean;
 }): ReactNode {
-  const { value, container } = useReaderMode({ doc: p.doc === undefined ? 'doc-a' : p.doc, plainView: p.plainView ?? false, places: p.places });
+  const { value, container, controls } = useReaderMode({ doc: p.doc === undefined ? 'doc-a' : p.doc, plainView: p.plainView ?? false, places: p.places });
   latest = value;
+  latestControls = controls;
   const frame = p.frame === undefined ? null : p.frame;
   const setFrame = value.setFrame;
   useEffect(() => { setFrame(frame); }, [setFrame, frame]);
@@ -1293,10 +1302,10 @@ describe('reader mode: where focus goes after the frameless Exit (X6 XR fix roun
 
   // X6 follow-up, review 4052 F1: this case first pinned focus ON the stand-in action. The real head draws its action only while
   // reader mode is offered, from React's state, one commit behind the controller, so an action on the page with no frame standing
-  // is one the next commit takes away (a fall back after entering: `reader-mode-mount.test.tsx`, the real head). Focus now goes to
-  // that action only while the controller's own offer says it stays after the step, which needs a ready frame, so here it goes to
-  // the main region; the stand-in action stays drawn, as a stale one would be.
-  it('no frame: a head Reader mode action still on the page is not taken, since the controller\'s own offer is off after the exit; focus goes to the main region (review 4052 F1)', async () => {
+  // is one the next commit takes away (a fall back after entering: `reader-mode-mount.test.tsx`, the real head). Wave 62 (review
+  // 4092 F2) deleted the head-action answer of the exit's focus, which that offer made unreachable: an exit with no frame standing
+  // focuses the main region, and the stand-in action stays drawn, as a stale one would be.
+  it('no frame: a head Reader mode action still on the page is not taken; an exit with no frame standing focuses the main region (review 4052 F1, review 4092 F2)', async () => {
     await onWithoutFrame(true);
     const action = screen.getByRole('button', { name: READER_MODE_TEXT.enter, hidden: true });
     tapExit();
@@ -1361,11 +1370,187 @@ describe('reader mode: where focus goes after the frameless Exit (X6 XR fix roun
   });
 });
 
+describe('reader mode: a block exit leaves focus where the cover put it (wave 62, review 4092 F1)', () => {
+  /** The app's order (`app.tsx`): the sign-in cover is a preceding sibling of the shell, mounted while sign-in is lost, and the
+   *  shell (here the reading container's harness) stays mounted under it. The cover's passphrase field takes focus at its commit
+   *  (`autoFocus`); the hook's block runs in a passive effect after it. */
+  function Covered(p: { frame: ReaderModeFrame | null; places: ReaderModePlaces }): ReactNode {
+    const { lost } = useAuthLost();
+    return <>{lost && <LoginScreen />}<CtxHarness frame={p.frame} places={p.places} /></>;
+  }
+  /** Enters with a frame whose focus really moves the document's focus (to the host), and drops the frame when `frameless`. */
+  async function enterCovered(frameless: boolean): Promise<{ places: ReturnType<typeof fakePlaces>; host: HTMLElement }> {
+    // The cover reads the box's sign-in status once; held unanswered, so nothing clears the loss under the case.
+    vi.stubGlobal('fetch', vi.fn(() => new Promise<never>(() => undefined)));
+    installFullScreen();
+    const places = fakePlaces();
+    const frame = fakeFrame();
+    const view = render(<Covered frame={frame} places={places} />);
+    const host = screen.getByTestId('host');
+    host.tabIndex = -1;
+    frame.focus.mockImplementation(() => { host.focus(); });
+    act(() => { latest.enter('button'); });
+    await flush();
+    expect(latest.state.on, 'CONTROL: reader mode is on').toBe(true);
+    expect(document.activeElement, 'CONTROL: entering gave the frame focus').toBe(host);
+    if (frameless) {
+      view.rerender(<Covered frame={null} places={places} />);
+      await flush();
+      expect(latest.state.on, 'CONTROL: reader mode stays on without the frame').toBe(true);
+    }
+    return { places, host };
+  }
+  afterEach(() => { vi.unstubAllGlobals(); });
+
+  it('block: the sign-in cover mounting over reader mode with a frame standing keeps focus on its passphrase field', async () => {
+    const { places, host } = await enterCovered(false);
+    await act(async () => { raiseAuthLost('expired'); });
+    await flush();
+    const field = document.getElementById('ccrc-passphrase');
+    expect(field, 'CONTROL: the sign-in cover is drawn').not.toBeNull();
+    expect(latest.state.on, 'the sign-in cover did not end reader mode').toBe(false);
+    expect(places.stepBack, 'CONTROL: a block steps back over its place once').toHaveBeenCalledTimes(1);
+    expect(document.activeElement, 'the block exit took focus from the passphrase field (to the frame)').not.toBe(host);
+    expect(document.activeElement, 'the passphrase field lost focus').toBe(field);
+  });
+
+  it('block: the sign-in cover mounting over reader mode with no frame standing keeps focus on its passphrase field', async () => {
+    await enterCovered(true);
+    await act(async () => { raiseAuthLost('expired'); });
+    await flush();
+    const field = document.getElementById('ccrc-passphrase');
+    expect(field, 'CONTROL: the sign-in cover is drawn').not.toBeNull();
+    expect(latest.state.on, 'the sign-in cover did not end reader mode').toBe(false);
+    expect(document.activeElement, 'the block exit took focus from the passphrase field (to the main region)').not.toBe(document.getElementById('content'));
+    expect(document.activeElement, 'the passphrase field lost focus').toBe(field);
+  });
+});
+
+describe('reader mode: a re-entry while its exit is still landing (wave 62, ticket x6-fu-reentry-flag)', () => {
+  /** A places port whose step back steps over one entry (or none, `steps: 0`); `land` delivers the step's landing as the dispatcher
+   *  does (`exitReader` while off). */
+  function landingPlaces(steps = 1): PlacesFake {
+    const p = fakePlaces();
+    p.stepBack.mockImplementation(() => steps);
+    return p;
+  }
+
+  it('reader mode: after an exit that stepped back, a re-entry is refused until that step lands, then offered again', async () => {
+    const places = landingPlaces();
+    setup({ places });
+    act(() => { latest.enter('button'); });
+    expect(latest.state.on, 'CONTROL: entered').toBe(true);
+    act(() => { latest.exit('exit-tap'); });
+    expect(places.stepBack, 'CONTROL: the exit stepped back').toHaveBeenCalledTimes(1);
+    expect(latestControls.offered(), 'reader mode is offered while the exit\'s step back is on its way').toBe(false);
+    // The outside door's listing (the palette's row) reads the wait too (fix round 1, review 4192 F8).
+    expect(latestControls.available(), 'the palette lists Reader mode while the exit\'s step back is on its way').toBe(false);
+    // The head keeps its action drawn meanwhile, so a focus it holds is not dropped (F6); a press is refused.
+    expect(latest.offered, 'the head took its Reader mode action away while the step lands').toBe(true);
+    act(() => { latest.enter('button'); });
+    expect(latest.state.on, 'a re-entry before the landing was taken').toBe(false);
+    expect(places.push, 'a re-entry before the landing pushed a reader place').toHaveBeenCalledTimes(1);
+    // The dispatcher reports the step's landing: a crossing landing while reader mode is off.
+    act(() => { places.land(); });
+    expect(latestControls.offered(), 'the landing did not end the wait').toBe(true);
+    expect(latestControls.available(), 'the landing did not end the listing\'s wait').toBe(true);
+    act(() => { latest.enter('button'); });
+    expect(latest.state.on, 'the re-entry after the landing was refused').toBe(true);
+    expect(places.push).toHaveBeenCalledTimes(2);
+  });
+
+  it('reader mode: a step back whose landing never comes holds the entry for at most READER_EXIT_LANDING_MS', async () => {
+    vi.useFakeTimers();
+    const places = landingPlaces();
+    setup({ places });
+    act(() => { latest.enter('button'); });
+    act(() => { latest.exit('exit-tap'); });
+    expect(latestControls.offered(), 'CONTROL: the wait stands').toBe(false);
+    await act(async () => { await vi.advanceTimersByTimeAsync(READER_EXIT_LANDING_MS - 1); });
+    expect(latestControls.offered(), 'the wait ended before its bound').toBe(false);
+    await act(async () => { await vi.advanceTimersByTimeAsync(1); });
+    expect(latestControls.offered(), 'the wait outlived its bound').toBe(true);
+    act(() => { latest.enter('key'); });
+    expect(latest.state.on, 'an entry after the bound was refused').toBe(true);
+  });
+
+  it('reader mode: a wait armed before StrictMode\'s simulated remount (the reload check\'s step) is still bounded after it', async () => {
+    vi.useFakeTimers();
+    installFullScreen();
+    const places = landingPlaces();
+    let dead = true;
+    const standingOnDead = vi.fn(() => { const d = dead; dead = false; return d; });
+    places.standingOnDead = standingOnDead;
+    render(<StrictMode><Harness frame={fakeFrame()} places={places} /></StrictMode>);
+    await flush();
+    // Review 4192 F10: the simulated remount ran (the host registered twice, each time asked once), so the re-arm is what is read.
+    expect(standingOnDead, 'CONTROL: StrictMode remounted the hook').toHaveBeenCalledTimes(2);
+    expect(places.stepBack, 'CONTROL: the reload check stepped below the dead entry').toHaveBeenCalledTimes(1);
+    expect(latestControls.offered(), 'CONTROL: the wait stands').toBe(false);
+    await act(async () => { await vi.advanceTimersByTimeAsync(READER_EXIT_LANDING_MS); });
+    expect(latestControls.offered(), 'the remount left the wait with no bound').toBe(true);
+  });
+
+  it('reader mode: an exit that stepped over nothing (an unplaced entry, or a step of no entries) holds no re-entry', () => {
+    const places = landingPlaces(0);
+    setup({ places });
+    act(() => { latest.enter('button'); });
+    act(() => { latest.exit('exit-tap'); });
+    expect(latestControls.offered(), 'a step of no entries held the entry').toBe(true);
+    act(() => { latest.enter('button'); });
+    expect(latest.state.on).toBe(true);
+  });
+
+  it('reader mode: the frame\'s r is refused too while the step is landing, and the screen leaving clears the bound\'s timer', async () => {
+    vi.useFakeTimers();
+    const places = landingPlaces();
+    const { frame, view } = setup({ places });
+    const base = vi.getTimerCount();
+    act(() => { latest.enter('button'); });
+    act(() => { latest.exit('exit-tap'); });
+    expect(vi.getTimerCount(), 'CONTROL: the wait\'s bound is armed').toBe(base + 1);
+    const iframe = document.createElement('iframe');
+    screen.getByTestId('host').appendChild(iframe);
+    frame.focus.mockImplementation(() => { iframe.focus(); });
+    act(() => { iframe.focus(); });
+    expect(document.activeElement, 'CONTROL: the frame holds focus').toBe(iframe);
+    act(() => { latest.frameToggle(); });
+    expect(latest.state.on, 'the frame\'s r entered while the step was landing').toBe(false);
+    // Another exit's wait, then the screen leaving with it armed.
+    act(() => { places.land(); });
+    act(() => { iframe.focus(); });
+    act(() => { latest.frameToggle(); });
+    expect(latest.state.on, 'CONTROL: the frame\'s r enters once the step has landed').toBe(true);
+    act(() => { latest.exit('exit-tap'); });
+    expect(vi.getTimerCount(), 'CONTROL: the second wait\'s bound is armed').toBe(base + 1);
+    view.unmount();
+    expect(vi.getTimerCount(), 'the wait\'s bound outlived the screen').toBe(base);
+  });
+
+  it('reader mode: a pop the dispatcher hands the host between the teardown and the unregister steps nothing and arms no timer (review 4192 F7)', () => {
+    vi.useFakeTimers();
+    // The teardown is a layout cleanup and the unregister a passive one, so a pop can reach the host between them. The port keeps
+    // the host past its unregister, as a dispatcher whose unregister has not run yet does, and the case hands it that pop.
+    let kept: Parameters<ReaderModePlaces['register']>[0] | null = null;
+    const places = landingPlaces();
+    places.register = (h) => { kept = h; return () => undefined; };
+    const { view } = setup({ places });
+    expect(kept, 'CONTROL: the hook registered its host').not.toBeNull();
+    const base = vi.getTimerCount();
+    view.unmount();
+    expect(vi.getTimerCount(), 'CONTROL: the screen left with no timer of its own').toBe(base);
+    act(() => { kept!.leaveDead(); });
+    expect(places.markExitPending, 'a torn-down hook marked an exit pending').not.toHaveBeenCalled();
+    expect(places.stepBack, 'a torn-down hook stepped the page').not.toHaveBeenCalled();
+    expect(vi.getTimerCount(), 'a torn-down hook armed the wait\'s bound').toBe(base);
+  });
+});
+
 describe('wake lock: a refusal is remembered (X6 XR fix round 1, item 5)', () => {
   it('wake lock: a refused request is not asked again by activity, but by the page visible again and by a fresh entry', async () => {
     const wake = installWakeLock(true);
     const fire = installVisibility();
-    setup();
+    const { places } = setup();
     act(() => { latest.enter('button'); });
     await settle();
     expect(wake.request, 'entering asks once').toHaveBeenCalledTimes(1);
@@ -1382,8 +1567,9 @@ describe('wake lock: a refusal is remembered (X6 XR fix round 1, item 5)', () =>
     act(() => { latest.activity(); });
     await settle();
     expect(wake.request, 'activity asked again after the second refusal').toHaveBeenCalledTimes(2);
-    // A fresh entry into reader mode asks once more.
+    // A fresh entry into reader mode asks once more (after the exit's step back has landed, wave 62).
     act(() => { latest.exit('exit-tap'); });
+    act(() => { places.land(); });
     await settle();
     act(() => { latest.enter('button'); });
     await settle();
@@ -1420,10 +1606,11 @@ describe('wake lock: a refusal is remembered (X6 XR fix round 1, item 5)', () =>
 
   it('wake lock: a request that rejects late does not mark a fresh entry refused (exit and enter meanwhile) (review M3)', async () => {
     const wake = installPendingWakeLock();
-    setup();
+    const { places } = setup();
     act(() => { latest.enter('button'); });
     await settle();
     act(() => { latest.exit('exit-tap'); });
+    act(() => { places.land(); });   // the exit's step back lands (wave 62: a re-entry waits for it)
     act(() => { latest.enter('button'); });
     await settle();
     await act(async () => { wake.refuse(0); });

@@ -119,9 +119,9 @@ export const MESSAGE_MOVERS: Readonly<Record<string, { readonly calls: number; r
   'server/src/coord/overlordInboxRoutes.ts#registerOverlordInboxRoutes': { calls: 1, how: 'acknowledge: settles, then stamps through recordInboxAcknowledgement and answers 503 when the line is refused (PR A)' },
 };
 /** Every call of the combinator, in server/src, counted per symbol (`server.ts#buildServer` composes the hook's pick-up port; the
- *  boot pass's three are its unsettle, queue and deliver arms). */
+ *  boot pass's four are its spend, unsettle, queue and deliver arms; the spend arm is W2 request record A's). */
 const COMBINATOR_CALLERS: Readonly<Record<string, number>> = {
-  'server/src/operatorModel/bootPass.ts#runOperatorModelBootPass': 3, 'server/src/operatorModel/nudgeLane.ts#deliverWhileQueued': 1,
+  'server/src/operatorModel/bootPass.ts#runOperatorModelBootPass': 4, 'server/src/operatorModel/nudgeLane.ts#deliverWhileQueued': 1,
   'server/src/operatorModel/promptRecord.ts#recordOperatorPrompt': 1, 'server/src/server.ts#buildServer': 1,
 };
 /** A count record as the list `callersOf` answers: each `file#symbol` once per call. */
