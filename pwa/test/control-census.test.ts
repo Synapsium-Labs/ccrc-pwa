@@ -241,6 +241,9 @@ const CONTROLS: Record<string, string> = {
   'fleet/AccountKnob.tsx <button> acct-switch':
     'TOKEN. The Accounts card\'s switch (`LaneSwitch`): the kill switch (D-7732) and "Start new sessions here" (D-8195), a 36px track inside a tap-floor box.',
   'fleet/NewSessionSheet.tsx <button> acct-change': 'TOKEN. The change-account line above the project list.',
+  'session/PastedTextChip.tsx <a> msg-paste':
+    'TOKEN. A pasted text the session received as a file, drawn in its place in the user bubble (desktop-polish wave '
+    + '194): a block of its own line that opens the saved file, its rule `.msg-user .msg-paste` holding the floor.',
   'fleet/chips.tsx <button> acct-disclosure':
     'TOKEN. "show other pools (N)" — ONE entry where there were two, because '
     + 'the two sheets that drew it were drawing the same button down to the '
@@ -523,6 +526,9 @@ const CONTROLS: Record<string, string> = {
   'docs/DocsHead.tsx <button> docs-action docs-export':
     "TOKEN. Export (spec 4.17), after Share on a leaf: a <button> wearing the header's link-action class, `.docs-action`, "
     + 'whose rule carries the floor.',
+  'docs/DocsHead.tsx <button> docs-action docs-print':
+    "TOKEN. Print (the parity spec 4.6), after Export on a leaf: a <button> wearing the header's link-action class, `.docs-action`, "
+    + 'whose rule carries the floor.',
   'docs/DocsHead.tsx <button> docs-action docs-reader-mode':
     "TOKEN. Reader mode (the reader-mode spec 3.1), the first action of the row: a <button> wearing the header's link-action "
     + 'class, `.docs-action`, whose rule carries the floor.',
@@ -541,6 +547,15 @@ const CONTROLS: Record<string, string> = {
   'docs/MockupView.tsx <a> docs-hint-link':
     "TOKEN. An external link in the mockup's links list (native Docs reader C2 Task 8), opened with `openExternal` on tap: a standalone "
     + "line of the list wearing `.docs-hint-link`, whose own rule carries the floor.",
+  'docs/artifact/ArtifactOffer.tsx <button> docs-leaf-action':
+    "TOKEN. Open as artifact (X5 A5.1), beside every HTML page's walls view, the too-large view and the stand-in: the leaf's "
+    + "bordered `.docs-leaf-action`, whose own rule carries the floor.",
+  'docs/artifact/LaunchSheet.tsx <input> (none)':
+    'SELECTOR .docs-artifact-check. One choice of the artifact launch sheet (X5 A5.2), an outside host or windows: a checkbox '
+    + 'inside its label, whose rule carries the floor, so the whole label line toggles it.',
+  'docs/artifact/LaunchSheet.tsx <a> (computed)':
+    'VARIANT buttonVariants. The launch sheet\'s Open (X5 A5.2): the one real link to the artifact tab, with rel noopener noreferrer, '
+    + 'drawn with the button variant classes.',
   'docs/DocMarkdown.tsx <button> doc-gate-btn': "TOKEN. The large-document gate's two choices.",
   'docs/DocMarkdown.tsx <button> doc-plain-action': "TOKEN. Plain text's Format anyway or Retry.",
   'docs/DocImage.tsx <button> doc-img-load': 'TOKEN. Load image, for an image the page budget held back.',

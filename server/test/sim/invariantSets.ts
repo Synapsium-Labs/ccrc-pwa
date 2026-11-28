@@ -67,8 +67,8 @@ export function invariantVerdictCases(m: M): Record<string, SuiteCase> {
     'a row with no predicate answers not-applicable with its waitsOn; tables-absent and predicate-not-built are told apart': () => {
       expect(m.invariantVerdict('I1', EMPTY)).toEqual({ kind: 'not-applicable', waitsOn: 'W3, the holds', why: 'tables-absent' });
       expect(m.invariantVerdict('I18', EMPTY)).toEqual({ kind: 'not-applicable', waitsOn: 'ticket invariant-i18-seal-predicate', why: 'predicate-not-built' });
-      for (const n of ['I8', 'I13'] as const) expect(m.invariantVerdict(n, EMPTY)).toMatchObject({ kind: 'not-applicable', why: 'predicate-not-built' });
-      for (const n of ['I3', 'I4', 'I6', 'I10', 'I11', 'I12', 'I14', 'I15', 'I16'] as const) {
+      for (const n of ['I8', 'I12', 'I13'] as const) expect(m.invariantVerdict(n, EMPTY)).toMatchObject({ kind: 'not-applicable', why: 'predicate-not-built' });
+      for (const n of ['I3', 'I4', 'I6', 'I10', 'I11', 'I14', 'I15', 'I16'] as const) {
         expect(m.invariantVerdict(n, EMPTY)).toMatchObject({ kind: 'not-applicable', why: 'tables-absent' });
       }
     },

@@ -39,13 +39,16 @@ import { PrKeycap } from '../src/session/PrKeycap';
 import { PrSheet } from '../src/session/PrSheet';
 import { ReapSheet } from '../src/session/ReapSheet';
 import { RootFallback, ScreenFallback } from '../src/components/RenderBoundary';
-import { DOCS_MAX_IMAGES_PER_PAGE, DOCS_RASTER_TYPES, type DocsProjectsResponse } from '../../shared/docs';
+import { DOCS_MAX_IMAGES_PER_PAGE, DOCS_RASTER_TYPES, type DocPin, type DocsProjectsResponse } from '../../shared/docs';
 import { DOCS_RENDER_GATE_BYTES } from '../src/lib/markdownLimits';
 import { DocsScreen } from '../src/screens/DocsScreen';
 import { DOCS_COMPACT_QUERY } from '../src/docs/DocsHead';
 import { DocsFailureView } from '../src/docs/DocsFailureView';
 import { DOC_MARKDOWN_ACTION } from '../src/docs/DocMarkdown';
-import { DOC_IMAGE_TEXT, DOCS_BANNER_TEXT, DOCS_HEAD_TEXT, DOCS_TOOL_TEXT, DOCS_VIEW_TEXT, SHARE_SHEET_TEXT } from '../src/docs/docsText';
+import { DOC_IMAGE_TEXT, DOCS_BANNER_TEXT, DOCS_HEAD_TEXT, DOCS_RANGE_TEXT, DOCS_TOOL_TEXT, DOCS_VIEW_TEXT, SHARE_SHEET_TEXT } from '../src/docs/docsText';
+import { PartBar } from '../src/docs/range/MarkdownParts';
+import { RangeLeaf } from '../src/docs/range/RangeLeaf';
+import type { RangeLoader, RangeTarget } from '../src/docs/range/readRange';
 import { READER_MODE_TEXT } from '../src/docs/reader/readerModeWords';
 import { ReaderModeOverlay } from '../src/docs/ReaderModeOverlay';
 import { createReaderProgress } from '../src/docs/readerBar';
@@ -60,6 +63,7 @@ import { renderSettings } from './settingsHost';
 import { COMMIT_A, SERVED, draftOf, entry, failedAnswer, fakeLoaders, fileResponse, holder, okTree, pageAt, treeOk, type FakeLoaders } from './docsFixtures';
 import { ExportSheet } from '../src/docs/ExportSheet';
 import { EXPORT_TEXT } from '../src/docs/docsText';
+import { PRINT_ROW_TEXT } from '../src/docs/print/printWords';
 import type { ExportRequest } from '../src/docs/export/exportInput';
 
 const read = (...seg: string[]): string =>
@@ -358,6 +362,8 @@ describe('the two rules that were already scraped still reach a real element', (
       ruleIn(docsCss, '.btn-ghost.docs-banner-action'), ruleIn(docsCss, '.doc-img-link'),
       ruleIn(docsCss, '.docs-more'),
       ruleIn(docsCss, '.docs-title'), ruleIn(docsCss, '.docs-tool'),
+      ruleIn(docsCss, '.btn-ghost.docs-part-prev'), ruleIn(docsCss, '.btn-ghost.docs-part-next'),
+      ruleIn(docsCss, '.btn-ghost.docs-range-cancel'), ruleIn(docsCss, '.btn-ghost.docs-range-download'),
     ]) {
       // Comments off: a rule may legitimately MENTION 44px in prose
       // explaining the token, and that is not a hardcoded literal.
@@ -1095,6 +1101,52 @@ describe('the Docs controls (docs W5 part 1, spec 4.14)', () => {
     });
   });
 
+  // X2 P6.1 Step 0c: the part bar of a document read in parts, and the progress line of a range read (P1 drew them with no rule).
+  describe('the part bar: .docs-part-prev and .docs-part-next (btn-ghost)', () => {
+    it('are at least one tap tall, off the shared token', () => {
+      expect(floorIn(docsCss, '.btn-ghost.docs-part-prev')).toBe('var(--tap-min)');
+      expect(floorIn(docsCss, '.btn-ghost.docs-part-next')).toBe('var(--tap-min)');
+    });
+    it('are the classes both rendered buttons carry, in a nav.docs-parts', () => {
+      render(<PartBar index={1} count={3} onGo={() => {}} />);
+      expect(screen.getByRole('button', { name: DOCS_RANGE_TEXT.partPrevious })).toHaveClass('btn-ghost', 'docs-part-prev');
+      expect(screen.getByRole('button', { name: DOCS_RANGE_TEXT.partNext })).toHaveClass('btn-ghost', 'docs-part-next');
+      expect(document.querySelector('nav.docs-parts .docs-part-at')?.textContent).toBe('Part 2 of 3');
+      const at = ruleIn(docsCss, '.docs-part-at');
+      expect(declValue(at, 'font-variant-numeric'), 'figures that do not jump between parts').toBe('tabular-nums');
+    });
+  });
+
+  describe('.docs-in-parts — a part\'s frame fills the leaf as a whole document\'s does (X2 P6.1 Step 0c)', () => {
+    it('is a column that fills the leaf and may shrink, and the bar and notes beside the frame keep their height', () => {
+      const column = ruleIn(docsCss, '.docs-screen:has(.docs-reader) > .docs-reading > .docs-leaf > .docs-in-parts');
+      expect(declValue(column, 'flex')).toBe('1 1 auto');
+      expect(declValue(column, 'min-block-size')).toBe('0');
+      expect(declValue(ruleIn(docsCss, '.docs-in-parts'), 'flex-direction')).toBe('column');
+      expect(declValue(ruleIn(docsCss, '.docs-in-parts > :not(.docs-reader)'), 'flex')).toBe('none');
+    });
+  });
+
+  describe('the progress line: .docs-range-cancel and .docs-range-download (btn-ghost)', () => {
+    it('are at least one tap tall, off the shared token', () => {
+      expect(floorIn(docsCss, '.btn-ghost.docs-range-cancel')).toBe('var(--tap-min)');
+      expect(floorIn(docsCss, '.btn-ghost.docs-range-download')).toBe('var(--tap-min)');
+    });
+    it('are the classes the rendered Cancel and Download carry', () => {
+      const never: RangeLoader = { prepare: () => new Promise(() => undefined), frame: () => new Promise(() => undefined) };
+      const pin: DocPin = { kind: 'committed', commit: COMMIT_A, servedRef: SERVED, section: 'specs', path: 'big.md' };
+      const target: RangeTarget = { project: 'demo', pin, range: { kind: 'blob', sha: 'b'.repeat(40) }, size: 3 * 1048576 };
+      const visit = { rangeFailed: () => 'other' as const, rangeRead: () => {}, rangeRetry: () => {}, rangeRelists: 0, rangeWaiting: false };
+      render(<RangeLeaf target={target} cls="markdown" name="big.md" loader={never} visit={visit}>{() => <p>shown</p>}</RangeLeaf>);
+      const progress = document.querySelector('.docs-range-reading');
+      expect(progress?.querySelector('progress'), 'the progress line holds a progress').not.toBeNull();
+      expect(screen.getByRole('button', { name: DOCS_RANGE_TEXT.cancel })).toHaveClass('btn-ghost', 'docs-range-cancel');
+      cleanup();
+      render(<RangeLeaf target={target} cls="other" name="big.bin" loader={never} visit={visit} />);
+      expect(screen.getByRole('button', { name: DOCS_VIEW_TEXT.download })).toHaveClass('btn-ghost', 'docs-range-download');
+    });
+  });
+
   describe('.docs-reading-turn — reader mode’s Pages and Scroll switch (X6 XR2.2)', () => {
     it('is at least one tap tall and one tap wide, off the shared token', () => {
       expect(floorIn(docsCss, '.docs-reading-turn')).toBe('var(--tap-min)');
@@ -1293,6 +1345,37 @@ describe('Export: .docs-export on .docs-action, and the export sheet’s Save an
     };
     render(<ExportSheet request={request} onClose={() => {}} load={() => Promise.reject(new TypeError('chunk'))} />);
     expect(await screen.findByRole('button', { name: EXPORT_TEXT.retry })).toHaveClass('min-h-tap');
+  });
+});
+
+// — native Docs reader X2 P6.1, Print: the header's Print row, a <button> wearing `.docs-action` as Export's does; its floor is that
+// rule's (the compact row's width floor is `.docs-compact-bar .docs-action`'s, below). Both halves. —
+describe('Print: .docs-print on .docs-action (docs X2 P6.1)', () => {
+  afterEach(() => {
+    history.replaceState(null, '', '/');
+    vi.unstubAllGlobals();
+  });
+
+  it('is at least one tap tall: .docs-action on the token, and no rule of its own that gives the floor back', () => {
+    expect(floorIn(docsCss, '.docs-action')).toBe('var(--tap-min)');
+    expect(declValue(ruleIn(docsCss, '.docs-compact-bar .docs-action'), 'min-width')).toBe('var(--tap-min)');
+    expect(docsCss).not.toMatch(/^\.docs-action\.docs-print\s*\{[^}]*(min-height|height)\s*:/m);
+  });
+
+  it('is the class the rendered control carries, in Page details; the desk row and the compact row\'s icons have none', async () => {
+    openDocs('/docs/demo/specs/a.md', markdownLeaf('# A\n'));
+    await screen.findByRole('button', { name: DOCS_HEAD_TEXT.export });
+    expect(screen.queryByRole('button', { name: PRINT_ROW_TEXT.print, hidden: true })).toBeNull();
+    cleanup();
+    vi.stubGlobal('matchMedia', (q: string) => ({
+      matches: q === DOCS_COMPACT_QUERY, media: q, onchange: null,
+      addEventListener() {}, removeEventListener() {}, addListener() {}, removeListener() {}, dispatchEvent: () => false,
+    }));
+    openDocs('/docs/demo/specs/a.md', markdownLeaf('# A\n'));
+    const inPanel = await screen.findByRole('button', { name: PRINT_ROW_TEXT.print, hidden: true });
+    expect(inPanel).toHaveClass('docs-action', 'docs-print');
+    expect(inPanel.closest('.docs-more-panel')).not.toBeNull();
+    expect(inPanel.closest('.docs-compact-bar')).toBeNull();
   });
 });
 

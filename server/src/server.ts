@@ -129,8 +129,9 @@ import { registerHierarchyRoutes } from './coord/hierarchyRoutes.js';
 import { registerFaceRoutes } from './face/routes.js';
 import { ccdOverlordBody, stopCreatedOf } from './coord/overlordBody.js';
 import { NO_OVERLORD_STORE, drainOwedStops, overlordLanePortOf, registerOverlordRoutes } from './coord/overlordRoutes.js';
-import { NO_WITNESS_YET, ladderConditionInputs, ladderRead } from './coord/overlordLadderRead.js';
-import { overlordGateRun, overlordReadGate, type OverlordGateDeps } from './coord/overlordGateRun.js';
+import { NO_WITNESS_YET, ladderConditionInputs, ladderRead, raiseLatch } from './coord/overlordLadderRead.js';
+import { NOT_WIRED_ACT_COUNT, overlordGateRun, overlordReadGate, type OverlordGateDeps } from './coord/overlordGateRun.js';
+import { ACT_CEILING_LATCH } from './coord/overlordActCeiling.js';
 import { registerOverlordInboxRoutes } from './coord/overlordInboxRoutes.js';
 import { runOverlordRead } from './coord/overlordRead.js';
 import { registerOverlordHistoryRoutes } from './coord/overlordHistoryRoutes.js';
@@ -2343,6 +2344,13 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     // The timer doors' profile read (Overlord W1): the other-lane refusals' one reader; asking its designation first notes the
     // unmeasured episode on their one module-scope latch, so the whole server logs one line an episode.
     profile: (id) => { otherLaneReads.designation(); return otherLaneReads.profile(id); },
+    // W2 act catalogue A: step 10's act counts at their stated default until act rows A wires its store; the ceiling-hit latch
+    // through the ladder's one writer, under the caller's actor, unless one stands.
+    actCount: NOT_WIRED_ACT_COUNT,
+    ceilingLatch: { standing: () => { const r = deps.coord?.ladderRows(); return r === undefined || r.kind === 'unmeasured' ? 'unmeasured' : r.standing.some((l) => l.cause === ACT_CEILING_LATCH); },
+      raise: (detail, actor) => { if (deps.coord === undefined) return;
+        const r = raiseLatch({ coord: deps.coord, journal: deps.overlordAuthority ?? NO_LADDER_AUTHORITY, clock: { wall: () => deps.time.clock.wall() }, entropy: { hex: (n) => deps.time.entropy.hex(n) } }, ACT_CEILING_LATCH, detail, actor);
+        if (!r.ok) console.warn(`ccrc-server: act-ceiling-hit latch not raised: ${'error' in r ? r.error : r.reason}`); } },
   };
   const gate = overlordGateRun(gateDeps);
   // The inbox wake asks the same readers as a read (no fence, no witness, nothing recorded), through its own handle.

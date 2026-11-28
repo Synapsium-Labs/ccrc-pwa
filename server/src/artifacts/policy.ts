@@ -10,7 +10,7 @@
 import { isExactHttpsOrigin } from '../../../shared/httpsOrigin.js';
 import {
   ARTIFACT_MAX_INFLIGHT, ARTIFACT_MAX_INFLIGHT_BOX, ARTIFACT_QUEUE_PER_CAPABILITY, ARTIFACT_SANDBOX_BASE, ARTIFACT_SANDBOX_WINDOWS,
-  ARTIFACT_MAX_ORIGINS, ARTIFACT_PUBLIC_SUFFIXES, ARTIFACT_QUEUE_WAIT_MS, ARTIFACT_HOURLY_BYTES, ARTIFACT_RESPONSE_MAX_MS, artifactMime, type ArtifactListOk, type ArtifactMintOk, type ArtifactOffWhy,
+  ARTIFACT_MAX_ORIGINS, ARTIFACT_PUBLIC_SUFFIXES, ARTIFACT_QUEUE_WAIT_MS, ARTIFACT_HOURLY_BYTES, ARTIFACT_RESPONSE_MAX_MS, artifactMime, looksNumericHost, originAdmitted, type ArtifactListOk, type ArtifactMintOk, type ArtifactOffWhy,
   type ArtifactRefusal, type ArtifactRevokeOk, type ArtifactRow, type ArtifactScopeOk,
 } from '../../../shared/artifacts.js';
 import {
@@ -65,13 +65,6 @@ function shown(v: string): string {
   return JSON.stringify(v.length > 80 ? v.slice(0, 80) + '...' : v);
 }
 
-/** Whether a browser would read `hostname` as an IPv4 address (the URL standard's "ends in a number": the last label is all
- *  digits, or `0x` and hex). Such a host is rewritten before use, so it is never compared as a name here. */
-function looksNumeric(hostname: string): boolean {
-  const last = hostname.slice(hostname.lastIndexOf('.') + 1);
-  return /^\d+$/.test(last) || /^0x[0-9a-f]*$/i.test(last);
-}
-
 /** A port written the one way a browser serializes it: digits with no leading zero, 1 to 65535. `0443` or `07790` would
  *  pass a looser check yet name the same origin as `443` or `7790`, so two "different" origins could be one. */
 function portOf(digits: string): number | null {
@@ -121,7 +114,7 @@ function checkOrigin(key: string, value: string, consoleLoopback: boolean, conso
   const { hostname, host } = httpsHostOf(value);
   // A name, never an address: a browser reads a host whose last label is numeric (`10.0.0.01`, `10.1`, `0x7f.1`) as an
   // IPv4 address and rewrites it, so the string checks below would compare a spelling the browser never uses.
-  if (looksNumeric(hostname)) return { ok: false, detail: `${key}=${shown(value)} is an address; artifacts need names` };
+  if (looksNumericHost(hostname)) return { ok: false, detail: `${key}=${shown(value)} is an address; artifacts need names` };
   const colon = host.indexOf(':');
   if (colon >= 0) {
     // One spelling per origin: a leading zero names the same port as without it, and a browser drops the default port from
@@ -138,11 +131,17 @@ function checkOrigin(key: string, value: string, consoleLoopback: boolean, conso
 /** The tier's one config decision (spec 2.3). Never throws. Order: an address (`CCRC_EXPOSE_MODE=ip`) has no second site, so
  *  it is off whatever keys stand; no keys is unset; some keys is partial; all three are validated and any failure is invalid. A
  *  key counts as present only when it is a non-empty string (an EnvironmentFile's bare `KEY=` line is absent). A detail holds
- *  only key names, the values the operator wrote and the rule's words, since it goes to a boot warning. */
+ *  only key names, the values the operator wrote and the rule's words, since it goes to a boot warning.
+ *  `masks` says whether the console's answer mask would alter a string (the caller hands in the shape-only masker, its one
+ *  home; absent, nothing is masked). Last, after the site rule: an origin it would alter is `invalid`, naming the key but never
+ *  the value, because a mint answer carries the artifact origin and the mask would alter every one, so no link could reach the
+ *  operator (D-9161). The live masker can also alter a string holding a stored secret's exact bytes; that is not known here,
+ *  and the mint's draws still answer `unmeasured` for it. */
 export function artifactConfig(
   env: { origin?: string; content?: string; port?: string; exposeMode?: string },
   consoleOrigin: string,
   consolePort: number,
+  masks: (value: string) => boolean = () => false,
 ): ArtifactConfig {
   if (env.exposeMode === 'ip') {
     return { state: 'off', why: 'by-address', detail: 'this box is reached by address, and artifacts need names' };
@@ -169,7 +168,7 @@ export function artifactConfig(
   }
   const consoleHostname = consoleLoopback ? 'localhost' : httpsHostOf(consoleOrigin).hostname;
   // A console reached by address has no second site (spec 2.5), whatever `CCRC_EXPOSE_MODE` says.
-  if (looksNumeric(consoleHostname)) {
+  if (looksNumericHost(consoleHostname)) {
     return { state: 'off', why: 'by-address', detail: 'this box is reached by address, and artifacts need names' };
   }
 
@@ -181,6 +180,17 @@ export function artifactConfig(
   if (!a.ok) return invalid(a.detail);
   const c = checkOrigin(KEY_CONTENT, content, consoleLoopback, consoleHostname, consolePort);
   if (!c.ok) return invalid(c.detail);
+  // The artifact origin is in every mint's answer, so a name the mask alters means no link can reach the operator. The content
+  // origin is in no masked answer today (the wrapper and the page's headers come from the artifact listener, unmasked); it is held
+  // to the same rule so the two hosts are one rule and no later answer that names it is ever altered (the coordinator's ruling).
+  if (masks(origin)) {
+    return invalid(`${KEY_ORIGIN} has a name the console's answer mask would alter (it has a credential's shape), so no link `
+      + 'could reach you; choose another label');
+  }
+  if (masks(content)) {
+    return invalid(`${KEY_CONTENT} has a name the console's answer mask would alter (it has a credential's shape); both artifact `
+      + 'hosts are held to the same rule; choose another label');
+  }
   return { state: 'on', artifactOrigin: origin, contentOrigin: content, port, artifactHost: a.host, contentHost: c.host };
 }
 
@@ -405,24 +415,10 @@ export function htmlRefusal(pin: DocPin): 'not-html' | null {
   return contentClass(pin.path) === 'html' ? null : 'not-html';
 }
 
-/** The host part of an origin, lower-cased with one trailing dot dropped, whatever its scheme and port; `''` for text with none. */
-function hostnameOfOrigin(origin: string): string {
-  const rest = origin.replace(/^[a-z][a-z0-9+.-]*:\/\//i, '');
-  const end = rest.search(/[:/?#]/);
-  const host = (end < 0 ? rest : rest.slice(0, end)).toLowerCase();
-  return host.endsWith('.') ? host.slice(0, -1) : host;
-}
-
-/** Whether `origin` may be a capability's confirmed external origin: an exact https origin (`isExactHttpsOrigin`) whose HOSTNAME
- *  is none of `ours` (the console, the artifact and the content origins), on any port, since a page allowed to call one of
- *  those hosts would void the path scoping of spec 4.3. Refuses too much, never too little. */
+/** Whether `origin` may be a capability's confirmed external origin: the pure rule lives in L0 (`originAdmitted`, which the launch
+ *  sheet asks too), so the sheet offers exactly what this admits. `ours` are the console, the artifact and the content origins. */
 export function originAdmission(origin: string, ours: readonly string[]): boolean {
-  if (!isExactHttpsOrigin(origin)) return false;
-  const host = hostnameOfOrigin(origin);
-  // A host a browser reads as an IPv4 address (`127.0.0.2`, `10.1`, `0x7f.0.0.1`) is rewritten before use, so it could name one
-  // of ours under a spelling the string compare below never sees: refused, as the config refuses an address for an origin.
-  if (looksNumeric(host)) return false;
-  return !ours.some((o) => hostnameOfOrigin(o) === host);
+  return originAdmitted(origin, ours);
 }
 
 /** The mint's origin step: more than `ARTIFACT_MAX_ORIGINS` origins, or any that `originAdmission` refuses, is `bad-origin`. */
@@ -536,9 +532,13 @@ export function scopeOfTree(pin: DocPin, tree: DocsTreeOk): { ok: true; scope: M
   return { ok: true, scope };
 }
 
-/** The scope read's answer: the manifest's counts, nothing minted. */
-export function scopeAnswer(scope: ManifestScope): ArtifactScopeOk {
-  return { ok: true, files: scope.entries.length, uncommitted: scope.uncommitted, unsized: scope.unsized, bytes: scope.bytes };
+/** The scope read's answer: the manifest's counts, nothing minted, and the tier's two hosts (D-9162: the launch sheet names the
+ *  artifact host and offers no outside origin on either; the mint still refuses such an origin `bad-origin` itself). */
+export function scopeAnswer(scope: ManifestScope, cfg: ArtifactTierOn): ArtifactScopeOk {
+  return {
+    ok: true, files: scope.entries.length, uncommitted: scope.uncommitted, unsized: scope.unsized, bytes: scope.bytes,
+    artifactHost: cfg.artifactHost, contentHost: cfg.contentHost,
+  };
 }
 
 /** The list read's answer: whether a mint could work now and, when it could not, the reason (`artifactAvailability`'s), beside the
@@ -645,7 +645,11 @@ const JAVASCRIPT_ESSENCES: ReadonlySet<string> = new Set([
 
 /** Whether a MIME type essence is an XML MIME type in the MIME Sniffing standard's sense: `text/xml`, `application/xml`, or any
  *  essence whose SUBTYPE ends in `+xml` (`image/svg+xml`, `application/xhtml+xml`, `application/rss+xml`, ...). The caller passes
- *  the essence, so a parameter such as `x=+xml` never reaches the test. The one place the tier names them (D-9149). */
+ *  the essence, so a parameter such as `x=+xml` never reaches the test. The one place the tier names them (D-9149).
+ *  The MIME table (`ARTIFACT_MIME`, `shared/artifacts.ts`) has no row for `xsl`, `xslt`, `rdf` or `xml` today (review 4062), so
+ *  every such file is an octet-stream attachment. A row added for one of them must be looked at here: its type must be one this
+ *  test catches (`text/xml`, `application/xml` or a `+xml` subtype such as `application/xslt+xml`), never an older spelling such
+ *  as `text/xsl`, or a document that runs script would be cached under the `other` rule. */
 function isXmlEssence(essence: string): boolean {
   if (essence === 'text/xml' || essence === 'application/xml') return true;
   const subtype = essence.slice(essence.indexOf('/') + 1);

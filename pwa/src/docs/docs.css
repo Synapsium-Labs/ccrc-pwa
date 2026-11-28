@@ -20,7 +20,8 @@
    both halves for each: the rule, and a rendered element with the class. The exemption is a link inside running text,
    which sets no floor of its own (WCAG 2.5.8's inline exception): the failure view's "Did you mean …?" link
    (`.docs-fail-suggest a`) and the links inside a rendered document. A Docs link that stands alone as a control
-   (`.docs-action`, `.docs-hint-link`, `.docs-owner-link`) carries the floor. The two `btn-ghost` controls take the
+   (`.docs-action`, `.docs-hint-link`, `.docs-owner-link`) carries the floor. The `btn-ghost` controls (the banner and
+   failure actions, the part bar's Previous and Next, the range read's Cancel and Download) take the
    floor from @ccrc/ui's ghost `Button` (its `min-h-tap`) and restate it here beside the width they give back. */
 
 /* — the Docs door, in the fleet header before `.accounts-door` (section 4.8): the box `.settings-door` had before `Door` — */
@@ -359,6 +360,31 @@
 .docs-banner-text { min-width: 0; overflow-wrap: anywhere; }
 .docs-banner-list { flex-basis: 100%; margin: 0; padding-left: var(--sp-4); overflow-wrap: anywhere; }
 .btn-ghost.docs-banner-action, .btn-ghost.docs-fail-action { width: auto; min-height: var(--tap-min); padding: 0 var(--sp-3); }
+
+/* — a document read in parts, and a range read in progress (X2 P1's classes, styled in X2 P6.1 Step 0c) —
+   `.docs-in-parts` holds the part bar, its notes and the part itself in one column (reader mode's rules below turn the same box into
+   the host's column, at a higher specificity, and undraw the bar and the notes). The bar is one row: Previous, the position
+   centred between, Next; where the row is too narrow (about 320 px with both buttons' words) the wrapping row lets the last item,
+   Next, drop beneath, keeping each button whole at the tap floor. The four buttons are btn-ghost controls: the ghost `Button`
+   carries the floor (`min-h-tap`), restated here beside the width they give back.
+   THE FILL. A whole document's leaf, with a reader frame in it, is a column that fills the screen (`.docs-screen:has(.docs-reader) >
+   .docs-reading > .docs-leaf`, above) and the frame takes `flex: 1 1 0`. A document in parts nests the frame one level down, in
+   `.docs-in-parts`, so the same two rules are given here: the box is a column that fills the leaf and may shrink (`flex: 1 1 auto;
+   min-block-size: 0`), and the bar and the notes beside the frame keep their own height (`flex: none`), so the frame, a flex child
+   of this column, takes the room left and not its minimum. */
+.docs-in-parts { display: flex; flex-direction: column; gap: var(--sp-3); min-width: 0; }
+.docs-screen:has(.docs-reader) > .docs-reading > .docs-leaf > .docs-in-parts { flex: 1 1 auto; min-block-size: 0; }
+.docs-in-parts > :not(.docs-reader) { flex: none; }
+.docs-parts { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-2); min-width: 0; }
+.btn-ghost.docs-part-prev, .btn-ghost.docs-part-next { flex: none; width: auto; min-height: var(--tap-min); padding: 0 var(--sp-3); }
+.docs-part-at {
+  flex: 1 1 8ch; min-width: 0; text-align: center;
+  font: var(--weight-regular) var(--text-sm) / var(--leading-normal) var(--font-mono);
+  font-variant-numeric: tabular-nums; /* after the shorthand, which resets it */
+}
+.docs-range-reading { display: grid; gap: var(--sp-2); justify-items: start; min-width: 0; }
+.docs-range-reading > progress { inline-size: 100%; block-size: var(--sp-2); }
+.btn-ghost.docs-range-cancel, .btn-ghost.docs-range-download { width: auto; min-height: var(--tap-min); padding: 0 var(--sp-3); }
 
 .docs-fail {
   display: grid; gap: var(--sp-2); min-width: 0;
@@ -725,6 +751,36 @@
 }
 .docs-mockup[data-frame='full'] .docs-mockup-canvas, .docs-mockup[data-frame='full'] .docs-mockup-frame { block-size: 100%; }
 .docs-mockup-bar { padding: var(--sp-1) var(--sp-2); }
+
+/* — Print (the parity spec 4.6, X2 P6.1 Step 1). The print view is `div.docs-print-root`, appended to `body` once by
+   `print/printMount.ts` and filled by a `beforeprint` listener from the trees prepared ahead (`print/usePrint.ts`); `afterprint`
+   empties it. On screen it is not rendered. Under print, while it holds a view, every other child of `body` is not rendered (the
+   console's bar, the rail, the reader frame and any sheet), and the root is: so the frame is not in the printed page, and a
+   page with no print view (a listing) prints as it is. The node carries `data-theme="light"`, so the tokens below are the light
+   palette's whatever the console shows; its rule sets its ink AND its own ground (contrast.test.ts measures that pair in every
+   palette, as for each rule here), and nothing inside sets a colour. The text is 11 pt; a figure, a table row and a preformatted
+   block are kept from breaking across pages; a part after the first starts a new page; a `details` prints open (the tree
+   carries `open`, and its closed content is made visible where the engine lets a rule do it). The row's button wears
+   `.docs-action.docs-print`; the view's own root is `.docs-print-root > .docs-print-view`, so the two never share a rule.
+   The console is hidden by two rules, never one selector list (an engine without `:has()` drops a whole list): `body` carries
+   `data-docs-printing` (and `data-theme="light"`, put there by `printMount.ts` while a view is mounted) and `:has()` sees the
+   view. The light palette reaches the page's ground through `html` (`color-scheme`; a selector of its own, since the contrast
+   gate keys a rule by its selector and `html` is base.css's) and `body` (its tokens, ink and ground). — */
+.docs-print-root { display: none; }
+@media print {
+  html:has(> body[data-docs-printing]) { color-scheme: light; }
+  body[data-docs-printing] { background: var(--bg-surface); color: var(--ink-primary); color-scheme: light; }
+  body[data-docs-printing] > :not(.docs-print-root) { display: none; }
+  body:has(> .docs-print-root > *) > :not(.docs-print-root) { display: none; }
+  .docs-print-root { display: block; background: var(--bg-surface); color: var(--ink-primary); font-size: 11pt; line-height: var(--leading-normal); }
+  .docs-print-root figure, .docs-print-root tr, .docs-print-root pre { break-inside: avoid; }
+  .docs-print-root pre { white-space: pre-wrap; overflow-wrap: anywhere; }
+  .docs-print-root img { max-inline-size: 100%; }
+  .docs-print-root .docs-print-part { break-before: page; }
+  .docs-print-root .docs-print-banner { margin: 0 0 var(--sp-3); padding: var(--sp-2); border: 1px solid currentColor; }
+  .docs-print-root .docs-print-note, .docs-print-root .docs-print-notice { margin: 0 0 var(--sp-2); }
+  .docs-print-root details::details-content { content-visibility: visible; }
+}
 
 /* — reduced motion (D-5501, D-5502): the door, the back chevron, a row, the chip and the bordered controls each
    declare a transition, so each is named here, after every rule it governs (motion-reduced.test.ts reads both

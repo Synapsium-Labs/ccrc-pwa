@@ -516,7 +516,8 @@ the unchanged canonical required-checks gate above. A project is positively opte
 anything but `inert`, or when `$REG/landing/<project>/lander` exists; that is not the
 lineage `enabled` marker, and the two are independent. On a project that is positively opted in, a `held` binding, a `binding` naming a
 PR that is not this run's, an answer you cannot read, or no entry for this PR
-means stop and report what you read to the operator; never choose a successor.
+means stop and report what you read to the operator, but for the conflict
+send-back below; never choose a successor.
 On such a project the PR is a draft while it waits its turn, because a merge
 train boards any ready PR: read the line as soon as the advance to `merging`
 answers `ok`, and unless that read's `binding` is `ready` for this run's own
@@ -541,7 +542,58 @@ is asked again, and so is a damaged entry whose record does not prove; both
 stay in the line until a later read settles them), mail the coordinator of that
 entry's run (`toId: 'coordinator'` with its `runId`) what you read, or, for an
 entry with no run, put it to the operator as an item.
-A `held` binding, `opt-in-unknown` included, stops. A missing `binding` (a server older than wave 5i) is the only fallback to the checks
+When the binding is held on this run's own entry for `composition-not-clean` and
+the radar measured a conflict between its pinned head and the base, the server
+mails this session one `head-held:#<pr>:<digest>` notice per entry, pin,
+episode, base and recipient (D-9159); it is a cue to read the line again and
+measure, never an instruction to eject, and it licenses nothing by itself. One
+held binding is no stop: when the read's `binding` is `held` with `reason`
+`composition-not-clean`, its `entryId` names this run's own entry and that entry
+reads `pinned` with a `pinnedSha` equal to the head you bind, then before you
+change the PR on this read, D-9115's undo included, make §5's queue query with
+`isDraft` added, `gh api graphql -F o='{owner}' -F n='{repo}' -F p=<pr> -f
+query='query($o: String!, $n: String!, $p: Int!) { repository(owner: $o, name:
+$n) { pullRequest(number: $p) { state isDraft autoMergeRequest { enabledAt }
+mergeQueueEntry { state } } } }'`; when its `state` is `OPEN` and either
+`isDraft` is `true`, or this is the first read after this advance to `merging`,
+on route Q, and `isDraft` is `false` with `mergeQueueEntry` and
+`autoMergeRequest` both null; and when, after one `git fetch origin`, your own
+`git merge-tree --write-tree --name-only --no-messages origin/main <pinnedSha>`
+exits 1 with a tree id on its first line, send the run back from `merging` with
+SKILL.md step 6's report-less round in its `ejected: conflict:#<pr>` form, step
+6's third case, an entry whose PR was never queued, its `base:` the
+`origin/main` sha you read and its `paths:` the conflicted paths (D-9160); step
+6's disarm (§5) is for a PR that query answers armed, with a non-null
+`autoMergeRequest`, because `gh pr merge <pr> --disable-auto` exits 1 on a draft
+that is not armed.
+Behind the head there is no binding of this entry to read, because the binding
+reads only the head: on a read whose `binding.mode` is `ready` and names another
+entry, when this run's own entry reads `pinned` with a `pinnedSha` equal to the
+head you bind, the same query, made first, answers as above, and the same probe
+exits 1 with a tree id on its first line, send the run back the same way,
+because such an entry cannot land and waiting only moves the hold to the moment
+it reaches the head. Behind the head every other read, a `held` binding whatever
+its `reason`, an `inert` binding, no `binding` or an answer you cannot read,
+licenses no send-back: leaving the entry is then a wait, not a report of its
+own, and the read is otherwise answered as this paragraph answers it. Run that
+probe only on a read of the line this paragraph already has you make for this
+run, at the head the read after the advance to `merging` or on a `head-held:`
+mail, behind the head the read after the advance to `merging`, once on that
+read; never on a loop or a timer of your own for it. The send-back costs three
+things: the entry's place, because the advance that brings the run back to
+`merging` re-pins it with a new `pinnedAt`, so it re-enters behind every entry
+already in the line unless `fixesMain` or an order edge places it otherwise, and
+both are kept; a second send-back of one entry raises the server's one operator
+notice for an entry ejected twice (SKILL.md step 6); and every entry with an
+order edge after it waits while it is out, because an ejected entry is still
+outstanding. Nothing else licenses that send-back: at the head only that one
+`held` binding, behind the head only a `ready` binding naming another entry; not
+another run's entry, not an entry whose conflict you did not measure with that
+probe, not a PR the query answers otherwise, and not a probe that exits 0 or
+answers anything else; at the head each stays a stop for the operator, and
+behind it the read is answered as this paragraph answers it, and the server
+ejects nothing and chooses no successor.
+Every other `held` binding, `opt-in-unknown` included, stops. A missing `binding` (a server older than wave 5i) is the only fallback to the checks
 above, and on a project whose `lander` exists it still stops; `ccrc rollout --server-first` avoids the window in which a
 server older than wave 5i answers without one. An `inert` binding on a project whose `lander` exists stops too. An `inert` binding where `lander` does not exist (the opt-in marker
 proven absent) leaves the checks above in force exactly as before: nothing here

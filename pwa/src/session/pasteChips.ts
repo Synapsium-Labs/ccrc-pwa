@@ -27,6 +27,7 @@
 //   right after a chip, or Delete right before one, takes the whole chip; so does a word delete that reaches into one.
 // - Sending, retry, both draft-conflict choices, copy and cut all go through one expansion (`expandValue`): each chip
 //   becomes its table text, byte for byte, and the field's own text loses every marker.
+import { linesWord } from '../../../shared/pastePointer';
 
 /** A paste this long (in characters, i.e. code points) becomes a chip: the brief's floor. Claude Code's own input box
  *  measures differently: it took 800 characters as text and chipped from 801 in this repo's own measurement
@@ -97,8 +98,9 @@ export const stripMarkers = (text: string): string => text.replace(EVERY_MARKER,
 export const shouldChip = (text: string): boolean =>
   lineCount(text) > CHIP_MAX_PLAIN_LINES || charCount(text) >= CHIP_MIN_CHARS || hasMarker(text);
 
-/** "1 line", "14 lines": the one spelling of a line count, for the label and for the chip row. */
-export const linesWord = (lines: number): string => `${lines} ${lines === 1 ? 'line' : 'lines'}`;
+/** "1 line", "14 lines": the one spelling of a line count, for the label and for the chip row. Defined once, in the
+ *  pointer's grammar (`shared/pastePointer.ts`, desktop-polish wave 194), and passed on here for this file's readers. */
+export { linesWord };
 
 /** The label grammar: `[Pasted text #N +L lines]`, its spaces no-break. */
 export const chipToken = (n: number, lines: number): string =>

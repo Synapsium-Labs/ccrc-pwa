@@ -1036,14 +1036,15 @@ export function registerDocsArtifactRoutes(app: FastifyInstance, readers: DocsNo
   });
 
   app.get('/api/docs/artifacts/scope', { exposeHeadRoute: false }, async (req, reply) => {
-    if (admitted(req, reply) === null) return reply;
+    const here = admitted(req, reply);
+    if (here === null) return reply;
     const ask = parseScopeQuery(req.query as DocsQuery);
     if (!ask.ok) return sendParseFailure(reply, ask);
     const notHtml = htmlRefusal(ask.pin);
     if (notHtml !== null) return refuseRoute(reply, notHtml);
     const got = await scoped(reply, ask);
     if (!got.ok) return got.reply;
-    return reply.send(scopeAnswer(got.scope));
+    return reply.send(scopeAnswer(got.scope, here.cfg));
   });
 
   app.post('/api/docs/artifacts', async (req, reply) => {

@@ -4055,8 +4055,8 @@ describe('landing order wave 5b: the report-less fix round from merging', () => 
   it('sends a fix round with no report from merging in one of two forms, the measured cause deciding which, and reviews its answer (wave 1 ruling 2; review 1302 F2)', () => {
     const s = sendBack();
     expect(s).toContain('**A fix round with no report behind it** comes from `merging`, and the cause you measured decides which of two forms it takes.');
-    expect(s).toContain('**An ejection** is sent in two cases only: the new-head route for a red that is `main`\'s own (`references/wave-lifecycle.md` §5b), and a dequeue (§5) whose cause is a conflict you measured: after one `git fetch origin`, `git merge-tree --write-tree --name-only --no-messages origin/main <handoffCommit>` exits 1 with a tree id on its first line, then the conflicted paths.');
-    expect(s).toContain('Its body holds three entries, one to a line, and nothing else: `ejected: new-head:#<pr>` or `ejected: dequeued:#<pr>`, then `base: <sha>`, the `origin/main` sha you read after one `git fetch origin`, then `checks: <required names that are red>` for the new-head route or `paths: <the conflicted paths>` for the dequeue.');
+    expect(s).toContain('**An ejection** is sent in three cases only: the new-head route for a red that is `main`\'s own (`references/wave-lifecycle.md` §5b), a dequeue (§5) whose cause is a conflict you measured, and a conflict you measured on this run\'s own pinned entry, an entry whose PR was never queued, at the head of the landing line or behind it (§5b, **The landing line**; D-9160): for a dequeue, after one `git fetch origin`, `git merge-tree --write-tree --name-only --no-messages origin/main <handoffCommit>` exits 1 with a tree id on its first line, then the conflicted paths, and for an entry whose PR was never queued the same probe of its `pinnedSha` in place of `<handoffCommit>` does.');
+    expect(s).toContain('Its body holds three entries, one to a line, and nothing else: `ejected: new-head:#<pr>`, `ejected: dequeued:#<pr>` or `ejected: conflict:#<pr>`, then `base: <sha>`, the `origin/main` sha you read after one `git fetch origin`, then `checks: <required names that are red>` for the new-head route or `paths: <the conflicted paths>` for a dequeue or an entry whose PR was never queued.');
     expect(s).toContain('Every ejection is clause 15\'s ejection, its base recorded on the landing line by the advance that sends the run back: first read the line, `GET /api/landing?project=<project>&pr=<pr>` (`ccrc-api landing show --project <project> --pr <pr>`), and send an ejection only where this PR\'s entry for this run reads `pinned`; with no such entry the round is no ejection, and it stays a stop for the operator.');
     expect(s).toContain('**A red the PR owns** is sent when the queue dequeued the PR for a required check and no conflict was measured, or when the verdict\'s `RED` line names a required check red on the head that is the PR\'s own.');
     expect(s).toContain('Its body holds two entries, one to a line, and nothing else: `red: #<pr>`, then `checks: <required names that are red>`.');
@@ -4069,7 +4069,7 @@ describe('landing order wave 5b: the report-less fix round from merging', () => 
   });
 
   it('names the report-less first lines the worker skill reads (wave 1 ruling 2; review 1302 F2)', () => {
-    for (const w of ['`ejected: dequeued:#<pr>`', '`ejected: new-head:#<pr>`', '`red: #<pr>`']) {
+    for (const w of ['`ejected: dequeued:#<pr>`', '`ejected: conflict:#<pr>`', '`ejected: new-head:#<pr>`', '`red: #<pr>`']) {
       expect(sendBack(), `the coordinator no longer sends ${w}`).toContain(w);
       expect(worker, `the worker skill no longer reads ${w}`).toContain(w);
     }
@@ -4078,7 +4078,8 @@ describe('landing order wave 5b: the report-less fix round from merging', () => 
   it('no report-less sentence holds a double quote', () => {
     const flatAll = flat(allSkillText);
     for (const s of [
-      '**A fix round with no report behind it**', '**An ejection** is sent in two cases only', 'Its body holds three entries',
+      '**A fix round with no report behind it**', '**An ejection** is sent in three cases only', 'Its body holds three entries',
+      'A run that received `dequeued:#<pr>`',
       'Every ejection is clause 15', '**A red the PR owns** is sent', 'Its body holds two entries',
       'It has no `base:` entry', 'A dequeue with any other cause', 'For either form, on route Q disarm first',
       'The worker\'s answering wave-done gets a NEW review run',
@@ -4092,15 +4093,16 @@ describe('landing order wave 5b: the report-less fix round from merging', () => 
 
   const REPORT_LESS = [
     '**A fix round with no report behind it** comes from `merging`, and the cause you measured decides which of two forms it takes.',
-    '**An ejection** is sent in two cases only: the new-head route for a red that is `main`\'s own (`references/wave-lifecycle.md` §5b), and a dequeue (§5) whose cause is a conflict you measured: after one `git fetch origin`, `git merge-tree --write-tree --name-only --no-messages origin/main <handoffCommit>` exits 1 with a tree id on its first line, then the conflicted paths.',
-    'Its body holds three entries, one to a line, and nothing else: `ejected: new-head:#<pr>` or `ejected: dequeued:#<pr>`, then `base: <sha>`, the `origin/main` sha you read after one `git fetch origin`, then `checks: <required names that are red>` for the new-head route or `paths: <the conflicted paths>` for the dequeue.',
+    '**An ejection** is sent in three cases only: the new-head route for a red that is `main`\'s own (`references/wave-lifecycle.md` §5b), a dequeue (§5) whose cause is a conflict you measured, and a conflict you measured on this run\'s own pinned entry, an entry whose PR was never queued, at the head of the landing line or behind it (§5b, **The landing line**; D-9160): for a dequeue, after one `git fetch origin`, `git merge-tree --write-tree --name-only --no-messages origin/main <handoffCommit>` exits 1 with a tree id on its first line, then the conflicted paths, and for an entry whose PR was never queued the same probe of its `pinnedSha` in place of `<handoffCommit>` does.',
+    'A run that received `dequeued:#<pr>` for this PR in this episode takes the dequeue form.',
+    'Its body holds three entries, one to a line, and nothing else: `ejected: new-head:#<pr>`, `ejected: dequeued:#<pr>` or `ejected: conflict:#<pr>`, then `base: <sha>`, the `origin/main` sha you read after one `git fetch origin`, then `checks: <required names that are red>` for the new-head route or `paths: <the conflicted paths>` for a dequeue or an entry whose PR was never queued.',
     'Every ejection is clause 15\'s ejection, its base recorded on the landing line by the advance that sends the run back: first read the line, `GET /api/landing?project=<project>&pr=<pr>` (`ccrc-api landing show --project <project> --pr <pr>`), and send an ejection only where this PR\'s entry for this run reads `pinned`; with no such entry the round is no ejection, and it stays a stop for the operator.',
     '**A red the PR owns** is sent when the queue dequeued the PR for a required check and no conflict was measured, or when the verdict\'s `RED` line names a required check red on the head that is the PR\'s own.',
     'Its body holds two entries, one to a line, and nothing else: `red: #<pr>`, then `checks: <required names that are red>`.',
     'It has no `base:` entry and licenses no absorb: the worker absorbs only on its own clause 16\'s first two triggers.',
     'A dequeue with any other cause, a requested change or a cause you could not read among them, is no report-less round: it stays a stop for the operator.',
     'For either form, on route Q disarm first (§5), on every route turn the PR back into a draft with `gh pr ready <pr> --undo` (D-8997), then make the same advance to `working`, on the `merging → working` edge, and send the same `fix-round` mail with no `artifacts`.',
-    'Every `ejected:` round\'s advance carries `ejection`, an object of two fields: `base`, the sha on the mail\'s `base:` line, and `kind`, `new-head` or `dequeued` as the mail\'s first line names it; a `red:` round\'s advance, and any other retreat, carries none.',
+    'Every `ejected:` round\'s advance carries `ejection`, an object of two fields: `base`, the sha on the mail\'s `base:` line, and `kind`, `new-head`, `dequeued` or `conflict` as the mail\'s first line names it; a `red:` round\'s advance, and any other retreat, carries none.',
     'Send the `ejected:` mail once the advance\'s answer reads `landing.kind` `ejected` and `landing.entry.baseSha` equals the base you sent.',
     'If it reads anything else, the line recorded no base: send no mail, and report it to the operator with the run\'s state as the advance answered it: `working` after `ok`; after a refusal, the state the answer names (its `from`), which is still `merging` only when the refusal came before any move; and when the answer names no state or was uncertain (the 503 `run-unreadable`, an `unknown-run` after the commit, a transport failure), read `runs list` for the run\'s state before reporting.',
     'The second ejection of one entry is not refused: where the entry you read counts one ejection already, the advance still answers `ok` and the server raises one notice to the operator, so name the second ejection in your turn\'s text and send the round as usual.',
@@ -4116,7 +4118,7 @@ describe('landing order wave 5b: the report-less fix round from merging', () => 
 
   it('records the base on the ejecting advance, so clause 15\'s ejection is literal and the interim reading is retired (D-7615)', () => {
     expect(CONTRACT[14]).toContain('or an ejection naming the base sha the landing line recorded');
-    for (const k of ['new-head', 'dequeued']) {
+    for (const k of ['new-head', 'dequeued', 'conflict']) {
       expect(LANDING_EJECTION_KINDS, `the skill sends a kind L0 does not define: ${k}`).toContain(k);
       expect(sendBack()).toContain(`\`ejected: ${k}:#<pr>\``);
     }
@@ -4150,14 +4152,21 @@ describe('landing order wave 5e: the landing line read before every landing', ()
     'The same read answers a `binding`, computed on that read from the line\'s facts and the server\'s latest control measurement.',
     'On `binding.mode: \'ready\'`, land only when its `entryId`, `pr` and full `pinnedSha` identify this run\'s own pinned entry and the head you bind; on a ready `fixesMain` exception, still run the unchanged canonical required-checks gate above.',
     'A project is positively opted in to the binding head when its `binding` is present and anything but `inert`, or when `$REG/landing/<project>/lander` exists; that is not the lineage `enabled` marker, and the two are independent.',
-    'On a project that is positively opted in, a `held` binding, a `binding` naming a PR that is not this run\'s, an answer you cannot read, or no entry for this PR means stop and report what you read to the operator; never choose a successor.',
+    'On a project that is positively opted in, a `held` binding, a `binding` naming a PR that is not this run\'s, an answer you cannot read, or no entry for this PR means stop and report what you read to the operator, but for the conflict send-back below; never choose a successor.',
     'On such a project the PR is a draft while it waits its turn, because a merge train boards any ready PR: read the line as soon as the advance to `merging` answers `ok`, and unless that read\'s `binding` is `ready` for this run\'s own entry at the head you bind, turn the PR back into a draft with `gh pr ready <pr> --undo` before your turn ends (D-9115).',
     'When that first read\'s `binding` is already `ready`, go on to land in the same sitting.',
     'Otherwise mark it ready again with `gh pr ready <pr>` only on a later read whose `binding` is, and run the verdict, the checks gate, this read and the landing in that same sitting.',
     'A `held` binding whose head, `order.head` of the same answer with its `pr` and `runId`, is another run\'s entry whose PR GitHub reads CLOSED with the train label (`landed-in-train` by default; `gh pr view <pr> --json state,labels`) is a train landing the landed reader has not marked yet: land nothing past it, write no train record and edit no train\'s body.',
     'While the line is paused its answer carries no `order.head`, so read the line without `--pr` and take the held entry from its `entries` as the one whose `id` is `binding.entryId`.',
     'The reader marks such an entry by itself once it reads the train\'s record, landed when the record proves and, unless the entry is damaged, closed when it does not, so set a timer and read the line again after 20 minutes, which covers the reader\'s longest retry step plus one beat of its lane; if the same head still holds (a record the reader cannot read is asked again, and so is a damaged entry whose record does not prove; both stay in the line until a later read settles them), mail the coordinator of that entry\'s run (`toId: \'coordinator\'` with its `runId`) what you read, or, for an entry with no run, put it to the operator as an item.',
-    'A `held` binding, `opt-in-unknown` included, stops. A missing `binding` (a server older than wave 5i) is the only fallback to the checks above, and on a project whose `lander` exists it still stops; `ccrc rollout --server-first` avoids the window in which a server older than wave 5i answers without one.',
+    'When the binding is held on this run\'s own entry for `composition-not-clean` and the radar measured a conflict between its pinned head and the base, the server mails this session one `head-held:#<pr>:<digest>` notice per entry, pin, episode, base and recipient (D-9159); it is a cue to read the line again and measure, never an instruction to eject, and it licenses nothing by itself.',
+    'One held binding is no stop: when the read\'s `binding` is `held` with `reason` `composition-not-clean`, its `entryId` names this run\'s own entry and that entry reads `pinned` with a `pinnedSha` equal to the head you bind, then before you change the PR on this read, D-9115\'s undo included, make §5\'s queue query with `isDraft` added, `gh api graphql -F o=\'{owner}\' -F n=\'{repo}\' -F p=<pr> -f query=\'query($o: String!, $n: String!, $p: Int!) { repository(owner: $o, name: $n) { pullRequest(number: $p) { state isDraft autoMergeRequest { enabledAt } mergeQueueEntry { state } } } }\'`; when its `state` is `OPEN` and either `isDraft` is `true`, or this is the first read after this advance to `merging`, on route Q, and `isDraft` is `false` with `mergeQueueEntry` and `autoMergeRequest` both null; and when, after one `git fetch origin`, your own `git merge-tree --write-tree --name-only --no-messages origin/main <pinnedSha>` exits 1 with a tree id on its first line, send the run back from `merging` with SKILL.md step 6\'s report-less round in its `ejected: conflict:#<pr>` form, step 6\'s third case, an entry whose PR was never queued, its `base:` the `origin/main` sha you read and its `paths:` the conflicted paths (D-9160); step 6\'s disarm (§5) is for a PR that query answers armed, with a non-null `autoMergeRequest`, because `gh pr merge <pr> --disable-auto` exits 1 on a draft that is not armed.',
+    'Behind the head there is no binding of this entry to read, because the binding reads only the head: on a read whose `binding.mode` is `ready` and names another entry, when this run\'s own entry reads `pinned` with a `pinnedSha` equal to the head you bind, the same query, made first, answers as above, and the same probe exits 1 with a tree id on its first line, send the run back the same way, because such an entry cannot land and waiting only moves the hold to the moment it reaches the head.',
+    'Behind the head every other read, a `held` binding whatever its `reason`, an `inert` binding, no `binding` or an answer you cannot read, licenses no send-back: leaving the entry is then a wait, not a report of its own, and the read is otherwise answered as this paragraph answers it.',
+    'Run that probe only on a read of the line this paragraph already has you make for this run, at the head the read after the advance to `merging` or on a `head-held:` mail, behind the head the read after the advance to `merging`, once on that read; never on a loop or a timer of your own for it.',
+    'The send-back costs three things: the entry\'s place, because the advance that brings the run back to `merging` re-pins it with a new `pinnedAt`, so it re-enters behind every entry already in the line unless `fixesMain` or an order edge places it otherwise, and both are kept; a second send-back of one entry raises the server\'s one operator notice for an entry ejected twice (SKILL.md step 6); and every entry with an order edge after it waits while it is out, because an ejected entry is still outstanding.',
+    'Nothing else licenses that send-back: at the head only that one `held` binding, behind the head only a `ready` binding naming another entry; not another run\'s entry, not an entry whose conflict you did not measure with that probe, not a PR the query answers otherwise, and not a probe that exits 0 or answers anything else; at the head each stays a stop for the operator, and behind it the read is answered as this paragraph answers it, and the server ejects nothing and chooses no successor.',
+    'Every other `held` binding, `opt-in-unknown` included, stops. A missing `binding` (a server older than wave 5i) is the only fallback to the checks above, and on a project whose `lander` exists it still stops; `ccrc rollout --server-first` avoids the window in which a server older than wave 5i answers without one.',
     'An `inert` binding on a project whose `lander` exists stops too.',
     'An `inert` binding where `lander` does not exist (the opt-in marker proven absent) leaves the checks above in force exactly as before: nothing here removes a project\'s earlier line and pause checks.',
     'A 404 stays the older-server fallback.',
@@ -4199,12 +4208,80 @@ describe('landing order wave 5e: the landing line read before every landing', ()
       'The second ejection of one entry', '**The landing line.** Every run', 'Before each enqueue, direct merge and re-enqueue',
       'Land only when its `order`', 'A paused line, an entry', 'A PR with no entry, which a run that entered', 'The order it answers',
       'A dequeue that neither a re-enqueue', 'On `dequeued:`, read why',
+      'When the binding is held on this run', 'One held binding is no stop', 'Behind the head there is no binding of this entry to read',
+      'Behind the head every other read', 'Run that probe only on a read of the line', 'The send-back costs three things',
+      'Nothing else licenses that send-back', 'Every other `held` binding',
     ]) {
       const from = flatAll.indexOf(s);
       expect(from, s).toBeGreaterThanOrEqual(0);
       const sentence = flatAll.slice(from, flatAll.indexOf('. ', from));
       expect(sentence, `a double quote in the sentence beginning ${s}`).not.toContain('"');
     }
+  });
+
+  it('the conflict send-back is this run\'s own measured entry whose PR was never queued, at the head on composition-not-clean or behind it on a ready binding, after one read of the PR\'s state, and the notice licenses nothing (D-9159, D-9160)', () => {
+    const occurrences = (hay: string, needle: string): number => hay.split(needle).length - 1;
+    const step6 = skill.slice(skill.indexOf('6. **Rule on the report**'), skill.indexOf('\n7. **Final merge:**'));
+    const step6Flat = flat(step6);
+    const sentence = (begin: string): string => {
+      const from = prose.indexOf(begin);
+      expect(from, `§5b lost the sentence beginning ${begin}`).toBeGreaterThanOrEqual(0);
+      return prose.slice(from, prose.indexOf('. ', from) + 1);
+    };
+    expect(occurrences(prose, '`ejected: conflict:#<pr>`')).toBe(1);
+    expect(occurrences(prose, 'an entry whose PR was never queued')).toBe(1);
+    expect(occurrences(step6Flat, 'an entry whose PR was never queued')).toBe(3);
+
+    const head = sentence('One held binding is no stop:');
+    for (const w of [
+      '`reason` `composition-not-clean`', 'names this run\'s own entry',
+      'before you change the PR on this read, D-9115\'s undo included, make §5\'s queue query with `isDraft` added',
+      'pullRequest(number: $p) { state isDraft autoMergeRequest { enabledAt } mergeQueueEntry { state } }',
+      '`state` is `OPEN`', '`isDraft` is `true`', 'this is the first read after this advance to `merging`, on route Q',
+      '`isDraft` is `false` with `mergeQueueEntry` and `autoMergeRequest` both null',
+      'exits 1 with a tree id on its first line', 'step 6\'s third case, an entry whose PR was never queued',
+      'step 6\'s disarm (§5) is for a PR that query answers armed, with a non-null `autoMergeRequest`',
+      'exits 1 on a draft that is not armed',
+    ]) expect(head, `the head sentence lost: ${w}`).toContain(w);
+
+    const behind = sentence('Behind the head there is no binding of this entry to read');
+    for (const w of [
+      'on a read whose `binding.mode` is `ready` and names another entry', 'this run\'s own entry reads `pinned`',
+      'the same query, made first, answers as above', 'the same probe exits 1 with a tree id on its first line',
+      'such an entry cannot land',
+    ]) expect(behind, `the behind-the-head sentence lost: ${w}`).toContain(w);
+
+    const other = sentence('Behind the head every other read');
+    for (const w of [
+      'a `held` binding whatever its `reason`', 'an `inert` binding', 'no `binding`', 'licenses no send-back',
+      'a wait, not a report of its own',
+    ]) expect(other, `the every-other-read sentence lost: ${w}`).toContain(w);
+
+    const when = sentence('Run that probe only on a read of the line');
+    for (const w of [
+      'at the head the read after the advance to `merging` or on a `head-held:` mail',
+      'behind the head the read after the advance to `merging`', 'never on a loop or a timer of your own for it',
+    ]) expect(when, `the measuring sentence lost: ${w}`).toContain(w);
+
+    const cost = sentence('The send-back costs three things');
+    for (const w of [
+      're-pins it with a new `pinnedAt`', 'one operator notice for an entry ejected twice', 'an ejected entry is still outstanding',
+    ]) expect(cost, `the cost sentence lost: ${w}`).toContain(w);
+
+    const closing = sentence('Nothing else licenses that send-back');
+    for (const w of [
+      'at the head only that one `held` binding', 'behind the head only a `ready` binding naming another entry',
+      'not another run\'s entry', 'not an entry whose conflict you did not measure with that probe',
+      'not a PR the query answers otherwise', 'not a probe that exits 0 or answers anything else',
+      'at the head each stays a stop for the operator, and behind it the read is answered as this paragraph answers it',
+    ]) expect(closing, `the closing sentence lost: ${w}`).toContain(w);
+
+    expect(prose).toContain('never an instruction to eject, and it licenses nothing by itself');
+    for (const gone of ['a mail that names this run', 'gh pr view <pr> --json isDraft', '`head-mismatch` included']) {
+      expect(prose, `round 1's words are back: ${gone}`).not.toContain(gone);
+    }
+    expect(step6Flat).toContain('A run that received `dequeued:#<pr>` for this PR in this episode takes the dequeue form.');
+    expect(step6Flat).not.toContain('A pinned entry\'s ejection has nothing to disarm');
   });
 });
 
@@ -4479,15 +4556,16 @@ describe('landing order wave 5f: the attributed landing writes in both coordinat
     expect(from, 'step 6 lost its report-less paragraph').toBeGreaterThanOrEqual(0);
     expect(s.slice(from).replace(/\s*-\s*$/, '').trim()).toBe([
       '**A fix round with no report behind it** comes from `merging`, and the cause you measured decides which of two forms it takes.',
-      '**An ejection** is sent in two cases only: the new-head route for a red that is `main`\'s own (`references/wave-lifecycle.md` §5b), and a dequeue (§5) whose cause is a conflict you measured: after one `git fetch origin`, `git merge-tree --write-tree --name-only --no-messages origin/main <handoffCommit>` exits 1 with a tree id on its first line, then the conflicted paths.',
-      'Its body holds three entries, one to a line, and nothing else: `ejected: new-head:#<pr>` or `ejected: dequeued:#<pr>`, then `base: <sha>`, the `origin/main` sha you read after one `git fetch origin`, then `checks: <required names that are red>` for the new-head route or `paths: <the conflicted paths>` for the dequeue.',
+      '**An ejection** is sent in three cases only: the new-head route for a red that is `main`\'s own (`references/wave-lifecycle.md` §5b), a dequeue (§5) whose cause is a conflict you measured, and a conflict you measured on this run\'s own pinned entry, an entry whose PR was never queued, at the head of the landing line or behind it (§5b, **The landing line**; D-9160): for a dequeue, after one `git fetch origin`, `git merge-tree --write-tree --name-only --no-messages origin/main <handoffCommit>` exits 1 with a tree id on its first line, then the conflicted paths, and for an entry whose PR was never queued the same probe of its `pinnedSha` in place of `<handoffCommit>` does.',
+      'A run that received `dequeued:#<pr>` for this PR in this episode takes the dequeue form.',
+      'Its body holds three entries, one to a line, and nothing else: `ejected: new-head:#<pr>`, `ejected: dequeued:#<pr>` or `ejected: conflict:#<pr>`, then `base: <sha>`, the `origin/main` sha you read after one `git fetch origin`, then `checks: <required names that are red>` for the new-head route or `paths: <the conflicted paths>` for a dequeue or an entry whose PR was never queued.',
       'Every ejection is clause 15\'s ejection, its base recorded on the landing line by the advance that sends the run back: first read the line, `GET /api/landing?project=<project>&pr=<pr>` (`ccrc-api landing show --project <project> --pr <pr>`), and send an ejection only where this PR\'s entry for this run reads `pinned`; with no such entry the round is no ejection, and it stays a stop for the operator.',
       '**A red the PR owns** is sent when the queue dequeued the PR for a required check and no conflict was measured, or when the verdict\'s `RED` line names a required check red on the head that is the PR\'s own.',
       'Its body holds two entries, one to a line, and nothing else: `red: #<pr>`, then `checks: <required names that are red>`.',
       'It has no `base:` entry and licenses no absorb: the worker absorbs only on its own clause 16\'s first two triggers.',
       'A dequeue with any other cause, a requested change or a cause you could not read among them, is no report-less round: it stays a stop for the operator.',
       'For either form, on route Q disarm first (§5), on every route turn the PR back into a draft with `gh pr ready <pr> --undo` (D-8997), then make the same advance to `working`, on the `merging → working` edge, and send the same `fix-round` mail with no `artifacts`.',
-      'Every `ejected:` round\'s advance carries `ejection`, an object of two fields: `base`, the sha on the mail\'s `base:` line, and `kind`, `new-head` or `dequeued` as the mail\'s first line names it; a `red:` round\'s advance, and any other retreat, carries none.',
+      'Every `ejected:` round\'s advance carries `ejection`, an object of two fields: `base`, the sha on the mail\'s `base:` line, and `kind`, `new-head`, `dequeued` or `conflict` as the mail\'s first line names it; a `red:` round\'s advance, and any other retreat, carries none.',
       'Send the `ejected:` mail once the advance\'s answer reads `landing.kind` `ejected` and `landing.entry.baseSha` equals the base you sent.',
       'If it reads anything else, the line recorded no base: send no mail, and report it to the operator with the run\'s state as the advance answered it: `working` after `ok`; after a refusal, the state the answer names (its `from`), which is still `merging` only when the refusal came before any move; and when the answer names no state or was uncertain (the 503 `run-unreadable`, an `unknown-run` after the commit, a transport failure), read `runs list` for the run\'s state before reporting.',
       'The second ejection of one entry is not refused: where the entry you read counts one ejection already, the advance still answers `ok` and the server raises one notice to the operator, so name the second ejection in your turn\'s text and send the round as usual.',

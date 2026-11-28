@@ -559,6 +559,58 @@ describe('MarkdownParts', () => {
     expect(got.at(-1)).toEqual({ index: 2, fragment: 'deep' });
   });
 
+  it('md parts: with a render job the text is read for blocks, a gate a window, and cut at them; unmounting aborts the read', async () => {
+    // X2 P6.1 Step 0b2. The job here is the worker's own (`answerRenderJob`), asked for blocks: the library's top-level blocks of
+    // each window. Each section is a heading and one paragraph a little under the gate, so the cut is at the headings.
+    const { answerRenderJob } = await import('../src/lib/readerRenderJob');
+    const asked: { blocks: true | undefined; signal: AbortSignal | undefined }[] = [];
+    const pre = (src: string, o: { budgetMs: number; signal?: AbortSignal; blocks?: true }): Promise<ReaderRenderOutcome> => {
+      asked.push({ blocks: o.blocks, signal: o.signal });
+      return new Promise((resolve) => { answerRenderJob({ id: 1, kind: 'render', src, blocks: o.blocks }, (r) => { resolve(r.outcome); }); });
+    };
+    const starts: string[] = [];
+    const view = render(<MarkdownParts text={TEXT} pre={pre} fragment={null} renderPart={(part) => { starts.push(part.text.slice(0, 9)); return <p>part {part.index + 1}</p>; }} />);
+    expect(screen.getByText('Preparing the parts of this document (0 of 3)…')).toBeTruthy();
+    await waitFor(() => expect(screen.getByText('Part 1 of 3')).toBeTruthy(), { timeout: 30000 });
+    expect(asked.length, 'a window of the gate at a time').toBeGreaterThanOrEqual(3);
+    expect(asked.every((a) => a.blocks === true), 'every ask is for blocks').toBe(true);
+    fireEvent.click(screen.getByText('Next part'));
+    fireEvent.click(screen.getByText('Next part'));
+    expect(starts.slice(-3)).toEqual(['## Part 1', '## Part 2', '## Part 3']);
+    view.unmount();
+    // A read that is still running when the text goes away is aborted.
+    const slow = render(<MarkdownParts text={TEXT} pre={pre} fragment={null} renderPart={() => <p>x</p>} />);
+    const signal = asked.at(-1)!.signal!;
+    expect(signal.aborted).toBe(false);
+    slow.unmount();
+    expect(signal.aborted).toBe(true);
+  }, 60000);
+
+  it('md parts: part 1 mounts as soon as it is final, before the last window answers; Next waits for a final part and "of n" for the whole read', async () => {
+    // X2 P6.1 review: no part waited for the whole text. The third window's answer is held back here: part 1 is final once the
+    // second window has answered (it ends at the heading that the second window shows), and shows under "Part 1".
+    const { answerRenderJob } = await import('../src/lib/readerRenderJob');
+    let call = 0;
+    let release: (() => void) | null = null;
+    const pre = (src: string, o: { budgetMs: number; signal?: AbortSignal; blocks?: true }): Promise<ReaderRenderOutcome> => {
+      call += 1;
+      const mine = call;
+      return new Promise((resolve) => {
+        const answer = (): void => { answerRenderJob({ id: 1, kind: 'render', src, blocks: o.blocks }, (r) => { resolve(r.outcome); }); };
+        if (mine < 3) answer(); else release = answer;
+      });
+    };
+    render(<MarkdownParts text={TEXT} pre={pre} fragment={null} renderPart={(part) => <p>part {part.index + 1}</p>} />);
+    await waitFor(() => expect(screen.getByText('part 1')).toBeTruthy(), { timeout: 30000 });
+    expect(release, 'the third window has not been answered').not.toBeNull();
+    expect(screen.getByText('Part 1')).toBeTruthy();
+    expect(screen.queryByText(/Part 1 of/)).toBeNull();
+    expect((screen.getByText('Next part').closest('button') as HTMLButtonElement).disabled, 'no final part to go to yet').toBe(true);
+    act(() => { release!(); });
+    await waitFor(() => expect(screen.getByText('Part 1 of 3')).toBeTruthy(), { timeout: 30000 });
+    expect((screen.getByText('Next part').closest('button') as HTMLButtonElement).disabled).toBe(false);
+  }, 60000);
+
   it('md parts: a part the budget refuses keeps its ids unknown and opens part 1 with a note', async () => {
     const pre = async (src: string): Promise<ReaderRenderOutcome> =>
       partOf(src) === 2 ? { kind: 'not-rendered', why: 'over-limit' } : rendered([`part-${partOf(src)}`]);

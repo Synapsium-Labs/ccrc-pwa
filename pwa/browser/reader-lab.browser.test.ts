@@ -176,6 +176,12 @@ describe('the reader lab in Chrome (reader lab plan, Task 11)', () => {
     }
     expect(lines.some((l) => /^\s+self-nav-teardown\s+holds \(second load fired\)$/.test(l)), 'self-nav-teardown').toBe(true);
     expect(lines.find((l) => l.startsWith('door:'))).toMatch(/session cookie sent$/);
+    // X2 P6.1 Step 0b: the gate-sized page's five runs are on one line, recorded in the plan's Results (GATE-L1's desktop
+    // Chromium leg). Only its shape is asserted here: the figures go to the console above.
+    expect(lines.find((l) => l.trimStart().startsWith('gate-page '))).toMatch(new RegExp('^ {4}gate-page 524288 bytes: (?:'
+      + 'render median (?:\\d+ ms|none), worst (?:\\d+ ms|none); render and mount median (?:\\d+ ms|none), worst (?:\\d+ ms|none); '
+      + 'budget \\d+ ms; (?:within|over \\(runs? [\\d, ]+\\))'
+      + '|\\d of 5 runs ready; first failure: run \\d, (?:render|mount), [a-z-]+; budget \\d+ ms; not measured)$'));
 
     const t = (n: LabProbeName): LabProbeTally => tallies.get(n)!;
     expect(t('cookie-console').hits).toBeGreaterThanOrEqual(1);

@@ -1,0 +1,8 @@
+/* The artifact launch sheet (X5 A5.2; spec 2026-11-19 section 6.2). Design tokens only.
+   TAP FLOOR. `.docs-artifact-check` is a label that holds a checkbox, so the whole line toggles it and the line carries the
+   floor in its own rule, as docs.css's controls do. */
+.docs-artifact-sheet { display: grid; gap: var(--sp-3); min-width: 0; }
+.docs-artifact-check {
+  display: flex; align-items: center; gap: var(--sp-2); min-height: var(--tap-min);
+  overflow-wrap: anywhere;
+}

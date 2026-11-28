@@ -9,11 +9,12 @@ import { DESIGNATION_SEQUENCE_STATES } from '../../shared/overlord-designation.j
 import { ACTOR_SUBJECT_MAX } from '../../shared/overlord-identity.js';
 import { MESSAGE_STATES } from '../../shared/operatorMessages.js';
 import { RUNGS } from '../../shared/overlord-ladder.js';
+import { REQUEST_STATES } from '../../shared/overlordRequests.js';
 import { retentionCutCases, sequenceLineKnownCases, sequenceLineVerdictCases, sequencePageCases } from './sim/sequenceSets.js';
 
 describe('the sequence vocabulary (shared/overlord-sequence.ts)', () => {
-  it('names generation, designation, message, the ladder\'s two kinds of line and the readiness word, each with its id rule and spec text', () => {
-    expect(L0.SEQUENCE_KINDS).toEqual(['generation', 'designation', 'message', 'ladder-rung', 'ladder-latch', 'readiness']);
+  it('names generation, designation, message, the ladder\'s two kinds of line, the readiness word and a request, each with its id rule and spec text', () => {
+    expect(L0.SEQUENCE_KINDS).toEqual(['generation', 'designation', 'message', 'ladder-rung', 'ladder-latch', 'readiness', 'request']);
     for (const k of L0.SEQUENCE_KINDS) {
       expect(L0.SEQUENCE_KIND_MAP[k].id.length).toBeGreaterThan(0);
       expect(L0.SEQUENCE_KIND_MAP[k].spec).toMatch(/^§10\.4 /);
@@ -25,6 +26,7 @@ describe('the sequence vocabulary (shared/overlord-sequence.ts)', () => {
     expect(L0.SEQUENCE_KIND_MAP.message.states).toBe(MESSAGE_STATES);
     expect(L0.SEQUENCE_KIND_MAP['ladder-rung'].states).toBe(RUNGS);
     expect(L0.SEQUENCE_KIND_MAP['ladder-latch'].states).toBe(L0.LADDER_LATCH_SEQUENCE_STATES);
+    expect(L0.SEQUENCE_KIND_MAP.request.states).toBe(REQUEST_STATES);
     expect(L0.LADDER_LATCH_SEQUENCE_STATES).toEqual(['raised', 'cleared']);
     expect(DESIGNATION_SEQUENCE_STATES).toEqual(['pending', 'live', 'failed', 'retired']);
   });

@@ -14,9 +14,11 @@ import type { RangeLoader } from '../src/docs/range/readRange';
 import type { DocsVisit } from '../src/docs/useDocsVisit';
 
 /** The range side of a hand-built visit, for a test that reads no range or cares nothing about a stale one: a failed read
- *  is none of the visit's business, nothing is re-listed, and the counter never moves. Spread it into a `DocsVisit`. */
-export const NO_RANGE_VISIT: Pick<DocsVisit, 'rangeFailed' | 'rangeRead' | 'rangeRetry' | 'rangeRelists' | 'rangeWaiting'> = {
-  rangeFailed: () => 'other', rangeRead: () => {}, rangeRetry: () => {}, rangeRelists: 0, rangeWaiting: false,
+ *  is none of the visit's business, nothing is re-listed, the counter never moves, and no read has given any bytes
+ *  (`rangeOpened`). Spread it into a `DocsVisit`. */
+export const NO_RANGE_VISIT: Pick<DocsVisit, 'rangeFailed' | 'rangeRead' | 'rangeRetry' | 'rangeRelists' | 'rangeWaiting' | 'rangeOpened' | 'rangeDropped'> = {
+  rangeFailed: () => 'other', rangeRead: () => {}, rangeRetry: () => {}, rangeRelists: 0, rangeWaiting: false, rangeOpened: null,
+  rangeDropped: () => {},
 };
 
 export const COMMIT_A = 'a'.repeat(40);

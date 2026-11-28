@@ -1,6 +1,7 @@
 // The Overlord gate order (Overlord W1, gates B; spec 2026-11-09 §11.2, §3.1, §3.3.11 H12, §7.4 C27, Table 11.6; plan
 // `docs/superpowers/plans/2026-11-14-overlord-w1/w1-gates.md` Task 4). Ring L1, context C5: pure decisions over facts the
-// runner (`overlordGateRun.ts`, L4) gathered. Runtime imports: the ladder's two step deciders, and `roleOf.ts`'s pure
+// runner (`overlordGateRun.ts`, L4) gathered. Runtime imports: the ladder's two step deciders, the act ceiling's decider and
+// the act catalogue (L0, which says whose ceiling is counted; W2 act catalogue A), and `roleOf.ts`'s pure
 // designation-fact deciders (L1), the one owner of a session's place in the designation (slug
 // gate-reads-the-designation-fact); every other import is a type. No `fs`, no Fastify, no clock: every fact arrives as an
 // argument, each with its unmeasured arm, and no step reads an unmeasured fact as a pass (slug
@@ -20,6 +21,8 @@
 // `card-unread`), held there by `single-definition/core-vocab.test.ts`. Every word is typed as a `RouteRefusal`, so a word
 // `shared/refusal.ts` does not hold is a compile error, never a second spelling.
 import { offStep, rungStep } from './overlordLadder.js';
+import { actCeilingStep, type CeilingVerdict, type GroupCount } from './overlordActCeiling.js';
+import { OVERLORD_ACT_KINDS, type CeilingGroup } from '../../../shared/overlord.js';
 import { designationFactFrom, designationFactOf } from '../roleOf.js';
 import type { DoorClass, EffectiveRung } from './overlordLadder.js';
 import type { AuthorityState } from './overlordAuthorityCoherence.js';
@@ -188,13 +191,16 @@ export interface GateFacts {
   readonly card: 'read-current' | 'read-stale' | 'none' | { readonly kind: 'unmeasured'; readonly why: string };
   readonly generation: { readonly kind: 'state'; readonly state: GenerationState } | { readonly kind: 'none' }
     | { readonly kind: 'unmeasured'; readonly why: string };
+  /** The act's group count over the window (step 10's ceiling half), read only when `gateReads` says so: a door that is not a
+   *  start door and whose act's ceiling is counted; `not-asked` otherwise (W2 act catalogue A). */
+  readonly ceiling: GroupCount | 'not-asked';
 }
 
 /** The words the order answers, every one a `RouteRefusal` (so `shared/refusal.ts` holds each). */
 export type GateWord = Extract<RouteRefusal,
   | 'not-the-overlord' | 'unavailable' | 'registry-unmeasurable' | 'renewing' | 'capability-missing' | 'authority-rolled-back'
   | 'overlord-off' | 'stale-designation' | 'launch-profile-unmet' | 'stale-generation' | 'unwitnessed' | 'unmeasured'
-  | 'card-unread' | 'rung-below'>;
+  | 'card-unread' | 'rung-below' | 'act-ceiling'>;
 /** Step 1's word as a value, for the one other door that refuses by the same rule: the report door's `reply` arm (Overlord W1 chat,
  *  PR B, `server/src/operatorModel/replies.ts#replyTargetVerdict`), where only the designated session records a reply. Spelled here only. */
 export const NOT_THE_OVERLORD = 'not-the-overlord' satisfies GateWord;
@@ -204,7 +210,10 @@ export type GateVerdict =
   | { readonly kind: 'pass' }
   | { readonly kind: 'hook' }   // a start door, and the caller is another session: served as before
   | { readonly kind: 'refuse'; readonly word: GateWord; readonly detail: string; readonly step: GateStep;
-      readonly record: GateRecord; readonly why: FenceWhy | null };
+      readonly record: GateRecord; readonly why: FenceWhy | null;
+      /** The latch cause the refusal names for the runner to raise (step 10's `act-ceiling`, F15); absent on every other. */
+      readonly latch?: CeilingLatch };
+type CeilingLatch = Extract<CeilingVerdict, { word: 'act-ceiling' }>['latch'];
 
 /** The gate's own words that are not refusal words, each map checked against the union it spells, so the coordination kebab
  *  census (`mail-routes.test.ts`) admits them through `isOverlordGateKebab`, never by an allowlist pin. */
@@ -251,11 +260,17 @@ const RENEWING_STATES: Readonly<Record<GenerationState, boolean>> = {
 const START: DoorClass = 'card-probe-note';
 
 /** Which facts a door's order reads past step 1: a start door reads no ladder, card or generation state; a read door no
- *  fence or witness. The runner reads exactly these, so an unreadable ladder never stops a generation from starting. */
-export function gateReads(door: OverlordDoorRow):
-  { readonly ladder: boolean; readonly authority: boolean; readonly card: boolean; readonly fence: boolean } {
+ *  fence or witness; the act's count only a door that is not a start door and whose act's ceiling is counted (plan §5), so a
+ *  kind whose bound an owner holds, or no act kind, asks no count. The runner reads exactly these, so an unreadable ladder never
+ *  stops a generation from starting. */
+export function gateReads(door: OverlordDoorRow): {
+  readonly ladder: boolean; readonly authority: boolean; readonly card: boolean; readonly fence: boolean;
+  /** The group whose count the runner reads, or `null`: no count is asked, and the fact is `not-asked`. */
+  readonly ceiling: CeilingGroup | null;
+} {
   const start = door.ladderClass === START;
-  return { ladder: !start, authority: !start, card: !start, fence: door.write };
+  const cell = door.act === null ? null : OVERLORD_ACT_KINDS[door.act].ceiling;
+  return { ladder: !start, authority: !start, card: !start, fence: door.write, ceiling: !start && cell !== null && cell.kind === 'counted' ? cell.group : null };
 }
 
 /** A passing write's witness spend, after the counter advanced (review 2803 F2): the spend that could not be recorded refuses
@@ -338,10 +353,18 @@ export function overlordGate(f: GateFacts): GateVerdict {
     if (g.kind === 'unmeasured') return refuse('unavailable', '9', `the generations could not be read: ${g.why}`);
     if (g.kind === 'none') return refuse('renewing', '9', 'no live generation');
     if (RENEWING_STATES[g.state]) return refuse('renewing', '9', `the generation is ${g.state}`);
-    // Step 10: the rung by act kind (rungStep). A door that names no act kind skips it, and only it (the timer doors, §11.2).
+    // Step 10: the rung by act kind (rungStep), then the act's ceiling (actCeilingStep), the early refusal (W2 act catalogue A;
+    // act rows A's writer checks it again inside its write). The rung decides first, so a refused rung answers `rung-below` even
+    // when its count is unmeasured. A door that names no act kind skips both halves, and only it (the timer doors, §11.2).
     if (door.act !== null && ladder !== 'start-door' && ladder.kind === 'read') {
       const rung = rungStep(ladder.rung.rung, door.ladderClass, door.act);
-      if (!rung.pass) return refuse(rung.word, '10', `the act needs the rung ${rung.needs}`);
+      if (!rung.pass) return refuse(rung.word, '10', rung.needs === null ? 'no rung allows the act' : `the act needs the rung ${rung.needs}`);
+      const ceiling = actCeilingStep(door.act, null, { act: f.ceiling, effect: 'not-asked' });
+      if (!ceiling.pass && ceiling.word === 'act-ceiling') {
+        const detail = `the ${ceiling.group} ceiling of ${ceiling.limit} an hour ${ceiling.scope === 'all' ? 'in all' : 'for the programme'} is reached`;
+        return { kind: 'refuse', word: 'act-ceiling', detail, step: '10', record: null, why: null, latch: ceiling.latch };
+      }
+      if (!ceiling.pass) return refuse('unavailable', '10', `the ${ceiling.group} count could not be read: ${ceiling.why}`);
     }
   }
   return { kind: 'pass' };

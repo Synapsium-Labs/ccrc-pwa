@@ -8,6 +8,10 @@
  *  Screen shell — header · banners · list · composer, one column.     *
  * ------------------------------------------------------------------ */
 .chat {
+  /* THE SCREEN'S ONE EDGE (desktop polish wave 182): the header's sides at a desk, the banners', the transcript's and the
+     composer's all read this, so a later change moves all of them together. It is the transcript's own inset, not the
+     skin's --gutter: in Refined the gutter is 24 at a desk, and moving every session's reading column is not this wave's. */
+  --chat-inset: var(--sp-4);
   height: 100dvh;
   max-width: 640px;
   margin: 0 auto;
@@ -28,6 +32,7 @@
   border-bottom: 1px solid var(--edge-subtle);
   background: var(--bg-surface);
 }
+/* At a desk the header's sides are the screen's one edge, `--chat-inset` (desktop polish wave 182): in its desk block below. */
 .chat-title-wrap {
   flex: 1;
   min-width: 0;
@@ -382,6 +387,10 @@ button.metachip:active {
 .keycap--pr .keycap-word,
 .chat-head .keycap-word { display: none; }
 @media (min-width: 900px) {
+  /* The header's sides are the screen's one edge, `--chat-inset` (desktop polish wave 182): its title starts on the
+     transcript's and the composer's left edge and its last control ends on the composer's right edge, not 8 px from the
+     divider. In Instrument that edge is also its --gutter (16). The phone keeps its pads. */
+  .chat-head { padding-inline: var(--chat-inset); }
   .chat-head .keycap-word {
     display: inline;
     white-space: nowrap;
@@ -487,7 +496,7 @@ button.metachip:active {
   display: flex;
   align-items: center;
   gap: var(--sp-3);
-  margin: var(--sp-2) var(--sp-4) 0;
+  margin: var(--sp-2) var(--chat-inset) 0;
   border: 1px solid var(--edge-subtle);
   border-radius: var(--r-md);
   background: var(--bg-raised);
@@ -562,7 +571,7 @@ button.metachip:active {
 .chat-item {
   display: grid;
   gap: var(--sp-1);
-  padding: var(--sp-2) var(--sp-4);
+  padding: var(--sp-2) var(--chat-inset);
 }
 
 /* "Jump to latest" pill — appears once the reader scrolls up. */
@@ -948,7 +957,7 @@ button.metachip:active {
 }
 .composer {
   flex: none;
-  padding: var(--sp-2) var(--sp-4) calc(var(--sp-3) + var(--safe-bottom));
+  padding: var(--sp-2) var(--chat-inset) calc(var(--sp-3) + var(--safe-bottom));
 }
 /* Keyboard open (data-kb: the visualViewport inset pads the shell) — the
    home-bar safe-area is behind the keyboard now, so the composer drops it. */
@@ -1897,6 +1906,43 @@ button.metachip:active {
   text-decoration: none;
 }
 
+/* A pasted text the session received as a file (desktop-polish wave 194): a chip in its place inside the user bubble,
+   between the text around it, opening the saved file in a new tab. The document chip's own pair (--ink-on-well on
+   --bg-well), so no new ground or ink needs auditing; a block of its own line, as tall as a tap target. Scoped under
+   `.msg-user` so it outranks that bubble's `a { color: inherit }`, which drew the bubble's ink on the well (1.09:1 in
+   the light palette, measured by the browser leg). */
+.msg-user .msg-paste {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  width: fit-content;
+  max-width: 100%;
+  min-height: var(--tap-min);
+  margin: var(--sp-1) 0;
+  padding: 0 var(--sp-3);
+  font: var(--weight-medium) var(--fs-xs) / var(--lh-normal) var(--family-mono);
+  font-variant-numeric: tabular-nums;
+  color: var(--ink-on-well);
+  background: var(--bg-well);
+  border: 1px solid var(--edge-subtle);
+  border-radius: var(--r-md);
+  text-decoration: none;
+  white-space: nowrap;
+}
+.msg-user .msg-paste-glyph {
+  flex: none;
+}
+
+/* The composer's tray hold (desktop-polish wave 194): a fieldset that only disables the tray's controls while a send
+   saves. It draws no box of its own, so the tray sits where it always did. */
+.attach-tray-hold {
+  display: contents;
+  min-inline-size: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
 /* Desktop drop target. */
 .composer[data-drop='true'] .inputbar {
   border-color: var(--accent);
@@ -2096,10 +2142,10 @@ button.metachip:active {
   display: flex;
   flex-direction: column;
   margin-block: var(--sp-2);
-  /* Inside the reading column, not on its edge: `.chat-item` and `.composer` pad their content by --sp-4 within the
+  /* Inside the reading column, not on its edge: `.chat-item` and `.composer` pad their content by --chat-inset within the
      column's box, so the card is that much narrower on each side and lines up with the transcript's cards and the
      composer's field. Later than the column's shared rule above, so it wins. */
-  max-width: calc(min(var(--measure-chat), 100%) - 2 * var(--sp-4));
+  max-width: calc(min(var(--measure-chat), 100%) - 2 * var(--chat-inset));
   padding: var(--pad-card);
   background: var(--bg-surface);
   border: 1px solid var(--edge-subtle);

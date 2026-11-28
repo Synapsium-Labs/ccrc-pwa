@@ -3,8 +3,11 @@
 // desk, the class chooser. jsdom has no layout, so the jsdom suites (test/fleet-class-chooser.test.tsx,
 // test/instrument-list.test.tsx) pin the classes and the structure; this file holds what they cannot:
 //   (a) at 900 and 1280, under a fine and a coarse pointer, in status mode and in project mode at 100% text, the row is
-//       one height, `--row-h` (32 fine, 44 coarse), with or without the chooser on it, so the toggle and the list do not
-//       move when the mode changes; the chooser is on the row, never overlapping the radiogroup; no option's words are cut;
+//       one height, `--row-h` (32 fine, 44 coarse), so the toggle does not move when the mode changes; the chooser is
+//       UNDER the row, never overlapping the radiogroup or New project; no option's words are cut. Changed claim (desktop
+//       polish wave 182, the coordinator's ruling A): the chooser was on the row until New project joined it, and the
+//       three do not fit the column's one line. A case per width (900, 1280, 1440) and pointer holds the row's, the
+//       switch's and New project's boxes equal across the two modes, and the chooser's line on the head block's `--sp-2`;
 //   (b) at 1280 (the 340 px list column) in project mode at 150% and 200% text, the chooser wraps BELOW the radiogroup
 //       instead of running under it, the radiogroup spans the row, no option is cut, and nothing scrolls sideways.
 //
@@ -106,13 +109,32 @@ async function measure(width: number, touch: boolean, mode: Mode, zoom = 100) {
       const options = [...group.querySelectorAll<HTMLElement>('[role="radio"]')];
       const hits = (a: ReturnType<typeof box>, b: ReturnType<typeof box>): boolean =>
         !(a.left >= b.right - 0.5 || a.right <= b.left + 0.5 || a.top >= b.bottom - 0.5 || a.bottom <= b.top + 0.5);
+      // Desktop polish wave 182 (the coordinator's ruling A): New project rides the head row in both modes, and in project
+      // mode the chooser has a line of its own under it, so the head row is the same in both modes.
+      const doorEl = row.querySelector<HTMLElement>('.fleet-new-project');
+      const db = doorEl === null ? null : box(doorEl);
+      // The chooser's line: the column's child that holds it, and the first drawn sibling after that line.
+      let line: Element | null = choosers[0] ?? null;
+      while (line !== null && line.parentElement !== row.parentElement) line = line.parentElement;
+      let next = line?.nextElementSibling ?? null;
+      while (next !== null && next.getBoundingClientRect().height === 0) next = next.nextElementSibling;
+      const sp = (name: string): number => {
+        const probe = document.createElement('div');
+        probe.style.cssText = `position:absolute;visibility:hidden;height:var(${name})`;
+        document.body.appendChild(probe);
+        const h = probe.getBoundingClientRect().height;
+        probe.remove();
+        return h;
+      };
       return {
+        row: box(row), door: db, sp2: sp('--sp-2'),
+        chooserLine: line === null ? null : box(line), afterChooserLine: next === null ? null : box(next),
         rowHeight: box(row).height, rowWidth: box(row).width, group: gb, chooser: cb, choosers: choosers.length,
         inRow: choosers[0] !== undefined && row.contains(choosers[0]),
         inGroup: choosers[0] !== undefined && group.contains(choosers[0]),
         // The chooser against the radiogroup's box AND each option's own box: the group may be narrower than its
         // options (`.ins-toggle` has `min-width: 0`), so an option can run under the chooser outside the group's box.
-        overlap: cb !== null && [gb, ...options.map(box)].some((b) => hits(cb, b)),
+        overlap: cb !== null && [gb, ...options.map(box), ...(db === null ? [] : [db])].some((b) => hits(cb, b)),
         // An option is cut when its own words overflow it, or when the group clips the options it holds.
         cutOptions: [
           ...options.filter((o) => o.scrollWidth > o.clientWidth).map((o) => o.textContent),
@@ -180,12 +202,42 @@ describe("Instrument's desk toggle row, in a real Chrome", () => {
         expect([status.radios, project.radios], 'the toggle\'s two options, in each mode').toEqual([2, 2]);
         expect(status.choosers, 'status mode has no chooser on the row').toBe(0);
         expect(project.choosers, 'project mode has the one chooser').toBe(1);
-        expect(project.inRow, 'the chooser is on the toggle row').toBe(true);
+        // Changed claim (desktop polish wave 182, ruling A): the chooser is UNDER the head row, never on it and never
+        // overlapping it; it was on the row before New project joined the row.
+        expect(project.inRow, 'the chooser is not on the head row').toBe(false);
+        expect(project.chooser!.top, 'the chooser is under the head row').toBeGreaterThanOrEqual(project.row.bottom - 0.5);
         expect(project.inGroup, 'the chooser is inside the radiogroup').toBe(false);
         expect(project.overlap, 'the chooser overlaps the radiogroup').toBe(false);
         expect(project.chooser!.height, 'the chooser is as tall as the row').toBe(project.rowH);
         expect(status.cutOptions, 'status mode: options whose words are cut').toEqual([]);
         expect(project.cutOptions, 'project mode: options whose words are cut').toEqual([]);
+        expect([...status.errors, ...project.errors], 'page errors').toEqual([]);
+      }, 120_000);
+    }
+  }
+
+  // Desktop polish wave 182 (ruling A, condition 2): the head row is one box in both modes, and the switch and New project
+  // do not move when the mode changes; the chooser's line sits on the column's inset with the head block's `--sp-2` above
+  // and below it (condition 1).
+  for (const [pointer, touch] of [['fine pointer', false], ['touch', true]] as const) {
+    for (const width of [900, 1280, 1440]) {
+      it(`the head row, the switch and New project hold one box in both modes, the chooser's line on the rhythm, under a ${pointer} at ${width}`, async () => {
+        const status = await measure(width, touch, 'status');
+        const project = await measure(width, touch, 'project');
+        const near = (a: { left: number; top: number; width: number; height: number }, b: typeof a, what: string): void => {
+          for (const k of ['left', 'top', 'width', 'height'] as const) expect(Math.abs(a[k] - b[k]), `${what}: ${k} in status ${a[k]}, in project ${b[k]}`).toBeLessThanOrEqual(0.5);
+        };
+        near(status.row, project.row, 'the head row');
+        near(status.group, project.group, 'the switch');
+        expect(status.door, 'New project on the head row in status mode').not.toBeNull();
+        expect(project.door, 'New project on the head row in project mode').not.toBeNull();
+        near(status.door!, project.door!, 'New project');
+        expect(project.chooserLine, "the chooser's line").not.toBeNull();
+        expect(Math.abs(project.chooserLine!.left - project.row.left), "the chooser's line starts on the head row's inset").toBeLessThanOrEqual(0.5);
+        expect(Math.abs(project.chooser!.left - project.row.left), 'the chooser starts on the inset').toBeLessThanOrEqual(0.5);
+        expect(project.chooser!.top - project.row.bottom, 'the gap above the chooser is --sp-2').toBeCloseTo(project.sp2, 0);
+        expect(project.afterChooserLine, 'something is drawn under the chooser').not.toBeNull();
+        expect(project.afterChooserLine!.top - project.chooser!.bottom, 'the gap under the chooser is --sp-2').toBeCloseTo(project.sp2, 0);
         expect([...status.errors, ...project.errors], 'page errors').toEqual([]);
       }, 120_000);
     }

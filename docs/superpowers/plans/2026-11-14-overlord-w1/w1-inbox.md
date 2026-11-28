@@ -280,7 +280,9 @@ rules otherwise.
     board, history and the sequence's cursor are planned as unfenced reads (`write: no`), so a forger can still spend
     their ceilings. They fence their reads too, as these two do, and their door process rows become fenced; until then
     their plans call the runner with `unfenced: true`, which counts every attributed line and says so in their review
-    (Index changes).
+    (Index changes). (Corrected 2026-11-27, call 1590: the history read and the board read are unfenced views, attributed
+    reads and not proven ones, and both are readable by readers through the read tool. The history row is not fenced,
+    whatever this question recommends of it.)
 19. **`acknowledge`'s sequence line** (slug `acknowledge-stamps-after-the-store`; ruled, F13). §10.4 has one writer add
     a line inside each stamped transaction, and `acknowledge` moves a message in the private store, which is a second
     file behind the privacy boundary, so no transaction spans both (the index's question 31). **Ruled:** after the
@@ -474,6 +476,8 @@ The index (`docs/superpowers/plans/2026-11-14-overlord-w1.md`) should carry thes
 4. **Board and history B, and sequence C:** each handler calls the gate and then `runOverlordRead`, and drops its own
    ledger and ceiling steps; each fences its read, with a fenced door process row (`read` included for the readers'
    tool), or calls the runner with `unfenced: true` and states that a forger can spend its ceiling (question 18).
+   (Corrected 2026-11-27, call 1590: the history read and the board read are unfenced views, attributed reads and not
+   proven ones. The history row is not fenced, whatever this change says of it.)
 5. **Door process B1:** `readsBetween` leaves out `inbox` lines and lines whose outcome is not `rows` (question 6); its
    pick-up report answers `said-not-operator`, not a new `unknown-message` (question 11). **Door process A2:**
    `door-tools-argv.test.ts`'s fenced `view` rows are those whose door row is `write: yes` (`card`, `inbox`, `messages`),

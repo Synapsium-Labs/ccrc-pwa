@@ -56,12 +56,12 @@
 // Released fold holds archive-all, and the rollup's rules hold unchanged. A card mixes statuses, so there each row
 // shows its word beside its lamp (spec §3.1), which `SessionLine` always does.
 //
-// THE CLASS CHOOSER sits on the toggle's row in project mode at a desk only (T2f, D-6371): its readers are the project
-// cards' placement forecast and Add workspace, so in status mode it would do nothing. Below 900 it stays on the screen's
-// runs line. It is the shared `ClassChooser`, a sibling of the radiogroup and never inside it; the radiogroup grows (`flex-auto`, so its
-// basis stays its content and the row wraps the chooser under it at large text sizes, which `flex-1`'s 0% basis never did)
-// to the space the chooser leaves, so the toggle keeps the row's width in both modes. `.ins-toggle` already sets
-// `min-width: 0`, so no utility repeats it.
+// THE CLASS CHOOSER is drawn in project mode at a desk only (T2f, D-6371): its readers are the project cards' placement
+// forecast and Add workspace, so in status mode it would do nothing. Below 900 it stays on the screen's runs line. At a desk
+// it has a line of its own under the head row (desktop polish wave 182, ruling A), never on the row: the switch, the
+// chooser and New project do not fit the column's one line, so the head row is the same box in both modes. It is the
+// shared `ClassChooser`. The radiogroup grows (`flex-auto`, so its basis stays its content, which `flex-1`'s 0% basis never
+// kept). `.ins-toggle` already sets `min-width: 0`, so no utility repeats it.
 //
 // THE TOGGLE is remembered per device under `ccrc-fleet-group`; storage that is absent, unreadable or holds an unknown
 // value answers status. The phone tabs (below the desk query) are a view over the status groups, not a mode: Needs you,
@@ -84,6 +84,8 @@ import type { ProgHue } from '../../fleet/programmeBoxes';
 import { boundOpenRun, isRunClosed } from '../../fleet/runWords';
 import { SessionLine } from '../../fleet/SessionLine';
 import { markAllSeenLabel, useMarkSeen } from '../../fleet/markSeen';
+import { NewProjectDoor } from '../../fleet/NewProjectDoor';
+import { PoolLag, poolLagText } from '../../fleet/poolLag';
 import { openRunAt, openSession } from '../../fleet/openers';
 import {
   statusGroupLabel, statusView, statusViewTotal, type BoxClock, type StatusBox, type StatusGroupId, type StatusViewGroup,
@@ -95,6 +97,7 @@ import { useLocation } from '../../lib/router';
 import { rovingStep } from '../../lib/rovingStep';
 import { readKey, writeKey } from '../../lib/storage';
 import { DESK_QUERY, useMediaQuery } from '../../lib/useMediaQuery';
+import { useFleetStore } from '../../stores/fleet';
 
 /** The toggle's per-device memory. */
 export const GROUP_MODE_KEY = 'ccrc-fleet-group';
@@ -150,6 +153,14 @@ export function FleetTable(): ReactNode {
   const { path } = useLocation();
   const at = matchRoute(path);
   const selectedId = at?.route.id === 'session' ? at.param : null;
+  // THE HEAD ROW AT A DESK (desktop polish wave 182). The toggle's line is the column's first row, centred on the detail
+  // pane's title line (instrument.css), and it carries the New project door at its end: before, the door was a 44 px row
+  // of its own above the toggle, lining up with nothing. The pool-lag readout, when the two epochs differ, is the line
+  // under it, so the head row never moves with it. `FleetScreen` draws neither where this list is placed at a desk
+  // (`listHead`); below 900 the runs line carries the door and the screen's head the readout, as before.
+  const flows = useFleetFlows();
+  const pools = useFleetStore((s) => s.pools);
+  const lag = desk ? poolLagText(pools?.epoch, pools?.observedEpoch) : null;
 
   const choose = (next: GroupMode): void => {
     setMode(next);
@@ -158,7 +169,7 @@ export function FleetTable(): ReactNode {
 
   return (
     <div className="ins-table" data-mode={mode}>
-      <div className="flex min-w-0 flex-wrap items-center justify-between gap-1">
+      <div className="ins-head-row flex min-w-0 flex-wrap items-center justify-between gap-1">
         <div
           role="radiogroup"
           aria-label="Group sessions by"
@@ -180,8 +191,13 @@ export function FleetTable(): ReactNode {
             </Button>
           ))}
         </div>
-        {desk && mode === 'project' && <ClassChooser className="min-h-row" />}
+        {desk && <NewProjectDoor inline onNewProject={flows.openAddProject} />}
       </div>
+      {/* Project mode's class chooser has a line of its own under the head row (desktop polish wave 182, the coordinator's
+          ruling A): the switch, the chooser and New project do not fit the column's one line, and the head row stays the
+          same box in both modes, so the switch and the door never move when the mode changes. */}
+      {desk && mode === 'project' && <div className="ins-chooser-line"><ClassChooser className="min-h-row" /></div>}
+      {lag !== null && <div className="ins-lag"><PoolLag text={lag} /></div>}
       {mode === 'project'
         ? <ProjectCards selectedId={selectedId} />
         : <StatusTable selectedId={selectedId} phoneTab={desk ? null : tab} onTab={setTab} />}

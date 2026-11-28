@@ -8,6 +8,7 @@ import { fileURLToPath } from 'node:url';
 import { parseFile, ts } from './scan/parse.js';
 import * as m from '../src/coord/overlordLadder.js';
 import * as L0 from '../../shared/overlord-ladder.js';
+import { OVERLORD_ACT_KINDS, OVERLORD_ACT_KIND_LIST } from '../../shared/overlord.js';
 import {
   effectiveRungCases, highestHeldRungCases, narrowingStateCases, offStepCases, rungMoveVerdictCases, rungStepCases,
   rungWordReadingCases, degradedReadingCases,
@@ -37,7 +38,8 @@ describe('every exported union has its runtime list', () => {
     expect(L0.LADDER_CAUSE_MAP['no-witness-since-boot']).toMatchObject({ kind: 'condition', effect: { kind: 'cap', cap: 'advise' }, notice: 'none' });
     expect(L0.LADDER_READERS).toEqual(['launch-profile-unmet']);
     expect(L0.LADDER_NOTICES).toEqual(['none', 'push', 'item']);
-    expect(L0.LADDER_ACT_KINDS).toEqual(['read', 'write-note', 'acknowledge', 'link-team']);
+    // The act catalogue owns its list (`overlord-act-catalogue.test.ts` pins it whole); W1's four kinds are in it.
+    expect(OVERLORD_ACT_KIND_LIST).toEqual(expect.arrayContaining(['read', 'write-note', 'acknowledge', 'link-team']));
     expect(L0.CONDITION_READINGS).toEqual(['standing', 'lifted', 'unmeasured']);
     expect(L0.NARROWING_WHYS).toEqual(['no-witness-yet', 'witness-unmeasured', 'not-journalled']);
     expect(L0.LADDER_EFFECT_KINDS).toEqual(['cap', 'one-under-operator', 'read-by', 'server-words']);
@@ -69,7 +71,7 @@ describe('every exported union has its runtime list', () => {
 describe('ladder kebab census', () => {
   it('admits the vocabulary owners and refuses unrecognised words', () => {
     for (const word of [...L0.LADDER_EFFECT_KINDS, ...L0.NARROWING_STATES, ...L0.NARROWING_WHYS,
-      ...L0.LADDER_CAUSES, ...L0.LADDER_READERS, ...L0.LADDER_ACT_KINDS,
+      ...L0.LADDER_CAUSES, ...L0.LADDER_READERS, ...OVERLORD_ACT_KIND_LIST,
       'rung-unreadable', 'card-probe-note', 'not-yet', 'row-changed']) expect(m.isLadderKebab(word)).toBe(true);
     for (const word of ['read-bye', 'server-word', 'rung-unknown', 'row-change', 'some-other-word', '']) {
       expect(m.isLadderKebab(word)).toBe(false);
@@ -104,13 +106,13 @@ describe('the cause table', () => {
 
 describe('the rung cells', () => {
   it('W1\'s act kinds each have a cell at chat, advise and full, and off has none', () => {
-    for (const act of L0.LADDER_ACT_KINDS) expect(Object.keys(L0.RUNG_CELLS[act])).toEqual(['chat', 'advise', 'full']);
+    for (const act of OVERLORD_ACT_KIND_LIST) expect(Object.keys(OVERLORD_ACT_KINDS[act].rungs)).toEqual(['chat', 'advise', 'full']);
     for (const act of ['read', 'write-note', 'acknowledge'] as const) {
-      for (const c of Object.values(L0.RUNG_CELLS[act])) expect(c).toBe('allow');
+      for (const c of Object.values(OVERLORD_ACT_KINDS[act].rungs)) expect(c).toBe('allow');
     }
   });
   it('D-8809: the Overlord\'s team link is allowed at full only', () => {
-    expect(L0.RUNG_CELLS['link-team']).toEqual({ chat: 'refuse', advise: 'refuse', full: 'allow' });
+    expect(OVERLORD_ACT_KINDS['link-team'].rungs).toEqual({ chat: 'refuse', advise: 'refuse', full: 'allow' });
   });
 });
 

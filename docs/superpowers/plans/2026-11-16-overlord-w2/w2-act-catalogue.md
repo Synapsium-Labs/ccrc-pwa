@@ -222,7 +222,10 @@ The questions this plan raised, each with its recommendation, now accepted at re
     F9):** an act row counts against its own kind's group, and also against its effect's group when the effect has a
     counted ceiling. `ActCountReader.count(group, …)` counts rows whose kind is in the group and rows whose effect is.
     Step 10 checks the act's group as the early refusal. The door gathers the effect's verdict through
-    `actCeilingStep` (the act's count `not-asked`) and passes it to `overlordMayAct`, which refuses on it. Act rows A's
+    `actCeilingStep` (the act's count `not-asked`) and passes it to `overlordMayAct`, which refuses on it. (Corrected
+    2026-11-27, call 1874, review 4135 F1: a counted act whose own count was not asked refuses, so that call always
+    refuses. The door reads both counts and asks the step once with both; step 10's early call passes the act's count
+    and the effect's as not asked.) Act rows A's
     writer re-reads the counts and re-runs `actCeilingStep` for the act's and the effect's groups inside the same
     synchronous write, so two concurrent calls cannot both pass a ceiling (`CoordStore` is synchronous; gates B's
     guarded counter is the precedent, "a TOCTOU re-check").
@@ -399,7 +402,9 @@ re-fits after the first week as W1's read ceilings are.*
 **The rule, `actCeilingStep`** (L1, first match):
 
 1. The act's cell is `held-by` or `never`, and its effect's count was not asked: `pass`.
-2. A count the step needs is `unmeasured`: `refuse`, `unavailable`, naming the group and why.
+2. A count the step needs is `unmeasured`: `refuse`, `unavailable`, naming the group and why. (Corrected 2026-11-27,
+   call 1874, review 4135 F1: a needed count that was not asked refuses `unavailable` too; the act's count is needed
+   for a counted act, whatever the effect's.)
 3. The act's group, in all, is at or over its `all`: `refuse`, `act-ceiling`, naming the group, `all` and the window.
 4. The act's group, for the target's programme, is at or over its `perProgramme`: `refuse`, `act-ceiling`, naming the
    programme.

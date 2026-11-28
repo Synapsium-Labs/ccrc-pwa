@@ -34,6 +34,7 @@ export const LAB_TEXT = {
     mermaid: 'Drawing Mermaid:',
     strays: 'Sending stray messages to the reader…',
     done: 'Reading the counts…',
+    gate: 'Timing the gate-sized page:',
   },
   verdict: LAB_VERDICT_WORDS,
   checks: {

@@ -22,7 +22,8 @@ import {
 import { flushSync } from 'react-dom';
 import {
   DOCS_CLASS_CAP, contentClass, docListPinKey, docsApi, docsPageUrl, entryView, githubBlobUrl, isDocsFolderLocation,
-  type DocListPin, type DocPin, type DocsFolderLocation, type DocsPageLocation, type DocsShowOk, type DocsTreeOk, type EntryBadge, type EntryMode, type GithubTarget,
+  type DocContentClass, type DocListPin, type DocPin, type DocsFolderLocation, type DocsPageLocation, type DocsShowOk, type DocsTreeOk,
+  type EntryBadge, type EntryMode, type GithubTarget,
 } from '../../../shared/docs';
 import { doorMark } from '../command/door';
 import { formatAge } from '../fleet/formatReset';
@@ -32,6 +33,7 @@ import { useFollowLink } from '../lib/useTabLink';
 import { DESK_QUERY, useMediaQuery } from '../lib/useMediaQuery';
 import { Button, Icon, useNow, type IconName } from '@ccrc/ui';
 import { docsLocation } from './docsLinks';
+import { ArtifactList } from './artifact/ArtifactList';
 import { ROW_STAGES, fullHeadFormFor, headLayoutFor, type FullHeadForm, type RowStage } from './docsHeadWords';
 import {
   DOCS_FOLDER_TEXT, DOCS_HEAD_TEXT, DOCS_TOOL_TEXT, ENTRY_BADGE_TEXT, EXPORT_WAIT_TEXT, GITHUB_REFUSAL_TEXT, VIA_SENTENCE,
@@ -40,18 +42,22 @@ import {
 import { SECTION_LABEL, docsPathKind, githubTargetFor } from './docsTree';
 import { DocsPageLink } from './DocsTreeView';
 import type { DocsNotOk } from './failures';
-import { folderActions, folderTruthLine } from './folderPage';
+import { folderActions, folderTruthLine, utcMinuteText } from './folderPage';
 import { copyText, shareTargetFor, type ShareOpened } from './share';
 import { ShareSheet } from './ShareSheet';
 import { docMarkdownSource } from './DocMarkdown';
 import { ExportSheet } from './ExportSheet';
+import { PrintControlContext } from './print/usePrint';
+import { PRINT_ROW_TEXT, printPreparing } from './print/printWords';
 import type { ExportRequest, ExportSource } from './export/exportInput';
 import type { ExportWait } from './export/policy';
 import { showBytes } from './objectUrls';
 import type { ExportBody } from './exportBody';
 import type { ExportAssets } from './export/exportAssets';
 import type { HighlightStore } from '../lib/highlightStore';
-import { pinCommit, pinFor, samePin, type DocsVisit, type FileSlot, type Freshness } from './useDocsVisit';
+import { rangeHasTextView } from './range/rangePolicy';
+import { decodeRangeBytes } from './range/rangeText';
+import { pinCommit, pinFor, samePin, type DocsVisit, type FileSlot, type Freshness, type RangeOpened } from './useDocsVisit';
 import { oneBarTools, type ReaderCommand } from './reader/policy';
 import { READER_MODE_TEXT } from './reader/readerModeWords';
 import type { ReaderBar, ReaderProgress } from './readerBar';
@@ -63,6 +69,9 @@ type TreePage = Exclude<DocsPageLocation, { kind: 'index' }>;
 const SEP = ' · ';
 /** `sourceDraft` after its `{badge}`, so a draft source can draw its badge as the `.docs-badge` the rows draw. */
 const SOURCE_DRAFT_TAIL = DOCS_HEAD_TEXT.sourceDraft.slice(DOCS_HEAD_TEXT.sourceDraft.indexOf('{badge}') + '{badge}'.length);
+/** The truth line's clause for a stat-pinned draft once its range read finished (X2 P6.1 Step 0c; spec 4.3 "The pin"): when its bytes were
+ *  read. A committed document's bytes are named by its commit, so it says nothing of the kind. Local, as the Docs words file is held. */
+const READ_AT_TEXT = 'as read at {time}';
 
 function modeOf(page: DocsPageLocation): EntryMode {
   return page.kind !== 'index' && page.ref !== null ? 'ref' : 'default';
@@ -251,14 +260,14 @@ export function shareStateFor(
  *  - `updating`: the leaf does not show `pinFor`'s pin yet (its read, or its raster image, is in flight);
  *  - `waiting`: disabled, with why (`ExportWait`);
  *  - `plain-view`: the reader frame shows the leaf; a tap turns it off so Export saves the plain view (refinement (a));
- *  - `ready`: what to export.
+ *  - `ready`: what to export. `part` (X2 P6.1 Step 0c): the document is shown in parts and the source is the part on screen.
  *  Here and not in a module the header imports from `share.ts`: Share's refinement (o). */
 export type ExportState =
   | { readonly s: 'absent' }
   | { readonly s: 'updating'; readonly to: string }
   | { readonly s: 'waiting'; readonly why: ExportWait }
   | { readonly s: 'plain-view' }
-  | { readonly s: 'ready'; readonly source: ExportSource };
+  | { readonly s: 'ready'; readonly source: ExportSource; readonly part?: true };
 
 export interface ExportInputs {
   /** What the leaf's body shows; `null`: nothing published (it is formatting, or nothing is mounted). */
@@ -269,6 +278,8 @@ export interface ExportInputs {
   readonly settled: boolean;
   /** The visit's image registry; `null`: none, so a raster leaf never readies. */
   readonly assets: ExportAssets | null;
+  /** What the range read of the page gave (`DocsVisit.rangeOpened`); absent or `null`: none has (X2 P6.1 Step 0c). */
+  readonly ranged?: RangeOpened | null;
 }
 
 const EXPORT_ABSENT: ExportState = { s: 'absent' };
@@ -284,6 +295,56 @@ function htmlExportState(b: ExportBody | null, text: string, pin: DocPin, show: 
   if (b.kind === 'plain' && b.text === text) return { s: 'ready', source: { kind: 'plain', pin, show, body: b } };
   if (b.kind === 'mockup' && b.text === text) return { s: 'ready', source: { kind: 'mockup', pin, show, doc: b.doc, assets: b.assets } };
   return exportWaits('preparing');
+}
+
+/** Whether a body says it is one part of a text above 2 MiB (`part`, set by whatever draws it inside the parts). */
+function isPartBody(b: ExportBody): boolean {
+  return (b.kind === 'tree' || b.kind === 'plain' || b.kind === 'text') && b.part === true;
+}
+
+/** What a Markdown or text body published says to Export, once the leaf's pin is settled. `shows`: whether a body's text is
+ *  what the page shows: the whole text the page read (a file read whole, or a document read by range: the text of the bytes
+ *  that read gave). `show`: the file answer the leaf shows, `null` for a document read by range. What is ready is the part on
+ *  screen when the body says it is one (`part`, set by the body drawn inside the parts; its text is the part's, so `shows`
+ *  does not ask), and the leaf that shows no text (`none`) has no Export. */
+function bodyExportState(
+  cls: DocContentClass, b: ExportBody | null, shows: (text: string) => boolean, pin: DocPin, show: DocsShowOk | null, x: ExportInputs,
+): ExportState {
+  if (b === null) return exportWaits('formatting');
+  if (b.kind === 'none') return EXPORT_ABSENT;
+  if (cls === 'markdown' && b.kind === 'reader') return { s: 'plain-view' };
+  if (cls === 'markdown' && b.kind === 'gate') return exportWaits('gate');
+  const part = isPartBody(b);
+  const ready = (source: ExportSource): ExportState => (part ? { s: 'ready', source, part: true } : { s: 'ready', source });
+  if (b.kind === 'plain' && (part || shows(b.text))) return ready({ kind: 'plain', pin, show, body: b });
+  if (cls === 'markdown' && b.kind === 'tree' && (part || shows(b.text))) {
+    return x.store === null || !x.settled ? exportWaits('highlighting') : ready({ kind: 'tree', pin, show, body: b, store: x.store });
+  }
+  if (cls === 'text' && b.kind === 'text' && (part || shows(b.text))) {
+    if (b.lang === null) return ready({ kind: 'text', pin, show, body: b, store: null });
+    return x.store === null || !x.settled ? exportWaits('highlighting') : ready({ kind: 'text', pin, show, body: b, store: x.store });
+  }
+  return exportWaits('formatting');
+}
+
+/** Export of a document read by range (X2 P6.1 Step 0c; spec 4.3 "The pin", "Markdown in parts"): the leaf's file slot is `stat-pinned`
+ *  or `too-large`, and the bytes it shows are the part on screen under the OPENED pin the read gave (`x.ranged`), so there is no
+ *  answer to take `show` from. The body is compared with the text of the bytes the read gave, as a whole read's is with its
+ *  answer's: a part that fell back to the plain view, or the tree, of its own text is no such body, so Export waits for the one
+ *  that is. The bytes are decoded here, after the class check and through the leaf's own memoised decoder (the leaf decoded the
+ *  same array to show them), so a read of an image, a PDF or any other download is never decoded. A body that says it is a part
+ *  (a text above 2 MiB, shown in parts: `isPartBody`) is the part on screen, and is ready as one. Only a class with a view above its cap (Markdown, text) has one. A read that has given no bytes (in progress, cancelled,
+ *  failed, past the range ceiling) leaves nothing to export, so there is no Export, as there is none for any file slot that settled
+ *  with no bytes (refinement (k)). */
+function rangeExportState(cls: DocContentClass, expected: DocListPin, x: ExportInputs): ExportState {
+  if (!rangeHasTextView(cls)) return EXPORT_ABSENT;
+  const ranged = x.ranged ?? null;
+  if (ranged === null || !samePin(ranged.pin, expected)) return EXPORT_ABSENT;
+  // The leaf hands the visit the bytes of a class with a text view only (`RangeOpened.bytes`), so none here is a read with nothing
+  // to compare a body with: no Export, as for a read that gave no bytes.
+  const bytes = ranged.bytes;
+  if (bytes === undefined) return EXPORT_ABSENT;
+  return bodyExportState(cls, x.body, (t) => t === decodeRangeBytes(bytes).text, ranged.pin, null, x);
 }
 
 export function exportStateFor(page: DocsPageLocation, tree: DocsTreeOk, file: FileSlot, x: ExportInputs): ExportState {
@@ -306,6 +367,7 @@ export function exportStateFor(page: DocsPageLocation, tree: DocsTreeOk, file: F
     return held.asset.kind === 'raster' ? { s: 'ready', source: { kind: 'raster', pin: expected, asset: held.asset } } : EXPORT_ABSENT;
   }
   if (file.s === 'none' || file.s === 'loading') return updating;
+  if (file.s === 'stat-pinned' || file.s === 'too-large') return rangeExportState(cls, expected, x);
   if (file.s !== 'ok') return EXPORT_ABSENT;
   if (!samePin(file.pin, expected)) return updating;
   const pin = file.pin;
@@ -318,20 +380,7 @@ export function exportStateFor(page: DocsPageLocation, tree: DocsTreeOk, file: F
   if (src.kind === 'no-bytes') return EXPORT_ABSENT;
   const b = x.body;
   if (cls === 'html') return htmlExportState(b, src.text, pin, show);
-  if (b === null) return exportWaits('formatting');
-  if (cls === 'markdown' && b.kind === 'reader') return { s: 'plain-view' };
-  if (cls === 'markdown' && b.kind === 'gate') return exportWaits('gate');
-  if (b.kind === 'plain' && b.text === src.text) return { s: 'ready', source: { kind: 'plain', pin, show, body: b } };
-  if (cls === 'markdown' && b.kind === 'tree' && b.text === src.text) {
-    return x.store === null || !x.settled ? exportWaits('highlighting')
-      : { s: 'ready', source: { kind: 'tree', pin, show, body: b, store: x.store } };
-  }
-  if (cls === 'text' && b.kind === 'text' && b.text === src.text) {
-    if (b.lang === null) return { s: 'ready', source: { kind: 'text', pin, show, body: b, store: null } };
-    return x.store === null || !x.settled ? exportWaits('highlighting')
-      : { s: 'ready', source: { kind: 'text', pin, show, body: b, store: x.store } };
-  }
-  return exportWaits('formatting');
+  return bodyExportState(cls, b, (t) => t === src.text, pin, show, x);
 }
 
 /** The freshness chip's `data-state` (spec 4.5's table). */
@@ -562,11 +611,14 @@ function TruthLine(p: {
             </>
           )
           : <span className="docs-truth-source">{truthSource(tree, page, opened)}</span>;
+      // A stat-pinned draft read by range (X2 P6.1 Step 0c): the time its bytes were read, once they were.
+      const readTime = file.s === 'stat-pinned' && visit.rangeOpened !== null ? utcMinuteText(visit.rangeOpened.readAt) : null;
       leaf = (
         <>
           {SEP}{source}
           {k.view.badge !== null && s.kind !== 'draft' && page.at === null && <>{SEP}<span className="docs-badge">{ENTRY_BADGE_TEXT[k.view.badge]}</span></>}
           {file.s === 'ok' && <>{SEP}<span className="docs-truth-size">{kib(file.answer.show.size)}</span></>}
+          {readTime !== null && <>{SEP}<span className="docs-truth-read">{fillSentence(READ_AT_TEXT, { time: readTime })}</span></>}
         </>
       );
     }
@@ -705,7 +757,9 @@ function ExportAction(p: {
   const enabled = state.s === 'ready' || (state.s === 'plain-view' && p.onPlainView !== null);
   const onClick = (): void => {
     if (state.s === 'plain-view') p.onPlainView?.();
-    else if (state.s === 'ready') setRequest({ page, tree, source: state.source, assets: p.assets, readAt: p.readAt });
+    else if (state.s === 'ready') {
+      setRequest({ page, tree, source: state.source, assets: p.assets, readAt: p.readAt, ...(state.part === true ? { part: true as const } : {}) });
+    }
   };
   const name = busy ? fillSentence(DOCS_HEAD_TEXT.exportBusy, { state: words }) : p.glyph === true || p.row === true ? words : undefined;
   return (
@@ -718,6 +772,48 @@ function ExportAction(p: {
         {p.glyph === true ? <Icon name="download" size={20} /> : p.row === true ? <RowFace icon="download" words={words} /> : words}
       </button>
       {request !== null && <ExportSheet request={request} onClose={() => setRequest(null)} />}
+    </>
+  );
+}
+
+/** Print (spec 2026-11-18 4.6) in PAGE DETAILS only (the plan's "a Print row in Page details"; the coordinator's ruling): a `<button>`
+ *  wearing `.docs-action`, with its word, in the compact row's panel (`CompactPanelTail`) and in the stacked actions the one bar's
+ *  panel draws (`ActionsRow`). The desk row has none (it is where a fifth action broke the head's layout), and neither has the
+ *  compact row's icon strip: the desk prints with Ctrl+P or the browser's menu, which mount from what is prepared (`usePrint`).
+ *  It reads the Docs screen's print control (`PrintControlContext`), so it is drawn only where a body has published something to
+ *  print, and never on a listing. "Print", or "Download to print" for a PDF or an HTML page (`printOffer`'s answer, which prints
+ *  from its downloaded file); while Print waits for the parts' trees it reads "Preparing part k of n…" and is disabled with that
+ *  reason as its name; a Download to print with no download reachable from the head is disabled with its reason too. A failed
+ *  download is said under the head's row (`PrintNote`). */
+function PrintAction(): ReactNode {
+  const control = useContext(PrintControlContext);
+  if (control === null) return null;
+  const progress = control.progress;
+  const words = progress !== null ? printPreparing(progress.k, progress.n)
+    : control.offer === 'download-to-print' ? PRINT_ROW_TEXT.downloadToPrint : PRINT_ROW_TEXT.print;
+  const why = control.disabledWhy;
+  const name = progress !== null ? words : why !== null ? `${words}: ${why}` : undefined;
+  return (
+    <button
+      type="button" className="docs-action docs-print" disabled={progress !== null || why !== null} onClick={control.press}
+      aria-label={name} title={why !== null ? name : undefined}
+    >
+      {words}
+    </button>
+  );
+}
+
+/** What Print says below the head's row, as the head's other notes are (never inside the bar or the actions' flex box, whose width it
+ *  would take): the head draws it after its row, beside "Updated to". A failed Download to print (`role="alert"`), and, for a document
+ *  too long to print whole, the sentence that Print prints the part on screen and how to print the rest. */
+function PrintNote(): ReactNode {
+  const control = useContext(PrintControlContext);
+  const note = control?.note ?? null;
+  const tooLong = control?.tooLong ?? null;
+  return (
+    <>
+      {note !== null && <p className="docs-note" role="alert">{note}</p>}
+      {tooLong !== null && <p className="docs-note" role="status">{tooLong}</p>}
     </>
   );
 }
@@ -804,7 +900,7 @@ function ProjectActions(p: ActionInputs & { readonly form: FullHeadForm }): Reac
 
 /** `Actions` over actions worked out by the caller: the phone head works them out once for its row and its panel. */
 function ActionsRow(p: ActionInputs & { readonly form: FullHeadForm; readonly head: HeadActions }): ReactNode {
-  const { page, tree, file } = p;
+  const { page, tree } = p;
   const row = p.form === 'row';
   const { target, showsDraft, onVersion, share, exported, committedHref } = p.head;
   // Reader mode (X6 XR1.5): the row's first action, only in the desk row (the one bar draws its own control, and the panel's
@@ -822,9 +918,10 @@ function ActionsRow(p: ActionInputs & { readonly form: FullHeadForm; readonly he
       {exported.s !== 'absent' && page.kind === 'path' && (
         <ExportAction
           key={exportKeyOf(page, tree, exported)} page={page} tree={tree} state={exported} assets={p.exportAssets}
-          readAt={file.s === 'ok' ? file.receivedAt : null} onPlainView={p.onPlainView} row={row}
+          readAt={p.head.readAt} onPlainView={p.onPlainView} row={row}
         />
       )}
+      {page.kind === 'path' && !row && <PrintAction />}
       {committedHref !== null && (row
         ? (
           <DocsPageLink className="docs-action" href={committedHref} label={DOCS_HEAD_TEXT.openCommitted} title={DOCS_HEAD_TEXT.openCommitted}>
@@ -841,6 +938,8 @@ interface ActionInputs {
   readonly page: TreePage; readonly tree: DocsTreeOk; readonly file: DocsVisit['file']; readonly leafImage: DocPin | null;
   readonly exportBody: ExportBody | null; readonly pageStore: HighlightStore | null; readonly exportAssets: ExportAssets | null;
   readonly onPlainView: (() => void) | null;
+  /** The visit's range read of this page (`DocsVisit.rangeOpened`): what Export of a document read by range exports from. */
+  readonly rangeOpened: RangeOpened | null;
 }
 
 /** The actions on a page, worked out once for either header (phone-header refinement (e)): View on GitHub's target (`null`: none),
@@ -855,6 +954,8 @@ interface HeadActions {
   readonly share: ShareState;
   readonly exported: ExportState;
   readonly committedHref: string | null;
+  /** When the bytes Export would save were read: the file slot's `receivedAt`, or the range read's `readAt`; `null`: none read. */
+  readonly readAt: number | null;
 }
 
 function useHeadActions(p: ActionInputs): HeadActions {
@@ -865,7 +966,10 @@ function useHeadActions(p: ActionInputs): HeadActions {
   const share = shareStateFor(page, tree, file, p.leafImage);
   const settled = useStoreSettled(p.pageStore);
   useAssetsVersion(p.exportAssets);
-  const exported = exportStateFor(page, tree, file, { body: p.exportBody, store: p.pageStore, settled, assets: p.exportAssets });
+  const exported = exportStateFor(page, tree, file, {
+    body: p.exportBody, store: p.pageStore, settled, assets: p.exportAssets, ranged: p.rangeOpened,
+  });
+  const readAt = file.s === 'ok' ? file.receivedAt : p.rangeOpened?.readAt ?? null;
   let committedHref: string | null = null;
   if (page.kind === 'path' && page.view !== 'committed' && page.at === null) {
     const k = docsPathKind(tree, page.section, page.path, modeOf(page));
@@ -874,7 +978,7 @@ function useHeadActions(p: ActionInputs): HeadActions {
       committedHref = docsPageUrl(docsLocation(page, to));
     }
   }
-  return { target, showsDraft, onVersion, share, exported, committedHref };
+  return { target, showsDraft, onVersion, share, exported, committedHref, readAt };
 }
 
 /** The Docs header, ONE head for both families of page. A project page (`page` a `DocsPageLocation`, with its visit and tree)
@@ -1004,7 +1108,7 @@ function ProjectHead(p: {
   const listed = tree !== null && page.kind !== 'index' ? { tree, page } : null;
   const actionInputs = {
     file: visit.file, leafImage: p.leafImage ?? null, exportBody: p.exportBody ?? null, pageStore: p.pageStore ?? null,
-    exportAssets: p.exportAssets ?? null, onPlainView,
+    exportAssets: p.exportAssets ?? null, onPlainView, rangeOpened: visit.rangeOpened,
   };
   if (fullHeadFormFor(compactWidth) === 'stacked') {
     return (
@@ -1017,6 +1121,7 @@ function ProjectHead(p: {
             {p.plainView === true && <PlainViewNote />}
           </>
         )}
+        <PrintNote />
         {visit.updatedTo !== null && (
           <p className="docs-updated" role="status">{fillSentence(DOCS_HEAD_TEXT.updatedTo, { short: shortCommit(visit.updatedTo) })}</p>
         )}
@@ -1032,6 +1137,7 @@ function ProjectHead(p: {
           {p.plainView === true && <PlainViewNote />}
         </>
       )}
+      <PrintNote />
       {visit.updatedTo !== null && (
         <p className="docs-updated" role="status">{fillSentence(DOCS_HEAD_TEXT.updatedTo, { short: shortCommit(visit.updatedTo) })}</p>
       )}
@@ -1299,7 +1405,7 @@ function PhoneHead(p: CompactProps & { readonly tree: DocsTreeOk; readonly bar: 
   const panelId = useId();
   const head = useHeadActions({
     page, tree, file, leafImage: p.leafImage, exportBody: p.exportBody, pageStore: p.pageStore,
-    exportAssets: p.exportAssets, onPlainView: p.onPlainView,
+    exportAssets: p.exportAssets, onPlainView: p.onPlainView, rangeOpened: visit.rangeOpened,
   });
   const dot = freshDot(freshnessChip(tree, p.receivedAt, visit.freshness, p.now).state);
   const onKeyDown = (e: KeyboardEvent): void => {
@@ -1331,11 +1437,13 @@ function PhoneHead(p: CompactProps & { readonly tree: DocsTreeOk; readonly bar: 
           : (
             <ActionsRow
               page={page} tree={tree} file={file} leafImage={p.leafImage} exportBody={p.exportBody} pageStore={p.pageStore}
-              exportAssets={p.exportAssets} onPlainView={p.onPlainView} form="stacked" head={head}
+              exportAssets={p.exportAssets} onPlainView={p.onPlainView} rangeOpened={visit.rangeOpened} form="stacked" head={head}
             />
           )}
+        <ArtifactList scope={{ project: page.project, section: page.section, path: page.path }} />
       </div>
       {bar === null && p.plainView && <PlainViewNote />}
+      <PrintNote />
       {visit.updatedTo !== null && (
         <p className="docs-updated" role="status">{fillSentence(DOCS_HEAD_TEXT.updatedTo, { short: shortCommit(visit.updatedTo) })}</p>
       )}
@@ -1366,7 +1474,7 @@ function CompactControls(p: CompactProps & {
       {exported.s !== 'absent' && (
         <ExportAction
           key={exportKeyOf(page, tree, exported)} page={page} tree={tree} state={exported} assets={p.exportAssets}
-          readAt={file.s === 'ok' ? file.receivedAt : null} onPlainView={p.onPlainView} glyph
+          readAt={head.readAt} onPlainView={p.onPlainView} glyph
         />
       )}
       {readerMode !== null && readerMode.offered && <ReaderModeAction ctx={readerMode} compact />}
@@ -1387,15 +1495,17 @@ function CompactControls(p: CompactProps & {
 function CompactPanelTail(p: { readonly tree: DocsTreeOk; readonly head: HeadActions }): ReactNode {
   const { tree } = p;
   const { target, showsDraft, onVersion, share, exported, committedHref } = p.head;
+  const printed = useContext(PrintControlContext) !== null;
   const exportNote = exported.s === 'plain-view' ? DOCS_HEAD_TEXT.exportPlainHint
     : exported.s === 'updating' || exported.s === 'waiting' ? fillSentence(DOCS_HEAD_TEXT.exportBusy, { state: exportWords(exported) })
       : null;
   return (
     <>
-      {(target !== null || committedHref !== null) && (
+      {(target !== null || committedHref !== null || printed) && (
         <div className="docs-actions">
           {target !== null && <GithubAction tree={tree} target={target} showsDraft={showsDraft} onVersion={onVersion} />}
           {committedHref !== null && <DocsPageLink className="docs-action" href={committedHref}>{DOCS_HEAD_TEXT.openCommitted}</DocsPageLink>}
+          <PrintAction />
         </div>
       )}
       {share.s === 'updating' && <p className="docs-note">{fillSentence(DOCS_HEAD_TEXT.shareBusy, { state: shareWords(share) })}</p>}

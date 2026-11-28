@@ -4,6 +4,7 @@
 // over a temporary coord.db with a configured journal, never mocked. Fixed clock, neutral names.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createHash } from 'node:crypto';
+import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { openCoordDb } from '../src/coord/db.js';
 import { CoordStore } from '../src/coord/store.js';
@@ -489,7 +490,8 @@ describe('applyLandingControl: an unhealthy selected head holds the line, and a 
     expect(landingBindingOf(landingFactsOf(coord, P), control, CONTROL_NOW)).toEqual({ mode: 'held', reason, entryId: first });
   });
 
-  it.each(CASES)('%s: through the store, no cue is queued (zero mail, deliveries and observations), twice over', (_name, control, reason) => {
+  // The third row is wave 5o's measured conflict, which now sends its own held-head notice (D-9159): its own case below.
+  it.each(CASES.slice(0, 2))('%s: through the store, no cue is queued (zero mail, deliveries and observations), twice over', (_name, control, reason) => {
     twoEntries();
     expect(apply(control)).toEqual({ kind: 'no-send', reason, holdChanged: false });
     expect(apply(control)).toEqual({ kind: 'no-send', reason, holdChanged: false });
@@ -497,6 +499,21 @@ describe('applyLandingControl: an unhealthy selected head holds the line, and a 
     expect(rows('SELECT * FROM mail')).toHaveLength(0);
     expect(rows('SELECT * FROM mail_deliveries')).toHaveLength(0);
     expect(cueObservations()).toHaveLength(0);
+  });
+
+  it('a selected head whose composition conflicts with the base: through the store, no cue is queued, and its own coordinator gets one held-head notice, never the later clean entry\'s, twice over (D-9159)', () => {
+    twoEntries();
+    const control = CASES[2][1];
+    expect(apply(control)).toMatchObject({ kind: 'held-queued', holdChanged: false });
+    expect(apply(control)).toEqual({ kind: 'duplicate', holdChanged: false });
+    expect(cueMails()).toHaveLength(0);
+    expect(cueObservations()).toHaveLength(0);
+    const mail = rows('SELECT * FROM mail');
+    expect(mail).toHaveLength(1);
+    expect((mail[0]!.subject as string).startsWith('head-held:#7:')).toBe(true);
+    expect(mail[0]!.toId).toBe('coordinator-a');
+    expect(rows('SELECT * FROM mail_deliveries')).toHaveLength(1);
+    expect(rows("SELECT * FROM run_events WHERE detail LIKE 'landing:head-held:v1:%'")).toHaveLength(1);
   });
 });
 
@@ -536,5 +553,217 @@ describe('applyLandingControl: pending and unmeasured health never move the flag
     expect(cueMails()).toHaveLength(0);
     expect(rows('SELECT * FROM mail')).toHaveLength(0);
     expect(rows('SELECT * FROM mail_deliveries')).toHaveLength(0);
+  });
+});
+
+// ---- landing order wave 5o: the held-head notice (D-9159) ------------------------------------------------------------
+type ProbeAnswerOf = Probe['doc']['heads'][number]['base'];
+const CONFLICT: ProbeAnswerOf = { state: 'conflict', paths: ['a.ts'], pathsCut: false };
+/** `controlAt(base, state)` with the probe's one head for PR 7 replaced, keeping the baseline's `branch` and `id`. */
+interface HeldControlOver { base?: string; answer?: ProbeAnswerOf; head?: string; state?: 'green' | 'red' }
+const heldControl = ({ base = CONTROL_BASE_SHA, answer = CONFLICT, head = CONTROL_HEAD_SHA, state = 'green' }: HeldControlOver = {}): LandingControlRead => {
+  const c = controlAt(base, state); const probe = c.probe as Probe;
+  const baseline = (controlRead().probe as Probe).doc.heads[0]!;
+  return controlRead({ probe: { ok: true, doc: { ...probe.doc, heads: [{ pr: 7, head, branch: baseline.branch, id: baseline.id, base: answer }] } }, health: c.health });
+};
+const held = (f: NextLandingFacts): Extract<ReturnType<typeof nextLandingNoticeOf>, { kind: 'held' }> => {
+  const out = nextLandingNoticeOf(f);
+  if (out.kind !== 'held') throw new Error(`expected a held notice, got ${out.kind === 'no-send' ? out.reason : out.kind}`);
+  return out;
+};
+const reasonOf = (f: NextLandingFacts): string => { const o = nextLandingNoticeOf(f); return o.kind === 'no-send' ? o.reason : o.kind; };
+
+describe('nextLandingNoticeOf: the held-head notice (D-9159, pure)', () => {
+  it('H1: a measured conflict of the pinned head answers held, to the run\'s claimant, with the cue\'s tuple under its own tag', () => {
+    const id = atMerging();
+    const f = nextFacts(heldControl());
+    const out = held(f);
+    const e = f.facts.entries[0]!;
+    const episode = (f.run as NextLandingRun).episode!.e;
+    expect(out).toMatchObject({ kind: 'held', reason: 'composition-not-clean', toId: 'coordinator-a', runId: id, entryId: e.id, pr: 7, baseSha: CONTROL_BASE_SHA });
+    expect(out.episode).toEqual({ kind: 'run', runId: id, episode, toId: 'coordinator-a' });
+    expect(JSON.parse(out.identity)).toEqual(['landing-head-held', 1, P, e.id, 7, CONTROL_HEAD_SHA, HC, e.pinnedAt, 'run', id, episode, CONTROL_BASE_SHA, 'coordinator-a']);
+    expect(out.body.startsWith(`Held head for ${P} #7, entry `)).toBe(true);
+    expect(out.body).toContain('not an instruction to eject');
+    expect(out.body).toContain(out.identity);
+  });
+
+  it('H2: an unmeasured composition sends nothing', () => {
+    atMerging();
+    expect(nextLandingNoticeOf(nextFacts(heldControl({ answer: { state: 'unmeasured' } })))).toEqual({ kind: 'no-send', reason: 'composition-not-clean' });
+  });
+
+  it('H3: a moved head sends nothing, even one that conflicts', () => {
+    atMerging();
+    expect(nextLandingNoticeOf(nextFacts(heldControl({ head: 'e'.repeat(40) })))).toEqual({ kind: 'no-send', reason: 'head-mismatch' });
+  });
+
+  it('H4: a PR the probe does not list sends nothing', () => {
+    atMerging();
+    const c = heldControl(); const probe = c.probe as Probe;
+    expect(nextLandingNoticeOf(nextFacts(controlRead({ probe: { ok: true, doc: { ...probe.doc, heads: [] } }, health: c.health }))))
+      .toEqual({ kind: 'no-send', reason: 'head-mismatch' });
+  });
+
+  it('H5: every other reason over a conflicting head answers its own word', () => {
+    atMerging();
+    const f = nextFacts(heldControl());
+    expect(nextLandingNoticeOf({ ...f, facts: { ...f.facts, flags: { ...f.facts.flags, operatorPaused: true } } })).toEqual({ kind: 'no-send', reason: 'paused' });
+    const c = heldControl(); const health = c.health as Health; const probe = c.probe as Probe;
+    expect(nextLandingNoticeOf({ ...f, control: { ...c, health: { ok: true, doc: { ...health.doc, sha: BASE_B } } } })).toEqual({ kind: 'no-send', reason: 'base-mismatch' });
+    const stale = new Date(CONTROL_NOW - 3_600_000).toISOString().replace(/\.\d{3}Z$/, 'Z');
+    expect(nextLandingNoticeOf({ ...f, control: { ...c, probe: { ok: true, doc: { ...probe.doc, at: stale } } } })).toEqual({ kind: 'no-send', reason: 'probe-unmeasured' });
+    expect(nextLandingNoticeOf({ ...f, control: { ...c, lander: { ok: false, reason: 'unreadable' } } })).toEqual({ kind: 'no-send', reason: 'opt-in-unknown' });
+  });
+
+  it('H6: the recipient is the cue\'s own rule: every refusal answers the recipient\'s word', () => {
+    atMerging();
+    const f = nextFacts(heldControl());
+    const run = f.run as NextLandingRun;
+    const reason = (over: Partial<NextLandingFacts>): string => reasonOf({ ...f, ...over });
+    expect(reason({})).toBe('held');
+    expect(reason({ run: 'missing' })).toBe('run-unreadable');
+    expect(reason({ run: 'unreadable' })).toBe('run-unreadable');
+    expect(reason({ run: { ...run, project: 'project-b' } })).toBe('run-unreadable');
+    expect(reason({ run: { ...run, id: run.id + 1 } })).toBe('run-unreadable');
+    expect(reason({ run: { ...run, state: 'awaiting-review' } })).toBe('run-not-merging');
+    expect(reason({ run: { ...run, claimedBy: null } })).toBe('recipient-missing');
+    expect(reason({ run: { ...run, episode: null } })).toBe('episode-unreadable');
+    expect(reason({ run: { ...run, episode: { ...run.episode!, head: 'e'.repeat(40) } } })).toBe('episode-changed');
+    expect(reason({ run: { ...run, episode: { ...run.episode!, pr: 8 } } })).toBe('episode-changed');
+  });
+
+  it('H7: a no-run row goes to its journal creation claimant, never to a later order setter', () => {
+    expect(coord.writeLandingAuthority({ kind: 'entry', project: P, pr: 7, pinnedSha: CONTROL_HEAD_SHA, handoffCommit: HC, setBy: 'creator-a' }, 1000)).toMatchObject({ ok: true });
+    expect(coord.writeLandingAuthority({ kind: 'order', project: P, pr: 7, fixesMain: true, setBy: 'lane-b' }, 2000)).toMatchObject({ ok: true });
+    const f = nextFacts(heldControl());
+    const out = held(f);
+    expect(f.facts.entries[0]!.setBy).toBe('lane-b');
+    expect(out.toId).toBe('creator-a');
+    expect(out.runId).toBeNull();
+    expect((JSON.parse(out.identity) as unknown[]).slice(8, 11)).toEqual(['no-run', null, f.facts.creations[0]!.seq]);
+  });
+
+  it('H8: a ready binding is unchanged: the cue, under its own tag', () => {
+    atMerging();
+    const out = sent(nextFacts());
+    expect(out.kind).toBe('send');
+    expect((JSON.parse(out.identity) as unknown[])[0]).toBe('landing-next');
+  });
+
+  it('H9: the identity moves with the base, is stable on the same read, and is the cue\'s thirteen members under its own tag', () => {
+    atMerging();
+    const a = held(nextFacts(heldControl())).identity;
+    expect(held(nextFacts(heldControl())).identity).toBe(a);
+    expect(held(nextFacts(heldControl({ base: BASE_B }))).identity).not.toBe(a);
+    const tuple = JSON.parse(a) as unknown[];
+    const cue = JSON.parse(sent(nextFacts()).identity) as unknown[];
+    expect(tuple).toHaveLength(13);
+    expect(tuple[0]).toBe('landing-head-held');
+    expect(tuple.slice(1)).toEqual(cue.slice(1));
+  });
+
+  it('the held-head notice reads the probe\'s heads only through probedHeadOf (D-9159)', () => {
+    const src = readFileSync(path.join(import.meta.dirname, '../src/coord/landingNext.ts'), 'utf8');
+    expect([...src.matchAll(/\.heads\b/g)]).toHaveLength(0);
+    expect(src.split('probedHeadOf(').length - 1).toBe(1);
+  });
+});
+
+describe('applyLandingControl: the held-head notice is queued once, durably (D-9159)', () => {
+  const heldMails = (): Record<string, unknown>[] => rows("SELECT * FROM mail WHERE subject LIKE 'head-held:%' ORDER BY id");
+  const heldObservations = (): Record<string, unknown>[] => rows("SELECT * FROM run_events WHERE detail LIKE 'landing:head-held:v1:%' ORDER BY id");
+  const conflictAt = (base: string = CONTROL_BASE_SHA): LandingControlRead => heldControl({ base });
+  const applyAt = (control: LandingControlRead, nowMs: number) => coord.applyLandingControl({ project: P, control, nowMs });
+  const identityOf = (mail: Record<string, unknown>): string => (mail.body as string).split('\n').find((l) => l.startsWith('["landing-head-held"'))!;
+
+  it('S1: a conflicting head at merging queues one mail and one observation, and no cue', () => {
+    const id = atMerging();
+    const out = apply(conflictAt());
+    const [mail] = heldMails();
+    const digest = sha256(identityOf(mail!));
+    expect(out).toEqual({ kind: 'held-queued', mailId: mail!.id, deliveryId: expect.any(Number), holdChanged: false });
+    expect(mail).toMatchObject({ fromId: 'operator', toId: 'coordinator-a', runId: id, kind: 'status', subject: `head-held:#7:${digest}` });
+    expect(heldObservations()).toHaveLength(1);
+    expect(heldObservations()[0]).toMatchObject({ runId: id, detail: `landing:head-held:v1:${digest}` });
+    expect(cueMails()).toHaveLength(0);
+  });
+
+  it('S2: the duplicate, on a later clock and after a restart', () => {
+    atMerging();
+    expect(apply(conflictAt())).toMatchObject({ kind: 'held-queued' });
+    expect(applyAt(conflictAt(), CONTROL_NOW + 60_000)).toEqual({ kind: 'duplicate', holdChanged: false });
+    reopen();
+    expect(applyAt(conflictAt(), CONTROL_NOW + 120_000)).toEqual({ kind: 'duplicate', holdChanged: false });
+    expect(heldMails()).toHaveLength(1);
+    expect(heldObservations()).toHaveLength(1);
+  });
+
+  it('S3: a new base is one new mail; the same new base again is a duplicate', () => {
+    atMerging();
+    expect(apply(conflictAt())).toMatchObject({ kind: 'held-queued' });
+    expect(apply(conflictAt(BASE_B))).toMatchObject({ kind: 'held-queued' });
+    expect(applyAt(conflictAt(BASE_B), CONTROL_NOW + 60_000)).toEqual({ kind: 'duplicate', holdChanged: false });
+    expect(heldMails()).toHaveLength(2);
+  });
+
+  it('S4: a new pin (the run sent back and come again) is one new mail', () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(1_000_000);
+    const id = atMerging();
+    expect(apply(conflictAt())).toMatchObject({ kind: 'held-queued' });
+    if (!coord.advanceLanding({ runId: id, to: 'working', causedBy: 'coordinator', landing: { kind: 'retreat', ejection: { kind: 'conflict', base: CONTROL_BASE_SHA } } }).ok) {
+      throw new Error('fixture conflict send-back refused');
+    }
+    vi.setSystemTime(2_000_000);
+    step(id, 'awaiting-review');
+    enterMerging(id);
+    expect(apply(conflictAt())).toMatchObject({ kind: 'held-queued' });
+    expect(applyAt(conflictAt(), CONTROL_NOW + 60_000)).toEqual({ kind: 'duplicate', holdChanged: false });
+    expect(heldMails()).toHaveLength(2);
+  });
+
+  it('S5: the run-less arm goes to the creator once', () => {
+    coord.writeLandingAuthority({ kind: 'entry', project: P, pr: 7, pinnedSha: CONTROL_HEAD_SHA, handoffCommit: HC, setBy: 'creator-a' }, 1000);
+    expect(apply(conflictAt())).toMatchObject({ kind: 'held-queued' });
+    expect(applyAt(conflictAt(), CONTROL_NOW + 60_000)).toEqual({ kind: 'duplicate', holdChanged: false });
+    expect(heldMails()).toHaveLength(1);
+    expect(heldMails()[0]).toMatchObject({ toId: 'creator-a', runId: null });
+    expect(heldObservations()).toHaveLength(0);
+  });
+
+  it('S6: a run that left merging queues nothing', () => {
+    const id = atMerging();
+    retreat(id);
+    expect(apply(conflictAt()).kind).toBe('no-send');
+    expect(heldMails()).toHaveLength(0);
+    expect(rows('SELECT * FROM mail')).toHaveLength(0);
+  });
+
+  it('S7: the conflict clears: the cue is queued and no second held mail; the conflict again on the same base is a duplicate', () => {
+    atMerging();
+    expect(apply(conflictAt())).toMatchObject({ kind: 'held-queued' });
+    expect(apply(controlAt())).toMatchObject({ kind: 'queued' });
+    expect(cueMails()).toHaveLength(1);
+    expect(heldMails()).toHaveLength(1);
+    expect(applyAt(conflictAt(), CONTROL_NOW + 60_000)).toEqual({ kind: 'duplicate', holdChanged: false });
+    expect(heldMails()).toHaveLength(1);
+  });
+
+  it('S8: a red health over a conflicting head sets the flag in the same transaction that queues the notice', () => {
+    atMerging();
+    expect(apply(heldControl({ state: 'red' }))).toMatchObject({ kind: 'held-queued', holdChanged: true });
+    expect(flags().mainRedHold).toBe(true);
+    expect(heldMails()).toHaveLength(1);
+  });
+
+  it('S9: a new recipient is one new mail; a recipient who returns gets none', () => {
+    atMerging();
+    expect(apply(conflictAt())).toMatchObject({ kind: 'held-queued' });
+    coord.db.prepare("UPDATE runs SET claimedBy = 'coordinator-b'").run();
+    expect(apply(conflictAt())).toMatchObject({ kind: 'held-queued' });
+    coord.db.prepare("UPDATE runs SET claimedBy = 'coordinator-a'").run();
+    expect(applyAt(conflictAt(), CONTROL_NOW + 60_000)).toEqual({ kind: 'duplicate', holdChanged: false });
+    expect(heldMails().map((m) => m.toId)).toEqual(['coordinator-a', 'coordinator-b']);
   });
 });

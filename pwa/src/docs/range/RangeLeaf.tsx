@@ -3,19 +3,20 @@
 // the read shows its progress and a Cancel, runs frame by frame (`readRange`), and hands the checked bytes to
 // `children` (Markdown in parts, or the image view); a class with no view above its cap gets a Download that reads the
 // file by range first. Cancel, leaving the page or opening another doc aborts the read and drops every frame held.
-import { useCallback, useContext, useEffect, useRef, useState, type ReactNode } from 'react';
+import { useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { DocsAssetContext } from '../DocImage';
+import { usePublishPrintSource, type PrintSource } from '../print/printSource';
 import { ASSET_FAILED } from '../export/exportAssets';
 import { Button } from '@ccrc/ui';
 import {
-  DOCS_IMAGE_VIEW_MAX_PIXELS, DOCS_IMAGE_VIEW_MAX_SIDE, DOCS_RANGE_MAX_BYTES, DOCS_RASTER_TYPES, docsRangePinText, sniffRaster,
+  DOCS_IMAGE_VIEW_MAX_PIXELS, DOCS_IMAGE_VIEW_MAX_SIDE, DOCS_RANGE_MAX_BYTES, DOCS_RASTER_TYPES, sniffRaster,
   type DocContentClass, type DocPin,
 } from '../../../../shared/docs';
 import { DOCS_RANGE_TEXT, DOCS_VIEW_TEXT, failureSentence, fillSentence, mib, slotSentence } from '../docsText';
 import { declaredRaster } from '../failures';
 import { rasterObjectUrl, saveBytes } from '../objectUrls';
 import type { DocsVisit, RangeStale } from '../useDocsVisit';
-import { imageHeaderDims, imageViewVerdict, rangeVerdict } from './rangePolicy';
+import { imageHeaderDims, imageViewVerdict, rangeHasTextView, rangeReadKey, rangeVerdict } from './rangePolicy';
 import { readRange, type RangeLoader, type RangeReadFailure, type RangeTarget } from './readRange';
 
 /** The words for a read that gave no bytes. */
@@ -55,12 +56,8 @@ type ReadState =
  *  its `fp`). */
 export interface RangeBytes { readonly bytes: Uint8Array<ArrayBuffer>; readonly digest: string }
 
-/** One read's identity: the project, the place, the range pin and the size. A leaf is keyed by it (`DocsLeaf` gives it as
- *  the element's `key`), so another doc is another instance with its own state, and a re-render that rebuilds an equal
- *  target object reads nothing again. */
-export function rangeReadKey(t: RangeTarget): string {
-  return [t.project, t.pin.section, t.pin.path, docsRangePinText(t.range), String(t.size)].join('\u0000');
-}
+/** `rangePolicy.ts`'s, which the visit reads too; still named here for the callers that import it from the leaf. */
+export { rangeReadKey };
 
 export function RangeLeaf(p: {
   readonly target: RangeTarget;
@@ -70,8 +67,10 @@ export function RangeLeaf(p: {
   /** The view of the bytes once read; absent, the class has no view above its cap and the leaf offers Download only. */
   readonly children?: (read: RangeBytes) => ReactNode;
   /** The visit, which owns the one automatic re-list (spec 4.3 item 1) for this page: a refused read is handed to it, and
-   *  it answers whether it re-listed, has no re-list left, or the word is none of its business. */
-  readonly visit: Pick<DocsVisit, 'rangeFailed' | 'rangeRead' | 'rangeRetry' | 'rangeRelists' | 'rangeWaiting'>;
+   *  it answers whether it re-listed, has no re-list left, or the word is none of its business. It also keeps what a finished
+   *  read gave (`rangeRead`) and drops it when a read of the page starts or the leaf goes (`rangeDropped`: a visit that keeps no
+   *  facts, as an outside folder's, may omit it). */
+  readonly visit: Pick<DocsVisit, 'rangeFailed' | 'rangeRead' | 'rangeRetry' | 'rangeRelists' | 'rangeWaiting'> & Partial<Pick<DocsVisit, 'rangeDropped'>>;
   /** A leaf with no view reads and saves as it opens (a Download tap already made, as on a version page where the file
    *  route's refusal named the blob), instead of waiting for a tap of its own. The leaf is keyed by its read key, so this
    *  runs once per such answer. */
@@ -82,8 +81,8 @@ export function RangeLeaf(p: {
   const hasView = p.children !== undefined;
   // The newest props, read by a read in flight: a re-render's new objects never restart it.
   const saveOnOpen = p.saveOnOpen === true;
-  const latest = useRef({ target: p.target, loader: p.loader, name: p.name, hasView, visit: p.visit, saveOnOpen });
-  latest.current = { target: p.target, loader: p.loader, name: p.name, hasView, visit: p.visit, saveOnOpen };
+  const latest = useRef({ target: p.target, loader: p.loader, name: p.name, cls: p.cls, hasView, visit: p.visit, saveOnOpen });
+  latest.current = { target: p.target, loader: p.loader, name: p.name, cls: p.cls, hasView, visit: p.visit, saveOnOpen };
   const [state, setState] = useState<ReadState>({ s: 'idle' });
   const ac = useRef<AbortController | null>(null);
   // True while a re-list is pending for this leaf: when the visit says a re-list that started after the failure has
@@ -100,6 +99,8 @@ export function RangeLeaf(p: {
     ac.current = mine;
     pending.current = false;
     const { target, loader } = latest.current;
+    // A read starting is no read of the page: what an earlier one gave is dropped, so a Cancel or a failure leaves none.
+    latest.current.visit.rangeDropped?.();
     setState({ s: 'reading', done: 0, total: target.size });
     void readRange(loader, target, {
       signal: mine.signal,
@@ -118,7 +119,11 @@ export function RangeLeaf(p: {
         setState({ s: 'failed', why, stale });
         return;
       }
-      latest.current.visit.rangeRead();
+      // What the read gave, for the page's head: its identity, the bytes' digest and when its last frame was checked, and, only for a
+      // class with a text view (`rangeHasTextView`), the bytes, whose text is what Export compares a body with. A leaf with no view
+      // stays mounted after it saves, so a read of any other class hands the visit none to hold.
+      const facts = { key: rangeReadKey(target), digest: r.digest, readAt: Date.now() };
+      latest.current.visit.rangeRead(rangeHasTextView(latest.current.cls) ? { ...facts, bytes: r.bytes } : facts);
       if (save) saveBytes(latest.current.name, r.bytes);
       setState(save && !latest.current.hasView ? { s: 'idle' } : { s: 'done', bytes: r.bytes, digest: r.digest });
     }, () => { if (ac.current === mine) setState({ s: 'failed', why: { kind: 'threw' }, stale: 'other' }); });
@@ -128,6 +133,8 @@ export function RangeLeaf(p: {
   // aborts the read, whatever its state. While the visit still has a re-list pending for this page (a leaf that mounted
   // under it), the pin it was given is the stale one: it waits for that re-list instead of reading it.
   useEffect(() => {
+    // A leaf that opens holds no read yet, whatever an earlier visit of the page gave.
+    latest.current.visit.rangeDropped?.();
     if (verdict !== 'over-ceiling' && (hasView || latest.current.saveOnOpen)) {
       if (latest.current.visit.rangeWaiting) {
         pending.current = true;
@@ -138,6 +145,9 @@ export function RangeLeaf(p: {
     }
     return () => { ac.current?.abort(); ac.current = null; };
   }, [key, verdict, hasView, start]);
+  // The leaf going takes what its read gave with it: the visit keeps the bytes (`rangeRead`), and none outlive the page that read
+  // them. Unmount only: a leaf that stays across a re-list (the same read key) keeps its read, as the visit's facts say.
+  useEffect(() => () => { latest.current.visit.rangeDropped?.(); }, []);
   // A re-list that served this leaf's wait: a leaf with a view reads again with the pin it now has, to show the document;
   // one with none says the file changed and waits for a new tap (one that moved the read key too was remounted, and its
   // mount effect above started it fresh).
@@ -261,6 +271,8 @@ export function RangeImage(p: {
     if (onShown !== null && openedPin !== null) onShown(openedPin);
     return () => { hold?.release(); URL.revokeObjectURL(u); setUrl(null); };
   }, [p.bytes, declared, matches, verdict, assetKey, assets]);
+  // Print draws the very object URL the view shows (X2 P6.1 Step 1), once it is made.
+  usePublishPrintSource(useMemo<PrintSource | null>(() => (url === null ? null : { kind: 'image', src: url, name: p.name }), [url, p.name]));
   if (!matches) return <p className="docs-note" role="status">{DOCS_RANGE_TEXT.imageMismatch}</p>;
   if (dims === null) return <p className="docs-note" role="status">{DOCS_RANGE_TEXT.imageNoHeader}</p>;
   if (verdict === 'side') {

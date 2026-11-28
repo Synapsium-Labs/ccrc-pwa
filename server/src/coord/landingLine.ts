@@ -11,6 +11,7 @@
 //   (an ordinary head, an operator pause and a recovery hold still do), and the walk below is untouched.
 // - `landingBindingOf` and `mainRedNext` (wave 5i) decide, from values, the binding head and the main-red flag's next
 //   value over one measured control bundle. Nothing is persisted here; the flag's one writer is `applyLandingControl`.
+//   The probe's one head for a PR is read by `probedHeadOf` alone (wave 5o, D-9159), shared with the held-head notice.
 // - `landingEjectionAsk` decides the second-ejection notice (D-7624). The entry's `ejections` count only ever rises and
 //   `CoordStore.advanceLanding` is its one writer, so exactly one write per entry produces 2: that write is the
 //   once-only raise. A third ejection raises nothing, and the advance is never refused.
@@ -22,7 +23,7 @@ import {
   type LandingWait,
 } from '../../../shared/landingLine.js';
 import { RADAR_PROBE_FRESH_S, freshWithin } from '../../../shared/api.js';   // L0: the one freshness rule
-import type { LandingControlRead } from './radar.js';                       // type-only: no ring edge
+import type { LandingControlRead, ProbeDoc, ProbeHead } from './radar.js';   // type-only: no ring edge
 import type { LandingMutationFacts } from './landingWrites.js';             // type-only
 
 /** First-green: `fixesMain` entries first, then the earlier pin, then the lower PR number. */
@@ -147,6 +148,13 @@ export function mainRedNext(previous: boolean, control: LandingControlRead, nowM
   return value === previous ? keep : { kind: 'set', value, sha: health.doc.sha, at: health.doc.at };
 }
 
+/** The probe's one head for `pr`, or null when it lists that PR not exactly once (wave 5o, D-9159): the binding's rule,
+ *  shared with the held-head notice so that both read the same head. `parseProbe` already refuses a PR listed twice. */
+export function probedHeadOf(doc: ProbeDoc, pr: number): ProbeHead | null {
+  const named = doc.heads.filter((h) => h.pr === pr);
+  return named.length === 1 ? named[0]! : null;
+}
+
 /** The binding head of one project (wave 5i), from current database facts and one control bundle. Never stored.
  *  `undefined` control is unmeasured, never inert: only a PROVEN marker absence is inert. Precedence: marker, operator
  *  pause, recovery, unreadable open projection, selected head, probe and health availability and freshness (rechecked
@@ -190,8 +198,7 @@ export function landingBindingOf(facts: LandingMutationFacts, control: LandingCo
   if (!health.ok || health.doc.project !== facts.project || !fresh(health.doc.at, nowMs)
     || health.doc.state === 'unmeasured' || health.doc.sha === null) return held('health-unmeasured');
   if (health.doc.sha !== probe.doc.baseSha) return held('base-mismatch');
-  const named = probe.doc.heads.filter((h) => h.pr === head.pr);
-  const probed = named.length === 1 ? named[0]! : null;
+  const probed = probedHeadOf(probe.doc, head.pr);
   if (probed === null || probed.head !== head.pinnedSha) return held('head-mismatch');
   if (probed.base.state !== 'clean') return held('composition-not-clean');
   if (health.doc.state === 'red' && !head.fixesMain) return held('main-red');

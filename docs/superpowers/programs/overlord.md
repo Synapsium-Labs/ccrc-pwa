@@ -95,15 +95,16 @@ Workspace: the Overlord programme's coordinator (slug `overlord`); issue #2491
 | W1 | Board B3: the brakes carry every switch, and the projects walk names what it could not read | #3566; run 4060 | merged (c3e9bd84b5, 2026-11-27 13:41:15Z) after reviews 4067, 4072 and 4080 |
 | W1 | Home B: the Overlord's place, its readiness word on three rows, the place-visible mark | #3457; run 3960 | merged (3fda0fc9b1, 2026-11-27 02:49:25Z) after reviews 3998 and 4021 |
 | W1 | Home C: Settings, the account facts and Clear, the place's carried words, the forced rebind's pair | #3489; run 4037 | merged (539aa48b11, 2026-11-27 15:21:49Z) after reviews 4056, 4065, 4074 and 4093 (the last on the merge after a send-back for a conflict) |
-| W1 | Chat A: the chat's thread, its two read doors and the client's calls | #3488; run 3961 | in review: the third review waits on one merge of main (call 1793); open |
-| W1 | Not started: chat B (after chat A merges; its brief carries ticket `chat-pages-operator-messages-past-100`) and the `overlord-v1` build, dispatched together when chat A merges ("Since #3591") | plans merged | planned; the build's merge waits for chat B and its entry checklist |
+| W1 | Chat A: the chat's thread, its two read doors and the client's calls | #3488; run 3961 | merged (07e8cc51e1, 2026-11-27 21:27:45Z) after reviews 4070, 4084, 4120 and 4130 (the last two past the cap of three, extended for one named scope, calls 1845 and 1865) |
+| W1 | Chat B: the chat's second PR (plan `w1-chat.md`, Task 5 on); its brief carries tickets `chat-pages-operator-messages-past-100` and `chat-ceiling-retry-delay-unbounded` | run 4148, wave 249 | building since 2026-11-27 (call 1883) |
+| W1 | The `overlord-v1` build (plan `2026-11-25-overlord-w1-overlord-v1.md`) | run 4149, wave 250 | building beside chat B (call 1883); its PR is a draft until chat B is on `main`; its merge waits for chat B and its entry checklist |
 | W1 | The Overlord clause (§11.4), clause 24 | #3354; plan `docs/superpowers/plans/2026-11-25-overlord-w1-coordinator-clause.md` | merged (1ec2db8ec3); D-9022 to D-9025 |
 | W2 plans | The index, one plan per piece, the fold: #2917; #2921 to #2925, #2928, #2930 to #2933, #2935 to #2938; #2952. Plans in `docs/superpowers/plans/2026-11-16-overlord-w2/` | those PRs | merged |
 | W2 | The pieces that need nothing from W1, built first: the vocabulary, row revisions, private names (A, B), the decision-model port and its arming (A, B), overlaps A, remaining work (A, B), done tests A, forecasts and health (A, B) | #2939; #2965; #2940, #2961; #2948, #2990; #2949; #2951, #3002; #2964; #2987, #3003 | merged |
-| W2 | The act catalogue, PR A (plan `w2-act-catalogue.md`, Tasks A1 to A4) | run 4112 | building since 2026-11-27 (call 1814) |
-| W2 | The request record, PR A (plan `w2-requests.md`, Tasks A1 to A4); it carries one migration | run 4113 | building since 2026-11-27 (call 1814) |
-| W2 | W2 Settings: the decision model's cards and the private-name list (plan `w2-settings.md`) | run 4114 | building since 2026-11-27 (call 1814) |
-| W2 | Route and follow up, the rest: the act catalogue B, act rows, journal and reads, the request record B and ids, the coordinator and operator doors, relay, follow-up, inbox band 3, label queue, the board's and home's W2 parts, overlaps B, done tests B, `overlord-route-v1` | plans merged | planned; the label queue A is ready and waits for a builder slot; the others wait on the pieces above, in the W2 index's order |
+| W2 | The act catalogue, PR A (plan `w2-act-catalogue.md`, Tasks A1 to A4) | #3608; run 4112 | draft; wave-done verified at 78fb992661; review 4135 ruled (call 1874); fix round 1 with the merge of main 07e8cc51e1 building; a narrow round 2 follows |
+| W2 | The request record, PR A (plan `w2-requests.md`, Tasks A1 to A3 here; Task A4 is a later run, wave 257, call 1826); it carries one migration | #3609; run 4113 | draft; the first fast run was red in three of its own server shards; fix round and the merge of main 07e8cc51e1 building; no review yet |
+| W2 | W2 Settings: the decision model's cards and the private-name list (plan `w2-settings.md`) | #3612; run 4114 | draft; wave-done verified at af6b399fdd; review 4139 ruled (call 1876); fix round 1 with the merge of main 07e8cc51e1 building |
+| W2 | Route and follow up, the rest: the act catalogue B, act rows, journal and reads, the request record B and ids, the coordinator and operator doors, relay, follow-up, inbox band 3, label queue, the board's and home's W2 parts, overlaps B, done tests B, `overlord-route-v1` | plans merged | planned; the label queue A (wave 254) is ready and waits for a builder slot; briefs are ready for the act catalogue B (wave 255) and request ids A (wave 256); the others wait on the pieces above, in the W2 index's order |
 | D-8126 | A4 calls made for you, Overturn and Seen; A5 the decide-by-default clause 21; A6 the detectors that act; A7 the server owns its faults; A9 the rule after compaction | #3072, #3100, #3080, #3079, #3146 | merged (taken into this programme by the operator's direction of 2026-11-19). A10 is a measurement due about 30 days after A9's rollout mail; A8 and the cap counting are not this programme's |
 | Capacity | Waiting workers sleep and hold no slot: the design and plan (D-8789 to D-8793); an own-run hold passes the run-done sleep; an idle worker sleeps after 30 minutes, in shadow; a run holds a dispatch slot only while its worker works; a refused coordinator is mailed when a slot frees; follow-up round 1; the in-place bind (W1-4b, D-6096) | #3091, #3092, #3101, #3103, #3117, #3133, #3134 | merged. W1-5 (D-6097) not built |
 | Mid-turn mail | The design and plan; PR 0 (the rig check); PR 1 (delivery times on `MailSummary`); PR 2 (urgent mail's sender rule); PR 3 (the `mailhold` route field); PR 4 (the projection and its decider); PR 5 (the notice line and refusal, shadow); PR 6 (the subagent ack refusal, shadow); PR 2b and 4b (urgent mail at the ingress, the reclaim repoint) | #3054, #3059; #3063; #3065; #3073; #3064; #3087; #3067; #3083; #3147 | merged |
@@ -1666,6 +1667,120 @@ the rule now.
 - **Tickets.** Added: `w2-act-catalogue-a`, `w2-request-record-a`, `w2-settings`,
   `item-secret-panel-holds-its-value-in-state`. Dropped as done by #3411: `overlord-v1-plan-corrections`.
 
+### Since #3599 (2026-11-27 16:45Z to 21:35Z)
+
+Calls 1822, 1826, 1827, 1833, 1845, 1865, 1874, 1876, 1877 and 1883 are this coordinator's, all routine. Where these
+bullets differ from the subsections above, these are the rule now.
+
+- **What landed.**
+  - The ledger PR #3599 (documents; 10d75aa9e1, 2026-11-27 17:12:22Z; no run, accepted by the coordinator), through the
+    merge queue. The design rule it carries is marked merged in the Overlord goals.
+  - Another programme's PR #3487 (a frames recipe; 86b2c2d6e2, 17:48:05Z). It carried coordination-database
+    migration 134 and moved the gate's count lines to 343 scanned, 340 HTTP, 220 gated, 120 exempt and 34 route files.
+    Its owner named one known limit: the reducer's wrap rule counts cells from a hand list of wide characters. Call
+    1822: it lands as it is, and no capture starts until a width follow-up is also on `main`; the owner mails then, and
+    the recipe is wired and run here.
+  - Chat A, PR #3488 (run 3961, wave 242; 07e8cc51e1, 21:27:45Z), after four reviews (runs 4070, 4084, 4120 and 4130).
+    The merged tree equals the reviewed head's. The count lines on `main` are now 345 scanned, 342 HTTP, 222 gated,
+    120 exempt and 34 route files. The Desktop polish and Docs reader coordinators had a notice before the enqueue, at
+    the dequeue and at the merge. The Desktop polish coordinator answered that #3488 lands first and that its own long
+    paste PR (#3604) absorbs the composer conflict.
+- **Chat A's last two reviews.**
+  - Review 4120 (round 3, narrow, at a0362cb8f0) found nothing critical and said the merge held. F1 was a false
+    sentence in a Known limit. F2, older than the round, was a read that the ceiling refused on a quiet thread, which
+    never scheduled its retry, against plan question 9. F3 to F8 were minor. Call 1845: fix round 3 with the one merge
+    of main that carries #3487. F2 is fixed with a quiet-thread case; the toggle case's title is fixed; the prose
+    points are fixed; and F7 (a send in flight at a rebind loses its draft) is a Known limit with ticket
+    `chat-send-in-flight-at-a-rebind-loses-its-draft`. The review cap of three was extended for that one named narrow
+    scope (the one behaviour fix and the merge).
+  - Review 4130 (round 4, narrow, at 430ad85e83) read the range from a0362cb8f0: the fix round, the merge and a note
+    commit. It found six minor points and none held. The merge differs from the mechanical merge only in the gate's
+    source file and its suite, and the reviewer recomputed the five count figures. Call 1865: accepted, land. F1 (the
+    retry after a ceiling refusal trusts the server's retry time with no upper bound; the shipped server answers at most
+    one hour) and F4 (no case for a refusal with no retry time) are carried to chat B, ticket
+    `chat-ceiling-retry-delay-unbounded`. F2, F3, F5 and F6 are wording, corrected on this ledger PR.
+  - The landing. Enqueued at 20:36Z at the reviewed head. The queue removed it at 20:54:37Z on two browser cases in the
+    Docs reader's files (a reader lab wall case and a reader mode wait case), which the PR does not touch and which had
+    passed on the same tree in the full run. The owner judged both known flakes and filed them as #3618 and #3619.
+    Call 1877: one re-enqueue, done at 21:00Z at the same head; a second red in a row on one head would be a hold and a
+    question to that owner. It merged on the second queue run.
+- **The three W2 pieces.** Each had its wave-done verified on the exact tip (the full run green, the browser shard logs
+  read for the two that reach the console) and a first review. Each fix round holds its push until chat A is on `main`,
+  then takes one merge of `main` (07e8cc51e1) and one push; go-merge mails went out at chat A's merge.
+  - The act catalogue A (#3608, run 4112, wave 251; verified at 78fb992661). Review 4135 (round 1, full): the claim that
+    no answer of an existing door changes holds; the lens compared 2040 answers against `main`, byte for byte. One
+    important finding and six minor. F1: the call that the task note and plan question 10 hand to PR B (the door asking
+    the ceiling step with the act's count not asked) refuses every time, because a counted act whose own count was not
+    asked refuses. Call 1874: the decider stays strict; the door reads both counts and asks the step once with both; a
+    case pins that call; the note is corrected with a departure slug; and the plan's question 10 and rule 2 are
+    corrected here. The minor findings (the latch raise dropping a refused answer, a missing one-home scan, the
+    `mayCarry` type, the compensator list, the SAFETY scan's verb list, and two figures in the note) go into the fix
+    round. Ticket `act-ceiling-composed-ports-case-and-count-guard`: a case for the composed ports and a count guard,
+    both for act rows A. A narrow round 2 follows the fix round. Call 1827, earlier, allowed the piece one console
+    line (the new latch cause's sentence in the console's ladder words), so the PR reaches the console and its browser
+    shard logs are read at each wave-done.
+  - The request record A (#3609, run 4113, wave 252). Call 1826: built whole locally (3,760 changed lines, 943 of
+    source), then split after Task A3. This run carries A1 to A3, with the one migration, which takes the slot after
+    134. Task A4 (the private store's citation read, the boot spend arm, I12) is kept for a later run of its own, wave
+    257, brought onto `main` when this part and chat A are there. Until then the I12 row reads predicate-not-built
+    (call 1833). The first fast run was red in three server shards, all of its own making (a kind list pin, a word the mail
+    routes' census did not declare, a migration pin); two were fixed at once and the third waited for chat A's merge.
+    It has had no review, so its first review is a full one.
+  - W2 Settings (#3612, run 4114, wave 253; verified at af6b399fdd). Review 4139 (round 1, full): the key and the
+    name list never leak, and one mechanism holds. Four findings were confirmed and nine notes follow. F1: two step-ups
+    in a row read as final without a confirm. F2: a page hide while the confirm shows drops the typed key, and the door
+    then says Saved. F3: a refused ceiling loses its range detail. F4: a refused view removes the key's controls.
+    Call 1876: one fix round with the owed merge. The retry mark follows the confirm and the control is disabled while
+    its step shows, per act. A retry never sends less than the first send (held as a boolean only). The refusal detail
+    is kept. F4 is a stated limit with a reload sentence, and the reader's detail is kept. The nine notes ride the same
+    round; the names stay in the box only after a refused row, a refused cap or a first step-up, and a 401 empties them. The
+    worker had reported that one words file was once edited by a script; the reviewer read it whole. Ticket
+    `decision-model-view-drops-an-unknown-row-not-the-view`.
+- **Chat B and the `overlord-v1` build are dispatched (call 1883).** At chat A's merge: chat B (run 4148, wave 249,
+  ticket `w1-chat-b`; its brief carries tickets `chat-pages-operator-messages-past-100` and
+  `chat-ceiling-retry-delay-unbounded`), and the `overlord-v1` build (run 4149, wave 250, ticket `w1-overlord-v1`),
+  built beside chat B, its PR a draft until chat B is on `main`. Five builders now run: 4112, 4113, 4114, 4148 and 4149.
+  Run 3961 closes final on its worker's merged mail.
+- **The next links are prepared.** Three read-only reads of the W2 plans against `main` saved a digest each, and two
+  briefs are ready: the act catalogue B (wave 255, ticket `w2-act-catalogue-b`; dispatched when #3608 merges) and request
+  ids A (wave 256, ticket `w2-request-ids-a`; dispatched when #3609 merges; it carries a migration, changes the mail
+  door's answer for mail to the Overlord, and owes a proposal on the shape of the fixed-line mail table). Act rows A
+  (wave 258) is not briefed: it needs the catalogue A for most tasks and the catalogue B only for the allow type; the
+  read suggests three parts and says two rulings are needed first (no answer changes for a caller that sends no op-key
+  header, and a mint of the key that does not depend on the harness). The label queue A is wave 254. Wave 257 is the
+  request record's Task A4.
+- **A small piece for a free slot.** Another programme's full run found two macOS-only reds in suites of this programme
+  (advisory legs). The API client's suite: a history argument with a code point past U+10FFFF, and its old five-byte
+  form, are accepted on the Mac and refused elsewhere, a portability defect in the client. The delivery driver's suite:
+  the capture runner's environment, built from empty, holds a macOS locale variable. Ticket
+  `macos-reds-history-arg-and-capture-env`. It goes out as one small piece when a builder slot frees, proved with the
+  macOS workflow on the branch, after a look at `main`'s next daily run.
+- **Corrections made on this ledger PR.**
+  - Chat A's task note, five points of review 4130: the fix round 3 row says timing can differ for a retry time under
+    30 s; the Known limit on a failed first read names an answer the console cannot read; the F8 row says the reset is
+    guarded by two other cases; the round's count reads one fix, six wording points and one test assertion; and the
+    Known limit `chat-ceiling-retry-delay-unbounded` is added.
+  - Plans: a dated sentence at question 10 of the act catalogue's plan and at rule 2 of its ceiling step, saying that
+    a counted act whose own count was not asked refuses, and that the door asks with both counts; and at question 18 and
+    index change 4 of the inbox plan, saying that the history and board reads are unfenced, attributed reads.
+- **Still owed.** Code comments and one test title that the list under "Since #3411" names are not documents and ride a
+  later PR: the test box suite's title and comment, the board's port comment and its sets file's comment, and the count
+  of section pages (in W2 Settings' brief). The rest of board B3's wording notes were not established and stay listed.
+  The capture items are their owner's. The older list in the Next-wave brief stands. Also owed:
+  - Spec refusal rows when their pieces land: `policy-refused` (the catalogue B) and `op-key-reused` and `act-key-taken`
+    (act rows A). The rebrand steer is not yet an Overlord goals modification; it is recorded when its spec text lands.
+  - The entry checklist ruling waits for the `overlord-v1` builder's report, as in "Since #3591".
+  - The label queue A waits for a builder slot and for a ruling on its unresolved references (three of its four card
+    rows cite a message, a goals version and a mail that no reader on `main` resolves).
+  - The request record's Task A4, wave 257, after #3609 is on `main`. Its brief says: bring the kept work onto `main`,
+    move the I12 row and the simulator's two lists again, and the stamp census's count of boot movers goes to four.
+  - The tracker link for ticket `w2-settings` was not accepted by the sync once; one retry at a later sweep, not
+    blocking.
+- **Tickets.** Added: `w1-chat-b`, `w1-overlord-v1`, `chat-send-in-flight-at-a-rebind-loses-its-draft`,
+  `chat-ceiling-retry-delay-unbounded`, `act-ceiling-composed-ports-case-and-count-guard`,
+  `decision-model-view-drops-an-unknown-row-not-the-view` and `macos-reds-history-arg-and-capture-env`. Dropped as done
+  by #3599: `spec-rule-prefer-mechanisms-ccrc-owns`.
+
 ## Carried constraints
 
 - **Characterization first.** Every foundation that moves code pins today's behaviour first, green on the old code.
@@ -1784,6 +1899,14 @@ ruling on its unresolved references. Chat A has pushed its one merge of main and
 its last review follows. When chat A merges, chat B and the `overlord-v1` build are dispatched together. After each W2
 merge, dispatch the next link the W2 index names: the act catalogue B after A; request ids A and the request record B
 after the request record A; act rows A after both catalogue PRs.
+
+**Update, 21:35Z** ("Since #3599" has the detail). Chat A is merged (#3488, 07e8cc51e1). Building: chat B (run 4148), the
+`overlord-v1` build (run 4149, a draft until chat B is on `main`), and the three W2 pieces, each in a fix round that takes
+one merge of 07e8cc51e1: the act catalogue A (#3608, a narrow round 2 follows), the request record A (#3609, its first
+review is a full one) and W2 Settings (#3612). On each merge dispatch: the act catalogue B (wave 255) at #3608's merge;
+request ids A (wave 256) at #3609's merge; the request record's Task A4 (wave 257) when #3609 is on `main`; act rows A
+(wave 258) after the catalogue A, after two rulings; and the label queue A (wave 254) when a builder slot frees, after
+its ruling on unresolved references.
 
 - **Where to start.** Read the spec's "In short", §14 (the build order) and "Where things stand". Then read the plan
   of the piece you take, and its task note if it has one. Each plan is self-contained.
