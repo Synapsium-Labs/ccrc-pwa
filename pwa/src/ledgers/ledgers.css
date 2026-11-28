@@ -276,6 +276,9 @@
 @media (pointer: coarse) {
   .wi-card .wi-earlier > summary { min-height: var(--tap-min); }
 }
+/* An outside link's host, after its words (fix round 2, F1): plain text in the secondary ink, never part of the link. It wraps
+   as one word, like any other, and breaks inside only when it is wider than the line (the text's own `overflow-wrap`). */
+.wi .wi-link-host { color: var(--ink-secondary); font-weight: var(--weight-regular); }
 /* Why the item came back, read first, under the title: the list row's send-back rule (`.wl-bounce`'s edge), on the card. */
 .wi-card .wi-came-back { display: grid; gap: var(--sp-1); border-left: 2px solid var(--status-dead); padding-left: var(--sp-2); }
 /* An inline item text (the title, an option) wears the prose class (`PROSE`) so its code and links look as the transcript's do,

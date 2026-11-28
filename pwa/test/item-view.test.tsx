@@ -767,7 +767,8 @@ describe('the item read top to bottom, its text as Markdown (desktop-polish wave
     const why = document.querySelector('.wi-text')!;
     expect(why.querySelector('img')).toBeNull();
     expect([...why.querySelectorAll('a')].map((a) => a.getAttribute('href'))).toEqual(['https://example.com/e']);
-    expect(why.textContent).toBe('a b c d e');
+    // The one outside link is worded, so its host follows it (fix round 2, F1).
+    expect(why.textContent).toBe('a b c d e (example.com)');
   });
 
   it('an item reference links in prose and never inside code', () => {
@@ -825,10 +826,21 @@ describe('wave 186 fix round 1 (review 4189): links, options, steps', () => {
     expect(document.querySelector('.wi-what a')?.getAttribute('href')).toBe('/waiting/12');
   });
 
-  it('A1: a How step that numbers itself is drawn once, by the list\'s own marker', () => {
-    show(itemView({ how: ['1. Open the shell', '2) Run the check', 'Then 3. stays', '9. Not its own index'] }));
-    expect([...document.querySelectorAll('ol.wi-steps > li')].map((l) => l.textContent)).toEqual(
-      ['Open the shell', 'Run the check', 'Then 3. stays', '9. Not its own index']);
+  const steps = (): string[] => [...document.querySelectorAll('ol.wi-steps > li')].map((l) => l.textContent ?? '');
+
+  it('A1: when every How step numbers itself from 1, each number is drawn once, by the list\'s own marker', () => {
+    show(itemView({ how: ['1. Open the shell', '2) Run the check', '3. Paste the output'] }));
+    expect(steps()).toEqual(['Open the shell', 'Run the check', 'Paste the output']);
+  });
+
+  it('fix round 2, F6: an inline enumeration in a step of a list that does not number itself is left as written', () => {
+    show(itemView({ how: ['1) the server, 2) the agent must both run', 'Restart both.'] }));
+    expect(steps()).toEqual(['1) the server, 2) the agent must both run', 'Restart both.']);
+  });
+
+  it('fix round 2, F6: a list where only one step numbers itself is left as written, every step', () => {
+    show(itemView({ how: ['Open the shell.', '2. Run the check', 'Then 3. stays'] }));
+    expect(steps()).toEqual(['Open the shell.', '2. Run the check', 'Then 3. stays']);
   });
 
   it('A8: the fold\'s list is named from the words file', () => {
@@ -839,5 +851,90 @@ describe('wave 186 fix round 1 (review 4189): links, options, steps', () => {
     ] }));
     expect(EARLIER_HISTORY_WORD).toBe('Earlier history');
     expect(document.querySelector(`details.wi-earlier ul[aria-label="${EARLIER_HISTORY_WORD}"]`)).not.toBeNull();
+  });
+});
+
+// Fix round 2 of wave 186 (review 4219), F1 as the coordinator ruled it: in item text, a link the policy accepted that leaves the
+// console (an absolute https address) and whose words are not exactly its own address draws its words as the link and then
+// the destination's host in round brackets, as plain text outside the anchor. A console path, a Docs reader path and an item
+// reference show no host. F9: an address with a userinfo part is refused. Every address here is invented.
+describe('fix round 2: an outside link says where it goes', () => {
+  const PROG = { programme: { name: 'Programme A', hue: null, homeProject: 'project-a' } };
+  /** Every outside anchor in the item's text: its words, its address, and the host drawn after it (or null). */
+  const outside = (): { words: string; href: string | null; host: string | null }[] =>
+    [...document.querySelectorAll('.wi-card .wi-text a[target="_blank"], .wi-card .wi-what a[target="_blank"]')].map((a) => {
+      const next = a.nextElementSibling;
+      return { words: a.textContent ?? '', href: a.getAttribute('href'), host: next?.classList.contains('wi-link-host') ? (next.textContent ?? '').trim() : null };
+    });
+  /** The rule, for one anchor: its words are its own address, or its host follows it. */
+  const holds = (a: { words: string; href: string | null; host: string | null }): boolean =>
+    a.href !== null && (a.words === a.href ? a.host === null : a.host === `(${new URL(a.href).host})`);
+
+  const SPELLINGS: ReadonlyArray<readonly [string, string]> = [
+    ['words in code', '[`https://good.example/a`](https://evil.example/x)'],
+    ['words in bold', '[**https://good.example/a**](https://evil.example/x)'],
+    ['a trailing bold mark', '[https://good.example/a **](https://evil.example/x)'],
+    ['an image\'s alt text', '![https://good.example/a](https://evil.example/x.png)'],
+    ['a bare domain', '[good.example](https://evil.example/x)'],
+    ['an address inside a phrase', '[see https://good.example/a now](https://evil.example/x)'],
+    ['a no-break space inside the words', '[https://good.example/a\u00a0now](https://evil.example/x)'],
+    ['a full-width solidus', '[https:\uff0f\uff0fgood.example\uff0fa](https://evil.example/x)'],
+    ['words with no address at all', '[Approve in the console](https://evil.example/x)'],
+  ];
+  it.each(SPELLINGS)('%s: the outside anchor is its own address, or its host follows it', (_name, text) => {
+    show(itemView({ why: `Read ${text} first.` }), PROG);
+    const links = outside();
+    expect(links.length, JSON.stringify(links)).toBe(1);
+    expect(links[0]!.href, JSON.stringify(links)).toMatch(/^https:\/\/evil\.example\//);
+    expect(holds(links[0]!), JSON.stringify(links)).toBe(true);
+  });
+
+  it('an ordinary worded link: its words, then its host, outside the anchor and its name', () => {
+    show(itemView({ why: 'Read [the runbook](https://example.com/runbook) first.' }), PROG);
+    expect(outside()).toEqual([{ words: 'the runbook', href: 'https://example.com/runbook', host: '(example.com)' }]);
+    expect(screen.getByRole('link', { name: 'the runbook' })).toBeTruthy();
+    expect(document.querySelector('.wi-text a .wi-link-host')).toBeNull();
+  });
+
+  it('an address as its own words shows no host: an autolink, a bare address, and the A3 rewrite', () => {
+    show(itemView({ why: 'See <https://example.com/x>, https://example.com/y and [docs/a.md](https://example.com/z).' }), PROG);
+    expect(outside()).toEqual([
+      { words: 'https://example.com/x', href: 'https://example.com/x', host: null },
+      { words: 'https://example.com/y', href: 'https://example.com/y', host: null },
+      { words: 'https://example.com/z', href: 'https://example.com/z', host: null },
+    ]);
+  });
+
+  it('a console path, a Docs reader path and an item reference show no host', () => {
+    show(itemView({ why: 'Open [the runs](/runs), read [the spec](docs/superpowers/specs/x-design.md) and see item 12.' }),
+      { ...PROG, itemHref: (id) => `/waiting/${id}` });
+    expect(document.querySelectorAll('.wi-card .wi-text a')).toHaveLength(3);
+    expect(document.querySelector('.wi-link-host')).toBeNull();
+  });
+
+  it('a non-ASCII host is shown encoded, and a port only when it is not the default', () => {
+    show(itemView({ why: '[the page](https://b\u00fccher.example/x) and [the admin](https://example.com:8443/a) and [the root](https://example.com:443/r)' }), PROG);
+    expect(outside().map((a) => a.host)).toEqual(['(xn--bcher-kva.example)', '(example.com:8443)', '(example.com)']);
+  });
+
+  it('a title holds the rule too', () => {
+    show(itemView({ title: 'Check [the board](https://example.com/b)' }), PROG);
+    expect(outside()).toEqual([{ words: 'the board', href: 'https://example.com/b', host: '(example.com)' }]);
+  });
+
+  it('F9: an address with a userinfo part is refused: no anchor, its words stay', () => {
+    show(itemView({ why: '[the repo](https://github.com@evil.example/) and https://user:pw@evil.example/a' }), PROG);
+    expect(document.querySelectorAll('.wi-card .wi-text a')).toHaveLength(0);
+    expect(document.querySelector('.wi-card .wi-text')?.textContent).toBe('the repo and https://user:pw@evil.example/a');
+  });
+
+  it('the property over a corpus of spellings: every outside anchor drawn is its own address, or its host follows it', () => {
+    const corpus = [...SPELLINGS.map(([, t]) => t), '[the runbook](https://example.com/runbook)', '<https://example.com/x>',
+      '[docs/a.md](https://example.com/z)', '[**bold** and `code`](https://example.com/m)', '[![alt words](https://example.com/i.png)](https://example.com/p)',
+      '[HTTPS://EXAMPLE.COM/U](https://example.com/U)', '[https://example.com/q.](https://example.com/q)'];
+    show(itemView({ why: corpus.join('\n\n') }), PROG);
+    const links = outside();
+    expect(links.length).toBeGreaterThanOrEqual(corpus.length - 1);
+    expect(links.filter((a) => !holds(a)), JSON.stringify(links)).toEqual([]);
   });
 });

@@ -63,6 +63,10 @@ const ITEMS = [
   base(3, { kind: 'decide', title: 'Pick where the report goes', how: [],
     options: ['See https://example.com/report', 'Open [the runs](/runs)', 'Close item 1 now'], recommended: null, recommendedWhy: null,
     history: [{ at: NOW - 30 * MIN, act: 'raise', note: null }] }),
+  // Fix round 2, F1: a worded outside link, its host after it.
+  base(4, { title: 'Read the runbook before the update', how: [],
+    why: 'The steps are in [the runbook for the test box update](https://runbooks.example.com/test-box/update) and nowhere else.',
+    history: [{ at: NOW - 30 * MIN, act: 'raise', note: null }] }),
 ];
 const WAITING = { items: ITEMS, cleared: [], goals: [] };
 const FIXTURE: AppFixture = {
@@ -314,6 +318,31 @@ describe.each([REFINED, INSTRUMENT] as const)('fix round 1, in %s', (skin) => {
       await page.locator('.wi-earlier > summary').click();
       expect(await page.evaluate(() => (document.querySelector('.wi-earlier') as HTMLDetailsElement).open)).toBe(true);
       expect(await cue()).toBe('"\u25BE"');
+    } finally { await ctx.close(); }
+  });
+});
+
+// Fix round 2 of wave 186 (review 4219), F1: a worded outside link draws its host after it, outside the anchor. At 390 the host
+// sits on one line, nothing scrolls sideways, and the link's accessible name is its words alone.
+describe.each([REFINED, INSTRUMENT] as const)('fix round 2, in %s', (skin) => {
+  it('F1 at 390: the host follows the link, unsplit, outside its name; no sideways scroll', async () => {
+    const { ctx, page, errors } = await open(skin, 390, 4);
+    try {
+      const host = await page.evaluate(() => {
+        const el = document.querySelector('.wi-card .wi-text a[target="_blank"] + .wi-link-host');
+        if (el === null) return null;
+        const rects = [...el.getClientRects()].filter((r) => r.width > 0);
+        return { text: el.textContent, lines: new Set(rects.map((r) => Math.round(r.top))).size, inLink: el.closest('a') !== null,
+          right: Math.max(...rects.map((r) => r.right)), vw: document.documentElement.clientWidth };
+      });
+      expect(host, 'the host is drawn after the link').not.toBeNull();
+      expect(host!.text).toBe(' (runbooks.example.com)');
+      expect(host!.lines, JSON.stringify(host)).toBe(1);
+      expect(host!.inLink).toBe(false);
+      expect(host!.right, JSON.stringify(host)).toBeLessThanOrEqual(host!.vw);
+      expect(await page.getByRole('link', { name: 'the runbook for the test box update', exact: true }).count()).toBe(1);
+      expect(await sideways(page), 'sideways scroll').toBe(0);
+      expect(errors).toEqual([]);
     } finally { await ctx.close(); }
   });
 });

@@ -63,6 +63,9 @@ function linkOf(text: string, homeProject: string | null): LinkRun | null {
     let url: URL;
     try { url = new URL(text); } catch { return null; }
     if (url.protocol !== 'https:' || url.hostname === '') return null;
+    // A userinfo part (`https://github.com@evil.example/`) reads as one host and opens another: no link (fix round 2 of
+    // wave 186, F9).
+    if (url.username !== '' || url.password !== '') return null;
     // A document anywhere but the Docs reader (D28) is text: the boundary the raise and return routes refuse at.
     if (linksDocumentOutside(text)) return null;
     return { kind: 'link', text, href: url.href, external: true };

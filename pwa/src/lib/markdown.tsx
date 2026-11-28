@@ -43,7 +43,7 @@ import {
 } from './markdownLimits';
 import { keystrokeParts, prescanMarkdown, utf8ByteLength } from './markdownGuard';
 import { ITEM_REMARK_PLUGINS, type ParseOutcome } from './markdownParse';
-import { TEXT_LINK_ATTR, linkProseRuns, type TextLinkSplitter } from './hastLinkRuns';
+import { TEXT_LINK_ATTR, TEXT_SELF_ATTR, linkProseRuns, type TextLinkSplitter } from './hastLinkRuns';
 import { chatRunner, type MarkdownParser } from './markdownRunner';
 import { renderHast, type RenderHastOptions } from './renderHast';
 import { useParsedMarkdown } from './useParsedMarkdown';
@@ -576,6 +576,21 @@ function ItemHeading({ children }: { children?: ReactNode }): ReactNode {
   return <p><strong>{children}</strong></p>;
 }
 
+/** An item link that leaves the console and whose words are not exactly its own address: its words as the link, then the
+ *  destination's host in round brackets, as plain text outside the anchor and its name (fix round 2 of wave 186, F1, the
+ *  coordinator's rule). Words can say anything (`Approve in the console`, a look-alike address in code or bold, an image's alt
+ *  text), so the host is shown for every such link rather than judged from the words. The host is the address parser's (lower
+ *  case, a non-ASCII name encoded, a port only when it is not the default). A console path, a Docs reader path and an item
+ *  reference stay in the console and show none. An address the parser cannot read is no link: its words stay. */
+function WithHost({ link, href, outside, self, children }: { link: ReactNode; href: string; outside: boolean; self: boolean; children?: ReactNode }): ReactNode {
+  if (!outside || self) return link;
+  let host: string;
+  try { host = new URL(href).host; } catch { return <>{children}</>; }
+  // The space before the brackets is the host's own, so a reader that leaves the host out (the summary's parity case) leaves
+  // no stray space; the bracketed host wraps as one word.
+  return <>{link}<span className="wi-link-host">{` (${host})`}</span></>;
+}
+
 /** An item's components: chat's shared ones, and an anchor, an image and headings of its own. */
 export const ITEM_COMPONENTS: Components = {
   ...SHARED_COMPONENTS,
@@ -588,7 +603,8 @@ export const ITEM_COMPONENTS: Components = {
     const said = (rest as Record<string, unknown>)[TEXT_LINK_ATTR];
     if (href === undefined || href === '' || (said !== 'external' && said !== 'internal')) return <>{children}</>;
     const target: RefTarget = { href, external: said === 'external' };
-    return <ChatLink target={target}><InsideLinkContext value>{children}</InsideLinkContext></ChatLink>;
+    const link = <ChatLink target={target}><InsideLinkContext value>{children}</InsideLinkContext></ChatLink>;
+    return <WithHost link={link} href={href} outside={said === 'external'} self={(rest as Record<string, unknown>)[TEXT_SELF_ATTR] === 'true'}>{children}</WithHost>;
   },
   img: function ItemImage({ node: _node, src, alt, ...rest }) {
     const href = typeof src === 'string' && src !== '' ? src : null;
@@ -598,7 +614,8 @@ export const ITEM_COMPONENTS: Components = {
     // (`judgeImage`, `hastLinkRuns.ts`, which marks it), with its alt text as the words; anywhere else it is its alt text.
     const said = (rest as Record<string, unknown>)[TEXT_LINK_ATTR];
     if (href === null || insideLink || (said !== 'external' && said !== 'internal')) return words === null ? null : <>{words}</>;
-    return <ChatLink target={{ href, external: said === 'external' }}>{words}</ChatLink>;
+    const link = <ChatLink target={{ href, external: said === 'external' }}>{words}</ChatLink>;
+    return <WithHost link={link} href={href} outside={said === 'external'} self={(rest as Record<string, unknown>)[TEXT_SELF_ATTR] === 'true'}>{words}</WithHost>;
   },
   h1: ItemHeading, h2: ItemHeading, h3: ItemHeading, h4: ItemHeading, h5: ItemHeading, h6: ItemHeading,
 };

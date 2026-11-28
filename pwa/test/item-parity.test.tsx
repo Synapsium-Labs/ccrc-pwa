@@ -22,6 +22,10 @@ function pageWords(text: string): string {
     n.childNodes.forEach((c) => {
       if (c.nodeType === Node.TEXT_NODE) { out += c.nodeValue ?? ''; return; }
       if (!(c instanceof HTMLElement) || c.classList.contains('code-block-bar') || c.getAttribute('aria-hidden') === 'true') return;
+      // An outside link's host is the page's own addition beside the writer's words; the summary never carries it (F1, round 2).
+      if (c.classList.contains('wi-link-host')) return;
+      // A line break is a space between words (round 2, F2).
+      if (c.tagName === 'BR') { out += ' '; return; }
       const block = BLOCKS.has(c.tagName);
       out += `${block ? ' ' : ''}${walk(c)}${block ? ' ' : ''}`;
     });
@@ -60,12 +64,20 @@ const AGREE: readonly string[] = [
   'First paragraph.\n\nSecond paragraph with `code`.',
 ];
 
-/** Texts the two read differently, on purpose, each with why. A difference here is held, so a change that closes it moves the
- *  text to AGREE. */
-const DIFFER: ReadonlyArray<readonly [string, string]> = [
-  ['- one\n- two', 'two or more lines make a list on the page; the one-line summary keeps the writer\'s markers, so it still reads as steps'],
-  ['| a | b |\n|---|---|\n| 1 | 2 |', 'a table is a table on the page; a summary keeps its pipes (A6, a follow-up of the coordinator\'s)'],
-  ['Steps\n=====', 'a setext heading is bold on the page; a summary keeps the underline (A6, a follow-up)'],
+/** Texts the two read differently, on purpose: the text, the page's words, the summary's, and why. Both sides are pinned, so
+ *  a change on either side is seen; a change that closes one moves its text to AGREE (fix round 2, F2). */
+const DIFFER: ReadonlyArray<readonly [string, string, string, string]> = [
+  ['- one\n- two', 'one two', '- one - two',
+    'two or more lines make a list on the page; the one-line summary keeps the writer\'s markers, so it still reads as steps'],
+  ['| a | b |\n|---|---|\n| 1 | 2 |', 'a b 1 2', '| a | b | |---|---| | 1 | 2 |',
+    'a table is a table on the page; a summary keeps its pipes (A6, a follow-up of the coordinator\'s)'],
+  ['Steps\n=====', 'Steps', 'Steps =====', 'a setext heading is bold on the page; a summary keeps the underline (A6, a follow-up)'],
+  ['- [ ] confirm the result', 'confirm the result', '- [ ] confirm the result',
+    'a task item is a checkbox on the page; the summary keeps its brackets, so it still reads as a task'],
+  ['Before\n\n***\n\nAfter', 'Before After', 'Before *** After', 'a thematic break is a rule on the page; a summary keeps its stars'],
+  ['one\\\ntwo', 'one two', 'one\\ two', 'a line-end backslash is a line break on the page; a summary keeps the backslash'],
+  ['[docs/a.md](https://example.com/z)', 'https://example.com/z', 'docs/a.md',
+    'the page draws a link whose words are another address as where it opens (round 1, A3); a summary keeps the words'],
 ];
 
 describe('the item page and its summaries read one text alike (F7)', () => {
@@ -73,7 +85,8 @@ describe('the item page and its summaries read one text alike (F7)', () => {
     expect(pageWords(text)).toBe(itemPlainText(text));
   });
 
-  it.each(DIFFER)('expected difference %j: %s', (text) => {
-    expect(pageWords(text)).not.toBe(itemPlainText(text));
+  it.each(DIFFER)('the listed difference %j: page %j, summary %j (%s)', (text, page, summary) => {
+    expect(pageWords(text)).toBe(page);
+    expect(itemPlainText(text)).toBe(summary);
   });
 });

@@ -20,6 +20,10 @@ export type TextLinkSplitter = (text: string) => readonly TextLinkRun[];
  *  anchor component honours as it is (react-markdown hands it on as `data-text-link`). */
 export const TEXT_LINK_PROP = 'dataTextLink';
 export const TEXT_LINK_ATTR = 'data-text-link';
+/** Set on a judged anchor or image whose words are exactly its own address (`true`), so it needs no host beside it; the item's
+ *  anchor draws an outside link's host after any other (fix round 2 of wave 186, F1). Absent means "not its own address". */
+export const TEXT_SELF_PROP = 'dataTextSelf';
+export const TEXT_SELF_ATTR = 'data-text-self';
 
 /** Elements whose text is never split. */
 const NEVER_SPLIT: ReadonlySet<string> = new Set(['a', 'code', 'pre', 'kbd']);
@@ -38,8 +42,13 @@ function judgeAnchor<T extends RootContent | ElementContent>(el: Element, split:
     const words = wordsOf(el.children);
     // Words that are an address or a path of their own, other than this one, would say one place and open another: the link
     // is drawn as where it opens (fix round 1 of wave 186, A3).
-    const children: ElementContent[] = words !== null && words !== href && LOOKS_LIKE_ADDRESS.test(words) ? [{ type: 'text', value: only.text }] : el.children;
-    const judged: Element = { ...el, children, properties: { ...el.properties, href: only.href, [TEXT_LINK_PROP]: only.external ? 'external' : 'internal' } };
+    const rewritten = words !== null && words !== href && LOOKS_LIKE_ADDRESS.test(words);
+    const children: ElementContent[] = rewritten ? [{ type: 'text', value: only.text }] : el.children;
+    const self = rewritten || isOwnAddress(textOf(el.children), only);
+    const judged: Element = {
+      ...el, children,
+      properties: { ...el.properties, href: only.href, [TEXT_LINK_PROP]: only.external ? 'external' : 'internal', ...(self ? { [TEXT_SELF_PROP]: 'true' } : {}) },
+    };
     return [judged as T];
   }
   // A refused link is its words, and those words are prose like any other: an autolink inside them is judged by the same
@@ -49,6 +58,20 @@ function judgeAnchor<T extends RootContent | ElementContent>(el: Element, split:
 
 /** Words that read as an address or a path: one token holding a scheme's colon or a slash, or starting `www.`. */
 const LOOKS_LIKE_ADDRESS = /^(?=\S+$)(?:[A-Za-z][A-Za-z0-9+.-]*:|www\.|.*\/)/;
+
+/** Every word under a link, through its marks (code, bold, an image's alt text), as a reader sees them. */
+function textOf(children: readonly ElementContent[]): string {
+  let out = '';
+  for (const c of children) {
+    if (c.type === 'text') out += c.value;
+    else if (c.type === 'element' && c.tagName === 'img') out += typeof c.properties['alt'] === 'string' ? c.properties['alt'] : '';
+    else if (c.type === 'element') out += textOf(c.children);
+  }
+  return out;
+}
+
+/** Whether a link's words are exactly its own address, as written or as the splitter resolved it. */
+const isOwnAddress = (words: string, run: { text: string; href: string }): boolean => words === run.text || words === run.href;
 
 /** A link's words when they are text alone, else null. */
 function wordsOf(children: readonly ElementContent[]): string | null {
@@ -69,7 +92,8 @@ function judgeImage<T>(el: Element, split: TextLinkSplitter): T[] {
   const runs = typeof src === 'string' && src !== '' ? split(src) : [];
   const only = runs.length === 1 ? runs[0]! : null;
   if (only !== null && only.kind === 'link' && only.text === src) {
-    return [{ ...el, properties: { ...el.properties, src: only.href, [TEXT_LINK_PROP]: only.external ? 'external' : 'internal' } } as T];
+    const self = typeof alt === 'string' && isOwnAddress(alt, only);
+    return [{ ...el, properties: { ...el.properties, src: only.href, [TEXT_LINK_PROP]: only.external ? 'external' : 'internal', ...(self ? { [TEXT_SELF_PROP]: 'true' } : {}) } } as T];
   }
   return typeof alt === 'string' && alt !== '' ? [{ type: 'text', value: alt } as T] : [];
 }
@@ -86,7 +110,8 @@ function splitChildren<T extends RootContent | ElementContent>(children: readonl
           ? { type: 'text', value: r.text }
           : {
             type: 'element', tagName: 'a',
-            properties: { href: r.href, [TEXT_LINK_PROP]: r.external ? 'external' : 'internal' },
+            // A run the splitter found in prose is its own address, as written.
+            properties: { href: r.href, [TEXT_LINK_PROP]: r.external ? 'external' : 'internal', [TEXT_SELF_PROP]: 'true' },
             children: [{ type: 'text', value: r.text }],
           }) as T);
       }
