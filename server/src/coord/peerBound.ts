@@ -8,6 +8,7 @@
  * store and acts on what this module decides.
  */
 import { PEER_MAIL_HOURLY, PEER_MAIL_MAX_OUTSTANDING, PEER_MAIL_WINDOW_MS, type MailKind, type PeerRetry } from '../../../shared/api.js';
+import { REPORTS_TO_OVERLORD_HOURLY } from '../../../shared/overlordRequests.js';
 
 /** A delivery read as an invitation to reply (`CoordStore.invitation`). `mailId` is the invited MAIL row's id, the
  *  key of the one-reply-per-mail rule and of `mail.answersMail`, never the delivery id the wire names: a parked
@@ -116,4 +117,27 @@ export function peerMailVerdict(f: PeerFacts): PeerVerdict {
         `${new Date(at).toISOString()} (in ${inS} s), when the oldest leaves the hour${hint}` };
   }
   return { verdict: 'bounded' };
+}
+
+/** What the route read for one report, mail to the Overlord's role that `requestMailVerdict` admitted. */
+export interface ReportFacts {
+  readonly fromId: string;
+  /** `at` of each mail `fromId` had accepted to the Overlord's role in the hour before `now`, ascending (`reportAtsInLastHour`). */
+  readonly hourAts: readonly number[];
+  readonly now: number;
+}
+
+/**
+ * The reports' quota (C14 "Reports skip the peer quotas"; request ids A, RI8), beside the peer bound it replaces for mail to the
+ * Overlord, whether or not the mail names a run: at most `REPORTS_TO_OVERLORD_HOURLY` in the last hour from one sender. Over it
+ * the answer is the peer bound's own `peer-quota` with its time retry (slug `reports-quota-is-peer-quota`), since the sender's
+ * next act is the same: wait, then send again.
+ */
+export function reportMailVerdict(f: ReportFacts): Extract<PeerVerdict, { verdict: 'bounded' | 'peer-quota' }> {
+  if (f.hourAts.length < REPORTS_TO_OVERLORD_HOURLY) return { verdict: 'bounded' };
+  const at = f.hourAts[f.hourAts.length - REPORTS_TO_OVERLORD_HOURLY]! + PEER_MAIL_WINDOW_MS;
+  const inS = Math.max(0, Math.ceil((at - f.now) / 1000));
+  return { verdict: 'peer-quota', retry: { on: 'time', at },
+    detail: `${f.fromId} has sent ${REPORTS_TO_OVERLORD_HOURLY} reports to the Overlord in the last hour; it can go at ` +
+      `${new Date(at).toISOString()} (in ${inS} s), when the oldest leaves the hour` };
 }

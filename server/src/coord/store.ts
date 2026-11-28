@@ -95,6 +95,8 @@ import { liftReviewCapByCoordinator, raiseReviewCapAsk, reviewCapGate, reviewCap
 import { lifecycleLaneRowsSince, type LifecycleLaneRow } from './lifecycleLaneRows.js';
 import { renderEnvelope } from './envelope.js';
 import { decideClaim, heldWithin, lapseWindowStart, ownLapsesUnder, rechainTargets, type ClaimRow, type LivenessVerdict } from './claims.js';
+import { OVERLORD_IDENTITY } from '../roleOf.js';
+import type { OverlordRefusal } from '../../../shared/refusal.js';
 import { runsPage as runsPageQuery, type RunsPage } from './runsPage.js';
 import { runFind as runFindQuery, runsReviewing, type RunFindParsed } from './runFind.js';
 import { readProgrammes as readProgrammesQuery } from './programmesRead.js';
@@ -2150,6 +2152,8 @@ export class CoordStore {
     ticket?: planStore.OpenRunTicket | null;
     /** The attributed claimant's uuid (D-5298), null or absent for an unattributed open: the incarnation the binding names. */
     claimedByUuid?: string | null;
+    /** The Overlord's request this run serves (Overlord W2, request ids A), written in the runs INSERT. Absent or null: names no request. */
+    requestId?: number | null;
   }): OpenRunResult {
     try {
       return tx(this.db, () => {
@@ -2227,8 +2231,8 @@ export class CoordStore {
           if (!bound.ok) throw new OpenRunPlanRefused(bound.kind, bound.by);
         }
         const insertRun = this.db.prepare(
-          'INSERT INTO runs (program, wave, waveOf, project, state, claimedBy, openedAt, kind, reviews, coordProject, unattributed, title) ' +
-          'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+          'INSERT INTO runs (program, wave, waveOf, project, state, claimedBy, openedAt, kind, reviews, coordProject, unattributed, title, requestId) ' +
+          'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
         );
         // Keep SQLite's exact INTEGER result until the safe-integer check below;
         // converting first can round an out-of-domain id into another number.
@@ -2236,6 +2240,7 @@ export class CoordStore {
         const res = insertRun.run(
           input.program, input.wave, input.waveOf, input.project, 'planned', input.claimedBy, now,
           input.kind ?? 'work', input.reviews ?? null, input.coordProject ?? null, input.unattributed === true ? 1 : 0, input.title,
+          input.requestId ?? null,
         );
         const exactId = res.lastInsertRowid;
         const id = Number(exactId);
@@ -4474,6 +4479,18 @@ export class CoordStore {
     const measured: MeasuredRunRow = { row, nums: m.nums };
     return { ok: true, run: this.hydrateRun(measured, this.healthFor([measured]).get(m.nums.id)!,
       this.reviewCapStates([m.nums.id])) };
+  }
+
+  /** The one read of a request's runs (Overlord W2, request ids A): every run of `program` that names `requestId`, in id
+   *  order, through the row mapper `run()` uses; `[]` when none. Done tests B, the follow-up, the operator's request doors
+   *  and forecasts read it through a `Pick` port. It does not catch: a throw (an unreadable run) reaches the caller. */
+  runsForRequest(requestId: number, program: string): readonly RunRow[] {
+    const rows = this.db.prepare(
+      `SELECT ${RUN_ROW_COLUMNS} FROM runs r JOIN programs p ON p.slug = r.program WHERE r.requestId = ? AND r.program = ? ORDER BY r.id`,
+    ).all(requestId, program) as unknown as RunRowDb[];
+    const read = this.hydrateRuns(rows);
+    if (!read.ok) throw new Error(`runsForRequest: ${read.detail}`);
+    return read.runs;
   }
 
   /** Rows -> the whole answer, ALL-OR-FAILURE. The order is forced by the
@@ -7300,12 +7317,15 @@ export class CoordStore {
   insertMail(m: { fromId: string; fromUuid: string; toId: string; runId: number | null;
                   kind: MailKind; subject: string; body: string;
                   artifacts: readonly string[]; answersMail?: number | null; clientKey?: string | null;
-                  inReplyTo?: number | null; urgentAs?: UrgentRole | null }): { id: number } {
+                  inReplyTo?: number | null; urgentAs?: UrgentRole | null;
+                  /** The Overlord's request this mail belongs to (Overlord W2, request ids A); absent or null: names none. */
+                  requestId?: number | null }): { id: number } {
     const res = this.db.prepare(
       'INSERT INTO mail (at, fromId, fromUuid, toId, runId, kind, subject, body, artifacts, answersMail, clientKey, inReplyTo, ' +
-      'urgentAs) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      'urgentAs, requestId) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
     ).run(Date.now(), m.fromId, m.fromUuid, m.toId, m.runId, m.kind, m.subject, m.body,
-      JSON.stringify(m.artifacts), m.answersMail ?? null, m.clientKey ?? null, m.inReplyTo ?? null, m.urgentAs ?? null);
+      JSON.stringify(m.artifacts), m.answersMail ?? null, m.clientKey ?? null, m.inReplyTo ?? null, m.urgentAs ?? null,
+      m.requestId ?? null);
     return { id: Number(res.lastInsertRowid) };
   }
 
@@ -7813,9 +7833,9 @@ export class CoordStore {
   hasOutstandingPeerDuplicate(fromId: string, toId: string, subject: string): boolean {
     const row = this.db.prepare(
       'SELECT 1 AS x FROM mail m JOIN mail_deliveries d ON d.mailId = m.id ' +
-      'WHERE m.runId IS NULL AND m.fromId = ? AND d.toId = ? AND m.subject = ? ' +
+      'WHERE m.runId IS NULL AND m.fromId = ? AND d.toId = ? AND m.subject = ? AND m.toId <> ? ' +
       `AND d.state IN ${OUTSTANDING_STATES_SQL} LIMIT 1`,
-    ).get(fromId, toId, subject);
+    ).get(fromId, toId, subject, OVERLORD_IDENTITY);
     return row !== undefined;
   }
 
@@ -7825,12 +7845,13 @@ export class CoordStore {
    *  one recipient, not on history (the hourly arm below is the one history
    *  bound, and it deliberately uses a different denominator). */
   outstandingPeerCount(fromId: string, toId: string): number {
-    // `answersMail IS NULL` (#2726): an invited reply holds no slot.
+    // `answersMail IS NULL` (#2726): an invited reply holds no slot. A report to the Overlord (the mail row's `toId` its role
+    // word) holds none either: reports skip the peer quotas (C14; request ids A, RI8), and a held report stays outstanding.
     return (this.db.prepare(
       'SELECT COUNT(*) AS n FROM mail m JOIN mail_deliveries d ON d.mailId = m.id ' +
       `WHERE m.runId IS NULL AND m.fromId = ? AND d.toId = ? AND d.state IN ${OUTSTANDING_STATES_SQL} ` +
-      'AND m.answersMail IS NULL',
-    ).get(fromId, toId) as { n: number }).n;
+      'AND m.answersMail IS NULL AND m.toId <> ?',
+    ).get(fromId, toId, OVERLORD_IDENTITY) as { n: number }).n;
   }
 
   /** The `at` of every peer mail `fromId` has had ACCEPTED in the sliding
@@ -7842,11 +7863,22 @@ export class CoordStore {
    *  reply (`answersMail` set, #2726) is not charged. `now` is the caller's
    *  clock, passed in rather than read here — the same
    *  policy-stays-with-the-caller reason `dueDeliveries`/`capsUsage` already
-   *  take theirs. */
+   *  take theirs. A report to the Overlord (`toId` its role word) is not
+   *  charged either: it meets its own quota, `reportAtsInLastHour`, in place
+   *  of this one (C14 "Reports skip the peer quotas"; request ids A, RI8). */
   peerMailAtsInLastHour(fromId: string, now: number): number[] {
     return (this.db.prepare(
-      'SELECT at FROM mail WHERE runId IS NULL AND fromId = ? AND at > ? AND answersMail IS NULL ORDER BY at, id',
-    ).all(fromId, now - PEER_MAIL_WINDOW_MS) as { at: number }[]).map((r) => r.at);
+      'SELECT at FROM mail WHERE runId IS NULL AND fromId = ? AND at > ? AND answersMail IS NULL AND toId <> ? ORDER BY at, id',
+    ).all(fromId, now - PEER_MAIL_WINDOW_MS, OVERLORD_IDENTITY) as { at: number }[]).map((r) => r.at);
+  }
+
+  /** The `at` of every mail `fromId` has sent to the Overlord (`toId` is its role word) in the hour before `now`, ascending
+   *  (Overlord W2, request ids A): the report rate's count is its length. Same window and bound as `peerMailAtsInLastHour`
+   *  (`at > now - PEER_MAIL_WINDOW_MS`); `now` is the caller's clock. */
+  reportAtsInLastHour(fromId: string, now: number): number[] {
+    return (this.db.prepare(
+      'SELECT at FROM mail WHERE fromId = ? AND toId = ? AND at > ? ORDER BY at, id',
+    ).all(fromId, OVERLORD_IDENTITY, now - PEER_MAIL_WINDOW_MS) as { at: number }[]).map((r) => r.at);
   }
 
   /** The delivery `deliveryId` names, read as an invitation to reply (#2726): the mail it carries, that mail's
@@ -8435,7 +8467,7 @@ export class CoordStore {
     });
   }
 
-  recordRejection(r: { code: MailRejectCode; fromId?: string; fromUuid?: string; toId?: string;
+  recordRejection(r: { code: MailRejectCode | Extract<OverlordRefusal, 'request-not-yours'>; fromId?: string; fromUuid?: string; toId?: string;
                        runId?: number | null; kind?: string; subject?: string;
                        detail?: string }): void {
     this.db.prepare(
@@ -8637,15 +8669,17 @@ export class CoordStore {
    * against the run. Additive: every existing reader ignores it.
    */
   mailQueuedSince(sinceId: number): { deliveryId: number; mailId: number; toId: string; fromId: string;
+                                       /** The MAIL row's own `toId` (a role word for a role-addressed mail), beside the delivery's `toId`. */
+                                       mailToId: string;
                                        runId: number | null; kind: string; subject: string;
                                        project: string | null; workspace: string | null;
                                        runSessionId: string | null }[] {
     return this.db.prepare(
-      'SELECT d.id AS deliveryId, m.id AS mailId, d.toId, m.fromId, m.runId, m.kind, m.subject, ' +
+      'SELECT d.id AS deliveryId, m.id AS mailId, d.toId, m.toId AS mailToId, m.fromId, m.runId, m.kind, m.subject, ' +
       'r.project, r.workspace, r.sessionId AS runSessionId ' +
       'FROM mail_deliveries d JOIN mail m ON m.id = d.mailId LEFT JOIN runs r ON r.id = m.runId ' +
       'WHERE d.id > ? ORDER BY d.id',
-    ).all(sinceId) as { deliveryId: number; mailId: number; toId: string; fromId: string; runId: number | null;
+    ).all(sinceId) as { deliveryId: number; mailId: number; toId: string; fromId: string; mailToId: string; runId: number | null;
                          kind: string; subject: string; project: string | null; workspace: string | null;
                          runSessionId: string | null }[];
   }
@@ -11985,7 +12019,9 @@ export class CoordStore {
   itemHistory(id: number): ItemEventRow[] { return ledgers.itemHistory(this.db, id); }
   setSpecPin(program: string, specPath: string, inShort: string, now: number, doneWhen: readonly string[] | null, source: WrittenSource): void { ledgers.setSpecPin(this.db, program, specPath, inShort, now, doneWhen, source); }
   setDoneWhen(program: string, doneWhen: readonly string[], now: number, modId: number): void { ledgers.setDoneWhen(this.db, program, doneWhen, now, modId); }
-  addModification(program: string, m: { text: string; ruling: string | null; itemId: number | null; pr: number | null; doneWhen?: readonly string[] | null }, now: number): number { return ledgers.addModification(this.db, program, m, now); }
+  addModification(program: string, m: { text: string; ruling: string | null; itemId: number | null; pr: number | null; doneWhen?: readonly string[] | null; requestId?: number | null }, now: number): number { return ledgers.addModification(this.db, program, m, now); }
+  /** The count of this programme's modifications that name `requestId` (request ids A): `ledgers.modificationsForRequest`. */
+  modificationsForRequest(requestId: number, program: string): number { return ledgers.modificationsForRequest(this.db, requestId, program); }
   ratifyGoalsVersion(program: string, version: GoalsVersion, now: number, actor: string): ledgers.RatifyResult { return ledgers.ratifyGoalsVersion(this.db, program, version, now, actor); }
   markModificationsMerged(program: string, pr: number, mergedAt: number): number { return ledgers.markModificationsMerged(this.db, program, pr, mergedAt); }
   goalsFor(program: string): GoalsView { return ledgers.goalsFor(this.db, program); }

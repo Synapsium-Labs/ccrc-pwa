@@ -7,6 +7,7 @@ import { SPOT_PROBE_SUBJECT } from '../continuity/renewalFeed.js';
 import { isProviderRetryMail, renderProviderRetryLine } from '../../../shared/provider-retry.js';
 import { OVERLORD_IDENTITY, type DesignationFact } from '../roleOf.js';
 import { TIMER_MAIL_SENDER } from '../../../shared/continuity-timers.js';
+import { MAIL_ROLE_IDS } from './rundefs.js';
 import {
   isInboxWakeMail, readInboxWakeBody, renderInboxWakeLine, renderSpotProbeLine,
 } from '../../../shared/overlordInbox.js';
@@ -249,36 +250,70 @@ export function renderOperatorMessageNudge(id: number): string {
  *  ack: the operator message's `delivered`, or nothing. `draft` says what a person's unsent text does to the send: absent, it is
  *  stashed and given back (D-5912); `refuse` types nothing while it stands (D-9090). */
 export interface FixedLineMailRow {
-  readonly name: 'operator-message' | 'spot-probe' | 'inbox-wake' | 'provider-retry' | 'timer';
+  readonly name: 'operator-message' | 'spot-probe' | 'inbox-wake' | 'provider-retry' | 'timer' | 'overlord-report';
   /** `mailToId` is the MAIL ROW's recipient (a role's word, kept on the row), never the delivery's session (Overlord W1). */
   readonly matches: (m: { readonly fromId: string; readonly subject: string; readonly mailToId?: string }) => boolean;
   readonly designatedOnly: boolean;
   readonly line: (m: { readonly subject: string; readonly body: string }, now: number) => string;
   readonly firstDelivery: 'message-delivered' | 'none';
-  /** True when the row's delivery waits until the designated session's live generation has read its card (C62; the timer row
-   *  only): while it holds, nothing is typed and no attempt is spent. */
-  readonly waitsForCard: boolean;
+  /** The table's one hold (the coordinator's ruling on request ids A, call 1937), absent on a row that never holds. `card`: the
+   *  delivery waits until the designated session's live generation has read its card (C62; the timer row), read after the
+   *  sweep's gates; while it holds, nothing is typed and no attempt is spent. `acked`: the delivery is never typed and is
+   *  read again each sweep until it is acked (a report to the Overlord, read through its inbox), read at the head of the sweep
+   *  before every gate, so it is never gated, woken, counted toward a park or parked. The word never leaves this process. */
+  readonly hold?: FixedLineHold;
+  /** `record-only`: a new delivery of this row is recorded on the console and never pushed to the operator (C16; a report).
+   *  Absent: the push rule of today. */
+  readonly push?: 'record-only';
   readonly draft?: 'refuse';
 }
+/** The hold's two words: until the card is read, and until the delivery is acked. */
+export type FixedLineHold = 'card' | 'acked';
 export const FIXED_LINE_MAIL: readonly FixedLineMailRow[] = [
   // Only the designated session is ever sent an operator message, so its row needs no designation.
-  { name: 'operator-message', matches: isOperatorMessageMail, designatedOnly: false, firstDelivery: 'message-delivered', waitsForCard: false,
+  { name: 'operator-message', matches: isOperatorMessageMail, designatedOnly: false, firstDelivery: 'message-delivered',
     line: (m) => renderOperatorMessageNudge(operatorMessageIdOf(m.subject)!) },
   // The renewal act's spot-probe notice names `ccrc-api probe`, which the Overlord cannot run; a coordinator keeps the notice's own text.
   { name: 'spot-probe', matches: (m) => m.fromId === OPERATOR_MESSAGE_SENDER && m.subject === SPOT_PROBE_SUBJECT, designatedOnly: true, firstDelivery: 'none',
-    line: () => renderSpotProbeLine(), waitsForCard: false },
+    line: () => renderSpotProbeLine() },
   // The time left is read at the mail pass's clock, taken once at the pass's start (at most one pass before typing), never at queueing.
-  { name: 'inbox-wake', matches: isInboxWakeMail, designatedOnly: true, firstDelivery: 'none', waitsForCard: false,
+  { name: 'inbox-wake', matches: isInboxWakeMail, designatedOnly: true, firstDelivery: 'none',
     line: (m, now) => renderInboxWakeLine(readInboxWakeBody(m.body), now) },
   // A session whose turn ended on a provider error (`providerRetry.ts`): the line says it all and is acked as typed, so no replay
   // stands beside the ladder's own repeat. A person writing in that box is about to continue the session themselves.
-  { name: 'provider-retry', matches: isProviderRetryMail, designatedOnly: false, firstDelivery: 'none', draft: 'refuse', waitsForCard: false,
+  { name: 'provider-retry', matches: isProviderRetryMail, designatedOnly: false, firstDelivery: 'none', draft: 'refuse',
     line: () => renderProviderRetryLine() },
   // The Overlord's timers (W1): the timer lane's mail to the role, matched on the MAIL ROW's recipient, so a session-keyed
   // timer mail keeps the generic nudge. The Overlord has no mail verb: the line names its timer list door, and waits for the card.
   { name: 'timer', matches: (m) => m.fromId === TIMER_MAIL_SENDER && m.mailToId === OVERLORD_IDENTITY, designatedOnly: true,
-    firstDelivery: 'none', waitsForCard: true, line: (m) => renderTimerFiredLine(m.subject) },
+    firstDelivery: 'none', hold: 'card', line: (m) => renderTimerFiredLine(m.subject) },
+  // A coordinator's report on its request (W2, request ids A, RI6 and RI17): mail a session sent to the role, which the mail door
+  // admits only from the owner of an open request it names. Held, never typed, whatever session the delivery names (a report to a
+  // body retired since is still held, so it is not `designatedOnly`), until the Overlord's inbox acks it; recorded, never pushed.
+  // Its line is what the row would type were it ever released; no lane types it while the hold stands.
+  { name: 'overlord-report', matches: (m) => m.mailToId === OVERLORD_IDENTITY && !MAIL_ROLE_IDS.has(m.fromId), designatedOnly: false,
+    firstDelivery: 'none', hold: 'acked', push: 'record-only', line: () => renderReportHeldLine() },
 ];
+
+/** The report row's line (never typed while its hold stands): the mail nudge's head, then where the report waits. */
+export function renderReportHeldLine(): string {
+  return `${INJECTED_PROMPTS['mail-nudge'].text} A report on a request waits in your inbox.`;
+}
+
+/** Whether the sweep holds one due delivery before every gate: its mail matches a row that holds until acked (the report).
+ *  `origin` is the store's mail origin read (null: no such mail, which holds nothing). */
+export function heldUntilAcked(toId: string, origin: { readonly fromId: string; readonly subject: string; readonly toId: string } | null,
+  designated: SweepDesignation): boolean {
+  if (origin === null) return false;
+  const row = fixedLineMailOf({ fromId: origin.fromId, subject: origin.subject, toId, mailToId: origin.toId }, designated);
+  return row !== 'generic' && row.hold === 'acked';
+}
+
+/** The push word of a new delivery's mail (`FleetWatcher.pushNewMail`): the matching row's, with no designation filter, which no
+ *  push word needs. Absent: today's push rule. */
+export function fixedLinePushOf(m: { readonly fromId: string; readonly subject: string; readonly mailToId: string }): 'record-only' | undefined {
+  return FIXED_LINE_MAIL.find((r) => r.matches(m))?.push;
+}
 
 /** The fixed line of the role's timer mail (Overlord W1, question 3): the mail nudge's head, then how many timers came due,
  *  read from the subject's `timer: <n> due` (an unreadable subject types the line without the count), and the door that reads
@@ -315,8 +350,9 @@ export interface MailNudge {
   readonly line: string;
   readonly operatorMessageId: number | null;
   readonly firstDelivery?: 'none';
-  /** Set for a row that waits for the designated session's card (the timer row): the lane asks `cardHoldVerdict` first. */
-  readonly waitsForCard?: true;
+  /** The row's hold, when it has one (`FixedLineMailRow.hold`): `card` (the timer row), and the lane asks `cardHoldVerdict`
+   *  first. An `acked` row never reaches the send: the sweep holds it before every gate (`heldUntilAcked`). */
+  readonly hold?: FixedLineHold;
   readonly draft?: 'refuse';
 }
 
@@ -334,7 +370,7 @@ export function mailNudgeOf(
   const line = row.line({ subject: origin.subject, body: origin.body ?? '' }, now);
   return row.firstDelivery === 'message-delivered' ? { line, operatorMessageId: operatorMessageIdOf(origin.subject) }
     : { line, operatorMessageId: null, firstDelivery: row.firstDelivery, ...(row.draft === undefined ? {} : { draft: row.draft }),
-      ...(row.waitsForCard ? { waitsForCard: true as const } : {}) };
+      ...(row.hold === undefined ? {} : { hold: row.hold }) };
 }
 
 /** One due delivery of a fixed line whose first delivery moves nothing but the ack (`firstDelivery: 'none'`), already delivered

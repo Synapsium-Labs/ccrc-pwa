@@ -6,6 +6,7 @@ import type { StallArm } from '../../../shared/stall-watch.js';
 import { isHookEvent, type HookEvent } from '../../../shared/hook-events.js';
 import { sessionRoleOf } from '../roleOf.js';
 import { actsOnClaimant } from './rundefs.js';
+import { heldUntilAcked } from './envelope.js';
 import type { ChildMark, MailGate, RunState } from '../../../shared/api.js';
 import type { MailTurnMode } from '../turnidle.js';
 import { stallWatchSays, turnWordOf } from '../sessionReading.js';
@@ -1940,8 +1941,15 @@ function stallMailStuckInner(input: StallSessionInput, d: StallDeliveryRow, now:
 /** For run workers and coordinators: one verdict per `queued` delivery addressed to the session, in id order. */
 export function stallMailStuckVerdicts(input: StallSessionInput, now: number): StallVerdict[] {
   if (input.role === 'other') return [];
+  // A delivery the fixed-line table holds until acked (a report to the Overlord, request ids A) is waiting by design, never
+  // stuck: the same rule the mail sweep holds it by. Its row is never `designatedOnly` (the table's census), so no designation
+  // is read here.
+  const held = (d: StallDeliveryRow): boolean => {
+    const m = input.mail.find((r) => r.id === d.mailId);
+    return m !== undefined && heldUntilAcked(d.toId, m, { kind: 'not-designated' });
+  };
   return input.deliveries
-    .filter((d) => d.toId === input.sessionId && d.state === 'queued')
+    .filter((d) => d.toId === input.sessionId && d.state === 'queued' && !held(d))
     .sort((a, b) => a.id - b.id)
     .map((d) => stallMailDisabledHold(stallMailStuckInner(input, d, now), input.arming));
 }

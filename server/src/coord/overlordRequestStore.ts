@@ -9,15 +9,16 @@
 // caller's transaction that rolls everything back, and it is a programming error, never a refusal word.
 //
 // ONE WRITER PER FACT. The insert writes the row, its citations and its `open` move. The move writer writes the state, raises
-// `revision` by one (RQ7) and writes its move row with the act id it was given. `setParentClockInTx` is the one bookkeeping
-// writer here: a parent's follow-up clock when a child opens or its last open child ends (F2). `appendMove` is the one writer of
+// `revision` by one (RQ7) and writes its move row with the act id it was given. `setParentClockInTx` is one bookkeeping
+// writer here: a parent's follow-up clock when a child opens or its last open child ends (F2); `stampRequestNewsInTx` is the
+// other, a request's line of news from the mail door (request ids A). `appendMove` is the one writer of
 // the moves table, private, for both appliers (F7). Every state change stamps one `request` line on the sequence, in the same
 // transaction, through `stampRequestLine`; a self-loop changes no state word and stamps nothing.
 //
 // NO OPERATOR WORDS. Message ids and hashes only. The summary and the close note are the Overlord's words, masked at the door.
 import type { DatabaseSync } from 'node:sqlite';
 import {
-  OPEN_REQUEST_STATES, REQUEST_ACTOR_SEQUENCE_KIND, REQUEST_BOUNDS, REQUEST_MOVE_FIELDS, isRequestState, isTerminalRequestState,
+  OPEN_REQUEST_STATES, REQUEST_ACTOR_SEQUENCE_KIND, REQUEST_BOUNDS, REQUEST_MOVE_FIELDS, REQUEST_NEWS_CHARS, isRequestState, isTerminalRequestState,
   type ExpectedPath, type RequestActor, type RequestColumn, type RequestMove, type RequestMoveReason, type RequestOrigin,
   type RequestState,
 } from '../../../shared/overlordRequests.js';
@@ -26,6 +27,7 @@ import {
   type RequestMoveRefusal,
 } from './overlordRequests.js';
 import { stampSequenceInTx, type SequenceLineInput } from './overlordSequenceStore.js';
+import { requestOwnerReadOf, type RequestOwnerRead } from './requestMail.js';
 
 /** One request as stored. `state` is the stored word: a word this build lacks is carried as it is, and no move leaves it. */
 export interface RequestRow {
@@ -121,6 +123,12 @@ function moveOf(r: Record<string, unknown>): RequestMoveRow {
 export function requestById(db: DatabaseSync, id: number): RequestRow | 'absent' {
   const r = db.prepare(`SELECT ${ROW_COLS} FROM overlord_requests WHERE id = ?`).get(id) as Record<string, unknown> | undefined;
   return r === undefined ? 'absent' : rowOf(r);
+}
+
+/** One request as the request ids' owner rule reads it (Overlord W2, request ids A), for the run, mail and goals doors. Throws
+ *  on an unreadable database: each door answers that as its own unmeasured case, never as an absent request. */
+export function requestOwnerOf(db: DatabaseSync, id: number): RequestOwnerRead {
+  return requestOwnerReadOf(requestById(db, id));
 }
 
 /** Every move of one request, oldest first. */
@@ -318,6 +326,27 @@ export function applyRequestMoveInTx(db: DatabaseSync, plan: RequestMovePlan, ac
   const row = requestById(db, m.id);
   if (row === 'absent') throw new Error(`request ${m.id} not read back after its move`);
   return { row, move, seq };
+}
+
+// ── The news writer (Overlord W2, request ids A) ───────────────────────────────────────────────────────────────────────
+
+/** What the news writer did: stamped an open request, or left a closed or absent one as it was (the mail still sends). */
+export type RequestNewsStamp = 'stamped' | 'closed' | 'absent' | 'not-in-transaction';
+
+/**
+ * The one writer of `lastNewsAt` and `news` (H22 "stamps the time and one line of news on it, in its own transaction"; RI5): the
+ * mail door's, inside the mail's transaction, only while the request is open. `line` is the mail's subject, masked by the door
+ * before the transaction; it is cut here at `REQUEST_NEWS_CHARS` characters, never mid-character. Bookkeeping: it raises no
+ * revision (RQ7) and stamps no sequence line, since news is no move. A stored state word this build cannot name reads as open,
+ * as `openRequests` counts it.
+ */
+export function stampRequestNewsInTx(db: DatabaseSync, id: number, line: string, at: number): RequestNewsStamp {
+  if (!inTx(db)) return 'not-in-transaction';
+  const row = requestById(db, id);
+  if (row === 'absent') return 'absent';
+  if (isRequestState(row.state) && isTerminalRequestState(row.state)) return 'closed';
+  db.prepare('UPDATE overlord_requests SET lastNewsAt = ?, news = ? WHERE id = ?').run(at, [...line].slice(0, REQUEST_NEWS_CHARS).join(''), id);
+  return 'stamped';
 }
 
 // ── The private writers ────────────────────────────────────────────────────────────────────────────────────────────────

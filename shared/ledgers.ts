@@ -345,24 +345,33 @@ export interface ItemView {
 
 /** What a goals version rests on (Overlord W1, portfolio B; spec §3.8), stored as `ratifiedBy` on the pin and on each
  *  modification. It records the SOURCE only; whether that source ratifies is `goalRatification`'s, decided at every read.
- *  W2 adds `{ kind: 'request' }`, with the row's requestId; the parser refuses it until then. */
+ *  W2's request ids A adds `{ kind: 'request' }`, with the row's own requestId. */
 export type RatifiedBy =
   | { kind: 'coordinator' }                  // the programme's own coordinator wrote it
   | { kind: 'item' }                         // a modification that cites an item; the id is the row's itemId
-  | { kind: 'operator' };                    // the operator's ratify door
+  | { kind: 'operator' }                     // the operator's ratify door
+  | { kind: 'request'; requestId: number };  // a modification made for a request its programme owns; the id is the row's requestId
 export type RatifiedByKind = RatifiedBy['kind'];
-const RATIFIED_BY_KIND_MAP: Record<RatifiedByKind, true> = { coordinator: true, item: true, operator: true };
+const RATIFIED_BY_KIND_MAP: Record<RatifiedByKind, true> = { coordinator: true, item: true, operator: true, request: true };
 /** Whether a word off the wire is a source this build can name (a newer server may send one it cannot). */
 export const isRatifiedByKind = (raw: unknown): raw is RatifiedByKind =>
   typeof raw === 'string' && Object.prototype.hasOwnProperty.call(RATIFIED_BY_KIND_MAP, raw);
-/** NULL is a version written before the column (`unrecorded`); any other text this build cannot read is `unreadable`. */
-export const parseRatifiedBy = (raw: string | null): RatifiedBy | 'unrecorded' | 'unreadable' =>
-  raw === null ? 'unrecorded' : isRatifiedByKind(raw) ? { kind: raw } : 'unreadable';
+/** NULL is a version written before the column (`unrecorded`); any other text this build cannot read is `unreadable`. The
+ *  column stores the word only, as it stores `item`; a `request` source takes its id from the row's own `requestId`, and reads
+ *  `unreadable` without one (request ids A). */
+export const parseRatifiedBy = (raw: string | null, requestId: number | null = null): RatifiedBy | 'unrecorded' | 'unreadable' => {
+  if (raw === null) return 'unrecorded';
+  if (!isRatifiedByKind(raw)) return 'unreadable';
+  if (raw === 'request') return requestId === null ? 'unreadable' : { kind: 'request', requestId };
+  return { kind: raw };
+};
 export const ratifiedByText = (r: RatifiedBy): string => r.kind;
 /** What a coordinator door may record: every source but the operator's, which only the ratify door writes (review 2240 F6). */
 export type WrittenSource = Exclude<RatifiedBy, { kind: 'operator' }>;
-/** A modification's source, from the row's own `itemId` (review 2240 F6: the store derives it, never the route). */
-export const modificationSource = (itemId: number | null): WrittenSource => (itemId === null ? { kind: 'coordinator' } : { kind: 'item' });
+/** A modification's source, from the row's own `requestId` and `itemId` (review 2240 F6: the store derives it, never the route):
+ *  a request first, then an item, then the coordinator. */
+export const modificationSource = (itemId: number | null, requestId: number | null = null): WrittenSource =>
+  requestId !== null ? { kind: 'request', requestId } : itemId === null ? { kind: 'coordinator' } : { kind: 'item' };
 /** The pin's stored source, counted only when it was recorded at or after the pin's text (review 2240 F2): a build older than
  *  the ratification columns re-pins the text and leaves the source, so a source older than `inShortAt` describes text that is
  *  gone, and reads `unrecorded`. Every writer of this build stamps `ratifiedAt` with or after `inShortAt`. */
@@ -377,9 +386,10 @@ export const COORDINATOR_SOURCE_RATIFIES: boolean = true;
 export const itemAnswered = (item: { state: string; tickedAt: number | null }): boolean =>
   (item.state === 'checking' || item.state === 'done') && item.tickedAt !== null;
 export type RatificationWhy = 'unrecorded' | 'unreadable' | 'source-does-not-ratify' | 'effect-unmeasured'
-  | 'item-not-answered' | 'absent';
+  | 'item-not-answered' | 'absent' | 'not-opened';
 const RATIFICATION_WHY_MAP: Record<RatificationWhy, true> = {
   unrecorded: true, unreadable: true, 'source-does-not-ratify': true, 'effect-unmeasured': true, 'item-not-answered': true, absent: true,
+  'not-opened': true,
 };
 /** Whether a word off the wire is a reason this build can name (a newer server may send one it cannot). */
 export const isRatificationWhy = (raw: unknown): raw is RatificationWhy =>
@@ -402,6 +412,10 @@ export function goalRatification(source: RatifiedBy | 'unrecorded' | 'unreadable
       return { ratified: false, why: itemAnswered(item) ? 'effect-unmeasured' : 'item-not-answered', source };
     case 'operator':
       return { ratified: true, source };
+    // §3.8: a request-backed version "counts as goal evidence once the operator has opened it", and nothing records an
+    // opening in W2, so it reads `not-opened` (request ids A, RI10); the piece that records the opening replaces this one arm.
+    case 'request':
+      return { ratified: false, why: 'not-opened', source };
     default: {
       const never: never = source;
       return { ratified: false, why: 'unreadable', source: never };

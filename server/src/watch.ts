@@ -231,7 +231,7 @@ import {
   toRunSummary, type MarkReleaseNotifiedResult,
   type OpenSibling, type RunRow,
 } from './coord/store.js';
-import { mailNudgeOf, sweepDesignationOf } from './coord/envelope.js';
+import { fixedLinePushOf, heldUntilAcked, mailNudgeOf, sweepDesignationOf } from './coord/envelope.js';
 import { operatorNudgeFor } from './operatorModel/operatorNudge.js';
 import { finishFixedLineAck, settleNudge } from './operatorModel/nudgeLane.js';
 import { createInboxWakeLane } from './coord/overlordInboxWake.js';
@@ -3536,8 +3536,9 @@ export class FleetWatcher {
         tag: `mail-${m.toId}-${m.mailId}`,
         recordAlways: true,
         // A fired timer is the session's own reminder, never news for the operator (review 2053 F2): recorded, never pushed. A
-        // provider retry is another: the outage has one notice of its own (`providerRetryLane.ts`).
-        ...(isAskNudgeMail(m) || isApprovalNudgeMail(m) || isOperatorMessageMail(m) || isInboxWakeMail(m) || isProviderRetryMail(m) || stall === 'check' || stall === 'reply' || stall === 'self-wake' || isUntoldNotice(m.subject) || isRunCloseWarning(m.subject) || isSkillRolloutMail(m) || m.fromId === TIMER_MAIL_SENDER ? { recordOnly: true } : {}),
+        // provider retry is another: the outage has one notice of its own (`providerRetryLane.ts`). A row of the fixed-line table
+        // that says `record-only` (a report to the Overlord, request ids A, C16) is read from that row, the one rule its hold reads.
+        ...(isAskNudgeMail(m) || isApprovalNudgeMail(m) || isOperatorMessageMail(m) || isInboxWakeMail(m) || isProviderRetryMail(m) || stall === 'check' || stall === 'reply' || stall === 'self-wake' || isUntoldNotice(m.subject) || isRunCloseWarning(m.subject) || isSkillRolloutMail(m) || m.fromId === TIMER_MAIL_SENDER || fixedLinePushOf(m) === 'record-only' ? { recordOnly: true } : {}),
       }, projects);
       this.lastMailNotifyId = m.deliveryId;
     }
@@ -8642,6 +8643,9 @@ export class FleetWatcher {
     };
     const seen = new Set<string>();          // one message per session per sweep
     for (const d of due) {
+      // A row of the fixed-line table that holds until acked (a report to the Overlord, request ids A) is held HERE, before
+      // every gate: no gate stamp, no attempt, no wake, no park, nothing typed, read again next sweep (ruling call 1937).
+      if (heldUntilAcked(d.toId, store.mailOrigin(d.mailId), sweepDesignationOf(designation))) continue;
       if (seen.has(d.toId)) { gated(d, 'same-sweep'); continue; }
       if (this.mailInFlight.has(d.toId)) { gated(d, 'in-flight'); continue; }   // CHECK — review findings 1/5, see this method's docstring
       // CLAIM — immediately after the check, with NO await in between, so the
@@ -9012,7 +9016,7 @@ export class FleetWatcher {
         const nudge = await operatorNudgeFor((id) => readBoxText({ tmux: this.deps.tmux, queue: this.deps.queue }, id), d.toId, origin, sweepDesignationOf(designation), now);
         // A fixed line delivered once whose ack never landed is acked, never typed twice (review 3389 F1). The Overlord's timer
         // line waits until its live generation has read its card (W1, C62): no attempt is spent while it holds.
-        if (finishFixedLineAck({ coord: store, now, warn: (l) => { console.warn(l); } }, d, nudge) || (nudge.waitsForCard === true && !timerLineHold(gens, identityOf(d.toId, designation), (id) => store.cardReadOfStart(id), (l) => { console.warn(l); }))) continue;
+        if (finishFixedLineAck({ coord: store, now, warn: (l) => { console.warn(l); } }, d, nudge) || (nudge.hold === 'card' && !timerLineHold(gens, identityOf(d.toId, designation), (id) => store.cardReadOfStart(id), (l) => { console.warn(l); }))) continue;
         // `seen` is added only HERE, once every gate above has passed, the nudge is chosen and neither the ack-once nor the card
         // hold took the row, so the send is actually about to be attempted. It means "one message per session per sweep", not
         // "one row considered per sweep": a row that types nothing claims nothing (review 3841 F1), and moving the claim
