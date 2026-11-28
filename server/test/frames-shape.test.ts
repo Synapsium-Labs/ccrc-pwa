@@ -139,6 +139,7 @@ describe('dim (plan 2.3)', () => {
     expect(rowIsDim('\x1b[38:5:2mtext')).toBe(false);
     expect(rowIsDim('\x1b[38;2;2;2;2mtext')).toBe(false);
     expect(rowIsDim('\x1b[38;5;2;2mtext')).toBe(true); // the colour, then dim
+    expect(rowIsDim('\x1b[38:5:2;2mtext')).toBe(true); // the colon form carries its own arguments: the 2 after it is dim
   });
   it('dim combined with another attribute is dim; 22, 0 and an empty sequence turn it off', () => {
     expect(rowIsDim('\x1b[1;2mtext')).toBe(true);

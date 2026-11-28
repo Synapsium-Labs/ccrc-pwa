@@ -148,6 +148,11 @@ describe('same-form and new-form (plan 3.2)', () => {
     newest[3] = { ...row('2.1.332', 3, FORM_B), shape: null };
     expect(standingOf(framesStandingAnswerOf(records, [...full('2.1.331'), ...newest]))).toMatchObject({ word: 'same-form', differing: [] });
   });
+  it('a row that carries a shape but is not drawn, or was not cleared, is not compared (a writer other than the lane\'s)', () => {
+    const other = framesShapeToStore(result('2.1.332', 9, FORM_B), 'clear');
+    const newest = full('2.1.332').map((r) => (r.part === 9 ? { ...row('2.1.332', 9, FORM_B, 'unsettled'), shape: other } : r.part === 8 ? { ...row('2.1.332', 8, FORM_B, 'drawn', { checked: 'masked' }), shape: other } : r));
+    expect(standingOf(framesStandingAnswerOf(records, [...full('2.1.331'), ...newest]))).toMatchObject({ word: 'same-form', differing: [] });
+  });
   it('the standing over a table of many builds equals the standing over the bounded rows', () => {
     const builds = Array.from({ length: 12 }, (_, i) => `2.1.${320 + i}`);
     const many = builds.flatMap((b, i) => full(b, i % 2 === 0 ? FORM_A : FORM_B));

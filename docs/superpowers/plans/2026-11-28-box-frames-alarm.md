@@ -172,7 +172,11 @@ Cursor `[2, 1]`. Tokens: `R:`, `G~`, `R:`, `X2|`, `@1,2`. A build whose hint say
 seen. The chip part's box row `❯ [Pasted text #1 +0 lines]` is `Cg:[Pasted text #9 +9 lines]`; a build that renamed the
 label to `[Pasted content #1]` would give `G` instead, a new form.
 
-### 2.7 Two questions for the coordinator
+### 2.7 Two questions for the coordinator (ruled)
+
+**Ruled** (the coordinator's "step 1 ruled"): 2.2's anchor yes, with a probe and a case for one rule row and for three; the
+label words kept; the two exports as one identical hunk on both branches, which wave 197's worker said yes to. The
+questions as they were put:
 
 1. **Rule label words.** Section 7 keeps a rule label's characters with every digit run as `9` (its example: `↑ 156 more`
    is `↑ 9 more`), and its "cannot see" list also says a label word change (`more` to `lines above`) is the same form.
@@ -211,8 +215,11 @@ so the read and the lanes never name different builds (pinned for every order of
 | any | any | any | one or more | `new-form` |
 | not complete | any | any | none | `incomplete` |
 | complete | null | 0 | none | `first-form` |
-| complete | a build | 0 | none | `first-form` |
+| complete | a build | 0 | none | `not-compared` |
 | complete | a build | 1 or more | none | `same-form` |
+
+**Ruled** (the coordinator's ruling 4 on step 1): the fourth row is a fifth word, `not-compared`, so `first-form` means only
+"no earlier complete build within the bound". The bullet below records the proposal as it was put.
 
 - **`new-form` wins over `incomplete`.** The first differing part says so at once, before the other 51 are framed (about
   an hour of lane passes). That is the alarm's point. The differing list then holds what is measured so far.
@@ -246,6 +253,7 @@ frames: { kind: 'standing', standing: {
             build, against: build | null, word, differing: frameId[],
             refusals, refused: frameId[], overCap: frameId[] } }
       | { kind: 'no-trusted-build' }
+      | { kind: 'held' }                the recipe's hold is down (5.3, ruled); answered before either store read
       | { kind: 'unreadable' }          the store read threw; one log line, the error never on the wire
       absent                            an older server, or no coordination store: the reader answers 'unknown'
 ```
@@ -349,6 +357,10 @@ running was only the build's absence on the box.
   (the Shadow lanes card's switch), a runtime mechanism that costs the operator an act per recipe, which the standing
   directives argue against. **Not built**: the coordinator rules first, and either one touches the owner's lane and goes
   to it as a packet.
+- **Ruled and built** (the coordinator's "the hold ruled"; the capture owner's packet 4, call 1966, and call 1968): the
+  constant, read by the server's job decider (no job), by the status read's decider (`{kind: 'held'}`, before either store
+  read), and by the test box's own desk (the submission refused at the frame with the existing words), never by the fleet
+  agent's forwarding arm. The task note states the property in three lines.
 
 ## 6. The settings case (agent)
 
@@ -418,6 +430,8 @@ None yet. A deviation found is mailed to the coordinator, who issues its number.
 - **Agreed:** section 7 of the recipe plan, in substance (the capture owner); the brief's scope and limits.
 - **Agreed by the capture owner** (call 1963): packets 2 and 3 as sent; packet 1 with its two changes, no stored tokens
   and a read bounded by builds, both written into section 4.
-- **Waiting on you:** the coordinator's rulings on 2.2's anchor, 2.7's two questions, 3.2's `first-form` row and 5.3's
-  hold.
+- **Agreed by the coordinator** ("step 1 ruled", "the hold ruled"): the anchor, the label words, the reducer's two exports
+  as one identical hunk, the fifth word `not-compared`, and the hold as a constant; and by the capture owner, packet 4 with
+  its three conditions and the box-side hold (calls 1966 and 1968).
+- **Waiting on you:** nothing in step 1. The migration slot is mailed to the coordinator before the push.
 - **Later:** a console surface for frames; a generated mark table for the reducer (wave 197's).
