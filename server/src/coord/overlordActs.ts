@@ -5,7 +5,9 @@
 //
 // DECIDE BEFORE THE APPEND (§4.3; the coordinator's item 2 on act rows A). `actWriteVerdict` and `actSettleVerdict` answer every
 // refusal from facts read inside the caller's `BEGIN IMMEDIATE`. Nothing refuses after the act journal's record: the store's apply
-// re-asks the same decider and throws if it disagrees, a programming error that rolls the transaction back, never a word.
+// re-asks the same decider and throws if it disagrees, a programming error, never a refusal. The throw undoes the apply's own
+// savepoint only; the writer answers `journal-append`, and the caller's transaction is the door's to end
+// (`overlordActsStore.ts#ActJournalPort`).
 //
 // THE ID IS ONE DECIDER'S (slug `act-id-from-one-decider`). `nextActId` answers the next id from the table's highest and the act
 // journal's, never the table's own counter, so a refused or rolled-back write reserves nothing, and a restored floor is the

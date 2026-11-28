@@ -1,7 +1,8 @@
 // Overlord W2, act rows A (Task A6's count reader; the coordinator's items 6a and 6c): gate step 10's two producers as the
-// composition root builds them (`overlordCeilingWiring.ts`), over a fixture store and the ladder's real one writer. The standing
-// read, a raise that lands, a refused raise (one log line in the server's form) and a raise that throws (one line, then the throw
-// the runner swallows). Fixture databases in temp dirs only, never the live HOME.
+// server's build function binds them (`overlordCeilingWiring.ts`), over a fixture store and the ladder's real one writer. The
+// standing read (yes for a raise that lands through the real writer, no for another cause's: `actCases.ts#ceilingStandingCases`,
+// review 4205 F2), a raise the writer accepts, a refused raise (one log line in the server's form) and a raise that throws (one
+// line, then the throw the runner swallows). Fixture databases in temp dirs only, never the live HOME.
 import { afterEach, describe, expect, it } from 'vitest';
 import path from 'node:path';
 import Fastify from 'fastify';
@@ -16,6 +17,8 @@ import { OVERLORD_DOORS, type DoorRow, type OverlordDoorRow } from '../src/coord
 import type { DesignationRead } from '../../shared/overlord-designation.js';
 import type { RecordedActor } from '../src/auth/callerIdentity.js';
 import { mkTmp, removeTmpFixtures } from './tmpHelpers.js';
+import { ceilingStandingCases } from './actCases.js';
+import * as wiring from '../src/coord/overlordCeilingWiring.js';
 
 afterEach(async () => { await removeTmpFixtures(); });
 
@@ -24,7 +27,9 @@ const ladderDeps = (coord: CoordStore) => ({ coord, journal: NO_LADDER_AUTHORITY
 const realRaise = (coord: CoordStore) => (detail: string, actor: RecordedActor) => raiseLatch(ladderDeps(coord), ACT_CEILING_LATCH, detail, actor);
 
 describe('the composed latch ports', () => {
-  it('the standing read: no store or an unreadable one is unmeasured; a measured one says whether act-ceiling-hit stands', () => {
+  for (const [name, run] of Object.entries(ceilingStandingCases(wiring))) it(`the standing read: ${name}`, run);
+
+  it('the standing read: no store or an unreadable one is unmeasured; a measured one with no latch, or a refused raise, is no', () => {
     const warn: string[] = [];
     expect(ceilingLatchPorts({ rows: () => undefined, raise: undefined, warn: (l) => warn.push(l) }).standing()).toBe('unmeasured');
     expect(ceilingLatchPorts({ rows: () => ({ kind: 'unmeasured', why: 'locked' }), raise: undefined, warn: (l) => warn.push(l) }).standing()).toBe('unmeasured');

@@ -278,6 +278,8 @@ describe('act rows A: the wired count at gate step 10', () => {
       const calls: string[] = [];
       const read = overlordReadGate(depsOf({ actCount: { count: (g, p, s) => { calls.push(g); return real.count(g, p, s); } } }));
       const rows = Object.entries(OVERLORD_DOORS).filter(([, r]) => r.group === 'overlord');
+      // The walk's own rows are never empty, so a change to its filter alone cannot leave an empty loop and a green case (F5).
+      expect(rows.length).toBeGreaterThan(5);
       for (const [k] of rows) expect(await read(BODY, k), k).toEqual({ kind: 'pass' });
       expect(calls).toEqual([]);
     } finally { db.close(); }

@@ -6,9 +6,10 @@
 // DECIDE, APPEND, APPLY (§4.3; the coordinator's item 2). Each writer reads every fact inside the caller's `BEGIN IMMEDIATE` and
 // asks its decider: a refusal writes nothing and reserves no id. On a pass it hands the act journal its records and, as the
 // journal's apply, the row and the `act` line. The apply re-reads the facts, re-asks the decider and THROWS if the answer
-// differs: inside the journal's call that is a failure after the append (the journal tells its guard `trailing`), and inside
-// the caller's transaction it rolls everything back. It is a programming error, never a refusal word: `DatabaseSync` is
-// synchronous, so what the plan read is still true when the apply runs.
+// differs: inside the journal's call that is a failure after the append (the journal tells its guard `trailing`). The apply's
+// savepoint alone is undone (`undoable`), so neither the row nor its line is left; the writer answers `journal-append`; and the
+// caller's transaction is the door's to end (`ActJournalPort` says what a door does on that word). It is a programming error,
+// never a refusal: `DatabaseSync` is synchronous, so what the plan read is still true when the apply runs.
 //
 // NO PRODUCTION CALLER YET (the coordinator's item 3). `ActJournalPort` is declared here by its consumer and implemented by the
 // act journal (act journal A), which wires the writer. Until then the writers have no caller outside this file and the tests
@@ -40,12 +41,17 @@ import { stampSequenceInTx } from './overlordSequenceStore.js';
 
 /** L2, declared here by its consumer (§4.3, F12). The act journal implements it. It appends the records inside the caller's
  *  `tx()`, then runs `apply` (the row and the act line), as `journalKernel.ts#appendThenApply` does. A throw from `apply` after the
- *  append is told to the journal's guard as `trailing` at once and answered `journal-append`. Never throws. */
+ *  append is told to the journal's guard as `trailing` at once and answered `journal-append`. Never throws.
+ *
+ *  A DOOR ON `journal-append`. The writer has undone only its own savepoint: the row and its line are gone, but everything else the
+ *  door wrote in its transaction still stands, and the journal's record is already appended. The door must end its transaction
+ *  without committing (throw out of its `tx()`, so it rolls back) and refuse the call; it never commits an effect with no act
+ *  row. The journal's guard, told `trailing`, then fences the doors (the act journal's to build). */
 export interface ActJournalPort {
   appendInTx(db: DatabaseSync, records: readonly ActJournalRecord[], apply: () => void): ActJournalAppend;
 }
 export type ActJournalAppend =
-  | { readonly ok: true }
+  | { readonly ok: true; readonly sequence: number }
   | { readonly ok: false; readonly error: 'not-in-transaction' | 'authority-rolled-back' | 'authority-unmeasured' | 'journal-append'; readonly detail: string };
 
 // --------------------------------------------------------------------------------------------------------------------- the input

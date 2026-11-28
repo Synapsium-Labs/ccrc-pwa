@@ -1,9 +1,25 @@
 // The act row's deciders' cases (Overlord W2, act rows A, Tasks A2 and A3). Written ONCE here, as suite cases over a module:
 // `overlord-acts.test.ts` runs them against the real module, and `sim/overlordActsSets.ts` runs them against each textual mutant
-// (the every-run floors of D-8217). The expectations are spelled out here, independently of the module's own lists.
+// (the every-run floors of D-8217). The expectations are spelled out here, independently of the module's own lists. Review 4205
+// added two more modules' cases at the end, over fixture databases in temp dirs (never the live HOME): the store's two applies,
+// run by `overlord-acts-store.test.ts`, and the ceiling latch's standing read, run by `overlord-ceiling-wiring.test.ts`.
 import { expect } from 'vitest';
+import path from 'node:path';
+import type { DatabaseSync } from 'node:sqlite';
 import type { ActAnswer } from '../../shared/overlordActs.js';
+import type { LadderLatchCause } from '../../shared/overlord-ladder.js';
+import { openCoordDb } from '../src/coord/db.js';
+import { CoordStore } from '../src/coord/store.js';
+import { tx } from '../src/coord/tx.js';
+import { attributionIdentity, serverActorOf } from '../src/auth/attributionIdentity.js';
+import type { RecordedActor } from '../src/auth/callerIdentity.js';
+import { gateActorOf } from '../src/accounts/audit.js';
+import { NO_LADDER_AUTHORITY } from '../src/coord/overlordAuthorityJournal.js';
+import { raiseLatch } from '../src/coord/overlordLadderRead.js';
+import { ACT_CEILING_LATCH } from '../src/coord/overlordActCeiling.js';
+import type { ActJournalPort, ActWrite } from '../src/coord/overlordActsStore.js';
 import type { SuiteCase } from './sim/mutate.js';
+import { mkTmp } from './tmpHelpers.js';
 
 export type ActsModule = typeof import('../src/coord/overlordActs.js');
 type M = ActsModule;
@@ -148,7 +164,7 @@ export function countReadableCases(c: CeilingModule): Record<string, SuiteCase> 
   const counted = (all: number, programme: number | null = null) => ({ kind: 'counted', programme, all }) as const;
   const refusedAs = (group: string) => ({ pass: false, word: 'unavailable', group, why: c.UNREADABLE_COUNT, latch: null });
   return {
-    'a count is a non-negative safe integer, and a programme count null only where none was named': () => {
+    'a count is a non-negative safe integer, and a programme count is one or null (the guard accepts a null always)': () => {
       for (const ok of [counted(0), counted(5), counted(7, 0), counted(30, 6)]) expect(c.countReadable(ok), JSON.stringify(ok)).toBe(true);
       for (const bad of [-1, 0.5, Number.NaN, Number.POSITIVE_INFINITY, Number.MAX_SAFE_INTEGER + 2]) {
         expect(c.countReadable(counted(bad)), `all ${bad}`).toBe(false);
@@ -178,5 +194,116 @@ export function writeCountGroupsCases(m: M): Record<string, SuiteCase> {
       expect(m.writeCountGroups('answer-item', 'acknowledge')).toEqual({ act: 'answer', effect: null });
       expect(m.writeCountGroups('read', 'a-kind-this-build-lacks')).toEqual({ act: null, effect: null });
     },
+  };
+}
+
+// ------------------------------------------------------------------------------------------- the store's two applies (review 4205)
+
+export type ActsStoreModule = typeof import('../src/coord/overlordActsStore.js');
+
+const STORE_AT = 1_800_000_000_000;
+const storeDb = (): DatabaseSync => openCoordDb(path.join(mkTmp('ccrc-acts-apply-'), 'coord.db'));
+const actLines = (db: DatabaseSync): { state: string; actor: string; actorKind: string }[] =>
+  db.prepare("SELECT state, actor, actorKind FROM overlord_sequence WHERE kind = 'act' ORDER BY seq").all() as never;
+let applySeed = 0;
+const applyInput = (actor: RecordedActor, id: number, state: 'pending' | 'done'): ActWrite => ({
+  allow: { act: 'relay', effect: null, programme: 'prog-a', incarnation: null, naturalKey: '', cell: 'allow', generationId: 2 },
+  kind: 'relay', state, target: { kind: 'request', id, revision: 0 }, targets: [{ kind: 'request', id: String(id), revision: 0 }],
+  requestId: id, widens: null, opens: null, summary: 'route it', why: 'its owner', authority: 'own', actor,
+  identityStrength: 'attributed', isolation: 'shared-user', fence: { term: 1, generationId: 2, model: null, lane: null },
+  op: { key: (++applySeed).toString(16).padStart(32, 'a'), door: 'relay', callSha256: 'c'.repeat(64), sessionId: 'overlord-a' },
+  checks: [], journalHighest: null,
+});
+/** A journal double that runs `between` after its append and before the apply (a fact changed under the plan), then the apply,
+ *  answering a throw from it as `journal-append`, as the act journal will. */
+const doubleWith = (between: () => void = () => undefined): ActJournalPort => {
+  let sequence = 0;
+  return {
+    appendInTx(_db, _records, apply) {
+      sequence += 1;
+      between();
+      try { apply(); } catch (e) { return { ok: false, error: 'journal-append', detail: e instanceof Error ? e.message : String(e) }; }
+      return { ok: true, sequence };
+    },
+  };
+};
+const IDENTITY = attributionIdentity({ attribute: async () => ({ ok: true }), incarnation: async () => ({ kind: 'unmeasured', reason: 'absent' }) });
+const sessionActor = async (): Promise<RecordedActor> => {
+  const s = await IDENTITY.session('overlord-a', '11111111-2222-3333-4444-555555555555', 'byUuid');
+  if (!s.ok) throw new Error('the fixture session was not attributed');
+  return s.actor;
+};
+const operatorActor = (): RecordedActor => IDENTITY.operator(gateActorOf('Fixture browser', 'abcdef0123456789'));
+
+/** The apply re-makes its plan and throws when a fact changed under it (F3), and a door settle's act line is its act's own
+ *  actor's (F1): one case per actor kind the door can carry. */
+export function actApplyCases(m: ActsStoreModule): Record<string, SuiteCase> {
+  const doorSettleLine = async (actor: RecordedActor): Promise<void> => {
+    const db = storeDb();
+    try {
+      const j = doubleWith();
+      expect(tx(db, () => m.writeActInTx(db, j, applyInput(actor, 7, 'pending'), STORE_AT))).toMatchObject({ ok: true, act: { id: 1 } });
+      expect(tx(db, () => m.settleActInTx(db, j, 1, 'done', 'door', STORE_AT + 1))).toMatchObject({ ok: true, act: { state: 'done' } });
+      expect(actLines(db)).toEqual([
+        { state: 'pending', actor: actor.subject, actorKind: actor.kind }, { state: 'done', actor: actor.subject, actorKind: actor.kind }]);
+    } finally { db.close(); }
+  };
+  return {
+    'a door settle\'s line carries a session actor\'s own subject and kind': async () => { await doorSettleLine(await sessionActor()); },
+    'a door settle\'s line carries an operator actor\'s own subject and kind': async () => { await doorSettleLine(operatorActor()); },
+    'the write\'s apply throws when the highest id moved between the append and the apply: journal-append, no row, no line': () => {
+      const db = storeDb();
+      try {
+        const plain = doubleWith();
+        for (const id of [7, 8]) expect(tx(db, () => m.writeActInTx(db, plain, applyInput(serverActorOf('lane-a'), id, 'done'), STORE_AT)).ok).toBe(true);
+        // The plan reserves id 3; the double then drops row 2, so the re-made plan reserves 2 and the apply must not insert 3.
+        const moved = doubleWith(() => { db.prepare('DELETE FROM overlord_acts WHERE id = 2').run(); });
+        expect(tx(db, () => m.writeActInTx(db, moved, applyInput(serverActorOf('lane-a'), 9, 'done'), STORE_AT)))
+          .toMatchObject({ ok: false, error: 'journal-append' });
+        expect(m.actById(db, 3)).toEqual({ kind: 'measured', value: 'absent' });
+        expect(actLines(db)).toHaveLength(2);
+      } finally { db.close(); }
+    },
+    'the settle\'s apply throws when the row\'s state moved between the append and the apply: journal-append, the state left': () => {
+      const db = storeDb();
+      try {
+        const plain = doubleWith();
+        expect(tx(db, () => m.writeActInTx(db, plain, applyInput(serverActorOf('lane-a'), 7, 'pending'), STORE_AT)).ok).toBe(true);
+        // The plan reads from = pending; the double moves the row to unknown, from which the lane may also settle done, so the
+        // re-made plan passes with another from, and the apply must refuse it rather than write done over unknown.
+        const moved = doubleWith(() => { db.prepare("UPDATE overlord_acts SET state = 'unknown' WHERE id = 1").run(); });
+        expect(tx(db, () => m.settleActInTx(db, moved, 1, 'done', 'lane', STORE_AT + 1))).toMatchObject({ ok: false, error: 'journal-append' });
+        expect(m.actById(db, 1)).toMatchObject({ kind: 'measured', value: { state: 'unknown' } });
+        expect(actLines(db)).toHaveLength(1);
+      } finally { db.close(); }
+    },
+  };
+}
+
+// ------------------------------------------------------------------------------------- the ceiling latch's standing read (F2)
+
+export type CeilingWiringModule = typeof import('../src/coord/overlordCeilingWiring.js');
+
+/** The standing read over a fixture store, with latches raised through the ladder's real one writer by an actor it accepts. */
+export function ceilingStandingCases(w: CeilingWiringModule): Record<string, SuiteCase> {
+  const withStore = (fn: (coord: CoordStore, raise: (cause: LadderLatchCause) => void) => void): void => {
+    const coord = new CoordStore(storeDb());
+    const deps = { coord, journal: NO_LADDER_AUTHORITY, clock: { wall: () => 1_000 }, entropy: { hex: (n: number) => 'c'.repeat(2 * n) } };
+    try {
+      fn(coord, (cause) => { expect(raiseLatch(deps, cause, 'a fixture cause', serverActorOf('lane-a'))).toMatchObject({ ok: true, changed: true }); });
+    } finally { coord.db.close(); }
+  };
+  const ports = (coord: CoordStore) => w.ceilingLatchPorts({ rows: () => coord.ladderRows(), raise: undefined, warn: () => undefined });
+  return {
+    'a standing act-ceiling-hit latch reads yes': () => withStore((coord, raise) => {
+      expect(ports(coord).standing()).toBe(false);
+      raise(ACT_CEILING_LATCH);
+      expect(ports(coord).standing()).toBe(true);
+    }),
+    'a standing latch of another cause alone reads no': () => withStore((coord, raise) => {
+      raise('probes-failed-twice');
+      expect(coord.ladderRows()).toMatchObject({ kind: 'measured', standing: [{ cause: 'probes-failed-twice' }] });
+      expect(ports(coord).standing()).toBe(false);
+    }),
   };
 }

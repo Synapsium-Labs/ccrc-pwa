@@ -6,8 +6,8 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { MutantSet, SuiteCase } from './mutate.js';
 import {
-  actNaturalKeyCases, actSettleVerdictCases, actWriteVerdictCases, countReadableCases, nextActIdCases, writeCountGroupsCases,
-  type ActsModule, type CeilingModule,
+  actApplyCases, actNaturalKeyCases, actSettleVerdictCases, actWriteVerdictCases, ceilingStandingCases, countReadableCases, nextActIdCases,
+  writeCountGroupsCases, type ActsModule, type ActsStoreModule, type CeilingModule, type CeilingWiringModule,
 } from '../actCases.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');
@@ -99,6 +99,31 @@ const COUNT_GUARD_SET: MutantSet<CeilingModule> = {
   ],
 };
 
+// Review 4205: the store's two applies (F1, F3) and the ceiling latch's standing read (F2), each check red without it.
+const STORE_KEY = 'server/src/coord/overlordActsStore.ts';
+const APPLY_WRITE_SET: MutantSet<ActsStoreModule> = {
+  modulePath: path.join(ROOT, STORE_KEY), suite: actApplyCases,
+  mutants: [
+    { id: 'A1 the write\'s apply does not compare its plan', old: 'if (!again.ok || again.plan.id !== plan.id || again.plan.natural.key !== plan.natural.key) {', new: 'if (!again.ok) {' },
+  ],
+};
+const APPLY_SETTLE_SET: MutantSet<ActsStoreModule> = {
+  modulePath: path.join(ROOT, STORE_KEY), suite: actApplyCases,
+  mutants: [
+    { id: 'A2 the settle\'s apply does not compare its from', old: ' || again.plan.record.from !== plan.record.from) {', new: ') {' },
+    { id: 'A3 every door settle\'s line is the server\'s', old: "const own = plan.by === 'door' && (a.kind === 'session' || a.kind === 'operator');", new: 'const own = false;' },
+    { id: 'A4 an operator\'s door settle\'s line is the server\'s', old: "(a.kind === 'session' || a.kind === 'operator')", new: "a.kind === 'session'" },
+  ],
+};
+const WIRING_KEY = 'server/src/coord/overlordCeilingWiring.ts';
+const STANDING_SET: MutantSet<CeilingWiringModule> = {
+  modulePath: path.join(ROOT, WIRING_KEY), suite: ceilingStandingCases,
+  mutants: [
+    { id: 'L1 any standing latch reads yes', old: 'r.standing.some((l) => l.cause === ACT_CEILING_LATCH)', new: 'r.standing.length > 0' },
+    { id: 'L2 a standing latch never reads yes', old: 'r.standing.some((l) => l.cause === ACT_CEILING_LATCH)', new: 'false' },
+  ],
+};
+
 /** One entry per decider, keyed `<path>#<function>`; `mutation-floors.test.ts` spreads it into `MUTANT_SETS`. */
 export const ACT_ROWS_MUTANT_SETS: Record<string, MutantSet<never>> = {
   [`${KEY}#actNaturalKey`]: KEY_SET as MutantSet<never>,
@@ -107,4 +132,7 @@ export const ACT_ROWS_MUTANT_SETS: Record<string, MutantSet<never>> = {
   [`${KEY}#actSettleVerdict`]: SETTLE_SET as MutantSet<never>,
   [`${KEY}#writeCountGroups`]: GROUPS_SET as MutantSet<never>,
   [`${CEILING_KEY}#countReadable`]: COUNT_GUARD_SET as MutantSet<never>,
+  [`${STORE_KEY}#applyWrite`]: APPLY_WRITE_SET as MutantSet<never>,
+  [`${STORE_KEY}#applySettle`]: APPLY_SETTLE_SET as MutantSet<never>,
+  [`${WIRING_KEY}#ceilingLatchPorts`]: STANDING_SET as MutantSet<never>,
 };

@@ -33,7 +33,8 @@ import { ACT_CEILING_WINDOW_MS, type CeilingGroup } from '../../../shared/overlo
 /** Step 10's act-count reader (W2 act catalogue A; plan question 1, slug `ceiling-counter-is-an-act-rows-port`): act rows
  *  written since `since` whose kind or effect is in the group, in all and for the programme, named by its slug (`null`: no
  *  programme target; act rows A, slug `programme-is-its-slug`); a row settled `refused` does not count. Its producer is act
- *  rows A's store (`overlordActsStore.ts#actCountReader`), bound at L5 through `overlordCeilingWiring.ts`. */
+ *  rows A's store (`overlordActsStore.ts#actCountReader`), built by `overlordCeilingWiring.ts#actCountPort` and bound in the
+ *  server's build function (`server.ts#buildServer`, delivery). */
 export interface ActCountReader {
   count(group: CeilingGroup, programme: string | null, since: number): GroupCount;
 }

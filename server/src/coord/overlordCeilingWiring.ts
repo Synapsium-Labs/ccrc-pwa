@@ -1,5 +1,5 @@
-// Gate step 10's two producers, built once in the composition root (Overlord W2, act rows A, Task A6's count reader; act
-// catalogue A's question 3). Ring L4, context C5: it fills the runner's `actCount` and `ceilingLatch` ports
+// Gate step 10's two producers, built once where they are bound, in the server's build function (`server.ts#buildServer`,
+// delivery) (Overlord W2, act rows A, Task A6's count reader; act catalogue A's question 3). Ring L4, context C5: it fills the runner's `actCount` and `ceilingLatch` ports
 // (`overlordGateRun.ts`, declared by the runner, their consumer) from the ONE existing producer of each fact, and decides
 // nothing: the counts are the act store's (`overlordActsStore.ts#actCountReader`), the standing latches the ladder store's read,
 // and the raise the ladder's one writer (`overlordLadderRead.ts#raiseLatch`). Whether a latch is due is `ceilingLatchDue`'s (L1),

@@ -16,6 +16,8 @@ import {
 import type { ActJournalRecord } from '../src/coord/overlordActs.js';
 import { ACT_CEILING_WINDOW_MS, type OverlordActKind } from '../../shared/overlord.js';
 import { mkTmp, removeTmpFixtures } from './tmpHelpers.js';
+import { actApplyCases } from './actCases.js';
+import * as store from '../src/coord/overlordActsStore.js';
 
 let template = '';
 const opened: DatabaseSync[] = [];
@@ -50,7 +52,7 @@ const journal = (db: DatabaseSync): Double => {
       d.events.push(`append rows=${count(db)}`);
       try { apply(); } catch (e) { d.events.push('apply threw'); return { ok: false, error: 'journal-append', detail: e instanceof Error ? e.message : String(e) }; }
       d.events.push(`applied rows=${count(db)}`);
-      return { ok: true };
+      return { ok: true, sequence: d.calls.length };
     },
   };
   return d;
@@ -228,7 +230,7 @@ describe('the natural key and the operation key', () => {
 });
 
 describe('the settle', () => {
-  it('reads the row\'s state in the transaction and passes it as from; the door\'s line is its actor\'s, the lane\'s the server\'s', () => {
+  it('reads the row\'s state in the transaction and passes it as from; the lane\'s and the boot pass\'s lines are the server\'s', () => {
     const db = openDb(); const j = journal(db);
     expect(write(db, j, { state: 'pending' }).ok).toBe(true);
     expect(tx(db, () => settleActInTx(db, j, 1, 'unknown', 'lane', AT + 1))).toMatchObject({ ok: true, act: { state: 'unknown' } });
@@ -248,6 +250,12 @@ describe('the settle', () => {
     expect(tx(db, () => settleActInTx(db, j, 99, 'done', 'lane', AT))).toMatchObject({ ok: false, error: 'not-found' });
     expect(j.calls).toHaveLength(3);
   });
+});
+
+// Review 4205 F1 and F3: a door settle's line under a session and an operator actor, and the two applies' disagreement checks,
+// each red without its check. The cases are `actCases.ts`'s, shared with `sim/overlordActsSets.ts`.
+describe('the applies (review 4205)', () => {
+  for (const [name, run] of Object.entries(actApplyCases(store))) it(name, run);
 });
 
 describe('the readers', () => {
@@ -276,6 +284,15 @@ describe('the readers', () => {
 
 describe('the count reader (A6)', () => {
   const since = AT - ACT_CEILING_WINDOW_MS;
+  it('a named programme whose count reads back no integer is unmeasured, while the same read with no programme is counted (F4)', () => {
+    // A database stand-in whose first count is an integer and whose second is not: only the programme's count is unreadable.
+    const stub = (): DatabaseSync => {
+      let n = 0;
+      return { prepare: () => ({ get: () => ({ n: ++n === 1 ? 3 : null }) }) } as unknown as DatabaseSync;
+    };
+    expect(actCountReader(stub()).count('relay', 'prog-a', since)).toEqual({ kind: 'unmeasured', why: 'a count read back no integer' });
+    expect(actCountReader(stub()).count('relay', null, since)).toEqual({ kind: 'counted', programme: null, all: 3 });
+  });
   it('counts rows not refused whose kind or effect is in the group, in all and for one programme, inside the window', () => {
     const db = openDb(); const j = journal(db);
     let n = 0;

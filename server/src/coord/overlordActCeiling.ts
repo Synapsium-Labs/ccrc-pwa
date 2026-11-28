@@ -36,8 +36,10 @@ function overGroup(group: CeilingGroup, count: Extract<GroupCount, { kind: 'coun
   return null;
 }
 
-/** Whether a wired count is a count (act rows A, the coordinator's item 6b): every number a non-negative safe integer, the
- *  programme's `null` only where no programme was named. Anything else could not be measured, and is never read as zero. */
+/** Whether a wired count is a count (act rows A, the coordinator's item 6b): every number a non-negative safe integer, and the
+ *  programme's count either one or `null`. The guard is not told whether a programme was named, so it accepts a `null` always
+ *  (and `overGroup` then skips the per-programme cap); the reader is what answers `unmeasured` for a named programme it could
+ *  not count (`overlordActsStore.ts#actCountReader`). Anything else could not be measured, and is never read as zero. */
 export function countReadable(c: Extract<GroupCount, { kind: 'counted' }>): boolean {
   const isCount = (n: unknown): boolean => typeof n === 'number' && Number.isSafeInteger(n) && n >= 0;
   return isCount(c.all) && (c.programme === null || isCount(c.programme));
