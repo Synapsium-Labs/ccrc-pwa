@@ -8,6 +8,11 @@
 // that commit, through the fleet test slice, on 2026-11-22 (1 test passed). It is written here as it came, never regenerated
 // from the branch under test. The base drew `/` with `data-view="fleet"` and kept the address `/`; this build draws the same
 // at `/fleet`. A change to what the Fleet draws is a decision: re-measure on a base checkout and say so, never edit the text.
+//
+// RE-MEASURED, THE DESK COLUMN ONLY (desktop polish wave 182, the coordinator's ruling A): at a desk the class chooser has a
+// line of its own under the runs line, so the column's text reads New project before the chooser's options. The desk
+// `column` below is what this file's measuring code printed, unedited, on 9b5c885f1c (that wave's head, main 44f2b15a3b
+// absorbed), through the fleet test slice; every other field of both pictures is the base's, and still matched there.
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, render } from '@testing-library/react';
 import { REFINED } from '@ccrc/ui';
@@ -104,7 +109,7 @@ const BASE_PICTURE: Readonly<Record<'phone' | 'desk', FleetPicture>> = {
       "❯ccrcWaiting on youInbox 1RunsAccountsDocs⌘KSettings+New sessionchecking accounts…",
       "2 sessions · 1 waiting"
     ],
-    "column": "2 sessions · 1 waitingRuns · —AutomaticDefaultFableOpusSonnetHaikuNew projectNeeds you1Idle1▾held open: a question here is waiting on youproject-a2 sessionsclaude●+●firstwaitingneeds you···○secondidle···",
+    "column": "2 sessions · 1 waitingRuns · —New projectAutomaticDefaultFableOpusSonnetHaikuNeeds you1Idle1▾held open: a question here is waiting on youproject-a2 sessionsclaude●+●firstwaitingneeds you···○secondidle···",
     "rows": [
       "▾held open: a question here is waiting on youproject-a2 sessionsclaude●+●firstwaitingneeds you···○secondidle···"
     ],

@@ -1,7 +1,13 @@
 /* One run's page (`RunDetailScreen`, D-8072; spec 2026-11-04 §8.4). Skin tokens only; no `.run` rule, and nothing here lives in
    `instrument.css` or `refined.css`. Phone: one column, each fact its label over its value. From a laptop's width the facts
    are two columns, each label beside its value. Text wraps, nothing is ellipsised. */
-.rd-strip { padding-inline: 0; max-width: none; }
+.wi-nav.rd-strip { padding-inline: 0; max-width: none; }
+/* Under a page's head row the first line is the scaffold's --sp-2 down (desktop polish wave 182, ruling 4): at a desk the
+   strip's own pad above gives way, so the Back control sits on that gap alone. The phone keeps its sticky strip's pad. The
+   selectors name the item strip's class too, so these win over its rules (ledgers.css) whatever order the sheets load in. */
+@media (min-width: 900px) {
+  .wi-nav.rd-strip { padding-block-start: 0; }
+}
 .rd-note { margin: var(--sp-3) 0; color: var(--ink-primary); overflow-wrap: anywhere; }
 .rd-head { display: grid; gap: var(--sp-1); min-width: 0; margin: var(--sp-3) 0; color: var(--ink-primary); }
 .rd-head > p { margin: 0; min-width: 0; overflow-wrap: anywhere; }

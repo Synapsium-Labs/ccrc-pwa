@@ -1410,7 +1410,7 @@ export const INHERITED_GROUNDS = {
     under: ['var(--bg-sheet)'],
     why: "the connect sheet's field labels (NameFrame.tsx, SecretField.tsx), inside <Sheet>'s .sheet-panel, which paints background: var(--bg-sheet). The connect sheet's frames (.acct-connect, .acct-frame) paint no background, and the selector names no painted ancestor, so the auditor cannot recover that ground from CSS alone",
   },
-  '.acct-field-note, .acct-narrowed, .acct-door-reason > p, .acct-door-reason .acct-fix-hold': {
+  '.acct-field-note, .acct-narrowed, .acct-door-reason > p:not(.sr-only), .acct-door-reason .acct-fix-hold': {
     under: ['var(--bg-sheet)', 'var(--bg-page)'],
     why: "the connect sheet's field notes and a narrowed provider's or method's reason (NameFrame.tsx, ProviderFrame.tsx, MethodFrame.tsx) inside <Sheet>'s .sheet-panel, which paints var(--bg-sheet), and the Add account door's reason (DoorReason) on the Accounts page's var(--bg-page); none of the frames or the reason's box paints a background, and the selector names no painted ancestor, so the auditor cannot recover either ground from CSS alone",
   },
