@@ -35,8 +35,13 @@ plan's Results section "Follow-up wave, comments in parts (the conservative rule
 - **The top-level comment keeps its own cut** (`cutComment`, close and reopen): it is a gap the library draws no block for, none of
   the units the ruling names, and that cut was reviewed in P6.1; where it has no room the unit is whole, never P1's.
 - **The unread tail stays P1's**, and a unit that runs into it is read by the rule only up to it (review of item 1).
-- **For the coordinator's ruling**: a unit kept whole above the gate is printed as its plain source, so Print shows every line of
-  its comment where `main` showed P1's fragments; that is the gate's own answer for any Markdown above the gate.
+- The coordinator confirmed these three choices on 2026-11-28.
+- **Print of a unit kept whole above the gate** (the coordinator's ruling, 2026-11-28: recorded, not built). From a unit above
+  the render gate (524 288 bytes) that holds an opener, Print prints the plain source, so it shows every line of the comment where
+  `main` showed P1's fragments. A plain-source view shows comments by definition: that is the gate's own answer for any text too
+  large to render, and not the leak this wave closes, which is commented text in a rendered part.
+- **The dashes run** (a run of blocks each starting with three dashes, joining the unit before it): recorded, not built. Only the
+  text bounds it, so in practice the range ceiling (67 108 864 bytes) bounds it; above the gate it gets the gate's answer.
 
 ## What is left (class 10 after the rule)
 
