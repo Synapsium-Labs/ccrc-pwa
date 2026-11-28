@@ -6,7 +6,8 @@
 // text with it, is laid out in that widened column.
 //
 // This file renders such an item at desktop widths in both skins and holds what the jsdom suites cannot: the item card stays in
-// its column and left of the side panel, every element inside the card and inside the panel ends inside its own box, and neither
+// its column (since desktop-polish wave 186 the item is one column at a desk too, "Your move" under the card, so the card no
+// longer has a side panel to stay left of), every element inside the card and inside the panel ends inside its own box, and neither
 // the page nor the detail pane scrolls sideways. On a desk the pane (`.shell-detail`) clips its overflow sideways, so the page's
 // own sideways scroll stays 0 there whatever the card does: the pane's own is the one that measures it. A second item, ticked
 // and waiting on the coordinator, has the panel's status line, fixed words, in the same panel; a third is a decision with no
@@ -165,15 +166,14 @@ const geometry = (page: Page): Promise<Geometry> => page.evaluate(() => {
 describe.each([REFINED, INSTRUMENT] as const)('an item whose text holds a long run with no spaces, in %s', (skin) => {
   for (const width of [1280, 1920] as const) {
     for (const id of IDS) {
-      it(`at ${width}, item ${id}: the card, its text and the side panel stay inside their columns, with no sideways scroll`, async () => {
+      it(`at ${width}, item ${id}: the card, its text and "Your move" stay inside the one column, with no sideways scroll`, async () => {
         const { ctx, page, errors } = await open(skin, width, `/waiting/${id}`);
         try {
           const shots = process.env['CCRC_SHOTS'];
           if (shots !== undefined && shots !== '') await page.screenshot({ path: `${shots}/item-wrap-${skin}-${width}-${id}.png`, fullPage: true });
           const g = await geometry(page);
           expect(g.cardPastColumn, `the card past its column ${JSON.stringify(g)}`).toBeLessThanOrEqual(0);
-          expect(g.cardPastPanel, `the card past the panel's left edge ${JSON.stringify(g)}`).not.toBeNull();
-          expect(g.cardPastPanel!, `the card past the panel's left edge ${JSON.stringify(g)}`).toBeLessThan(0);
+          expect(g.cardPastPanel, `one column at a desk (wave 186) ${JSON.stringify(g)}`).toBeNull();
           expect(g.bandPast, `the band past the item ${JSON.stringify(g)}`).toBeLessThanOrEqual(0);
           expect(g.spills, 'elements ending past their card').toEqual([]);
           expect(g.scrolls, 'a card scrolling sideways').toEqual([]);

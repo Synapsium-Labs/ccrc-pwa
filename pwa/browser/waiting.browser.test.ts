@@ -204,7 +204,9 @@ describe.each(SKINS)('Waiting on you in %s', (skin) => {
           expect(m.band!.ratio, "the band's programme name on its tint").toBeGreaterThanOrEqual(4.5);
           expect(m.pills.length).toBeGreaterThanOrEqual(1);
           for (const p of m.pills) expect(p.ratio, `pill "${p.text}"`).toBeGreaterThanOrEqual(4.5);
-          expect(await page.textContent('.wi-history')).toContain('sent back: Settings still shows record only.');
+          // A send-back reads as its act, then the coordinator's note under it (desktop-polish wave 186).
+          const history = await page.locator('.wi-history[aria-label="History"] li').allInnerTexts();
+          expect(history.some((t) => /^Sent back by the coordinator · .+?\s+Settings still shows record only\.$/.test(t)), JSON.stringify(history)).toBe(true);
           expect(errors).toEqual([]);
         } finally {
           await ctx.close();

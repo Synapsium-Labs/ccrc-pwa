@@ -163,9 +163,42 @@ function latestReturn(item: ItemView): { at: number; note: string | null } | nul
 /** An OPEN item the coordinator sent back: it counts for the operator again, with the coordinator's note. */
 export const cameBack = (item: ItemView): boolean => item.state === 'open' && latestReturn(item) !== null;
 
-/** The coordinator's note on a sent-back item (what to fix), or `null` when it has none or the item did not come back. */
+/** The coordinator's note on a sent-back item (what to fix), or `null` when it has none or the item did not come back. The item
+ *  page draws it under the title (desktop-polish wave 186) as the list row draws it, from this one reader. */
 export function cameBackNote(item: ItemView): string | null {
   return item.state === 'open' ? latestReturn(item)?.note ?? null : null;
+}
+
+/** The label of that note under an item's title (desktop-polish wave 186). */
+export const CAME_BACK_WHY_WORD = 'Why it came back';
+
+/** An item's history at most this long is drawn whole; a longer one folds its earlier acts behind one disclosure and keeps
+ *  the newest `HISTORY_OPEN` open, so a long history never buries the item's acts below it (desktop-polish wave 186). */
+export const HISTORY_FOLD_OVER = 4;
+export const HISTORY_OPEN = 3;
+/** The disclosure's words: how many earlier acts it holds. */
+export const earlierActsWord = (n: number): string => `${n} earlier`;
+/** The accessible name of the folded acts' list (fix round 1 of wave 186, A8). */
+export const EARLIER_HISTORY_WORD = 'Earlier history';
+
+/** The How steps without the numbers they carry themselves, decided for the whole list (fix round 2 of wave 186, F6; round 1's
+ *  A1 decided step by step). Only when EVERY step begins with its own sequence number from 1 and a full stop or a bracket
+ *  (`1. Open the shell`, `2) Run the check`) is each number dropped, since the list draws it; otherwise every step is left as
+ *  written, so an inline enumeration (`1) the server, 2) the agent`) or a step that happens to start with a number keeps it. */
+export function stepsWithoutOwnNumbers(steps: readonly string[]): readonly string[] {
+  const heads = steps.map((step, i) => {
+    const m = /^\s*(\d{1,3})[.)]\s+(?=\S)/.exec(step);
+    return m !== null && Number(m[1]) === i + 1 ? m[0].length : -1;
+  });
+  return heads.every((h) => h > 0) ? steps.map((step, i) => step.slice(heads[i])) : steps;
+}
+
+/** An item's history split for drawing: the earlier acts behind the disclosure (empty when nothing folds) and the acts drawn
+ *  open, both in the history's own order. */
+export function historyFold<T>(history: readonly T[]): { readonly earlier: readonly T[]; readonly open: readonly T[] } {
+  if (history.length <= HISTORY_FOLD_OVER) return { earlier: [], open: history };
+  const cut = history.length - HISTORY_OPEN;
+  return { earlier: history.slice(0, cut), open: history.slice(cut) };
 }
 
 /** The pill of how soon an item is needed (spec §2: a needed-by label whatever the item's state). */

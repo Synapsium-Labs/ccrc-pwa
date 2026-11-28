@@ -24,11 +24,14 @@ import remarkGfm from 'remark-gfm';
 import remarkRehype from 'remark-rehype';
 import { remarkAlerts } from './remarkAlerts';
 import { remarkChatMarks } from './remarkChatMarks';
+import { remarkItemGuard } from './remarkItemGuard';
 import { keystrokeParts, prescanMarkdown } from './markdownGuard';
 import { DOCS_MAX_RENDER_ELEMENTS, MD_MAX_TREE_DEPTH } from './markdownLimits';
 
-/** Who asked: a label carried through the worker protocol and the runner. The pipeline is the same for both. */
-export type MarkdownProfile = 'chat' | 'docs';
+/** Who asked: a label carried through the worker protocol and the runner. The pipeline is the same for each; only the remark
+ *  plugins differ (`PLUGINS_BY_PROFILE`). `item` is a Waiting-on-you item's text (desktop-polish wave 186). */
+export const MARKDOWN_PROFILES = ['chat', 'docs', 'item'] as const;
+export type MarkdownProfile = (typeof MARKDOWN_PROFILES)[number];
 
 export type ParseOutcome =
   | { kind: 'tree'; tree: HastRoot; depth: number }
@@ -48,7 +51,15 @@ export type ParseOutcome =
 const PLUGINS_BY_PROFILE: Readonly<Record<MarkdownProfile, PluggableList>> = {
   chat: [remarkGfm, remarkAlerts, remarkChatMarks],
   docs: [remarkGfm, remarkAlerts],
+  // An item's text: GFM and the item guard (`remarkItemGuard.ts`), which keeps old plain prose reading as written. No alert
+  // callouts (the guard switches block quotes off) and no chat marks. A strikethrough takes two tildes, as the summary's
+  // projection reads it (`shared/itemText.ts`): a single tilde in old text stays a tilde (fix round 1 of wave 186, F7).
+  item: [[remarkGfm, { singleTilde: false }], remarkItemGuard],
 };
+
+/** The item profile's remark plugins, for the item renderer's synchronous path (`ItemMarkdown`, `markdown.tsx`), so the
+ *  worker and the main thread parse an item with the one list. */
+export const ITEM_REMARK_PLUGINS: PluggableList = PLUGINS_BY_PROFILE.item;
 
 /** A hast node as the two walks see it. */
 interface WalkNode {
@@ -190,7 +201,7 @@ export interface MarkdownReply {
 
 /** Everything the parse worker does with one message (`markdownWorker.ts` is only the wiring), here so tests never
  *  import the worker entry. A message with no finite numeric `id` is dropped: there is nothing to answer to. A
- *  non-string `src`, or a `profile` other than `'chat'` and `'docs'`, answers `threw` `TypeError`. Otherwise the
+ *  non-string `src`, or a `profile` outside `MARKDOWN_PROFILES`, answers `threw` `TypeError`. Otherwise the
  *  answer is `parseMarkdown`'s outcome. Both the parse and the post are wrapped: a parse that throws (the pre-scan
  *  runs outside `parseMarkdown`'s own try) answers `threw` and the thrown name, and a `post` that throws (a structured
  *  clone's `DataCloneError`) is answered once more with `threw` and the thrown name, and a throw from that second
@@ -203,8 +214,8 @@ export function answerMarkdownJob(data: unknown, post: (reply: MarkdownReply) =>
   let outcome: ParseOutcome;
   try {
     outcome =
-      typeof job.src === 'string' && (job.profile === 'chat' || job.profile === 'docs')
-        ? parseMarkdown(job.src, job.profile)
+      typeof job.src === 'string' && (MARKDOWN_PROFILES as readonly unknown[]).includes(job.profile)
+        ? parseMarkdown(job.src, job.profile as MarkdownProfile)
         : { kind: 'threw', error: 'TypeError' };
   } catch (e) {
     // `parseMarkdown` wraps its pipeline but not its pre-scan: a throw from there is answered like any other.

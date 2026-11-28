@@ -36,6 +36,8 @@ const ROOTS: readonly string[] = [
   'chatMarks.ts', 'remarkChatMarks.ts',
   // Print and the block-boundary cutter (X2 P6.1): the render job's HTML parse, which alone imports the parser.
   'renderTree.ts', 'printAllow.ts',
+  // The item profile's guard (desktop-polish wave 186): it imports nothing.
+  'remarkItemGuard.ts',
 ];
 /**
  * The shared kernel files the closure reaches, relative to the package: the one UTF-8 byte counter, which

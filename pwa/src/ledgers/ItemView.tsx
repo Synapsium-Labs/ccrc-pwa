@@ -31,9 +31,18 @@
 // programme's home project's Docs reader) open in the console, and anything else, `javascript:` and `data:` included, is text.
 // "item N", "items N and M" and "item #N" link to that item's page where the route's `itemHref` says the number is an item
 // (D-8194). A closed item (done, withdrawn, dismissed) opens read-only: its panel says it is closed and offers no act.
+//
+// READING ORDER AND MARKDOWN (desktop-polish wave 186). The page reads top to bottom: the band, the title, why the item came
+// back (the newest send-back note, `cameBackNote`, also kept in the history), why, how, the history, and "Your move" last, so
+// the operator reads before deciding; a decision's options, its recommendation and the own-answer field stay inside "Your
+// move", beside the button that sends them. A history of more than `HISTORY_FOLD_OVER` acts folds its earlier acts behind one
+// disclosure and keeps the newest `HISTORY_OPEN` open. Item text is Markdown, drawn by the transcript's renderer
+// (`ItemMarkdown`, `lib/markdown.tsx`): the title and each option take inline marks only; why, each how step, the
+// recommendation's reason and each history note take the block form, in the prose box (`PROSE`), so a fenced command is a
+// copy block. The links above are found in the prose by `linkRuns` (never inside code), one splitter per page.
 import { useEffect, useId, useMemo, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
-import { Button, QuickConfirm, RadioFieldset, TextInput, TextLink } from '@ccrc/ui';
+import { Button, PROSE, QuickConfirm, RadioFieldset, TextInput, TextLink, cn } from '@ccrc/ui';
 import {
   ANSWER_MAX, SECRET_VALUE_MAX, WAITS_ON_WORDS, isSecretValue, recommendationOf, type ItemView as ItemWire, type SecretRemoveAnswer,
   type SecretSaveAnswer, type SecretUnmasked, SECRET_TAIL_MIN,
@@ -45,8 +54,8 @@ import { ConfirmItsYou } from '../accounts/ConfirmItsYou';
 import { useStepUp, type StepUpDeps } from '../accounts/useStepUp';
 import { api } from '../lib/api';
 import { inAppClick } from '../fleet/settingsText';
-import { useTabLink } from '../lib/useTabLink';
-import { openExternal } from '../lib/markdown';
+import { ItemMarkdown } from '../lib/markdown';
+import type { TextLinkSplitter } from '../lib/hastLinkRuns';
 import { ApiError } from '../lib/apiError';
 import { readAuthStatus } from '../lib/auth';
 import { onPageHidden } from '../lib/pageClock';
@@ -61,7 +70,10 @@ import { ItemControls, useItemActs, type ItemActs } from './ItemActs';
 import { MigrationBody } from './MigrationBody';
 import { AccountHoldClear } from '../overlord/AccountHoldClear';
 import { holdLaneOfItem } from '../overlord/overlordSettingsWords';
-import { ageWords, closedItemWords, itemNumber, itemPills, KIND_WORD, NOT_CURRENT_ACTS_WORD, RECOMMENDED_WORD, RECOMMENDED_WHY_HEADING } from './ledgerWords';
+import {
+  ageWords, CAME_BACK_WHY_WORD, cameBackNote, closedItemWords, EARLIER_HISTORY_WORD, earlierActsWord, historyFold, itemNumber,
+  itemPills, KIND_WORD, NOT_CURRENT_ACTS_WORD, RECOMMENDED_WORD, RECOMMENDED_WHY_HEADING, stepsWithoutOwnNumbers,
+} from './ledgerWords';
 import './ledgers.css';
 
 export interface ItemViewProps {
@@ -344,35 +356,62 @@ const ACT_WORD: Readonly<Record<ItemWire['history'][number]['act'], string>> = {
   dismiss: 'You dismissed it', act: 'You acted on it', decline: 'You declined it', settle: 'It settled on its own',
 };
 
-/** Text with its links drawn as links (`linkRuns`, PL10): an outside page in a new tab with no opener, through `openExternal`,
- *  as every outside link of the console is (an installed app's own window must not navigate, review 1466 F10); a console or
- *  Docs path through the console's own navigation. The split is made once per text and home (review 1466 F9). */
-function Linked({ text, homeProject, itemHref }: { text: string; homeProject: string | null; itemHref?: ((id: number) => string | null) | undefined }): ReactNode {
-  const runs = useMemo(() => linkRuns(text, homeProject, itemHref), [text, homeProject, itemHref]);
-  // A console path moves within the app; a Docs path, at a desk, opens a Docs tab of its own (the Docs tab rule, desktop
-  // polish wave 174).
-  const link = useTabLink();
-  return runs.map((r, i) => {
-    if (r.kind === 'text') return <span key={i}>{r.text}</span>;
-    return r.external
-      ? <TextLink key={i} href={r.href} onClick={(e) => openExternal(e, r.href)}>{r.text}</TextLink>
-      : <TextLink key={i} {...link(r.href)}>{r.text}</TextLink>;
-  });
+/** The page's one splitter of prose into words and links (`linkRuns`, PL10), made once per home and item address (review 1466
+ *  F9): an outside page opens in a new tab with no opener, as every outside link of the console does (review 1466 F10); a
+ *  console path moves within the app, and a Docs path, at a desk, opens a Docs tab of its own (the Docs tab rule, desktop
+ *  polish wave 174). The item's anchor (`ITEM_COMPONENTS`) draws each run as `linkRuns` decided it. */
+function useItemLinks(homeProject: string | null, itemHref: ((id: number) => string | null) | undefined): TextLinkSplitter {
+  return useMemo(() => (text: string) => linkRuns(text, homeProject, itemHref), [homeProject, itemHref]);
 }
 
-function History({ item, now, homeProject, itemHref }: {
-  item: ItemWire; now: number; homeProject: string | null; itemHref?: ((id: number) => string | null) | undefined;
-}): ReactNode {
+/** An inline item text (a title, an option): its marks in the prose class, drawn inline (`.wi-inline`), so inline code and a
+ *  link look as the transcript draws them. With no splitter (an option) it links nothing: every link and image is its words. */
+function InlineText({ text, links }: { text: string; links?: TextLinkSplitter }): ReactNode {
+  return <span className={cn('wi-inline', PROSE)}><ItemMarkdown text={text} inline {...(links === undefined ? {} : { links })} /></span>;
+}
+
+/** A block of item text: Markdown in the prose box. */
+function ItemText({ text, links, className }: { text: string; links: TextLinkSplitter; className?: string }): ReactNode {
+  return <div className={cn(className, PROSE)}><ItemMarkdown text={text} links={links} /></div>;
+}
+
+/** A titled block of item text, its small heading and then the Markdown: Why, and the line that says why an item came back
+ *  (which also names itself to assistive tech and carries `data-came-back`). The DOM is the same as when each was written
+ *  out; one component, so the shape is written once (markup census). */
+function TextSection({ heading, text, links, cameBack = false }: { heading: string; text: string; links: TextLinkSplitter; cameBack?: boolean }): ReactNode {
   return (
-    <ul className="wi-history" aria-label="History">
-      {item.history.map((h, i) => (
-        <li key={`${h.at}:${h.act}:${i}`}>
-          {h.act === 'return' && h.note !== null ? <Linked text={`sent back: ${h.note}`} homeProject={homeProject} itemHref={itemHref} />
-            : h.act === 'raise' && h.actor === 'ccrc' ? RAISED_BY_CCRC : ACT_WORD[h.act]}
-          {` · ${ageWords(h.at, now)}`}
-        </li>
-      ))}
-    </ul>
+    <section {...(cameBack ? { className: 'wi-came-back', 'aria-label': heading, 'data-came-back': 'true' } : {})}>
+      <h3 className="wi-h">{heading}</h3>
+      <ItemText text={text} links={links} className="wi-text" />
+    </section>
+  );
+}
+
+type HistoryEntry = ItemWire['history'][number];
+
+/** One act of the history: what happened and when, and under it the coordinator's note on a send-back. */
+function HistoryLine({ h, now, links }: { h: HistoryEntry; now: number; links: TextLinkSplitter }): ReactNode {
+  return (
+    <li>
+      <span className="wi-act-line">{`${h.act === 'raise' && h.actor === 'ccrc' ? RAISED_BY_CCRC : ACT_WORD[h.act]} · ${ageWords(h.at, now)}`}</span>
+      {h.act === 'return' && h.note !== null && <ItemText text={h.note} links={links} className="wi-note" />}
+    </li>
+  );
+}
+
+function History({ item, now, links }: { item: ItemWire; now: number; links: TextLinkSplitter }): ReactNode {
+  const { earlier, open } = historyFold(item.history);
+  const line = (h: HistoryEntry, i: number): ReactNode => <HistoryLine key={`${h.at}:${h.act}:${i}`} h={h} now={now} links={links} />;
+  return (
+    <>
+      {earlier.length > 0 && (
+        <details className="wi-earlier" data-history="earlier">
+          <summary>{earlierActsWord(earlier.length)}</summary>
+          <ul className="wi-history" aria-label={EARLIER_HISTORY_WORD}>{earlier.map(line)}</ul>
+        </details>
+      )}
+      <ul className="wi-history" aria-label="History">{open.map((h, i) => line(h, earlier.length + i))}</ul>
+    </>
   );
 }
 
@@ -394,10 +433,13 @@ const OWN_WORD = 'Your own answer';
  *  A real space parts the two (the flex gap draws it, but an accessible name is built from the text): "Keep the order
  *  Recommended", never "Keep the orderRecommended" (fix round 1, F8), as `OptionRow` parts its label from its tag. */
 function OptionText({ text, recommended }: { text: string; recommended: boolean }): ReactNode {
-  if (!recommended) return text;
+  // An option takes inline marks only (desktop-polish wave 186), and no link and no image: it sits inside its radio's label,
+  // where a link would take the tap from the choice and leave the page with the typed note (fix round 1, F2).
+  const words = <InlineText text={text} />;
+  if (!recommended) return words;
   return (
     <span className="wi-opt-text" data-recommended="true">
-      {text}{' '}
+      {words}{' '}
       <span className="wi-rec">{RECOMMENDED_WORD}</span>
     </span>
   );
@@ -416,8 +458,8 @@ function Field({ label, value, onChange, maxLength, hint }: {
   );
 }
 
-function Panel({ item, programmeLive, onTick, onDismiss, saveSecret = saveItemSecret, removeSecret = removeStoredSecret, stepUpDeps = NO_STEP_UP_DEPS, authStatus = readSignIn, current = true, runs = null, acts, onActed, stuck = false }:
-  Pick<ItemViewProps, 'item' | 'programmeLive' | 'onTick' | 'onDismiss' | 'saveSecret' | 'removeSecret' | 'stepUpDeps' | 'authStatus' | 'current' | 'runs' | 'onActed'> & { acts: ItemActs; stuck?: boolean }): ReactNode {
+function Panel({ item, programmeLive, onTick, onDismiss, saveSecret = saveItemSecret, removeSecret = removeStoredSecret, stepUpDeps = NO_STEP_UP_DEPS, authStatus = readSignIn, current = true, runs = null, acts, onActed, stuck = false, links }:
+  Pick<ItemViewProps, 'item' | 'programmeLive' | 'onTick' | 'onDismiss' | 'saveSecret' | 'removeSecret' | 'stepUpDeps' | 'authStatus' | 'current' | 'runs' | 'onActed'> & { acts: ItemActs; stuck?: boolean; links: TextLinkSplitter }): ReactNode {
   const [pick, setPick] = useState<string | null>(null);
   const [own, setOwn] = useState('');
   const [note, setNote] = useState('');
@@ -487,7 +529,7 @@ function Panel({ item, programmeLive, onTick, onDismiss, saveSecret = saveItemSe
           {rec !== null && (
             <section className="wi-why-rec" aria-label={RECOMMENDED_WHY_HEADING}>
               <h3 className="wi-h">{RECOMMENDED_WHY_HEADING}</h3>
-              <p id={whyId} className="wi-text">{rec.why}</p>
+              <div id={whyId} className={cn('wi-text', PROSE)}><ItemMarkdown text={rec.why} links={links} /></div>
             </section>
           )}
           <RadioFieldset legend="Your decision" name={`item-${item.id}`} optionClassName="wi-opt"
@@ -559,6 +601,8 @@ export function ItemView({ item, onTick, onDismiss, programmeLive, now, programm
   const name = programme?.name ?? item.program;
   const href = programme?.href ?? null;
   const home = programme?.homeProject ?? null;
+  const links = useItemLinks(home, itemHref);
+  const back = cameBackNote(item);
   return (
     <div className="wi">
       <div className="wi-band" data-hue={programme?.hue ?? 'none'}>
@@ -575,15 +619,14 @@ export function ItemView({ item, onTick, onDismiss, programmeLive, now, programm
             <span className="wl-kind wi-kind">{KIND_WORD[item.kind]}</span>
             <span className="wi-num">{itemNumber(item)}</span>
           </span>
-          <h1 className="wi-what"><Linked text={item.title} homeProject={home} itemHref={itemHref} /></h1>
-          <section>
-            <h3 className="wi-h">Why</h3>
-            <p className="wi-text"><Linked text={item.why} homeProject={home} itemHref={itemHref} /></p>
-          </section>
+          <h1 className="wi-what"><InlineText text={item.title} links={links} /></h1>
+          {/* Why it came back, read first (ruling 2 of wave 186): the newest send-back note in full; the history keeps it too. */}
+          {back !== null && <TextSection heading={CAME_BACK_WHY_WORD} text={back} links={links} cameBack />}
+          <TextSection heading="Why" text={item.why} links={links} />
           {item.how.length > 0 && (
             <section>
               <h3 className="wi-h">How</h3>
-              <ol className="wi-steps" aria-label="How">{item.how.map((s, i) => <li key={`${i}:${s}`}><Linked text={s} homeProject={home} itemHref={itemHref} /></li>)}</ol>
+              <ol className="wi-steps" aria-label="How">{stepsWithoutOwnNumbers(item.how).map((s, i) => <li key={`${i}:${s}`}><ItemText text={s} links={links} /></li>)}</ol>
             </section>
           )}
           {migration !== undefined && (item.action?.verb === 'linear-map' || item.action?.verb === 'linear-report') && (
@@ -592,10 +635,10 @@ export function ItemView({ item, onTick, onDismiss, programmeLive, now, programm
           )}
           <section>
             <h3 className="wi-h">History</h3>
-            <History item={item} now={now} homeProject={home} itemHref={itemHref} />
+            <History item={item} now={now} links={links} />
           </section>
         </div>
-        <Panel item={item} programmeLive={programmeLive} onTick={onTick} onDismiss={onDismiss} current={current} runs={runs} acts={acts}
+        <Panel item={item} programmeLive={programmeLive} onTick={onTick} onDismiss={onDismiss} current={current} runs={runs} acts={acts} links={links}
                {...(onActed === undefined ? {} : { onActed })} stuck={migration !== undefined && (item.action?.verb === 'linear-map' || item.action?.verb === 'linear-report')}
                {...(saveSecret === undefined ? {} : { saveSecret })} {...(removeSecret === undefined ? {} : { removeSecret })}
                {...(stepUpDeps === undefined ? {} : { stepUpDeps })}
