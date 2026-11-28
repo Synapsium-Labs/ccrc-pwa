@@ -139,6 +139,8 @@ export type RestoreFloorRead = { readonly kind: 'floor'; readonly id: number } |
 export type CitationRead = {
   readonly kind: 'measured'; readonly cited: ReadonlySet<number>;
   readonly rootCited?: ReadonlySet<number>; readonly restoreFloor?: RestoreFloorRead;
+  /** Each citation row's request and message ids, by request then message (review 4190 F4); absent when no row cites. */
+  readonly citing?: readonly { readonly requestId: number; readonly messageId: number }[];
 } | { readonly kind: 'not-applicable' } | { readonly kind: 'unmeasured'; readonly why: string };
 
 /** The spend arm (W2 request record A, RQ11), per row, first match: a `spent` row keeps its mark (the arm never takes one away);

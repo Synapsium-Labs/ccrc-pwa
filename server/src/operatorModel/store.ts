@@ -463,6 +463,13 @@ export class OperatorModelStore {
       .map((r) => ({ id: r.id, state: isMessageState(r.state) ? r.state : 'unknown' as const })));
   }
 
+  /** The ids among `ids` that have a row, whatever its state: the boot pass's count of citations that meet no row (review 4190 F4).
+   *  Ids only, never a column of the row. */
+  presentAmong(ids: readonly number[]): StoreRead<readonly number[]> {
+    return this.read(() => (this.db.prepare('SELECT id FROM operator_messages WHERE id IN (SELECT value FROM json_each(?)) ORDER BY id')
+      .all(JSON.stringify(ids)) as { id: number }[]).map((r) => r.id));
+  }
+
   /** Every `settled` row, for the boot pass's re-derivation (I8). */
   settledRows(): StoreRead<readonly OperatorMessageRow[]> {
     return this.read(() => (this.db.prepare(`SELECT ${ROW_COLUMNS} FROM operator_messages WHERE state = 'settled' ORDER BY id`)

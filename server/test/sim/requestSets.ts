@@ -194,6 +194,10 @@ const BOOT_READ_SET: MutantSet<CitedReaderModule> = { modulePath: STORE_MODULE, 
     new: 'if (id === null) continue;' },
   { id: 'B5 a failed read is absent', old: "    return { kind: 'unmeasured', why: errText(e) };\n", new: "    return { kind: 'absent' };\n" },
   { id: 'B6 any root value is a root', old: 'if (num(r.root) === 1) rootCited.add(id);', new: 'if (num(r.root) !== null) rootCited.add(id);' },
+  { id: 'B7 a bad request id is skipped', old: "if (requestId === null) return { kind: 'unmeasured', why: 'a citation row holds no integer request id' };",
+    new: 'if (requestId === null) continue;' },
+  { id: 'B8 a pair is not kept', old: '      citing.push({ requestId, messageId: id });\n', new: '' },
+  { id: 'B9 the pairs in table order', old: ' ORDER BY requestId, messageId', new: '' },
 ] };
 
 // The spend arm's decider (Task A4, RQ11, F14), in the private store's messages file; its set lives here beside the reader's.

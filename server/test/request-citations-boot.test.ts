@@ -3,7 +3,7 @@
 // migrated coord.db copy, a temp operator-model.db, a privacy-issuer double), neutral names.
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { DatabaseSync } from 'node:sqlite';
-import { copyFileSync, mkdirSync } from 'node:fs';
+import { copyFileSync, mkdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { gateActorOf } from '../src/accounts/audit.js';
 import { attributionIdentity } from '../src/auth/attributionIdentity.js';
@@ -93,10 +93,15 @@ describe('requestCitations maps the store\'s three answers apart', () => {
     expect(requestCitations({ kind: 'unmeasured', why: 'boom' }, { kind: 'floor', id: 3 })).toEqual({ kind: 'unmeasured', why: 'boom' });
     const cited = new Set([1, 2]);
     const rootCited = new Set([1]);
-    expect(requestCitations({ kind: 'measured', cited, rootCited }, { kind: 'floor', id: 40 }))
-      .toEqual({ kind: 'measured', cited, rootCited, restoreFloor: { kind: 'floor', id: 40 } });
-    expect(requestCitations({ kind: 'measured', cited, rootCited }, { kind: 'unreadable', why: 'x' }))
+    const citing = [{ requestId: 7, messageId: 1 }, { requestId: 8, messageId: 2 }];
+    expect(requestCitations({ kind: 'measured', cited, rootCited, citing }, { kind: 'floor', id: 40 }))
+      .toEqual({ kind: 'measured', cited, rootCited, citing, restoreFloor: { kind: 'floor', id: 40 } });
+    expect(requestCitations({ kind: 'measured', cited, rootCited, citing }, { kind: 'unreadable', why: 'x' }))
       .toMatchObject({ kind: 'measured', restoreFloor: { kind: 'unreadable', why: 'x' } });
+  });
+  it('no citation rows carry no pairs: the measured arm is the one the twin pin reads (additive, absence permits)', () => {
+    const r = requestCitations({ kind: 'measured', cited: new Set(), rootCited: new Set(), citing: [] }, { kind: 'none' });
+    expect(Object.keys(r).sort()).toEqual(['cited', 'kind', 'restoreFloor', 'rootCited']);
   });
 });
 
@@ -108,15 +113,27 @@ describe('citedMessagesForBoot', () => {
     const w = world();
     const a = rec(w); const b = rec(w); const c = rec(w);
     const parent = cite(w, [a, b]);
-    cite(w, [b], parent);                                       // a child cites b again, as a non-root
-    expect(citedMessagesForBoot(w.coord.db)).toEqual({ kind: 'measured', cited: new Set([a, b]), rootCited: new Set([a, b]) });
+    const child = cite(w, [b], parent);                         // a child cites b again, as a non-root
+    const pairs = [{ requestId: parent, messageId: a }, { requestId: parent, messageId: b }, { requestId: child, messageId: b }];
+    expect(citedMessagesForBoot(w.coord.db)).toEqual({ kind: 'measured', cited: new Set([a, b]), rootCited: new Set([a, b]), citing: pairs });
     const second = cite(w, [c]);
-    cite(w, [c], second);
-    expect(citedMessagesForBoot(w.coord.db)).toEqual({ kind: 'measured', cited: new Set([a, b, c]), rootCited: new Set([a, b, c]) });
+    const third = cite(w, [c], second);
+    expect(citedMessagesForBoot(w.coord.db)).toEqual({ kind: 'measured', cited: new Set([a, b, c]), rootCited: new Set([a, b, c]),
+      citing: [...pairs, { requestId: second, messageId: c }, { requestId: third, messageId: c }] });
   });
 });
 
 // ------------------------------------------------------------------------------------------------------------ the pass
+
+describe('the composition root\'s citations port (review 4190 F3)', () => {
+  it('composes the measured adapter over the coordination database with no restore floor, until act journal B supplies one', () => {
+    // A floor here spends every message at or below it at every boot, so the literal is pinned, not left to a comment.
+    const root = readFileSync(path.resolve(import.meta.dirname, '../src/index.ts'), 'utf8');
+    expect(root.split('\n').filter((l) => l.includes('requestCitations('))).toEqual([
+      "    citations: () => requestCitations(citedMessagesForBoot(coordDb), { kind: 'none' }), now: () => time.clock.wall() });",
+    ]);
+  });
+});
 
 describe('no request rows (every box at merge)', () => {
   /** Every row of the private store and every line of the coord tables the pass could write, for a twin comparison. */
@@ -212,14 +229,54 @@ describe('the spend arm of runOperatorModelBootPass', () => {
     expect(w.db.prepare('SELECT spentAt FROM operator_messages WHERE id = ?').get(id)).toEqual({ spentAt: 2_000 });
   });
 
-  it('a cited message the private store has no row for is left alone, and the pass goes on', () => {
+  it('a cited message the private store has no row for is left alone, the pass goes on, and one line names it by ids (review 4190 F4)', () => {
     const w = world();
     const id = rec(w);
-    cite(w, [id + 50]);
+    const req = cite(w, [id + 50]);
     const r = pass(w, citations(w));
     expect(r.counts.spent).toBe(0);
     expect(stateOf(w, id)).toBe('settled');
-    expect(r.lines).toEqual([]);
+    expect(r.lines).toEqual([`boot pass: citations with no message row: 1 (request:message, the first 5: ${req}:${id + 50}); nothing moved for them`]);
+  });
+
+  it('citations with no message row: one line per boot, the count of all, the first five pairs by request then message, ids only', () => {
+    const w = world();
+    const kept = rec(w);
+    const a = cite(w, [101, 102, kept]);
+    const b = cite(w, [103, 104, 105]);
+    const c = cite(w, [106]);
+    w.coord.db.prepare("INSERT INTO overlord_request_messages (requestId, messageId, sha256, root, at) VALUES (?, 101, 'h', 0, 1)").run(b);
+    const r = pass(w, citations(w));
+    expect(stateOf(w, kept)).toBe('spent');
+    const absent = r.lines.filter((l) => l.startsWith('boot pass: citations with no message row'));
+    expect(absent).toEqual([
+      `boot pass: citations with no message row: 7 (request:message, the first 5: ${a}:101, ${a}:102, ${b}:101, ${b}:103, ${b}:104); nothing moved for them`,
+    ]);
+    expect(c).toBeGreaterThan(b);
+    expect(r.lines.join('\n')).not.toContain('operator wrote');
+  });
+
+  it('a private store that cannot say which cited rows exist logs that, counts nothing absent, and the spends still run', () => {
+    const w = world();
+    const id = rec(w);
+    cite(w, [id, id + 9]);
+    const spy = vi.spyOn(w.store, 'presentAmong').mockReturnValue({ kind: 'unmeasured', why: 'fixture' });
+    const r = pass(w, citations(w));
+    spy.mockRestore();
+    expect(stateOf(w, id)).toBe('spent');
+    expect(r.lines.filter((l) => l.startsWith('boot pass:'))).toEqual(['boot pass: cited message rows unmeasured (fixture); citations with no row not counted']);
+  });
+
+  it('a root-cited row in a state this build cannot name is not spent: the mover refuses it, the pass counts it unjudged and says so (review 4190 F6)', () => {
+    const w = world();
+    const id = rec(w);
+    cite(w, [id]);
+    w.db.prepare("UPDATE operator_messages SET state = 'later-word' WHERE id = ?").run(id);
+    const r = pass(w, citations(w));
+    expect(stateOf(w, id)).toBe('later-word');
+    expect(r.counts).toMatchObject({ spent: 0, unjudged: 1 });
+    expect(r.lines).toEqual([`boot pass: message ${id} not spent (refused)`]);
+    expect(lines(w)).toEqual([]);
   });
 
   it('a cited (non-root) row in delivered is NOT settled by the boot pass: W1\'s actor map lets only the citing door settle (known limit)', () => {
@@ -270,11 +327,11 @@ describe('the spend arm of runOperatorModelBootPass', () => {
       expect(ids.map((id) => stateOf(w, id))).toEqual(['spent', 'spent', 'settled', 'settled']);
       expect(lines(w).map((l) => l.id)).toEqual(['1', '2']);
       expect(r.lines).toEqual([]);
-      // A root citation of an id no message holds (a reply's) moves nothing either.
-      cite(w, [3]);
+      // A root citation of an id no message holds (a reply's) moves nothing either, and is named by its ids (review 4190 F4).
+      const req = cite(w, [3]);
       const again = pass(w, citations(w, { kind: 'floor', id: 4 }));
       expect(again.counts.spent).toBe(0);
-      expect(again.lines).toEqual([]);
+      expect(again.lines).toEqual([`boot pass: citations with no message row: 1 (request:message, the first 5: ${req}:3); nothing moved for them`]);
       expect(lines(w)).toHaveLength(2);
     });
 
@@ -313,11 +370,16 @@ describe('the spend arm of runOperatorModelBootPass', () => {
       w.coord.db.exec('DROP TABLE overlord_request_messages');
       w.coord.db.exec('CREATE TABLE overlord_request_messages (requestId INTEGER, messageId, sha256 TEXT, root INTEGER, at INTEGER)');
       w.coord.db.exec("INSERT INTO overlord_request_messages VALUES (1, 'x', 'h', 1, 1)");
-      expect(port()).toMatchObject({ kind: 'unmeasured' });
       const r = pass(w, port);
+      // The pass says so in its own voice, with the port's reason (review 4190 F1): never read as a clean read with no citations.
+      // Asserted first, on what the pass did, so a reason folded away anywhere before the pass reds here, not only on the port.
+      expect(r.lines.filter((l) => l.startsWith('boot pass: citations unmeasured'))).toEqual([
+        'boot pass: citations unmeasured (a citation row holds no integer message id); nothing spent by a citation or the floor',
+      ]);
       expect(r.counts.spent).toBe(0);
       expect([stateOf(w, id), stateOf(w, delivered)]).toEqual(['settled', 'delivered']);
       expect(lines(w)).toEqual([]);
+      expect(port()).toMatchObject({ kind: 'unmeasured' });
     });
 
     it('a read over a closed handle is unmeasured through the adapter, and the pass over it spends nothing', () => {
@@ -327,14 +389,18 @@ describe('the spend arm of runOperatorModelBootPass', () => {
       const closed = world();
       closed.coord.db.close();
       const port = (): CitationRead => requestCitations(citedMessagesForBoot(closed.coord.db), { kind: 'floor', id: 99 });
-      expect(port()).toMatchObject({ kind: 'unmeasured' });
+      const read = port();
+      expect(read).toMatchObject({ kind: 'unmeasured' });
       const r = pass(w, port);
       expect(r.counts.spent).toBe(0);
       expect(stateOf(w, id)).toBe('settled');
       expect(lines(w)).toEqual([]);
+      const logged = r.lines.filter((l) => l.startsWith('boot pass: citations unmeasured'));
+      expect(logged).toEqual([`boot pass: citations unmeasured (${read.kind === 'unmeasured' ? read.why : ''}); nothing spent by a citation or the floor`]);
+      expect(logged[0]).not.toContain('()');
     });
 
-    it('a table not yet migrated answers not-applicable, and the pass behaves as W1\'s did', () => {
+    it('a table not yet migrated answers not-applicable, and the pass behaves as W1\'s did, with no citation line', () => {
       const w = world();
       const id = rec(w);
       w.coord.db.exec('DROP TABLE overlord_request_messages');
@@ -342,6 +408,7 @@ describe('the spend arm of runOperatorModelBootPass', () => {
       const r = pass(w, citations(w));
       expect(r.counts.spent).toBe(0);
       expect(stateOf(w, id)).toBe('settled');
+      expect(r.lines).toEqual([]);
     });
 
     it('a private-store read that fails defers the spends of that read, logs without a text, and the rest of the pass runs', () => {

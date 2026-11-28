@@ -24,7 +24,7 @@ export interface BootPassCounts {
 
 export interface BootPassDeps {
   readonly operatorModel: Pick<OperatorModelStore,
-    'settledRows' | 'unnudged' | 'queuedIds' | 'highestMessageId' | 'moveMessage' | 'messageSessionOf' | 'unspentAmong' | 'unspentThrough'>;
+    'settledRows' | 'unnudged' | 'queuedIds' | 'highestMessageId' | 'moveMessage' | 'messageSessionOf' | 'unspentAmong' | 'unspentThrough' | 'presentAmong'>;
   readonly coord: NudgeQueueCoord & Pick<CoordStore, 'highestOperatorMessageMail' | 'hasAckedMailWithSubject'>;
   /** The citations port: W1's adapter answers `not-applicable` (open question 9); W2's measured adapter reads the request record's
    *  cited messages, the root-cited ones and the restore floor (`requestCitations`, composed at the root). */
@@ -40,8 +40,12 @@ export const w1Citations = (): CitationRead => ({ kind: 'not-applicable' });
 export function requestCitations(read: CitedMessagesRead, restoreFloor: RestoreFloorRead): CitationRead {
   if (read.kind === 'absent') return { kind: 'not-applicable' };
   if (read.kind === 'unmeasured') return { kind: 'unmeasured', why: read.why };
-  return { kind: 'measured', cited: read.cited, rootCited: read.rootCited, restoreFloor };
+  // The pairs ride only when a row cites (additive: a read with none is the same measured arm as before).
+  return { kind: 'measured', cited: read.cited, rootCited: read.rootCited, restoreFloor, ...(read.citing.length > 0 ? { citing: read.citing } : {}) };
 }
+
+/** How many pairs the line naming citations with no message row lists, by request then message (review 4190 F4). */
+export const BOOT_ABSENT_CITATIONS_SHOWN = 5;
 
 export function runOperatorModelBootPass(deps: BootPassDeps): { readonly counts: BootPassCounts; readonly lines: readonly string[] } {
   const c = { kept: 0, unsettled: 0, unjudged: 0, linked: 0, queued: 0, waiting: 0, delivered: 0, errors: 0, spent: 0 };
@@ -54,7 +58,9 @@ export function runOperatorModelBootPass(deps: BootPassDeps): { readonly counts:
   const cites = deps.citations();
   // The spend arm (W2 request record A, RQ11, F14), first, so a root-cited settled row is spent rather than re-judged: the copy a
   // citing door failed to write, and every row up to a read restore floor. It never takes a mark away, and spends only through
-  // the one mover that stamps the message's sequence line. A floor that could not be read spends nothing by the floor.
+  // the one mover that stamps the message's sequence line. A floor that could not be read spends nothing by the floor. A citation
+  // read that could not be measured says so with its reason, so the log never reads it as a clean read with none (review 4190 F1).
+  if (cites.kind === 'unmeasured') lines.push(`boot pass: citations unmeasured (${cites.why}); nothing spent by a citation or the floor`);
   if (cites.kind === 'measured') {
     const floor = cites.restoreFloor;
     if (floor?.kind === 'unreadable') lines.push(`boot pass: the restore floor could not be read (${floor.why}); nothing spent by the floor`);
@@ -70,6 +76,21 @@ export function runOperatorModelBootPass(deps: BootPassDeps): { readonly counts:
       const moved = moveOperatorMessage(mover, row.id, 'spend', 'boot-pass', deps.now());
       if (moved.ok) c.spent++;
       else { c.unjudged++; lines.push(`boot pass: message ${row.id} not spent (${moved.error})`); }
+    }
+    // A citation of a message the private store has no row for (a row removed by hand, an older private store under a newer
+    // coordination database) moves nothing, and leaves one line per boot: the count, and the first few pairs, ids only (F4).
+    const citing = cites.citing ?? [];
+    if (citing.length > 0) {
+      const present = store.presentAmong([...new Set(citing.map((p) => p.messageId))]);
+      if (present.kind === 'unmeasured') lines.push(`boot pass: cited message rows unmeasured (${present.why}); citations with no row not counted`);
+      else {
+        const have = new Set(present.value);
+        const absent = citing.filter((p) => !have.has(p.messageId));
+        if (absent.length > 0) {
+          const shown = absent.slice(0, BOOT_ABSENT_CITATIONS_SHOWN).map((p) => `${p.requestId}:${p.messageId}`).join(', ');
+          lines.push(`boot pass: citations with no message row: ${absent.length} (request:message, the first ${BOOT_ABSENT_CITATIONS_SHOWN}: ${shown}); nothing moved for them`);
+        }
+      }
     }
   }
 

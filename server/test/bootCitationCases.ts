@@ -39,26 +39,29 @@ const plant = (db: DatabaseSync, requestId: number, messageId: unknown, root: 0 
 export function citedMessagesForBootCases(m: CitedReaderModule): Record<string, SuiteCase> {
   return {
     'a migrated table with no citation is measured, with two empty sets (no request rows: the state of every box today)': () => {
-      withDb((db) => { expect(m.citedMessagesForBoot(db)).toEqual({ kind: 'measured', cited: new Set(), rootCited: new Set() }); });
+      withDb((db) => { expect(m.citedMessagesForBoot(db)).toEqual({ kind: 'measured', cited: new Set(), rootCited: new Set(), citing: [] }); });
     },
     'reads every cited id, and the root-cited ones apart': () => {
       withDb((db) => {
         plant(db, 1, 11, 1); plant(db, 1, 12, 1);
         plant(db, 2, 12, 0);                                    // a child cites 12 again, as a non-root
-        expect(m.citedMessagesForBoot(db)).toEqual({ kind: 'measured', cited: new Set([11, 12]), rootCited: new Set([11, 12]) });
+        expect(m.citedMessagesForBoot(db)).toEqual({ kind: 'measured', cited: new Set([11, 12]), rootCited: new Set([11, 12]),
+          citing: [{ requestId: 1, messageId: 11 }, { requestId: 1, messageId: 12 }, { requestId: 2, messageId: 12 }] });
       });
     },
     'a non-root citation alone is cited and not root-cited': () => {
       withDb((db) => {
         plant(db, 1, 11, 1); plant(db, 2, 13, 0);
-        expect(m.citedMessagesForBoot(db)).toEqual({ kind: 'measured', cited: new Set([11, 13]), rootCited: new Set([11]) });
+        expect(m.citedMessagesForBoot(db)).toEqual({ kind: 'measured', cited: new Set([11, 13]), rootCited: new Set([11]),
+          citing: [{ requestId: 1, messageId: 11 }, { requestId: 2, messageId: 13 }] });
       });
     },
     'ids with a gap are read as they stand, never filled in': () => {
       withDb((db) => {
-        plant(db, 1, 3, 1); plant(db, 2, 7, 1);
+        plant(db, 2, 7, 1); plant(db, 1, 3, 1);                // planted out of order: the pairs come back by request
         const r = m.citedMessagesForBoot(db);
-        expect(r).toEqual({ kind: 'measured', cited: new Set([3, 7]), rootCited: new Set([3, 7]) });
+        expect(r).toEqual({ kind: 'measured', cited: new Set([3, 7]), rootCited: new Set([3, 7]),
+          citing: [{ requestId: 1, messageId: 3 }, { requestId: 2, messageId: 7 }] });
       });
     },
     'a database without the table answers absent, never measured': () => {
@@ -82,6 +85,14 @@ export function citedMessagesForBootCases(m: CitedReaderModule): Record<string, 
         plant(db, 1, 11, 1);
         plant(db, 2, 'not-a-number', 1);
         expect(m.citedMessagesForBoot(db)).toEqual({ kind: 'unmeasured', why: 'a citation row holds no integer message id' });
+      });
+    },
+    'a citation row with no integer request id is unmeasured, never skipped': () => {
+      withDb((db) => {
+        db.exec('DROP TABLE overlord_request_messages');
+        db.exec('CREATE TABLE overlord_request_messages (requestId, messageId INTEGER, sha256 TEXT, root INTEGER, at INTEGER)');
+        db.prepare("INSERT INTO overlord_request_messages VALUES (1, 11, 'h', 1, 1), ('not-a-number', 12, 'h', 0, 1)").run();
+        expect(m.citedMessagesForBoot(db)).toEqual({ kind: 'unmeasured', why: 'a citation row holds no integer request id' });
       });
     },
   };
