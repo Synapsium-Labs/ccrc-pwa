@@ -2,6 +2,7 @@
 // w2-label-queue.md, Task 3). Ring: L2, context Coordination (C5). Declared by their consumers: `MeasuredLabels` by the
 // `LabelledCases` adapter (`labelQueueStore.ts#labelledCasesOf`), `LabelLaneReads` by the weekly lane (`labelQueueLane.ts`).
 // The doors' own port, `LabelCardStore`, is declared in their file (`labelCardRoutes.ts`, C6), never here.
+import type { ReadFailure } from '../../../shared/agent-protocol.js';
 import type { DecisionRowId, DecisionRowMode } from '../../../shared/decisionModel.js';
 import type { LabelledAnswer } from './decisionLines.js';
 import type { CardRefKind, LabelCardRow, LabelSource, RefFound } from './labelQueue.js';
@@ -45,7 +46,7 @@ export interface LabelLaneReads {
   /** Every open card, unfiltered (`cardShown` is the one filter, F12). */
   openCards(): readonly LabelCardRow[];
   /** A card's record's refs: `absent` when no record holds the id, `unreadable` when its refs cannot be read. */
-  recordRefs(recordId: number): Readonly<Record<string, string | readonly string[]>> | 'absent' | 'unreadable';
+  recordRefs(recordId: number): Readonly<Record<string, string | readonly string[]>> | ReadFailure;
   /** Cards picked in `week`, and each row's newest card's week start. */
   counts(week: string): { pickedThisWeek: number; lastCardWeekStart: ReadonlyMap<DecisionRowId, number> };
   /** `pickLabelCardsInTx`, with the budget re-read inside its transaction through `budget`. */

@@ -18,6 +18,7 @@
 // `labelCards.ts` and `labelQueue.ts`, and pass the verdict to the store's close, which re-checks and writes and decides
 // nothing else.
 import type { FastifyInstance } from 'fastify';
+import type { ReadFailure } from '../../../shared/agent-protocol.js';
 import { DECISION_QUESTIONS, type DecisionRowId, type DecisionRowMode } from '../../../shared/decisionModel.js';
 import type { CardView, LabelCardsAnswer, LabelSkipWord } from '../../../shared/labelQueue.js';
 import type { AccountGate } from '../accounts/gate.js';
@@ -38,7 +39,7 @@ export interface LabelCardStore {
   /** The row's mode through the decision model's row read, or `unreadable`. */
   rowMode(row: DecisionRowId): DecisionRowMode | 'unreadable';
   /** A card's record's refs and inline fields. */
-  record(recordId: number): { refs: Refs; inline: Readonly<Record<string, string>> | null } | 'absent' | 'unreadable';
+  record(recordId: number): { refs: Refs; inline: Readonly<Record<string, string>> | null } | ReadFailure;
   /** The cards picked in `week`. */
   pickedThisWeek(week: string): number;
   /** Told the verdict, it re-checks the card and the row in one transaction and writes the close and its label. */

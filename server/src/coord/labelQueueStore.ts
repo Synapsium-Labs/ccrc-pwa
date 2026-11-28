@@ -13,6 +13,7 @@
 // keeps it and a revision change drops it by the key alone. "The newest record" of a state is the newest by this table's own
 // order (`id`) among the records of that revision, whatever its host, model or line generation.
 import type { DatabaseSync } from 'node:sqlite';
+import type { ReadFailure } from '../../../shared/agent-protocol.js';
 import {
   DECISION_LABEL_SOURCES, DECISION_QUESTIONS, isDecisionRowId, type DecisionRowId, type DecisionRowMode,
 } from '../../../shared/decisionModel.js';
@@ -191,7 +192,7 @@ export function waitingStates(db: DatabaseSync, measured: MeasuredLabels, row: D
 /** One record's refs and inline fields, for a card's rebuild: `absent` when no record holds the id, `unreadable` when this
  *  build cannot read them. */
 export function labelRecordOf(db: DatabaseSync, recordId: number):
-  { refs: Record<string, string | readonly string[]>; inline: Record<string, string> | null } | 'absent' | 'unreadable' {
+  { refs: Record<string, string | readonly string[]>; inline: Record<string, string> | null } | ReadFailure {
   const r = db.prepare('SELECT refs, inline FROM decision_records WHERE id = ?').get(recordId) as { refs: string; inline: string | null } | undefined;
   if (r === undefined) return 'absent';
   const refs = parseRefs(r.refs);
