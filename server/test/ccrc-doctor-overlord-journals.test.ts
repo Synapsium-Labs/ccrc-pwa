@@ -9,7 +9,10 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { mkTmp } from './tmpHelpers.js';
 import { ghContainedEnv } from './ccdWsHelpers.js';
-import { buildChainedRecord, chainNext, encodeChainedRecord, type ChainedJournalFormat, type ChainedRefusal } from '../src/chainedJournal.js';
+import {
+  buildChainedRecord, chainNext, encodeChainedRecord,
+  type ChainedJournalFormat, type ChainedJournalRecord, type ChainedPosition, type ChainedRefusal,
+} from '../src/chainedJournal.js';
 import { OVERLORD_AUTHORITY_BASENAME, OVERLORD_AUTHORITY_FORMAT } from '../src/coord/overlordAuthority.js';
 import { OVERLORD_ACTS_BASENAME, OVERLORD_ACTS_FORMAT } from '../src/coord/overlordActRecords.js';
 import { INTENT, SETTLE } from './sim/overlordActJournalSets.js';
@@ -32,9 +35,9 @@ afterEach(() => { fs.chmodSync(ccrcDir, 0o700); for (const f of fs.readdirSync(c
 /** `n` records of a format chained from 1, written as the server writes them. */
 function writeJournal<E>(fmt: ChainedJournalFormat<E, ChainedRefusal>, base: string, entries: readonly E[], extra = ''): string {
   const parts: Uint8Array[] = [];
-  let prev: { sequence: number; digest: string } | null = null;
+  let prev: ChainedPosition | null = null;
   for (const entry of entries) {
-    const rec = buildChainedRecord(fmt, { ...chainNext(prev), acceptedAt: '2026-11-28T10:00:00.000Z', entry });
+    const rec: ChainedJournalRecord<E> = buildChainedRecord(fmt, { ...chainNext(prev), acceptedAt: '2026-11-28T10:00:00.000Z', entry });
     parts.push(encodeChainedRecord(fmt, rec));
     prev = rec;
   }
