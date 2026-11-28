@@ -61,6 +61,29 @@ export function enumerablePageStorage(): EnumerableStoragePort | null {
   return pageStorage();
 }
 
+/** `port`, with every write of the one key `key` rewritten first: `rewrite(value, stored)` gets the value written and what the
+ *  store holds under `key` at that moment, and its answer is what is written. Every read, every removal, the enumeration and
+ *  every other key's write pass through unchanged. A read of the stored value that throws writes `value` as it came (the
+ *  rewrite cannot be asked without it). The reader mount hands the library such a port, so the library's whole-object writes
+ *  of its prefs key keep a field the console owns (`reader/bridge.ts`, X2 P5.1 I-3): the port's one owner holds the wrapping,
+ *  and the rule it applies is its caller's. */
+export function rewritingWrites(
+  port: EnumerableStoragePort, key: string, rewrite: (value: string, stored: string | null) => string,
+): EnumerableStoragePort {
+  return {
+    getItem: (k) => port.getItem(k),
+    setItem: (k, value) => {
+      if (k !== key) { port.setItem(k, value); return; }
+      let stored: string | null;
+      try { stored = port.getItem(k); } catch { port.setItem(k, value); return; }
+      port.setItem(k, rewrite(value, stored));
+    },
+    removeItem: (k) => port.removeItem(k),
+    key: (index) => port.key(index),
+    get length() { return port.length; },
+  };
+}
+
 /** The answer a caller passes to tell "the read threw, or there is no store" from "nothing is stored". */
 export const UNREADABLE: unique symbol = Symbol('unreadable');
 

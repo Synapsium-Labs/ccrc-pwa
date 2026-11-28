@@ -254,7 +254,7 @@ describe('host appearance', () => {
     expect(m.seed).toEqual({ hosted: true, stamp: 'refined|first' });
     r.frame.setAppearance.mockClear();
     expect(r.options().adapters.appearance?.skin?.radius).toBeUndefined();
-    expect(Object.keys(r.options().adapters).sort()).toEqual(['appearance', 'assets', 'copy', 'docKey', 'focus', 'mermaidDraw', 'onFallback', 'onHash', 'onLink', 'onReady', 'store', 'storePrefix', 'title', 'watchdogMs'].sort());
+    expect(Object.keys(r.options().adapters).sort()).toEqual(['appearance', 'assets', 'copy', 'docKey', 'features', 'focus', 'mermaidDraw', 'onFallback', 'onHash', 'onLink', 'onReady', 'store', 'storePrefix', 'title', 'watchdogMs'].sort());
     el.style.removeProperty('--bg-page');
     m.follow('dark'); m.follow('dark');
     expect(r.frame.setAppearance).toHaveBeenCalledTimes(2);
@@ -338,23 +338,23 @@ describe('host appearance', () => {
 });
 
 describe('the adapters', () => {
-  it('the adapters are ccrc\'s keys for each draw and bar: the fourteen, loadMermaid after ready, features and onProgress on ccrc\'s bar', async () => {
+  it('the adapters are ccrc\'s keys for each draw and bar: the fourteen and `features` (the reading-layer flags, X2 P5.4), loadMermaid after ready, onProgress on ccrc\'s bar', async () => {
     const fourteen = [
-      'assets', 'copy', 'docKey', 'focus', 'mermaidDraw', 'onFallback', 'onHash', 'onLink', 'onReady', 'prefs', 'store', 'storePrefix', 'title', 'watchdogMs',
+      'assets', 'copy', 'docKey', 'features', 'focus', 'mermaidDraw', 'onFallback', 'onHash', 'onLink', 'onReady', 'prefs', 'store', 'storePrefix', 'title', 'watchdogMs',
     ];
     const rows: Array<[ReaderE17Reading, ReaderChrome, string[]]> = [
       ['does-not-hold', 'frame-bar', fourteen],
       ['holds', 'frame-bar', [...fourteen, 'loadMermaid']],
-      ['does-not-hold', 'host-bar', [...fourteen, 'features', 'onProgress']],
-      ['holds', 'host-bar', [...fourteen, 'features', 'loadMermaid', 'onProgress']],
+      ['does-not-hold', 'host-bar', [...fourteen, 'onProgress']],
+      ['holds', 'host-bar', [...fourteen, 'loadMermaid', 'onProgress']],
     ];
     const literal = [
-      ['assets', 'copy', 'docKey', 'focus', 'mermaidDraw', 'onFallback', 'onHash', 'onLink', 'onReady', 'prefs', 'store', 'storePrefix', 'title', 'watchdogMs'],
-      ['assets', 'copy', 'docKey', 'focus', 'loadMermaid', 'mermaidDraw', 'onFallback', 'onHash', 'onLink', 'onReady', 'prefs', 'store', 'storePrefix', 'title', 'watchdogMs'],
+      ['assets', 'copy', 'docKey', 'features', 'focus', 'mermaidDraw', 'onFallback', 'onHash', 'onLink', 'onReady', 'prefs', 'store', 'storePrefix', 'title', 'watchdogMs'],
+      ['assets', 'copy', 'docKey', 'features', 'focus', 'loadMermaid', 'mermaidDraw', 'onFallback', 'onHash', 'onLink', 'onReady', 'prefs', 'store', 'storePrefix', 'title', 'watchdogMs'],
       ['assets', 'copy', 'docKey', 'features', 'focus', 'mermaidDraw', 'onFallback', 'onHash', 'onLink', 'onProgress', 'onReady', 'prefs', 'store', 'storePrefix', 'title', 'watchdogMs'],
       ['assets', 'copy', 'docKey', 'features', 'focus', 'loadMermaid', 'mermaidDraw', 'onFallback', 'onHash', 'onLink', 'onProgress', 'onReady', 'prefs', 'store', 'storePrefix', 'title', 'watchdogMs'],
     ];
-    expect(literal.map((l) => l.length)).toEqual([14, 15, 16, 17]);
+    expect(literal.map((l) => l.length)).toEqual([15, 16, 16, 17]);
     for (const [n, [e17, chrome, expected]] of rows.entries()) {
       const r = rig({ e17, chrome });
       await r.run();
@@ -644,7 +644,9 @@ describe('ccrc\'s bar and the commands (the take-up plan, refinements (g), (i))'
     await b.run();
     const fa = a.options().adapters.features;
     const fb = b.options().adapters.features;
-    expect(fa).toEqual({ chrome: { bar: false, topSpace: false } });
+    // The chrome switches and the reading-layer flags (X2 P5.4) are one object; the flags' own cases are `reader-flags.test.ts`'s.
+    expect(fa?.chrome).toEqual({ bar: false, topSpace: false });
+    expect(Object.keys(fa ?? {}).sort()).toEqual(['chrome', 'inShort', 'rules', 'vocabulary']);
     expect(Object.getPrototypeOf(fa)).toBe(Object.prototype);
     expect(fa).not.toBe(fb);
   });
@@ -660,12 +662,12 @@ describe('ccrc\'s bar and the commands (the take-up plan, refinements (g), (i))'
     expect(() => none.options().adapters.onProgress!(1)).not.toThrow();
   });
 
-  it('a frame-bar mount, and a mount that names no chrome, pass no features, and pass onProgress only when the input listens (D-8805)', async () => {
+  it('a frame-bar mount, and a mount that names no chrome, pass the flags and no chrome switches, and pass onProgress only when the input listens (D-8805)', async () => {
     for (const chrome of ['frame-bar', undefined] as const) {
       const r = rig({ ...(chrome === undefined ? {} : { chrome }), onProgress: vi.fn() });
       await r.run();
       const keys = Object.keys(r.options().adapters);
-      expect(keys).not.toContain('features');
+      expect(Object.keys(r.options().adapters.features ?? {}).sort()).toEqual(['inShort', 'rules', 'vocabulary']);
       expect(keys).toContain('onProgress');
       const bare = rig(chrome === undefined ? {} : { chrome });
       await bare.run();

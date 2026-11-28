@@ -3,7 +3,7 @@
 // and writes nothing; read, write and remove round-trip; and the injectable instance (`memoryStorage`, the one
 // `test/setup.ts` installs when the page's storage is unusable) is a working store.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { memoryStorage, pageStorage, readKey, removeKey, UNREADABLE, writeKey, type StoragePort } from '../src/lib/storage';
+import { memoryStorage, pageStorage, readKey, removeKey, rewritingWrites, UNREADABLE, writeKey, type StoragePort } from '../src/lib/storage';
 
 const throwing: StoragePort = {
   getItem: () => { throw new Error('blocked'); },
@@ -86,5 +86,42 @@ describe('the injectable instance', () => {
     const mem = memoryStorage();
     mem.setItem('key-a', 12 as unknown as string);
     expect(mem.getItem('key-a')).toBe('12');
+  });
+});
+
+// X2 P5.1 (I-3, C7l): the one-key write rewrite the reader mount hands the library lives in the port's owner.
+describe('rewritingWrites', () => {
+  it('rewrites only the named key, from the value and what is stored, and passes every other act through', () => {
+    const mem = memoryStorage();
+    mem.setItem('key-a', 'old');
+    mem.setItem('key-b', 'b0');
+    const seen: [string, string | null][] = [];
+    const port = rewritingWrites(mem, 'key-a', (value, stored) => { seen.push([value, stored]); return `${value}+${stored ?? 'none'}`; });
+    port.setItem('key-a', 'new');
+    expect(mem.getItem('key-a')).toBe('new+old');
+    expect(seen).toEqual([['new', 'old']]);
+    port.setItem('key-b', 'b1');
+    expect(mem.getItem('key-b')).toBe('b1');
+    expect(seen).toHaveLength(1);
+    expect(port.getItem('key-a')).toBe('new+old');
+    expect(port.length).toBe(2);
+    expect([port.key(0), port.key(1)].sort()).toEqual(['key-a', 'key-b']);
+    port.removeItem('key-a');
+    expect(mem.getItem('key-a')).toBeNull();
+    port.setItem('key-a', 'fresh');
+    expect(mem.getItem('key-a')).toBe('fresh+none');
+  });
+
+  it('writes the value as it came when the read of the stored value throws', () => {
+    const mem = memoryStorage();
+    const throwing = {
+      get length() { return mem.length; }, key: (i: number) => mem.key(i), removeItem: (k: string) => mem.removeItem(k),
+      setItem: (k: string, v: string) => mem.setItem(k, v),
+      getItem: (): string | null => { throw new Error('refused'); },
+    };
+    const rewrite = vi.fn((value: string) => `${value}!`);
+    rewritingWrites(throwing, 'key-a', rewrite).setItem('key-a', 'v');
+    expect(mem.getItem('key-a')).toBe('v');
+    expect(rewrite).not.toHaveBeenCalled();
   });
 });

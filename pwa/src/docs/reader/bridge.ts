@@ -38,6 +38,11 @@
 // the frame already carries drops a swap in flight and mounts nothing, and says so (`onKept`), like a swap that failed to load; an
 // anchor that was riding a swap that is dropped or fails opens in the live layout then.
 //
+// The reading-layer flags (X2 P5.4, parity spec 5.6): every Docs mount's `features` carries `rules`, the In short switch and the
+// vocabulary (`policy.ts#readerFeatures`, with ccrc's chrome switches on a host-bar mount in the same object; the reader lab's mounts
+// seed none), and a mount whose input has `changesBase` hands the library the tab's comparison base for the doc as its `changesBase`
+// adapter, read at each library mount, when the policy admits it (`readerSeedChangesBase`). Nothing here decides either.
+//
 // The storage port handed to the library is wrapped (`layoutKeepingPort`): the frame writes its whole prefs snapshot back on any
 // prefs change, so every write of the prefs key keeps the `layout` stored at that moment (`policy.ts#withStoredLayoutKept`), and the
 // device's layout has one writer, `layoutPref.ts` (I-3).
@@ -61,11 +66,12 @@ import {
 } from '@synapsium-labs/pinax-lib/host';
 import { isDocsCommit } from '../../../../shared/docs';
 import { READER_STORE_PREFIX } from '../../lib/readerLimits';
-import { enumerablePageStorage, type EnumerableStoragePort } from '../../lib/storage';
+import { enumerablePageStorage, rewritingWrites, type EnumerableStoragePort } from '../../lib/storage';
 import {
-  READER_E17_MERMAID, READER_PREFS_KEY, isHostedMount, readerMountAsks, readerMountFocusFor, readerMountPlan, withStoredLayoutKept,
-  type ReaderChrome, type ReaderCommand, type ReaderE17Reading, type ReaderLayout, type ReaderLink, type ReaderMountProfile,
-  type ReaderReading, type ReaderAct,
+  READER_E17_MERMAID, READER_PREFS_KEY, isHostedMount, readerFeatures, readerMountAsks, readerMountFocusFor, readerMountPlan,
+  readerSeedChangesBase, withStoredLayoutKept,
+  type ReaderChrome, type ReaderCommand, type ReaderE17Reading, type ReaderFeatures, type ReaderLayout, type ReaderLink,
+  type ReaderMountProfile, type ReaderReading, type ReaderAct,
 } from './policy';
 import { readerAnchorRidesSwap } from './readerMode';
 import { loadMermaidAsset, loadReaderAssets, loadReaderFonts } from './assets';
@@ -133,6 +139,10 @@ export interface ReaderMountInput {
   } | null>;
   /** The frame's `version` operation: open the page at `sha` and/or filter its list to the day `only` names. */
   readonly openVersion?: (v: { sha?: string; only?: string }) => void;
+  /** The comparison base this tab holds for the doc (`readerHistory.ts`'s body gives it), read at each library mount, or `null` for
+   *  none (X2 P5.4). Passed on as the library's `changesBase` only when it is a full sha and the mount carries history
+   *  (`policy.ts#readerSeedChangesBase`); the reader lab's mounts never pass it on. */
+  readonly changesBase?: () => string | null;
 }
 
 export interface ReaderMountDeps {
@@ -218,21 +228,10 @@ function hostOwnsFocus(el: HTMLElement): boolean {
  *  moment (`withStoredLayoutKept`), because the frame writes its whole mount-time snapshot of the object back on any prefs change (a
  *  theme `follow`, an Aa width, font or size), the layout it was mounted in included. `layoutPref.ts` is the only writer of the field.
  *  Every other key, every read, a removal and the enumeration pass through unchanged. A read that throws leaves the write as it came
- *  (nothing is known to keep). */
+ *  (nothing is known to keep). The wrapping is the storage port's own (`lib/storage.ts#rewritingWrites`, the port's one owner, C7l);
+ *  the rule it applies is the policy's. */
 function layoutKeepingPort(port: EnumerableStoragePort): EnumerableStoragePort {
-  return {
-    getItem: (key) => port.getItem(key),
-    setItem: (key, value) => {
-      if (key !== READER_PREFS_KEY) { port.setItem(key, value); return; }
-      let stored: string | null;
-      try { stored = port.getItem(key); }
-      catch { port.setItem(key, value); return; }
-      port.setItem(key, withStoredLayoutKept(value, stored));
-    },
-    removeItem: (key) => port.removeItem(key),
-    key: (index) => port.key(index),
-    get length() { return port.length; },
-  };
+  return rewritingWrites(port, READER_PREFS_KEY, withStoredLayoutKept);
 }
 
 /** A mount that holds nothing (the assets did not load): both calls do nothing. */
@@ -368,7 +367,8 @@ export async function mountReader(el: HTMLElement, input: ReaderMountInput, deps
   let mountGen = 0;
   let isReady = false;
   let held: Held | null = null;
-  const adaptersNow = (): HostAdapters => ({
+  // The adapters one library mount is handed, for the `features` and the comparison base the policy decided for it.
+  const adaptersFor = (features: ReaderFeatures | null, changesBaseNow: string | null): HostAdapters => ({
     assets,
     watchdogMs,
     ...(port === null ? {} : { store: port }),
@@ -384,7 +384,10 @@ export async function mountReader(el: HTMLElement, input: ReaderMountInput, deps
       }),
     }),
     // The frame's bar is turned off only on ccrc's bar; progress is asked for by every production mount (D-8805), whose plan says so.
-    ...(plan.chrome === 'host-bar' ? { features: { chrome: { bar: false, topSpace: false } } } : {}),
+    // Every Docs mount seeds the reading-layer flags too (X2 P5.4); the reader lab's seeds none. `readerFeatures` decides, one object.
+    ...(features === null ? {} : { features }),
+    // The tab's comparison base for this doc, read now (each library mount reads it afresh), only a full sha and only with history.
+    ...(changesBaseNow === null ? {} : { changesBase: changesBaseNow }),
     // A `default` mount names no layout, so its adapters are exactly what they were before layouts (X2 P5.1).
     ...(layout === 'default' ? {} : { layout }),
     // A `host-bar` mount always did; any other Docs mount does when its input listens (the reader's body always does now).
@@ -404,6 +407,10 @@ export async function mountReader(el: HTMLElement, input: ReaderMountInput, deps
     onReady: readyOf(mountGen),
     onFallback: (r) => input.onFallback(r),
   });
+  // Decided in the policy, read at each library mount: the flags (a fresh object each time) and the comparison base the tab holds.
+  const adaptersNow = (): HostAdapters => adaptersFor(
+    readerFeatures(input.profile, plan.chrome), readerSeedChangesBase(plan.history, input.changesBase?.() ?? null),
+  );
 
   const mountFrame = deps.mount ?? mountDocFrame;
   let destroyed = false;

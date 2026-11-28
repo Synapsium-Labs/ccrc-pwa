@@ -16,7 +16,7 @@ import {
 } from '../../lib/readerLimits';
 import { docLinkTarget } from '../docLinkTarget';
 import type { DocLinkContextValue } from '../DocLink';
-import { READER_LAYOUTS, docsVariantLayout, type DocSectionSlug, type ReaderLayout } from '../../../../shared/docs';
+import { READER_LAYOUTS, docsVariantLayout, isDocsCommit, type DocSectionSlug, type ReaderLayout } from '../../../../shared/docs';
 import type { ReaderHiddenChar } from './readerText';
 import type { ReaderReading } from './readerMode';
 
@@ -300,6 +300,51 @@ export function readerMountPlan(
   return profile === 'lab-draw'
     ? { draw: 'auto', watchdogMs: READER_LAB_DRAW_WATCHDOG_MS, store: false, chrome: 'frame-bar', history: false, appearance: false }
     : { draw: docsDrawFor(e17), watchdogMs: readerWatchdogMs(bytes), store: true, chrome, history: true, appearance: true };
+}
+
+/** The words the reader's attention marks and ID rule skip before an ID (the review strip's "you or operator" row addresses, and the
+ *  ID qualifiers: `programme`, `program`, `at-scale`, `addendum`, and the version words `v1` to `v20`, each as itself, with `'s` and
+ *  with the typographic `’s` (U+2019); 64 words, the library's cap being 200 and a word's being 64 code units, X2 P5.4).
+ *  D-9176: the standalone reader's qualifier was a PATTERN for any version word (`v\d[\w.]*`, with an optional possessive), and the
+ *  library takes plain words only (measured 2026-11-28: it matches each listed word whole, case-insensitive; `v2.1` and `v21` are not
+ *  matched by `v2` or `v1`), so a version above `v20` or with a dot (`v2.1`, `v1.2.0`) before an ID no longer stops that ID from
+ *  linking. The list is the whole set; widening it is one edit here. */
+export const READER_QUALIFIERS: readonly string[] = (() => {
+  const words = ['programme', 'program', 'at-scale', 'addendum'];
+  for (let n = 1; n <= 20; n += 1) words.push(`v${n}`, `v${n}'s`, `v${n}’s`);
+  return words;
+})();
+
+/** The addressees the review strip's attention marks answer to: `you` (the library's default) and `operator`. */
+const READER_ADDRESSEES: readonly string[] = ['you', 'operator'];
+
+/** What a Docs mount's `features` object holds (X2 P5.4, parity spec 5.6): the reading-layer flags (`rules`, the In short switch and
+ *  the vocabulary) beside, on ccrc's bar, the chrome switches (the frame's bar off, its top space trimmed), in one object. */
+export interface ReaderFeatures {
+  readonly rules: true;
+  readonly inShort: true;
+  readonly vocabulary: { readonly addressees: string[]; readonly qualifiers: string[] };
+  readonly chrome?: { readonly bar: false; readonly topSpace: false };
+}
+
+/** The `features` a mount seeds, or `null` for none: the reader lab's `lab-draw` mount seeds none (it is a timed draw, not a reading),
+ *  and every Docs mount seeds the flags, with the chrome switches too on ccrc's bar (`host-bar`). A fresh object, and fresh lists,
+ *  every call: the library holds what it is handed. */
+export function readerFeatures(profile: ReaderMountProfile | undefined, chrome: ReaderChrome): ReaderFeatures | null {
+  if (profile === 'lab-draw') return null;
+  return {
+    ...(chrome === 'host-bar' ? { chrome: { bar: false as const, topSpace: false as const } } : {}),
+    rules: true,
+    inShort: true,
+    vocabulary: { addressees: [...READER_ADDRESSEES], qualifiers: [...READER_QUALIFIERS] },
+  };
+}
+
+/** The comparison base a mount seeds (X2 P5.4): the stored one (`raw`, what `readerHistory` kept for this doc in this tab, or what an
+ *  input handed) only when the mount carries history and the value is a full sha (40 or 64 lower-case hex digits); else `null`, one
+ *  meaning: "seed no base". */
+export function readerSeedChangesBase(history: boolean, raw: string | null): string | null {
+  return history && raw !== null && isDocsCommit(raw) ? raw : null;
 }
 
 /** Reader mode's asks of one mount (`readerMountPlan` takes reader mode's state through this, X6 XR1.4): a Docs mount asks for

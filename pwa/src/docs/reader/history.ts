@@ -2,6 +2,7 @@
 // plain values, no I/O, no timer, no DOM, no React, no library import (the shapes below mirror the shared Markdown
 // library's, which the type test holds equal) and no `lib/api.ts`. `bridge.ts` hands the answers to the frame and
 // the Docs screen acts on them: this file decides and does nothing else.
+import { READER_STORE_PREFIX } from '../../lib/readerLimits';
 import { isDocsCommit, type DocPin, type DocsFailure, type DocsLogAsk, type DocsLogOk, type DocsShowOk } from '../../../../shared/docs';
 
 /** One commit of the document, in the library's seed shape. */
@@ -125,6 +126,51 @@ export function readerVersionMove(
 export function readerChangesBase(pin: DocPin, sha: string): DocPin | null {
   if (pin.kind !== 'committed' || !isDocsCommit(sha)) return null;
   return { kind: 'committed', commit: sha, servedRef: pin.servedRef, section: pin.section, path: pin.path };
+}
+
+/** The key of a document's comparison base in the tab's session storage (X2 P5.4, parity spec 5.6): under the reader prefix, one
+ *  value per doc, never in page storage (so another tab of the device starts without it). */
+export function readerDocChangesBaseKey(docKey: string): string {
+  return `${READER_STORE_PREFIX}changes-base:${docKey}`;
+}
+
+/** The key of the library's own per-doc `seen` field (`{ sha, at }`, the last visit) in page storage: `<prefix>doc:<docKey>:<field>`. */
+export function readerSeenKey(docKey: string): string {
+  return `${READER_STORE_PREFIX}doc:${docKey}:seen`;
+}
+
+/** The sha of the last visit as the library keeps it under `seen` (JSON `{ sha, at }`), read as a value and never trusted for its
+ *  shape: a full sha, lower-cased, else `null` (absent, unparsable, not an object, no `sha`, or a `sha` that is not a full one). */
+export function readerSeenSha(raw: string | null): string | null {
+  if (raw === null) return null;
+  let v: unknown;
+  try {
+    v = JSON.parse(raw);
+  } catch {
+    return null;
+  }
+  if (typeof v !== 'object' || v === null || Array.isArray(v) || !own(v, 'sha')) return null;
+  const sha: unknown = (v as Record<string, unknown>)['sha'];
+  if (typeof sha !== 'string') return null;
+  const lower = sha.toLowerCase();
+  return isDocsCommit(lower) ? lower : null;
+}
+
+/** The sha a `changes(sha)` request records as the doc's comparison base, or `null` for none (the library's own rule, its README's
+ *  "Which request to record", binding): the frame asks `changes` unprompted only for the shas the host seeded into that mount, so a
+ *  request is a pick of the reader's own only when its sha is none of them (compared in lower case) and the mount is not a one-day
+ *  version (`only` set: the day's sha is the only one such a mount asks). `seeded` is every sha the host seeded into any library mount
+ *  of this body, each as the mount was made with it (the last visit's sha the frame then read from `seen`, and the `changesBase`;
+ *  the frame moves `seen` itself before it asks, so no later reading stands for it). The answer is lower case, and only a full sha is
+ *  ever recorded. */
+export function readerChangesBaseToRecord(
+  sha: string, seeded: { readonly seeded: Iterable<string>; readonly only: string | null },
+): string | null {
+  if (seeded.only !== null) return null;
+  const lower = typeof sha === 'string' ? sha.toLowerCase() : '';
+  if (!isDocsCommit(lower)) return null;
+  for (const s of seeded.seeded) if (s.toLowerCase() === lower) return null;
+  return lower;
 }
 
 /** The server's word for a path that does not exist at the commit asked (the docs-show failure `absent-path`). */

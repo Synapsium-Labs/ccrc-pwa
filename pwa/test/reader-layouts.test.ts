@@ -356,7 +356,9 @@ describe('the bridge hands the library a layout', () => {
     expect(Object.keys(lab.adaptersAt(0))).not.toContain('layout');
   });
 
-  it('layouts: a default mount\'s adapters are unchanged', async () => {
+  // P5.1 leaves a default mount's adapters as they were; P5.4 adds the reading-layer flags (`features`) to every Docs mount, the
+  // default's included, and nothing else.
+  it('layouts: a default mount\'s adapters name no layout and carry no layout assets', async () => {
     for (const input of [{}, { layout: 'default' as const }]) {
       const r = rig();
       const m = await r.run(input);
@@ -366,7 +368,7 @@ describe('the bridge hands the library a layout', () => {
       expect(Object.keys(a.assets).sort()).toEqual(['bootstrap', 'css', 'enhance', 'guard']);
       expect(m.layout).toBe('default');
       expect(Object.keys(a).sort()).toEqual(
-        ['assets', 'copy', 'docKey', 'focus', 'mermaidDraw', 'onFallback', 'onHash', 'onLink', 'onReady', 'prefs', 'storePrefix', 'title', 'watchdogMs'].sort(),
+        ['assets', 'copy', 'docKey', 'features', 'focus', 'mermaidDraw', 'onFallback', 'onHash', 'onLink', 'onReady', 'prefs', 'storePrefix', 'title', 'watchdogMs'].sort(),
       );
     }
   });

@@ -700,6 +700,8 @@ function ReaderBody(p: ReaderFrameProps & { readonly text: string; readonly onSi
         ...(history === null ? {} : {
           changes: (sha: string) => history.changes(sha),
           openVersion: (v: { sha?: string; only?: string }) => history.openVersion(v),
+          // The tab's comparison base for this doc (X2 P5.4): read at each library mount, so a reload and a link back seed the pick.
+          changesBase: () => history.changesBase(),
         }),
         bytes,
         docKey: readerDocKey(cur.props.link.project, cur.props.show.section, cur.props.show.path),
