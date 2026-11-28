@@ -191,7 +191,7 @@ function editArm(git, branch, lines) {
     `ledger-guard: ${violations.length} shared ledger file(s) edited outside a ledger branch:\n${list}\n`
     + `Put the change in a per-task note, ${NOTE_ROUTE} (a new file), and let the `
     + 'coordinator fold it into the ledger on its ledger pull request. If this edit is genuinely this change\'s own, '
-    + 'add a `Ledger-Edit: <D-TBD reason>` trailer to the head commit.');
+    + 'add a `Ledger-Edit: <reason>` trailer to the head commit.');
   return false;
 }
 

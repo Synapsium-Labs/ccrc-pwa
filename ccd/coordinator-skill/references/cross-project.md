@@ -94,10 +94,15 @@ immutable producer blob proves where that shape came from; and the plan blob
 controls wave scope and requirements. `ledgerAbsPath` names only the programme
 ledger. Paths, not payloads: the 8 KB ceiling is unchanged.
 
-**Deviations found during a foreign-repo wave are minted against the HOME
-project** — `POST /api/ledger/deviations` with the home project's name — and
-defined in the home plan, because that is where the plan lives. The allocator
-takes the project from the caller and cannot cross-check it, so this one is
+**Deviations found during a foreign-repo wave are numbered in the HOME
+project** — where it keeps its deviation ledger the way ccrc does (`D-N`
+entries under `docs/superpowers/`), the highest `D-N` defined in the home
+project's plans, notes and specs on its `origin/main` and on the branch that
+will define it, plus one, from 10000 (when the home project is ccrc,
+`npm run next-deviation` in its `server/` prints it), else its own convention —
+and defined in the home
+plan, because that is where the plan lives. Nothing can tell which project's
+tree the number was read from, so this one is
 discipline rather than a mechanism, which is exactly why it is written down.
 
 **Address the worker as `toId: 'worker'` with this run's `runId`**, and the

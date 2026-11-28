@@ -10,8 +10,8 @@
 // the code never folds them together.
 import { describe, it, expect } from 'vitest';
 import {
-  foldSkillStates, readyVerdict, FLOOR_STATES, TOKEN_STATES, COORD_DB_STATES, READY_VERDICTS,
-  isFloorState, isTokenState, isCoordDbState, isReadyVerdict,
+  foldSkillStates, readyVerdict, TOKEN_STATES, COORD_DB_STATES, READY_VERDICTS,
+  isTokenState, isCoordDbState, isReadyVerdict,
 } from '../../shared/api.js';
 import { measureFleetReadiness, projectReadiness, type ReadinessDeps } from '../src/readiness.js';
 import type { FleetIO } from '../src/io.js';
@@ -19,7 +19,7 @@ import { COORDINATOR_SKILL_DIR, WORKER_SKILL_DIR } from '../src/skillstate.js';
 
 
 const OK = {
-  worker: 'present', coordinator: 'present', floor: 'seeded',
+  worker: 'present', coordinator: 'present',
   boxToken: 'configured', coordDb: 'available',
 } as const;
 
@@ -49,14 +49,13 @@ describe('foldSkillStates — every rostered HOME, folded honestly', () => {
 });
 
 describe('readyVerdict — three-valued, because a boolean would collapse blocked with unknown', () => {
-  it('all five preconditions ok reads ready', () => {
+  it('all four preconditions ok reads ready', () => {
     expect(readyVerdict(OK)).toBe('ready');
   });
 
   it('a proven-missing precondition reads blocked', () => {
     expect(readyVerdict({ ...OK, worker: 'absent' })).toBe('blocked');
     expect(readyVerdict({ ...OK, coordinator: 'absent' })).toBe('blocked');
-    expect(readyVerdict({ ...OK, floor: 'not-seeded' })).toBe('blocked');
     expect(readyVerdict({ ...OK, boxToken: 'absent' })).toBe('blocked');
     expect(readyVerdict({ ...OK, coordDb: 'not-configured' })).toBe('blocked');
     expect(readyVerdict({ ...OK, coordDb: 'degraded' })).toBe('blocked');
@@ -65,18 +64,16 @@ describe('readyVerdict — three-valued, because a boolean would collapse blocke
   it('an unmeasurable precondition reads unknown — NOT blocked', () => {
     expect(readyVerdict({ ...OK, worker: 'unmeasurable' })).toBe('unknown');
     expect(readyVerdict({ ...OK, coordinator: 'unmeasurable' })).toBe('unknown');
-    expect(readyVerdict({ ...OK, floor: 'unmeasurable' })).toBe('unknown');
     expect(readyVerdict({ ...OK, boxToken: 'unmeasurable' })).toBe('unknown');
   });
 
   it('blocked OUTRANKS unknown — a proven failure is reportable even when something else is unknown', () => {
-    expect(readyVerdict({ ...OK, worker: 'absent', floor: 'unmeasurable' })).toBe('blocked');
+    expect(readyVerdict({ ...OK, worker: 'absent', boxToken: 'unmeasurable' })).toBe('blocked');
   });
 });
 
 describe('the derived lists and guards', () => {
   it('each list has exactly its members, derived from its map', () => {
-    expect([...FLOOR_STATES]).toEqual(['seeded', 'not-seeded', 'unmeasurable']);
     expect([...TOKEN_STATES]).toEqual(['configured', 'absent', 'unmeasurable']);
     expect([...COORD_DB_STATES]).toEqual(['available', 'degraded', 'not-configured']);
     expect([...READY_VERDICTS]).toEqual(['ready', 'blocked', 'unknown']);
@@ -86,8 +83,6 @@ describe('the derived lists and guards', () => {
     // The neighbours matter: these four unions sit beside `SkillState` and
     // share a shape, so a guard wired to the wrong list would still look
     // right on its own members.
-    expect(isFloorState('seeded')).toBe(true);
-    expect(isFloorState('present')).toBe(false);
     expect(isTokenState('configured')).toBe(true);
     expect(isTokenState('seeded')).toBe(false);
     expect(isCoordDbState('available')).toBe(true);
@@ -196,21 +191,16 @@ describe('projectReadiness — the per-project compose', () => {
     coordDb: 'available', at: 7,
   } as const;
 
-  it('joins the project floor to the fleet half and derives the verdict once', () => {
-    expect(projectReadiness(fleet, 'seeded')).toEqual({
-      worker: 'present', coordinator: 'present', floor: 'seeded',
+  it('joins nothing per project and derives the verdict once', () => {
+    expect(projectReadiness(fleet)).toEqual({
+      worker: 'present', coordinator: 'present',
       boxToken: 'configured', coordDb: 'available', verdict: 'ready', at: 7,
     });
   });
 
-  it('an unseeded floor blocks; an unmeasurable one is only unknown', () => {
-    expect(projectReadiness(fleet, 'not-seeded').verdict).toBe('blocked');
-    expect(projectReadiness(fleet, 'unmeasurable').verdict).toBe('unknown');
-  });
-
   it('carries the fleet half through unchanged — it measures nothing of its own', () => {
     const degraded = { ...fleet, worker: 'absent', coordDb: 'degraded' } as const;
-    expect(projectReadiness(degraded, 'seeded')).toMatchObject(
+    expect(projectReadiness(degraded)).toMatchObject(
       { worker: 'absent', coordDb: 'degraded', at: 7 });
   });
 });

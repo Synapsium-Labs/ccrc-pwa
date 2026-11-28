@@ -283,17 +283,49 @@ export interface CrossTreeCollision { readonly n: number; readonly files: readon
 export function definitionsIn(
   files: readonly { readonly path: string; readonly text: string }[],
 ): Definition[] {
-  const out: Definition[] = [];
+  return definitionLines(files).map(({ file, n }) => ({ file, n }));
+}
+
+/**
+ * `definitionsIn` with each definition's comparable subject, for the subject-aware rule. A subject
+ * wrapped onto the next line (`- **D-N** —` then the text) is read from the next non-blank line, unless
+ * that line is a definition, a heading or a fence; one still empty gets a key of its own (file and line), so an empty subject never makes two definitions equal.
+ */
+function definitionLines(
+  files: readonly { readonly path: string; readonly text: string }[],
+): (Definition & { readonly subject: string })[] {
+  const out: (Definition & { readonly subject: string })[] = [];
   for (const f of files) {
     const lines = f.text.split('\n');
     const fenced = fencedLines(lines);
     for (let i = 0; i < lines.length; i++) {
       if (fenced !== null && fenced.has(i)) continue;
       const m = DEFINITION.exec(lines[i]!);
-      if (m) out.push({ file: f.path, n: Number(m[1]) });
+      if (!m) continue;
+      let subject = definitionSubject(lines[i]!);
+      if (subject === '') {
+        // A definition, heading or fence on the next line is not this one's subject.
+        const nx = lines.slice(i + 1).find((l) => l.trim() !== '') ?? '';
+        subject = DEFINITION.test(nx) || /^\s*(?:#|```|~~~)/.test(nx) ? '' : tidySubject(nx);
+      }
+      out.push({ file: f.path, n: Number(m[1]), subject: subject === '' ? `\0${f.path}:${i}` : subject });
     }
   }
   return out;
+}
+
+const tidySubject = (s: string): string => s.replace(/\s+/g, ' ').trim().replace(/[.,;:!?]+$/, '').trimEnd();
+
+/**
+ * The subject of a definition line: the text after its first em dash (or, with no em dash, after the
+ * number), whitespace collapsed and trailing punctuation trimmed. The one subject extractor: the
+ * self-assigned rule and the old subject scanner in `deviation-refs.test.ts` both read it. `exact`
+ * keeps the old scanner's comparison, which is main's and stays so below the era: the text only trimmed.
+ */
+export function definitionSubject(line: string, exact = false): string {
+  const dash = line.indexOf('\u2014');
+  const rest = dash >= 0 ? line.slice(dash + 1) : line.replace(/^.*?D-\d+(?:\*\*)?/, '');
+  return exact ? rest.trim() : tidySubject(rest);
 }
 
 /**
@@ -319,7 +351,8 @@ export function crossTreeCollisions(
 ): CrossTreeCollision[] {
   const byN = new Map<number, Set<string>>();
   for (const d of [...definitionsIn(branch), ...definitionsIn(base)]) {
-    if (d.n < era) continue;
+    // From SELF_ASSIGNED_ERA up, selfAssignedCollisions alone judges: a renamed or mirrored entry is one deviation there.
+    if (d.n < era || d.n >= SELF_ASSIGNED_ERA) continue;
     const files = byN.get(d.n) ?? new Set<string>();
     files.add(d.file);
     byN.set(d.n, files);
@@ -328,6 +361,58 @@ export function crossTreeCollisions(
     .filter(([, files]) => files.size > 1)
     .map(([n, files]) => ({ n, files: [...files].sort() }))
     .sort((a, b) => a.n - b.n);
+}
+
+/** Self-assigned numbers start here: every number below it is history (allocator or hand-numbered). */
+export const SELF_ASSIGNED_ERA = 10000;
+
+type Files = readonly { readonly path: string; readonly text: string }[];
+
+/**
+ * Self-assigned numbers (n >= SELF_ASSIGNED_ERA) defined with two different subjects. Identical
+ * subjects in any number of paths or lines are one deviation: a spec mirroring its plan, a plan
+ * repeating its own entry, a file renamed or moved on the branch. A branch copy is read only when the
+ * branch changed that path since the merge base (`changed`), and a base copy only when it did not: so
+ * rewording a merged entry, or fixing a collision the base carries, is not a collision, main's later
+ * addition to a file the branch never touched still counts, and a file main moved or reworded after
+ * the merge base is not read again from the branch's untouched, stale copy. A base path the branch
+ * lacks counts when main added it after the merge base; one the branch deleted or renamed away is in
+ * `changed` (the caller lists renames off) and is absent. Two branches adding
+ * one number to the SAME file are seen only on the merged tree (the queue). `files` lists each
+ * defining path once, sorted. Pure, like `crossTreeCollisions`; the caller measures `changed`.
+ */
+export function selfAssignedCollisions(branch: Files, base: Files, changed: ReadonlySet<string>): CrossTreeCollision[] {
+  const defs = definitionLines([
+    // A path the branch did not change holds the merge base's text, which the base's current copy supersedes
+    // (main may since have moved, reworded or deleted it).
+    ...branch.filter((f) => changed.has(f.path)),
+    // A path the branch changed (deleted or renamed away included; the caller lists renames off) is the branch's view.
+    ...base.filter((f) => !changed.has(f.path)),
+  ]);
+  const byN = new Map<number, { subjects: Set<string>; files: Set<string> }>();
+  for (const d of defs) {
+    if (d.n < SELF_ASSIGNED_ERA) continue;
+    const e = byN.get(d.n) ?? { subjects: new Set<string>(), files: new Set<string>() };
+    e.subjects.add(d.subject);
+    e.files.add(d.file);
+    byN.set(d.n, e);
+  }
+  return [...byN.entries()]
+    .filter(([, e]) => e.subjects.size > 1)
+    .map(([n, e]) => ({ n, files: [...e.files].sort() }))
+    .sort((a, b) => a.n - b.n);
+}
+
+/**
+ * The next `count` deviation numbers: one past the highest definition at or above the era, or the era
+ * itself when there is none. Pure; the caller reads the tree (`scripts/next-deviation.ts`).
+ */
+export function nextDeviationNumbers(defs: readonly Definition[], count: number): number[] {
+  if (!Number.isInteger(count) || count < 1 || count > LEDGER_ALLOC_MAX) {
+    throw new RangeError(`count must be an integer 1..${LEDGER_ALLOC_MAX}, got ${count}`);
+  }
+  const top = defs.reduce((m, d) => (d.n >= SELF_ASSIGNED_ERA && d.n > m ? d.n : m), SELF_ASSIGNED_ERA - 1);
+  return Array.from({ length: count }, (_, i) => top + 1 + i);
 }
 
 /**

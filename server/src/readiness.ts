@@ -1,6 +1,6 @@
 import type { FleetIO } from './io.js';
 import type {
-  CoordDbState, FloorState, ProjectReadiness, SkillState, TokenState,
+  CoordDbState, ProjectReadiness, SkillState, TokenState,
 } from '../../shared/api.js';
 import { foldSkillStates, readyVerdict } from '../../shared/api.js';
 import { COORDINATOR_SKILL_DIR, WORKER_SKILL_DIR, readSkillState } from './skillstate.js';
@@ -113,14 +113,13 @@ export async function measureFleetReadiness(deps: ReadinessDeps): Promise<FleetR
   };
 }
 
-/** Join one project's floor to the swept fleet half. The verdict is DERIVED
+/** The swept fleet half as one project's answer. The verdict is DERIVED
  *  here and nowhere else, so every consumer renders one answer rather than
- *  folding five fields a second time and disagreeing at the edges. */
-export function projectReadiness(fleet: FleetReadiness, floor: FloorState): ProjectReadiness {
+ *  folding the fields a second time and disagreeing at the edges. */
+export function projectReadiness(fleet: FleetReadiness): ProjectReadiness {
   const facts = {
     worker: fleet.worker,
     coordinator: fleet.coordinator,
-    floor,
     boxToken: fleet.boxToken,
     coordDb: fleet.coordDb,
   };

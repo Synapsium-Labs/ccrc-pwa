@@ -2091,24 +2091,6 @@ export function isSkillState(v: unknown): v is SkillState {
  * `SkillState` above is REUSED for both skills rather than copied — this block
  * adds no fifth word for a question wave 2 already gave a vocabulary.
  */
-export type FloorState = 'seeded' | 'not-seeded' | 'unmeasurable';
-
-/** Presentational only, and keyed BY the type so the compiler keeps it total —
- *  a member added to the union with no key here is a compile error, which is
- *  what makes the derived list below trustworthy. */
-export const FLOOR_STATE_MAP: Record<FloorState, string> = {
-  seeded: 'deviation floor seeded',
-  'not-seeded': 'no deviation floor yet',
-  unmeasurable: 'could not be measured',
-};
-
-export const FLOOR_STATES: readonly FloorState[] =
-  Object.keys(FLOOR_STATE_MAP) as FloorState[];
-
-export function isFloorState(v: unknown): v is FloorState {
-  return typeof v === 'string' && (FLOOR_STATES as readonly string[]).includes(v);
-}
-
 /** `absent` is a PROVEN ENOENT on the token path; `unmeasurable` is any other
  *  read failure. The BOOT read (`coord/token.ts`) cannot produce the third
  *  member at all — it throws and the server never starts — which is why the
@@ -2265,11 +2247,10 @@ export function isAskRefuseCode(v: unknown): v is AskRefuseCode {
   return typeof v === 'string' && (ASK_REFUSE_CODES as readonly string[]).includes(v);
 }
 
-/** The five measured preconditions, without the derived verdict or the stamp. */
+/** The four measured preconditions, without the derived verdict or the stamp. */
 export interface ReadinessFacts {
   readonly worker: SkillState;
   readonly coordinator: SkillState;
-  readonly floor: FloorState;
   readonly boxToken: TokenState;
   readonly coordDb: CoordDbState;
 }
@@ -2545,7 +2526,6 @@ export const READINESS_CELL: {
 } = {
   worker: (v) => (v === 'present' ? 'ok' : v === 'absent' ? 'blocked' : 'unknown'),
   coordinator: (v) => (v === 'present' ? 'ok' : v === 'absent' ? 'blocked' : 'unknown'),
-  floor: (v) => (v === 'seeded' ? 'ok' : v === 'not-seeded' ? 'blocked' : 'unknown'),
   boxToken: (v) => (v === 'configured' ? 'ok' : v === 'absent' ? 'blocked' : 'unknown'),
   // No `unknown` arm: every member of `CoordDbState` is a proven condition.
   coordDb: (v) => (v === 'available' ? 'ok' : 'blocked'),
@@ -6909,15 +6889,14 @@ export function isRunRefuseCode(v: unknown): v is RunRefuseCode {
  *   not-owner       — release: the claim is live and not yours; heldBy names who
  *   claim-terminal  — release/break: the row already ended; state rides along.
  *                     Lapse-don't-delete (D12) is why this arm exists at all
- *   not-seeded      — the allocator refuses before sweepLedgerFloor has scanned
- *                     the project (D13: fail shut, never mint from a guess)
  *
  * Producers land across wave 7 (Tasks 18-20); `claims-envelope.test.ts` pins
- * the producer direction once all seven exist.
+ * the producer direction. A seventh, `not-seeded` (the deviation allocator's
+ * fail-shut refusal, D13), left with the allocator.
  */
 export const CLAIM_REFUSE_CODES = [
   'unknown-session', 'claim-conflict', 'bad-path', 'unknown-claim', 'not-owner',
-  'claim-terminal', 'not-seeded',
+  'claim-terminal',
 ] as const;
 export type ClaimRefuseCode = (typeof CLAIM_REFUSE_CODES)[number];
 export function isClaimRefuseCode(v: unknown): v is ClaimRefuseCode {
@@ -10025,7 +10004,7 @@ export const PEER_ETIQUETTE = [
   'Discovery is GET /api/peers?of=<your id> — the peers you cannot see from your own session list are the ones this route exists for.',
   'History is GET /api/lifecycle. Read each row’s own lifecycle, never its archive stamp — the stamp is reported verbatim and decides nothing.',
   'Peer mail is human-timescale: a busy peer reads it when it next idles, and losing a race is learned from the 409 you are already reading, never from mail.',
-  'Never invent a deviation number. POST /api/ledger/deviations allocates; a server you cannot reach is a mechanical blocker to report, not a licence to guess.',
+  'Take a deviation number, where the project keeps its deviation ledger the way ccrc does (D-N entries under docs/superpowers/), as the highest D-N defined in its plans, notes and specs on origin/main and on your branch, plus one, from 10000 (in ccrc, npm run next-deviation in server/ prints it); otherwise follow the project’s own convention. A duplicate is caught only where the project runs a collision guard, and there the second to land renumbers.',
 ] as const;
 
 /**

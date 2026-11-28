@@ -916,7 +916,7 @@ describe('GET /api/projects — the program-ready readiness', () => {
     const res = await app.inject({ method: 'GET', url: '/api/projects' });
     expect(res.statusCode).toBe(200);
     expect(res.json().projects[0].readiness).toEqual({
-      worker: 'present', coordinator: 'present', floor: 'seeded',
+      worker: 'present', coordinator: 'present',
       boxToken: 'configured', coordDb: 'available', verdict: 'ready',
       at: 1_785_300_000_000,
     });
@@ -930,8 +930,9 @@ describe('GET /api/projects — the program-ready readiness', () => {
       readiness: SWEPT, coord: { ledgerFloor: () => null, accountPoolEdges: () => new Map() },
     });
     const row = (await app.inject({ method: 'GET', url: '/api/projects' })).json().projects[0];
-    expect(row.readiness.floor).toBe('not-seeded');
-    expect(row.readiness.verdict).toBe('blocked');
+    // Numbers are self-assigned: no ledger floor is not a precondition any more.
+    expect(row.readiness).not.toHaveProperty('floor');
+    expect(row.readiness.verdict).toBe('ready');
     await app.close();
   });
 
@@ -940,54 +941,6 @@ describe('GET /api/projects — the program-ready readiness', () => {
     const row = (await app.inject({ method: 'GET', url: '/api/projects' })).json().projects[0];
     expect(row).toHaveProperty('readiness');
     expect(row.readiness).toBeNull();
-    await app.close();
-  });
-
-  it('a floor read that THROWS is unmeasurable for that project, and the request still answers', async () => {
-    // `CoordStore.ledgerFloor` has no result type: a sick store throws. That
-    // must not become a 500, and it must NOT become `not-seeded` — which
-    // would send an operator to seed a floor that may already exist.
-    const { app } = await makeApp({
-      readiness: SWEPT,
-      coord: { ledgerFloor: () => { throw new Error('SQLITE_BUSY'); }, accountPoolEdges: () => new Map() },
-    });
-    const res = await app.inject({ method: 'GET', url: '/api/projects' });
-    expect(res.statusCode).toBe(200);
-    expect(res.json().projects[0].readiness.floor).toBe('unmeasurable');
-    expect(res.json().projects[0].readiness.verdict).toBe('unknown');
-    await app.close();
-  });
-
-  it('one project throwing does not blank the others', async () => {
-    const root = mkTmp('ccrc-projects-readiness-');
-    mkdirSync(path.join(root, 'alpha'));
-    mkdirSync(path.join(root, 'beta'));
-    const { app } = await makeApp({
-      projectsRoot: root,
-      readiness: SWEPT,
-      coord: {
-        ledgerFloor: (project: string) => {
-          if (project === 'alpha') throw new Error('SQLITE_BUSY');
-          return { floor: 1, evidence: 'x', updatedAt: 1 };
-        },
-        accountPoolEdges: () => new Map(),
-      },
-    });
-    const rows = (await app.inject({ method: 'GET', url: '/api/projects' })).json().projects;
-    const byName = Object.fromEntries(
-      rows.map((r: { name: string; readiness: { floor: string } }) => [r.name, r.readiness.floor]));
-    expect(byName.alpha).toBe('unmeasurable');
-    expect(byName.beta).toBe('seeded');
-    await app.close();
-  });
-
-  it('no coordination store makes every project FLOOR unmeasurable, not not-seeded', async () => {
-    // The `coordDb` arm is the SWEEP's answer, not this route's; what the
-    // route owns here is the floor, and with no store it did not measure one.
-    const { app } = await makeApp({ readiness: SWEPT });
-    const row = (await app.inject({ method: 'GET', url: '/api/projects' })).json().projects[0];
-    expect(row.readiness.floor).toBe('unmeasurable');
-    expect(row.readiness.verdict).toBe('unknown');
     await app.close();
   });
 

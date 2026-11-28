@@ -9,13 +9,13 @@
 // collide, so a stale entry cannot quietly mask a new one.
 import { describe, it, expect } from 'vitest';
 import { readFileSync, readdirSync } from 'node:fs';
-import { execFileSync, execSync } from 'node:child_process';
+import { execFileSync } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createHash } from 'node:crypto';
-import { crossTreeCollisions, definitionsIn, floorFromScan,
-         LEDGER_ALLOCATOR_ERA, type Definition } from '../src/coord/ledger.js';
-import { LEDGER_SEED_GAP } from '../../shared/api.js';
+import { crossTreeCollisions, definitionsIn, definitionSubject, selfAssignedCollisions,
+         LEDGER_ALLOCATOR_ERA, SELF_ASSIGNED_ERA, type Definition } from '../src/coord/ledger.js';
+import { DEFINITION_DIRS, changedDefinitionPaths, readDefinitionFilesAt, resolveLedgerBase, staleLedgerBase } from '../scripts/next-deviation.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(here, '..', '..');
@@ -57,7 +57,7 @@ const entries = (): Entry[] => {
     if (LEGACY_PER_PLAN_LEDGERS.has(f)) continue;
     for (const line of readFileSync(path.join(PLANS, f), 'utf8').split('\n')) {
       const m = ENTRY.exec(line);
-      if (m) out.push({ file: f, n: Number(m[1]), subject: m[2]!.trim() });
+      if (m) out.push({ file: f, n: Number(m[1]), subject: definitionSubject(line, true) });
     }
   }
   return out;
@@ -75,7 +75,7 @@ describe('the deviation-refs scanner (D13 — the bb47c9e shape)', () => {
     const fresh = collisions().filter(([n]) => !GRANDFATHERED.has(n));
     expect(fresh.map(([n, es]) =>
       `D-${n}:\n${es.map((e) => `  ${e.file} :: ${e.subject}`).join('\n')}`),
-      'one number, two deviations — allocate through POST /api/ledger/deviations').toEqual([]);
+      'one number, two deviations — take fresh numbers with `cd server && npm run next-deviation -- <count>`').toEqual([]);
   });
 
   it('the scanner is looking at something', () => {
@@ -102,71 +102,9 @@ describe('the deviation-refs scanner (D13 — the bb47c9e shape)', () => {
   });
 });
 
-// D13's other exposure: `sweepLedgerFloor` feeds docs/superpowers/{plans,specs}
-// of each registry project to `floorFromScan`, and THIS repo is one of those
-// projects — its own tracked docs are live seed input on the fleet. A fixture
-// ref written contiguously (a 'D-' + '<n>' token with n far above the ledger)
-// anywhere the scan can see would seed the first live floor thousands of
-// numbers high, PERMANENTLY: the floor only ever rises. Fixture refs are
-// therefore spelled split in tracked text — `D-${2611}` in test source,
-// prefix-less numbers in plan prose — and this scan is the refusal that keeps
-// it that way. It runs the REAL floorFromScan over the WHOLE tracked tree
-// (163 ms measured, so no need to scope down to the sweep's own {plans,specs}
-// classes — the wider net also guards test/source fixtures, which poison the
-// live FLOOR: one contiguous ref seeds it thousands of numbers high, and it
-// only rises).
-describe('the floor seed reads THIS tree (D13 — fixtures must not poison it)', () => {
-  const trackedFiles = (): { path: string; text: string }[] =>
-    execSync('git ls-files -z', { cwd: ROOT, maxBuffer: 1 << 22 })
-      .toString('utf8').split('\0').filter(Boolean).sort()
-      .map((f) => ({ path: f, text: readFileSync(path.join(ROOT, f), 'utf8') }));
-
-  // Definition-SHAPED line prefixes, deliberately looser than ENTRY: this repo's
-  // ledgers hold entries spelled `- **D-190** (Task 1): the session-id
-  // pattern shipped …` — colon, no em-dash — which ENTRY cannot see. For a MAX
-  // the prefix alone is enough: it reads the number a heading/bullet line
-  // DEFINES, whatever its subject punctuation.
-  //
-  // THE EXEMPLAR THIS COMMENT FIRST GAVE WAS REFUTED (D-1329, whose retraction
-  // reached `server/src/coord/ledger.ts` and not this file). It named build 9b;
-  // measured, that plan's D-211 entry is the EM-DASH form and the plan holds zero
-  // ENTRY-blind entries — a claim the corpus table below already refuted, and
-  // passed while refuting. The line break in the quoted spelling above is
-  // deliberate: the contiguous string is a needle in that table, and this repo's
-  // own plans are part of the corpus it scans.
-  // COLON-FORM EXEMPLAR: 2026-08-23-stage5-oss-polish.md
-  const DEFINED = /^(?:#{2,4} |- \*\*)D-(\d+)\b/;
-  const definedMax = (): number => {
-    let max = 0;
-    for (const f of readdirSync(PLANS).filter((n) => n.endsWith('.md'))) {
-      if (LEGACY_PER_PLAN_LEDGERS.has(f)) continue;
-      for (const line of readFileSync(path.join(PLANS, f), 'utf8').split('\n')) {
-        const m = DEFINED.exec(line);
-        if (m) max = Math.max(max, Number(m[1]!));
-      }
-    }
-    return max;
-  };
-
-  it('floorFromScan over the real tracked tree seeds from the ledger high-water, not a fixture', () => {
-    // The expectation is DERIVED, not hand-kept: the high-water is the max n
-    // across the plans' own Deviations definition lines (`definedMax`), so
-    // this pin moves with each allocation on its own. The floor assertion
-    // therefore also insists every tracked ref is LEDGERED — a source ref to
-    // an allocated-but-unentered number reds here until its entry lands,
-    // which is the direction the ledger discipline points anyway.
-    const highWater = definedMax();
-    expect(highWater,
-      `the definition-derived high-water is ${highWater} — too low to be this tree's ledger`)
-      .toBeGreaterThanOrEqual(215);
-    const scan = floorFromScan(trackedFiles());
-    expect(scan, 'the tree seeds — an empty scan here means the docs moved').not.toBeNull();
-    expect(scan!.floor,
-      `a tracked file names a global D-ref above the ledger high-water D-${highWater} ` +
-      `(${scan!.evidence}) — spell a fixture SPLIT ('D-' + '9876'), never contiguous, ` +
-      `or the first live seed lands there forever`).toBe(highWater + LEDGER_SEED_GAP);
-  });
-});
+// The case "floorFromScan over the real tracked tree seeds from the ledger high-water" is removed: the allocator
+// is retired and the floor issues nothing (docs/superpowers/plans/2026-11-23-deviation-numbers-self-assigned-pr1.md).
+// COLON-FORM EXEMPLAR: 2026-08-23-stage5-oss-polish.md (the marker the exemplar test below reads, kept here)
 
 describe('one deviation namespace — no bare legacy ref survives (9b W10, D14)', () => {
   // The reconciliation record (docs/superpowers/specs/
@@ -255,39 +193,27 @@ describe('one deviation namespace — no bare legacy ref survives (9b W10, D14)'
 
 /* ── F7: the same collision, one merge EARLIER ─────────────────────────────── */
 
-/** The base this branch's ledger is measured against — `topology-clean.test.ts`'s
- *  own `resolveBase`, for its own reason. Returns null rather than guessing, and
- *  the first row below turns that null RED: a shallow `actions/checkout` (depth 1,
- *  where `origin/main` does not exist) is exactly how this guard would come to
- *  measure nothing while reporting green. CI carries `fetch-depth: 0` already. */
-function resolveLedgerBase(cwd: string): string | null {
-  // D-2732: `'main'` was the third candidate, and on the fleet host local `main`
-  // is a FOSSIL — measured 356 commits behind `origin/main`, parked by another
-  // worktree that never moves it. With ~10 worktrees on one `.git`, a concurrent
-  // fetch rewrites `packed-refs`, so `rev-parse --verify origin/main` can fail
-  // TRANSIENTLY, which is how the chain reached that third candidate at all. The
-  // fallback was silent, so the gate would compare this branch against a tree
-  // hundreds of commits old and say nothing about which tree it read. An
-  // unresolvable `origin/main` must reach the null-base refusal below instead:
-  // "I could not measure" is an answer, "I measured a fossil" is not.
-  const candidates = [process.env['CCRC_LEDGER_BASE'], 'origin/main']
-    .filter((r): r is string => Boolean(r));
-  for (const ref of candidates) {
-    try {
-      execFileSync('git', ['rev-parse', '--verify', '--quiet', `${ref}^{commit}`],
-        { cwd, stdio: 'pipe' });
-      return ref;
-    } catch { /* try the next candidate */ }
-  }
-  return null;
-}
-
+/** The base this branch's ledger is measured against: the helper's own resolver
+ *  (`resolveLedgerBase` in `server/scripts/next-deviation.ts` — `$CCRC_LEDGER_BASE`, then
+ *  `upstream/main`, then `origin/main`), so the guard and the helper measure one tree. Null
+ *  rather than a guess, and the first row below turns that null RED: a shallow
+ *  `actions/checkout` (depth 1, where `origin/main` does not exist) is exactly how this guard
+ *  would come to measure nothing while reporting green. CI carries `fetch-depth: 0` already.
+ *
+ *  D-2732: `'main'` was once the last candidate, and on the fleet host local `main`
+ *  is a FOSSIL — measured 356 commits behind `origin/main`, parked by another
+ *  worktree that never moves it. With ~10 worktrees on one `.git`, a concurrent
+ *  fetch rewrites `packed-refs`, so `rev-parse --verify origin/main` can fail
+ *  TRANSIENTLY, which is how the chain reached that candidate at all. The
+ *  fallback was silent, so the gate would compare this branch against a tree
+ *  hundreds of commits old and say nothing about which tree it read. An
+ *  unresolvable base must reach the null-base refusal below instead:
+ *  "I could not measure" is an answer, "I measured a fossil" is not. */
 const LEDGER_BASE = resolveLedgerBase(ROOT);
 
-/** `docs/superpowers/plans/*.md` as a given REF holds them, without checking it
- *  out and without merging it. One `ls-tree` plus one `cat-file --batch` per
- *  tree (D-9068): one `cat-file` per plan was measured at ~0.4 s for 67 files,
- *  and at 9.3 s and 11.8 s for the two trees of 962 plans on 2026-11-25. */
+/** `docs/superpowers/plans/*.md` as a given REF holds them, keyed by basename, without checking it
+ *  out and without merging it: the helper's reader (one `ls-tree`, one `cat-file --batch` per tree, D-9068:
+ *  one `cat-file` per plan was measured at 9.3 s and 11.8 s for the two trees of 962 plans on 2026-11-25). */
 const plansCache = new Map<string, { path: string; text: string }[]>();
 /** What `plansAt` answered for the characterization's fixed commit, from the one-process-per-blob read (D-9068). */
 const PLANS_AT_FIXED_COUNT = 962;
@@ -309,38 +235,10 @@ const readPlansAt = (ref: string): { path: string; text: string }[] =>
 /** The `.md` plans of REF that `keep` admits, read as `plansAt` reads them. The filter is an argument so that the
  *  characterization case below can pass a frozen copy of the exclusion list, which `LEGACY_PER_PLAN_LEDGERS` is not:
  *  that list may only shrink, and a recorded hash must not move when it does (wave 1f fix round 1, R5). */
-const readPlanBlobsAt = (ref: string, keep: (file: string) => boolean): { path: string; text: string }[] => {
-  const listing = execFileSync('git',
-    ['ls-tree', '-r', '--format=%(objectname) %(path)', ref, 'docs/superpowers/plans/'],
-    { cwd: ROOT, encoding: 'utf8', maxBuffer: 1 << 22 });
-  const wanted: { sha: string; path: string }[] = [];
-  for (const line of listing.split('\n').filter(Boolean)) {
-    const sp = line.indexOf(' ');
-    const sha = line.slice(0, sp);
-    const file = line.slice(sp + 1).split('/').pop()!;
-    if (!file.endsWith('.md') || !keep(file)) continue;
-    wanted.push({ sha, path: file });
-  }
-  // D-9068: every blob of the tree through ONE `git cat-file --batch`, where a process per plan cost about ten
-  // seconds a tree at 962 plans under load. Each answer is `<sha> blob <size>\n<size bytes>\n`, in the order asked;
-  // each text is decoded from its own bytes, as the per-blob read decoded its whole stdout. The buffer is a
-  // gigabyte: one tree's plans weighed about 98 MB on 2026-11-25.
-  const batch = execFileSync('git', ['cat-file', '--batch'],
-    { cwd: ROOT, input: wanted.map((w) => `${w.sha}\n`).join(''), maxBuffer: 1 << 30 });
-  const out: { path: string; text: string }[] = [];
-  let at = 0;
-  for (const w of wanted) {
-    const eol = batch.indexOf(0x0a, at);
-    const head = batch.subarray(at, eol).toString('utf8').split(' ');
-    if (eol < 0 || head[0] !== w.sha || head[1] !== 'blob') {
-      throw new Error(`git cat-file --batch answered "${head.join(' ')}" for ${w.path} (${w.sha}) at ${ref}`);
-    }
-    const end = eol + 1 + Number(head[2]);
-    out.push({ path: w.path, text: batch.subarray(eol + 1, end).toString('utf8') });
-    at = end + 1;
-  }
-  return out;
-};
+const readPlanBlobsAt = (ref: string, keep: (file: string) => boolean): { path: string; text: string }[] =>
+  readDefinitionFilesAt(ROOT, ref, ['docs/superpowers/plans/'])
+    .map((f) => ({ path: f.path.split('/').pop()!, text: f.text }))
+    .filter((f) => keep(f.path));
 
 describe('the cross-tree collision scan (F7 — before the merge, not after)', () => {
   // WHY THIS EXISTS, and why it is not the scan above with a wider net.
@@ -365,7 +263,7 @@ describe('the cross-tree collision scan (F7 — before the merge, not after)', (
   // line wraps its subject, which `ENTRY` cannot match (D-1294).
   it('resolved a base to measure against — a missing one is RED, never vacuous', () => {
     expect(LEDGER_BASE,
-      'no $CCRC_LEDGER_BASE or origin/main resolved (D-2732 removed the local-main fallback, which ' +
+      'no $CCRC_LEDGER_BASE, upstream/main or origin/main resolved (D-2732 removed the local-main fallback, which ' +
       'was a fossil): a shallow checkout cannot see the other ' +
       'tree, and this refuses to report a comparison nobody made')
       .not.toBeNull();
@@ -403,29 +301,16 @@ describe('the cross-tree collision scan (F7 — before the merge, not after)', (
     const baseSha = execFileSync('git', ['rev-parse', '--short', LEDGER_BASE!],
       { cwd: ROOT, encoding: 'utf8' }).trim();
     // The property is NOT "the base is reachable from HEAD" — the fossil is
-    // reachable, it is old main. It is "the base is not BEHIND `origin/main`":
-    // `origin/main` must be an ancestor of whatever we are comparing against.
-    // That admits `origin/main` itself and anything built on it, and refuses a
-    // ref that predates it — which is the only way an explicit
-    // `CCRC_LEDGER_BASE` can now hand this gate a stale tree, the silent
-    // fallback having been removed above.
-    const stale = ((): string | null => {
-      try {
-        execFileSync('git', ['rev-parse', '--verify', '--quiet', 'origin/main^{commit}'],
-          { cwd: ROOT, stdio: 'pipe' });
-      } catch { return null; }   // no origin/main to compare against: not this test's call
-      try {
-        execFileSync('git', ['merge-base', '--is-ancestor', 'origin/main', LEDGER_BASE!],
-          { cwd: ROOT, stdio: 'pipe' });
-        return null;
-      } catch {
-        const behind = execFileSync('git', ['rev-list', '--count', `${LEDGER_BASE!}..origin/main`],
-          { cwd: ROOT, encoding: 'utf8' }).trim();
-        return behind;
-      }
-    })();
+    // reachable, it is old main. It is "the base is not BEHIND what the resolver
+    // picks without $CCRC_LEDGER_BASE" (`staleLedgerBase`): that ref must be an
+    // ancestor of whatever we are comparing against, which is the only way an
+    // explicit `CCRC_LEDGER_BASE` can now hand this gate a stale tree, the silent
+    // fallback having been removed above. Measured against the resolver's answer,
+    // never a hard-coded `origin/main`, so a fork whose own `main` diverged from
+    // upstream is not read as stale.
+    const stale = staleLedgerBase(ROOT, LEDGER_BASE!);
     expect(stale,
-      `the ledger base ${LEDGER_BASE} (${baseSha}) is ${stale ?? '?'} commits BEHIND origin/main — `
+      `the ledger base ${LEDGER_BASE} (${baseSha}) is ${stale?.behind ?? '?'} commits BEHIND ${stale?.anchor ?? '?'} — `
       + 'a collision report against it is about a tree nobody is merging into').toBeNull();
     expect(here.length, `only ${here.length} plans read from HEAD`).toBeGreaterThanOrEqual(50);
     expect(there.length,
@@ -434,6 +319,28 @@ describe('the cross-tree collision scan (F7 — before the merge, not after)', (
       `HEAD holds only ${definitionsIn(here).length} ledger entries`).toBeGreaterThanOrEqual(300);
     expect(definitionsIn(there).length,
       `the base holds only ${definitionsIn(there).length} ledger entries`).toBeGreaterThanOrEqual(300);
+  });
+
+  it('no self-assigned D-<n> is defined with two different subjects across this branch and its base', () => {
+    const head = readDefinitionFilesAt(ROOT, 'HEAD');
+    const base = readDefinitionFilesAt(ROOT, LEDGER_BASE!);
+    // Anti-vacuity: a reader that dropped a directory, or returned nothing, would pass the check below.
+    for (const [name, tree] of [['HEAD', head], [LEDGER_BASE!, base]] as const) {
+      for (const dir of DEFINITION_DIRS) {
+        const read = tree.filter((f) => f.path.startsWith(dir)).length;
+        expect(read, `${name}: read ${read} files under ${dir}`).toBeGreaterThanOrEqual(1);
+      }
+    }
+    // A shared path is judged by the branch's copy only when the branch changed it since the merge base; one it
+    // deleted or renamed away is absent (renames off).
+    const changed = changedDefinitionPaths(ROOT, LEDGER_BASE!);
+    const hits = selfAssignedCollisions(head, base, changed);
+    expect(hits.map((c) => `D-${c.n} is defined with two different subjects in ${c.files.join(', ')}`),
+      `measured against ${LEDGER_BASE}. If they are the same deviation, make the lines identical (or cite it ` +
+      'instead of defining it); if not, renumber the newer one (yours, never one already on the base) with ' +
+      '`cd server && npm run next-deviation -- <count>`, after `git fetch origin main` (on a fork, add `upstream` and ' +
+      '`git fetch upstream main`: the helper and this guard then measure upstream/main by themselves; ' +
+      '$CCRC_LEDGER_BASE and --ref override).').toEqual([]);
   });
 
   it('no allocator-era D-<n> is defined in two plans across this branch and its base', () => {
@@ -458,8 +365,8 @@ describe('the cross-tree collision scan (F7 — before the merge, not after)', (
     });
     expect(described,
       `measured against ${LEDGER_BASE}. A number defined in two different plans across the two ` +
-      'trees. If one side is this branch and the other the base: allocate fresh numbers through ' +
-      'POST /api/ledger/deviations and renumber NOW, before the merge decides it for you. TWO ' +
+      'trees. If one side is this branch and the other the base: take fresh numbers with ' +
+      '`cd server && npm run next-deviation -- <count>` and renumber NOW, before the merge decides it for you. TWO ' +
       'KNOWN FALSE POSITIVES, check both before renumbering anything — (1) a plan RENAMED, or its ' +
       'entries MOVED between files, on this branch: file identity here is the basename, so the ' +
       'same entries under two names read as two definitions and the right action is to change ' +
@@ -690,7 +597,6 @@ describe('the cross-tree collision scan (F7 — before the merge, not after)', (
     const REQUIRED = [
       'es.length >= 100',
       'new Set(es.map((e) => e.file)).size >= 8',
-      'highWater >= 215',
       'here.length >= 50',
       'there.length >= 50',
       'definitionsIn(here).length >= 300',
@@ -736,17 +642,27 @@ describe('the cross-tree collision scan (F7 — before the merge, not after)', (
 // fence parser is written here.
 const DEFINITION_SHAPE = /^- \*\*D-(\d+)\.?\*\*/;
 
+/** The self-assigned era's wider net, over all three definition directories (the helper and the
+ *  guard read them all): any line that OPENS with the number, as a heading (`# D-N`), a bold
+ *  list item of any marker (`- `, `* `, `+ `, `1. `) or bare bold, at column 0 or after leading
+ *  whitespace, a table row's `| ` or a blockquote's `> ` (DEFINITION reads column 0 only, so those
+ *  must be rewritten as top-level lines). Only for numbers at or above `SELF_ASSIGNED_ERA`: measured
+ *  on main, this shape holds unreadable lines below it (727 at column 0: 665 in plans, 34 in programs,
+ *  28 in specs), which the plans-only baseline above does not cover. */
+const SELF_ASSIGNED_SHAPE = /^(?:[ \t]|[|>] )*(?:#{1,6} |[-*+] \*\*|\d+[.)] \*\*|\*\*)D-(\d+)(?!\.\d)\b/;
+
 /** Definition-shaped lines `DEFINITION` does not read, as `file -> numbers`, one
  *  number per line (so a number unreadable on two lines appears twice). */
 function unreadDefinitionShapes(
   files: readonly { readonly path: string; readonly text: string }[],
+  shape: RegExp = DEFINITION_SHAPE,
 ): Map<string, number[]> {
   const out = new Map<string, number[]>();
   for (const f of files) {
     const lines = f.text.split('\n');
     let before: Definition[] | null = null;   // the file as written, read once per file
     for (let i = 0; i < lines.length; i++) {
-      const m = DEFINITION_SHAPE.exec(lines[i]!);
+      const m = shape.exec(lines[i]!);
       if (!m) continue;
       // A shortcut, not a rule: the probe below gives a readable line the same answer,
       // but it re-reads the whole file, and most shaped lines are readable.
@@ -914,3 +830,47 @@ describe('every definition-shaped line is one the ledger reads (Task C33)', () =
     expect(multisetLess([n], [n, n])).toEqual([]);
   });
 });
+
+describe('every self-assigned definition-shaped line, in plans, programs and specs, is one the ledger reads', () => {
+  const selfAssignedUnread = (files: readonly { path: string; text: string }[]): string[] =>
+    [...unreadDefinitionShapes(files, SELF_ASSIGNED_SHAPE).entries()]
+      .map(([file, ns]) => [file, ns.filter((n) => n >= SELF_ASSIGNED_ERA)] as const)
+      .filter(([, ns]) => ns.length > 0)
+      .map(([file, ns]) => `${file}: ${ns.map((n) => 'D-' + n).join(', ')}`);
+
+  it('no file under the three definition directories holds an unreadable line for a number >= 10000', () => {
+    expect(selfAssignedUnread(readDefinitionFilesAt(ROOT, 'HEAD')),
+      'a definition-shaped line DEFINITION (server/src/coord/ledger.ts) cannot read: neither the helper nor the ' +
+      'collision guard sees the number, so it can be handed out twice. Write it as a top-level line, at column 0 and ' +
+      'not indented, in a table row or in a blockquote: `- **D-N** — subject` (an em dash), or `- **D-N** (…)` or ' +
+      '`- **D-N**: …`; a line that only cites the number must not open with it').toEqual([]);
+  });
+
+  it('flags each unreadable shape, in a spec and a task note as in a plan', () => {
+    const n = SELF_ASSIGNED_ERA + 1;
+    const one = (text: string, at = 'docs/superpowers/specs/x.md'): string[] => selfAssignedUnread([{ path: at, text }]);
+    for (const line of [
+      `- **D-${n}** \u2013 en dash`, `- **D-${n}** - hyphen`, `### D-${n} \u2013 en-dash heading`, `**D-${n} \u2013 bare bold**`,
+      `* **D-${n}** \u2014 star marker`, `+ **D-${n}** \u2014 plus marker`, `1. **D-${n}** \u2014 numbered`, `# D-${n} \u2014 h1`,
+      `- **D-${n}.** dot form`,
+    ]) {
+      expect(one(line), line).toEqual([`docs/superpowers/specs/x.md: D-${n}`]);
+      expect(one(line, 'docs/superpowers/programs/p/task.md'), line).toEqual([`docs/superpowers/programs/p/task.md: D-${n}`]);
+    }
+    // Not a top-level line: indented, a table row or a blockquote. DEFINITION reads column 0 only.
+    for (const line of [
+      `  - **D-${n}** \u2014 nested under a bullet`, `\t- **D-${n}** \u2014 tab-indented`, `| **D-${n}** \u2014 a table row |`,
+      `> **D-${n}** \u2014 a blockquote`, `> - **D-${n}** \u2014 a quoted bullet`, `  ### D-${n} \u2014 an indented heading`,
+    ]) {
+      expect(one(line), line).toEqual([`docs/superpowers/specs/x.md: D-${n}`]);
+    }
+    expect(one(`| **D-${SELF_ASSIGNED_ERA - 1}** \u2014 a table row below the era |`)).toEqual([]);
+    expect(one(`  - cites **D-${n}** in passing`)).toEqual([]);
+    expect(one(`- **D-${n}** \u2014 readable`)).toEqual([]);
+    expect(one(`### D-${n} \u2014 readable heading`)).toEqual([]);
+    expect(one(`- **D-${n}.1** a sub-number`)).toEqual([]);
+    expect(one(['```', `* **D-${n}** \u2014 quoted`, '```'].join('\n'))).toEqual([]);
+    expect(one(`* **D-${SELF_ASSIGNED_ERA - 1}** \u2014 below the era`)).toEqual([]);
+  });
+});
+
