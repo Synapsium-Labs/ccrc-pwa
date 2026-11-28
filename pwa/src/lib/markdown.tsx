@@ -19,7 +19,7 @@
 import Markdown, { defaultUrlTransform, type Options as MarkdownOptions } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import type { Components } from 'react-markdown';
-import type { Element as HastElement } from 'hast';
+import type { Element as HastElement, Root as HastRoot } from 'hast';
 import React, {
   createContext, memo, useCallback, useContext, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode,
 } from 'react';
@@ -42,7 +42,8 @@ import {
   MD_MAX_TREE_DEPTH,
 } from './markdownLimits';
 import { keystrokeParts, prescanMarkdown, utf8ByteLength } from './markdownGuard';
-import type { ParseOutcome } from './markdownParse';
+import { ITEM_REMARK_PLUGINS, type ParseOutcome } from './markdownParse';
+import { TEXT_LINK_ATTR, linkProseRuns, type TextLinkSplitter } from './hastLinkRuns';
 import { chatRunner, type MarkdownParser } from './markdownRunner';
 import { renderHast, type RenderHastOptions } from './renderHast';
 import { useParsedMarkdown } from './useParsedMarkdown';
@@ -212,19 +213,26 @@ export function CodeBlock({ children, at }: { children?: ReactNode; at?: object 
   const copySkipped = store === null || at === undefined ? null : store.copySkip(at);
   const entry = copySkipped === null ? keyEntry : copySkippedEntry(copySkipped);
   useHighlightRequest(store, key);
+  // What the last copy did, held for 1.6 s: `copied`, or `failed` when the page has no clipboard or the browser refused the
+  // write (desktop-polish wave 186), so a copy never fails in silence.
+  const [failed, setFailed] = useState(false);
   const onCopy = useCallback(() => {
-    void navigator.clipboard?.writeText(raw).then(() => {
-      setCopied(true);
-      window.setTimeout(() => setCopied(false), 1600);
-    });
+    const done = (ok: boolean): void => {
+      setCopied(ok);
+      setFailed(!ok);
+      window.setTimeout(() => { setCopied(false); setFailed(false); }, 1600);
+    };
+    const clip = navigator.clipboard;
+    if (clip === undefined) { done(false); return; }
+    clip.writeText(raw).then(() => done(true), () => done(false));
   }, [raw]);
   return (
     <div className="code-block">
       <div className="code-block-bar">
         <span className="code-block-lang">{codeBlockLabel(label, raw, answer, entry)}</span>
         <button type="button" className="code-block-copy" onClick={onCopy}
-                aria-label="Copy code" data-copied={copied || undefined}>
-          <span aria-live="polite">{copied ? 'Copied' : 'Copy'}</span>
+                aria-label="Copy code" data-copied={copied || undefined} data-copy-failed={failed || undefined}>
+          <span aria-live="polite">{copied ? 'Copied' : failed ? 'Copy failed' : 'Copy'}</span>
         </button>
       </div>
       <pre>
@@ -546,6 +554,120 @@ export const ChatMarkdown = memo(function ChatMarkdown({ text, parser = chatPars
           ? <SyncChatMarkdown text={text} />
           : <AsyncChatMarkdown text={text} parser={parser} />}
       </MessageReposContext>
+    </PreHighlightContext>
+  );
+});
+
+// ── ITEM TEXT (desktop-polish wave 186) ─────────────────────────────────────────────────────────────────────────────────
+// A Waiting-on-you item's text is Markdown, drawn by THIS renderer: the same react-markdown, the same pre-scan, the same
+// limits and paths (at most `CHAT_SYNC_MAX_BYTES` on the main thread, longer in the parse worker), the same code block, the
+// same raw-HTML-as-text. What differs is a parse profile and a component map, each a row beside chat's:
+//   - the `item` profile (`markdownParse.ts`): GFM and `remarkItemGuard`, which keeps old plain prose reading as written;
+//   - `ITEM_COMPONENTS`: chat's shared code, pre and table; an anchor that links only what the splitter judged and is its
+//     words otherwise (it never embeds an image); an image drawn as its link, never fetched; a heading drawn as bold text;
+//   - the caller's splitter (`linkProseRuns`, `hastLinkRuns.ts`): an item's references and paths become links in its prose,
+//     never inside code.
+// The transcript's output does not change: chat's list, components and paths are untouched (`item-markdown.test.tsx` feeds
+// one text to both).
+
+/** An item's heading, which only a setext underline makes (the guard switches `#` headings off): bold text, the item's own
+ *  type scale is its title's. */
+function ItemHeading({ children }: { children?: ReactNode }): ReactNode {
+  return <p><strong>{children}</strong></p>;
+}
+
+/** An item's components: chat's shared ones, and an anchor, an image and headings of its own. */
+export const ITEM_COMPONENTS: Components = {
+  ...SHARED_COMPONENTS,
+  a: function ItemAnchor({ node: _node, href, children, ...rest }) {
+    const insideLink = useContext(InsideLinkContext);
+    // A link inside a link's text draws as its text, as chat's does: one anchor, one click.
+    if (insideLink) return <>{children}</>;
+    // Fail closed (fix round 1 of wave 186, F1): only an anchor the splitter judged says where it goes (`linkProseRuns`
+    // marks it). Any other (no splitter, an inner autolink that escaped it, an address the url transform emptied) is words.
+    const said = (rest as Record<string, unknown>)[TEXT_LINK_ATTR];
+    if (href === undefined || href === '' || (said !== 'external' && said !== 'internal')) return <>{children}</>;
+    const target: RefTarget = { href, external: said === 'external' };
+    return <ChatLink target={target}><InsideLinkContext value>{children}</InsideLinkContext></ChatLink>;
+  },
+  img: function ItemImage({ node: _node, src, alt, ...rest }) {
+    const href = typeof src === 'string' && src !== '' ? src : null;
+    const words = alt !== undefined && alt !== '' ? alt : href;
+    const insideLink = useContext(InsideLinkContext);
+    // Never an `<img>`: nothing is fetched. An image is a link only where the splitter judged its address one
+    // (`judgeImage`, `hastLinkRuns.ts`, which marks it), with its alt text as the words; anywhere else it is its alt text.
+    const said = (rest as Record<string, unknown>)[TEXT_LINK_ATTR];
+    if (href === null || insideLink || (said !== 'external' && said !== 'internal')) return words === null ? null : <>{words}</>;
+    return <ChatLink target={{ href, external: said === 'external' }}>{words}</ChatLink>;
+  },
+  h1: ItemHeading, h2: ItemHeading, h3: ItemHeading, h4: ItemHeading, h5: ItemHeading, h6: ItemHeading,
+};
+
+/** The elements an inline item text keeps (a title, an option): marks inside one line. A paragraph, a list or a block is
+ *  unwrapped to its content. */
+const ITEM_INLINE_ELEMENTS: readonly string[] = ['a', 'br', 'code', 'del', 'em', 'img', 'kbd', 'span', 'strong'];
+
+/** The rehype step that links an item's prose, or none. */
+function useLinkStep(links: TextLinkSplitter | undefined): NonNullable<MarkdownOptions['rehypePlugins']> {
+  return useMemo(() => (links === undefined ? [] : [() => (tree: HastRoot) => linkProseRuns(tree, links)]), [links]);
+}
+
+/** At most `CHAT_SYNC_MAX_BYTES`, or any inline text: the pre-scan, the table-cell bound, then react-markdown on the main
+ *  thread, as chat's synchronous path. An inline text that is not formatted shows as its words. */
+function SyncItemMarkdown({ text, inline, links }: { text: string; inline: boolean; links: TextLinkSplitter | undefined }): ReactNode {
+  const rehype = useLinkStep(links);
+  const scan = prescanMarkdown(text);
+  if (!scan.ok) {
+    return inline ? text : <MsgPlain text={text} note={chatPlainNote({ kind: 'refused', why: scan.why, line: scan.line, value: scan.value })} />;
+  }
+  const cells = countChatTableCells(text);
+  if (cells > DOCS_MAX_RENDER_ELEMENTS) return inline ? text : <MsgPlain text={text} note={chatPlainNote({ kind: 'too-wide', elements: cells })} />;
+  return (
+    <Markdown remarkPlugins={ITEM_REMARK_PLUGINS} rehypePlugins={rehype} components={ITEM_COMPONENTS}
+              {...(inline ? { allowedElements: ITEM_INLINE_ELEMENTS, unwrapDisallowed: true } : {})}>
+      {text}
+    </Markdown>
+  );
+}
+
+/** How a tree from the worker renders as an item: the item's components and react-markdown's own url transform. */
+const ITEM_RENDER: RenderHastOptions = { components: ITEM_COMPONENTS, urlTransform: defaultUrlTransform };
+
+/** Over `CHAT_SYNC_MAX_BYTES`: the worker, in the item profile, as chat's asynchronous path; the splitter runs over the tree
+ *  it returns. */
+function AsyncItemMarkdown({ text, parser, links }: { text: string; parser: MarkdownParser; links: TextLinkSplitter | undefined }): ReactNode {
+  const { outcome, lastGood, pending } = useParsedMarkdown(text, parser, { profile: 'item', budgetMs: CHAT_PARSE_BUDGET_MS });
+  useEvictAfterCommit(useContext(PreHighlightContext));
+  const tree = pending && lastGood !== null ? lastGood : outcome?.kind === 'tree' ? outcome.tree : null;
+  const linked = useMemo(() => (tree === null || links === undefined ? tree : linkProseRuns(tree, links)), [tree, links]);
+  if (linked !== null) return renderHast(linked, ITEM_RENDER);
+  if (outcome !== null && outcome.kind !== 'tree' && !pending) return <MsgPlain text={text} note={chatPlainNote(outcome)} />;
+  return <MsgPlain text={text} />;
+}
+
+export interface ItemMarkdownProps {
+  readonly text: string;
+  /** A title or an option: inline marks only, on the main thread (both are at most 140 characters). */
+  readonly inline?: boolean;
+  /** Splits a prose text into words and links (an item's `linkRuns`); absent, only Markdown's own links link. Keep it stable
+   *  (a memoised function): a new one re-renders the text. */
+  readonly links?: TextLinkSplitter;
+  /** The parser of a long text; absent, chat's worker (`chatRunner`). */
+  readonly parser?: MarkdownParser;
+}
+
+/** An item's text as Markdown (see the section above). The caller draws the prose box (`PROSE`) around a block text; an
+ *  inline text sits in its own element (a heading, a label). One highlight store per text, as one per chat message. */
+export const ItemMarkdown = memo(function ItemMarkdown({ text, inline = false, links, parser = chatParse }: ItemMarkdownProps): ReactNode {
+  const highlighters = useContext(HighlighterContext);
+  const store = useChatHighlightStore();
+  useEffect(() => { if (!inline) highlighters.chat.prewarm(); }, [highlighters.chat, inline]);
+  useEvictAfterCommit(store);
+  return (
+    <PreHighlightContext value={store}>
+      {inline || utf8ByteLength(text) <= CHAT_SYNC_MAX_BYTES
+        ? <SyncItemMarkdown text={text} inline={inline} links={links} />
+        : <AsyncItemMarkdown text={text} parser={parser} links={links} />}
     </PreHighlightContext>
   );
 });

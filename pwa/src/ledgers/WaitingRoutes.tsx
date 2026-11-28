@@ -30,6 +30,7 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalS
 import type { ReactNode, Ref } from 'react';
 import { BackButton, Button } from '@ccrc/ui';
 import type { RunSummary } from '../../../shared/api';
+import { itemPlainText } from '../../../shared/itemText';
 import type { ItemView as ItemWire, WaitingView } from '../../../shared/ledgers';
 import type { MigrationView } from '../../../shared/plan';
 import { fleetHues } from '../fleet/programmeBoxes';
@@ -267,7 +268,7 @@ function ItemNav({ id, back, place, left, title }: {
   return (
     <nav className="wi-nav" aria-label={BETWEEN_ITEMS_LABEL}>
       <WayBack to={back.to} label={back.name} ref={backRef} />
-      <span className="sr-only" role="status">{positionWords(place, title)}</span>
+      <span className="sr-only" role="status">{positionWords(place, itemPlainText(title))}</span>
       {place !== null && (
         <span className="wi-steps-nav">
           <span className="wi-pos" aria-hidden="true">{placeWords(place)}</span>

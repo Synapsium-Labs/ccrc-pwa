@@ -3,6 +3,7 @@ import {
   OUTBOX_RETRY_BASE_MS, OUTBOX_RETRY_HORIZON_MS, SUBSCRIPTION_VERDICTS,
   type OutboxSource, type PushSendVerdict, type PushSilentWhy, type SubscriptionVerdict,
 } from '../../shared/push-outbox.js';
+import { itemPlainText } from '../../shared/itemText.js';
 
 /**
  * ONE OWNER FOR A PUSH'S TEXT, AND THE PUSH OUTBOX'S DECIDERS (Overlord spec §6.7, §4.2 and §4.3; plan
@@ -46,7 +47,7 @@ export const WAITING_URL = '/waiting';
  *  push outbox): a `coord` notice with no session, titled "Waiting on you", the item's title as its body, collapsed
  *  under `item-<id>` and opening the list on tap. Built by `noticePayload`, as every payload is. */
 export function itemPushPayload(id: number, title: string): PushPayload {
-  return noticePayload({ kind: 'coord', sessionId: '', title: 'Waiting on you', body: title }, { tag: `item-${id}`, url: WAITING_URL });
+  return noticePayload({ kind: 'coord', sessionId: '', title: 'Waiting on you', body: itemPlainText(title) }, { tag: `item-${id}`, url: WAITING_URL });
 }
 
 /** What the sender's `prepare` answers. `payload` is null and `service` false when there is no push service. */

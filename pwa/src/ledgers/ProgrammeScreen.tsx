@@ -36,6 +36,7 @@ import { useCallback, useEffect, useState } from 'react';
 import type { ReactNode } from 'react';
 import { RoleBadge, cn, useNow } from '@ccrc/ui';
 import type { FleetSession, RunSummary } from '../../../shared/api';
+import { itemPlainText } from '../../../shared/itemText';
 import {
   WAITS_ON_WORDS, programmeWaitsOn, type GoalsVersion, type GoalsView, type ItemView, type StoredSecret, type StoredSecretsAnswer, type WaitingView,
   type WaitsOn,
@@ -132,7 +133,7 @@ function StoredSecretsSection({ slug, secrets, now, onRemoved, removeSecret, ste
               <li key={s.slot} className="pv-secret" data-slot={s.slot}>
                 <span className="pv-secret-name">{s.slot}</span>
                 <span className="pv-secret-when">{STORED_TEXT.savedAt(s.setAt === null ? null : ageWords(s.setAt, now))}</span>
-                <span className="pv-secret-asker">{STORED_TEXT.askedBy(s.item?.title ?? null)}</span>
+                <span className="pv-secret-asker">{STORED_TEXT.askedBy(s.item === null || s.item === undefined ? null : itemPlainText(s.item.title))}</span>
                 <StoredSecretRemove key={`${s.slot}:${s.setAt ?? ''}`} program={slug} slot={s.slot} onRemoved={onRemoved}
                                     removeSecret={removeSecret} {...(stepUpDeps === undefined ? {} : { stepUpDeps })} />
               </li>

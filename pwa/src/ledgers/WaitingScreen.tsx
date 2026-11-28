@@ -9,6 +9,7 @@ import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { BareRow, Button, TextLink } from '@ccrc/ui';
 import type { CallView, FleetSession, RunSummary } from '../../../shared/api';
 import { WAITS_ON_WORDS, type ItemView, type WaitingView } from '../../../shared/ledgers';
+import { itemPlainLines, itemPlainText } from '../../../shared/itemText';
 import { capWaiting, reviewCapOf } from '../fleet/reviewCapWords';
 import { fleetHues } from '../fleet/programmeBoxes';
 import { programmeTitle, programWave, waveOfWords } from '../fleet/runWords';
@@ -143,8 +144,12 @@ function ItemRow({ item, now, onOpen, current, rowActs, itemHref }: {
           <span className="wl-kind">{KIND_WORD[item.kind]}</span>
           <span className="wl-num">{itemNumber(item)}</span>
         </span>
-        <RowMain what={item.title} why={item.why} lines={item.action !== undefined && item.action !== null}>
-          {back && note !== null && <span className="wl-bounce">{`The coordinator sent it back: ${note}`}</span>}
+        {/* A row summarises the item's Markdown as plain text (`itemPlainText`, desktop-polish wave 186); an item with an action
+            keeps its lines, each projected by the line-keeping form (`itemPlainLines`), because an end-run request's and an
+            end-programme proposal's why are a session's words (fix round 1, F6). */}
+        <RowMain what={itemPlainText(item.title)} why={item.action !== undefined && item.action !== null ? itemPlainLines(item.why) : itemPlainText(item.why)}
+                 lines={item.action !== undefined && item.action !== null}>
+          {back && note !== null && <span className="wl-bounce">{`The coordinator sent it back: ${itemPlainText(note)}`}</span>}
         </RowMain>
         <RowMeta pills={itemPills(item)} when={meta} />
       </BareRow>
@@ -400,7 +405,7 @@ function ClearedItemRow({ item, where, now, current }: {
     .filter((t) => t !== undefined);
   return (
     <li className="wl-cleared-row">
-      <span aria-hidden="true">✓ </span><s>{item.title}</s>
+      <span aria-hidden="true">✓ </span><s>{itemPlainText(item.title)}</s>
       {` · ${tail.join(' · ')}`}
       {/* An answer is often best judged once given (Overlord W1): the marks stay inside the Recently cleared window. */}
       <AnswerMarkBoxes item={item} current={current} />

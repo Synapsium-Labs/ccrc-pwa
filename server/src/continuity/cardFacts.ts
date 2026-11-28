@@ -30,6 +30,7 @@ import {
 } from '../../../shared/continuity-card.js';
 import { noteKeyText } from '../../../shared/continuity.js';
 import { ratificationOf, type Ratification } from '../../../shared/ledgers.js';
+import { itemPlainText } from '../../../shared/itemText.js';
 import type { CoordStore } from '../coord/store.js';
 import { operatorWasShown, type ItemRow } from '../coord/ledgersStore.js';
 import { designationFactFrom, identityOf, roleFactsOf, type DesignationFact } from '../roleOf.js';
@@ -78,7 +79,7 @@ function attempt<T>(what: string, f: () => T | null): Fact<T> {
 }
 
 const cardItemOf = (i: ItemRow, held: boolean): CardItem => ({
-  id: i.id, programme: i.program, kind: i.kind, state: i.state, neededBy: i.neededBy, at: i.raisedAt, text: i.title,
+  id: i.id, programme: i.program, kind: i.kind, state: i.state, neededBy: i.neededBy, at: i.raisedAt, text: itemPlainText(i.title),
   everTicked: i.tickedAt !== null, held,
 });
 

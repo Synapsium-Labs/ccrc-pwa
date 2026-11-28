@@ -9,8 +9,10 @@
    already gated on (`.pg-kicker`'s). Every width from a 360 px phone to a wide desktop holds with no horizontal scroll: the
    grids' text tracks are `minmax(0, 1fr)` and the words wrap anywhere. */
 
-/* The list's and the item's measure, one value for the list, the item and the strip above it (`.wi-nav`), so the three never
-   drift apart (follow-up A-8). Set on every root that holds one of them. */
+/* The list's and the item's measure, one value for each root that holds one of them (follow-up A-8). The item route narrows
+   it, once, for every block it stacks: the strip above the item (`.wi-nav`), the item (`.wi`) and the route's own lines in
+   its list wrappers (`.wl-route > .wl`: a saved copy's line, the migration note), so the three share one left edge (#3427's
+   one-edge rule; desktop-polish wave 186 below). */
 .wl-route,
 .wl,
 .wi { --wl-measure: 72rem; }
@@ -231,8 +233,15 @@
 @media (pointer: coarse) {
   .wi-band .wi-prog-door { display: inline-flex; align-items: center; min-height: var(--tap-min); }
 }
-.wi-detail { display: grid; grid-template-columns: minmax(0, 1fr) 21rem; gap: var(--sp-3); align-items: start; }
-@media (max-width: 900px) { .wi-detail { grid-template-columns: minmax(0, 1fr); } }
+/* ONE READING COLUMN at every width (desktop-polish wave 186): the item, then "Your move" under it, read top to bottom, never a
+   column of acts beside the text. The item and the strip above it are capped at the transcript's own prose measure
+   (`--measure-chat-prose`, 90ch Refined, 100ch Instrument), the value chat reads, so an item reads at the line length a session
+   does; the list keeps `--wl-measure`'s 72rem. The route's list wrappers beside the item take the same measure, so a saved
+   copy's line starts where the strip and the item do (fix round 1, F8). */
+.wi,
+.wi-nav,
+.wl-route > .wl { --wl-measure: var(--measure-chat-prose); }
+.wi-detail { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--sp-3); align-items: start; }
 /* The card's one column is `minmax(0, 1fr)`, never the implicit `auto` track: an `auto` track is as wide as its widest child's
    min-content, so one run that cannot break (a How step of ids joined by slashes and commas) set it wider than the card, and
    every child, the Why text with it, was laid out past the card's edge, under the side panel (Task C32, D-8585). */
@@ -245,9 +254,33 @@
 .wi-card .wi-what { margin: 0; font: var(--weight-medium) var(--fs-md) / var(--lh-tight) var(--family-ui); color: var(--ink-primary); overflow-wrap: anywhere; }
 .wi-card .wi-h { margin: 0; font-size: var(--fs-xs); letter-spacing: 0.06em; text-transform: uppercase; color: var(--ink-secondary); font-weight: var(--weight-medium); }
 .wi-card .wi-text { margin: 0; color: var(--ink-primary); overflow-wrap: anywhere; }
-.wi-card .wi-steps { margin: 0; padding-left: var(--sp-4); display: grid; gap: var(--sp-1); color: var(--ink-primary); overflow-wrap: anywhere; }
+/* The How steps are numbered (the preflight's `list-style: none` had taken the numbers off in both skins). A step is a block of
+   Markdown, so the gap between steps is the prose's own. */
+.wi-card .wi-steps { margin: 0; padding-left: var(--sp-6); display: grid; gap: var(--sp-2); list-style: decimal; color: var(--ink-primary); overflow-wrap: anywhere; }
+.wi-card .wi-steps > li::marker { color: var(--ink-secondary); font-variant-numeric: tabular-nums; }
 .wi-card .wi-history { list-style: none; margin: 0; padding: 0; display: grid; gap: var(--sp-1); font-size: var(--fs-meta); color: var(--ink-secondary); }
-.wi-card .wi-history li { border-left: 2px solid var(--edge-strong); padding-left: var(--sp-2); overflow-wrap: anywhere; }
+.wi-card .wi-history li { display: grid; gap: var(--sp-1); border-left: 2px solid var(--edge-strong); padding-left: var(--sp-2); overflow-wrap: anywhere; }
+/* A send-back's note, under its act: the coordinator's words, in the page's ink. */
+.wi-card .wi-history .wi-note { color: var(--ink-primary); }
+/* The earlier acts of a long history, behind one disclosure; the newest stay open below it. Its chevron is drawn here, as the
+   sheet's other folds draw theirs (`.wk-card summary`): a summary drawn as a flex row under a coarse pointer loses the browser's
+   marker, so the open and closed cue is the same at every pointer (fix round 1, A7). */
+.wi-card .wi-earlier > summary {
+  cursor: pointer; width: fit-content; font-size: var(--fs-meta); color: var(--ink-secondary); padding-block: var(--sp-1);
+  list-style: none; display: flex; align-items: center; gap: var(--sp-1);
+}
+.wi-card .wi-earlier > summary::-webkit-details-marker { display: none; }
+.wi-card .wi-earlier > summary::before { content: '\25B8'; flex: none; font-size: var(--fs-xs); }
+.wi-card .wi-earlier[open] > summary::before { content: '\25BE'; }
+.wi-card .wi-earlier[open] > summary { margin-bottom: var(--sp-1); }
+@media (pointer: coarse) {
+  .wi-card .wi-earlier > summary { min-height: var(--tap-min); }
+}
+/* Why the item came back, read first, under the title: the list row's send-back rule (`.wl-bounce`'s edge), on the card. */
+.wi-card .wi-came-back { display: grid; gap: var(--sp-1); border-left: 2px solid var(--status-dead); padding-left: var(--sp-2); }
+/* An inline item text (the title, an option) wears the prose class (`PROSE`) so its code and links look as the transcript's do,
+   but it stays inline, in its container's own type: this unlayered rule beats the prose class's layered grid and type. */
+.wi .wi-inline { display: inline; font: inherit; line-height: inherit; color: inherit; }
 /* An option's words wrap anywhere, recommended or not: a plain option's text sits in the radio primitive's sentence span, which
    sets no wrap of its own, so a long run with no spaces in it ran past the side panel and the window (Task C32 fix round 1). The
    rule is the item page's, not the shared primitive's. */

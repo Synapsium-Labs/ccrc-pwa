@@ -70,6 +70,7 @@ import { WAITING_URL } from '../pushOutbox.js';
 import { itemBoundOf, type OutboxView } from '../pushSender.js';
 import type { OtherLane } from './otherLanes.js';
 import { isEndProgrammeAction } from '../../../shared/ledgers.js';
+import { itemPlainText } from '../../../shared/itemText.js';
 import { isEnded } from '../../../shared/programmeLifecycle.js';
 import { parseEndProposal, programmeDoors, raiseEndProposal, type ProgrammeDoorPorts } from './programmeLifecycleRoutes.js';
 
@@ -336,7 +337,7 @@ export function registerLedgerCoordinatorRoutes(app: FastifyInstance, deps: Ledg
     // row gets no target: `NotifyEvent` carries no url and widening it is not this programme's. With the push outbox the
     // item's row, written by its move, carries the copy (`itemPushPayload`), and the funnel sends that row (I2).
     const outbox = deps.outbox;
-    deps.notice({ kind: 'coord', sessionId: '', runId: item.runId, title: 'Waiting on you', body: item.title }, 'push',
+    deps.notice({ kind: 'coord', sessionId: '', runId: item.runId, title: 'Waiting on you', body: itemPlainText(item.title) }, 'push',
       push === 'unwired' || outbox === undefined ? { tag: `item-${item.id}`, url: WAITING_URL } : { bound: {
         row: { id: push.row.id, source: 'item', sourceId: item.id }, due: push.row.due, viewing: push.row.viewing, settledOf: outbox.settledOf,
       } });

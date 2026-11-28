@@ -11,6 +11,10 @@ import { ApiError } from '../src/lib/apiError';
 import { LEDGER_REFUSAL_TEXT } from '../src/lib/refusalWords';
 import { ItemView } from '../src/ledgers/ItemView';
 import { MIN, NOW, itemView } from './ledgersFixture';
+import { READINESS_ITEM_TEXT } from '../../shared/overlord-readiness';
+import { OVERLORD_ITEM_PROGRAMME } from '../../shared/overlord-sequence';
+import { FACT_WORDS } from '../src/overlord/overlordSettingsWords';
+import { EARLIER_HISTORY_WORD } from '../src/ledgers/ledgerWords';
 
 afterEach(cleanup);
 
@@ -313,7 +317,11 @@ describe('the item view', () => {
         { at: NOW - 60 * MIN, act: 'return', note: 'Settings still shows record only.' },
       ],
     }));
-    expect(screen.getByText(/sent back: Settings still shows record only\./)).toBeTruthy();
+    // In the history (desktop-polish wave 186: the act, then its note under it), and read first under the title.
+    const returned = [...document.querySelectorAll('.wi-history li')].at(-1) as HTMLElement;
+    expect(returned.querySelector('.wi-act-line')?.textContent).toMatch(/^Sent back by the coordinator · /);
+    expect(returned.querySelector('.wi-note')?.textContent).toBe('Settings still shows record only.');
+    expect(document.querySelector('.wi-came-back')?.textContent).toBe('Why it came backSettings still shows record only.');
     expect(screen.getByRole('button', { name: 'Mark done' })).toBeTruthy(); // it is open again
   });
 
@@ -482,9 +490,12 @@ describe('the item view: the spec one tap away, and links that work (PL10)', () 
     expect(href('/runs')).toBe('/runs');
     expect(href('/programmes/prog-a')).toBe('/programmes/prog-a');
     expect(href('docs/superpowers/plans/p.md')).toBe('/docs/project-a/plans/p.md');
-    expect(href('https://example.com/why')).toBe('https://example.com/why');
-    // The words around them are drawn as they were.
-    expect(document.querySelector('.wi-text')!.textContent).toBe('See https://example.com/page and /runs for the state.');
+    // The sent-back note links under the title (wave 186) and in the history alike.
+    expect(screen.getAllByRole('link', { name: 'https://example.com/why' }).map((a) => a.getAttribute('href')))
+      .toEqual(['https://example.com/why', 'https://example.com/why']);
+    // The words around them are drawn as they were (the Why section's text: the came-back line above it is a `.wi-text` too).
+    const why = [...document.querySelectorAll('.wi-card > section')].find((s) => s.querySelector('.wi-h')?.textContent === 'Why')!;
+    expect(why.querySelector('.wi-text')!.textContent).toBe('See https://example.com/page and /runs for the state.');
   });
 
   // Review 1466 F5: a document link outside the console is text wherever the console draws item text, a return's note included,
@@ -496,7 +507,9 @@ describe('the item view: the spec one tap away, and links that work (PL10)', () 
     }), { programme: PROG });
     expect(document.querySelector('.wi-text')!.querySelectorAll('a')).toHaveLength(0);
     expect(document.querySelector('.wi-history')!.querySelectorAll('a')).toHaveLength(0);
-    expect(document.querySelector('.wi-history')!.textContent).toContain('sent back: see https://claude.ai/public/artifacts/abc');
+    expect(document.querySelector('.wi-history .wi-note')!.textContent).toBe('see https://claude.ai/public/artifacts/abc');
+    // The same note, read first under the title, is text there too.
+    expect(document.querySelector('.wi-came-back')!.querySelectorAll('a')).toHaveLength(0);
   });
 
   it('a javascript or data address stays text', () => {
@@ -618,8 +631,9 @@ describe('item references and a closed item (D-8194)', () => {
       history: [{ at: NOW - MIN, act: 'raise', note: null }, { at: NOW, act: 'return', note: 'See item #12.' }],
     }), { itemHref });
     const hrefs = screen.getAllByRole('link').map((a) => [a.textContent, a.getAttribute('href')]);
+    // The sent-back note is read first under the title (wave 186) and kept in the history, so it links in both.
     expect(hrefs).toEqual([
-      ['item 12', '/waiting/12'], ['items 13', '/waiting/13'], ['40', '/waiting/40'], ['item #12', '/waiting/12'],
+      ['item #12', '/waiting/12'], ['item 12', '/waiting/12'], ['items 13', '/waiting/13'], ['40', '/waiting/40'], ['item #12', '/waiting/12'],
     ]);
     expect(screen.getByText(/not item 99\./)).toBeTruthy();
   });
@@ -674,5 +688,156 @@ describe('the answer marks on an item\'s page (Overlord W1)', () => {
       expect(within(panel).queryByLabelText("I'm not sure of my answer")).toBeNull();
       cleanup();
     }
+  });
+});
+
+describe('the item read top to bottom, its text as Markdown (desktop-polish wave 186)', () => {
+  const RETURNED = [
+    { at: NOW - 50 * MIN, act: 'raise' as const, note: null }, { at: NOW - 40 * MIN, act: 'tick' as const, note: null },
+    { at: NOW - 30 * MIN, act: 'return' as const, note: 'The first note.' }, { at: NOW - 20 * MIN, act: 'tick' as const, note: null },
+    { at: NOW - 10 * MIN, act: 'return' as const, note: 'Run `ccrc doctor` on the **right** box.' },
+  ];
+
+  it('"Your move" is the last block, after the history; a decision\'s options stay inside it', () => {
+    show(itemView({ kind: 'decide', options: ['Keep it', 'Drop it'], recommended: 0, recommendedWhy: 'It costs less.' }));
+    const card = document.querySelector('.wi-detail > .wi-card')!;
+    const move = document.querySelector('.wi-detail > .wi-act')!;
+    expect(card.compareDocumentPosition(move) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(document.querySelector('.wi-detail')!.lastElementChild).toBe(move);
+    expect(card.querySelector('.wi-history')).not.toBeNull();
+    expect(move.querySelectorAll('input[type="radio"]')).toHaveLength(3);
+    expect(move.querySelector('.wi-why-rec')?.textContent).toContain('It costs less.');
+  });
+
+  it('why it came back is under the title, in full, as Markdown; the history keeps it too', () => {
+    show(itemView({ history: RETURNED }));
+    const back = document.querySelector('.wi-came-back') as HTMLElement;
+    const title = document.querySelector('.wi-what')!;
+    expect(title.compareDocumentPosition(back) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    const why = [...document.querySelectorAll('.wi-card > section')].find((s) => s.querySelector('.wi-h')?.textContent === 'Why')!;
+    expect(back.compareDocumentPosition(why) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(within(back).getByText('Why it came back')).toBeTruthy();
+    expect(back.querySelector('code')?.textContent).toBe('ccrc doctor');
+    expect(back.querySelector('strong')?.textContent).toBe('right');
+    expect(document.querySelector('ul.wi-history[aria-label="History"]')!.textContent).toContain('Run ccrc doctor on the right box.');
+  });
+
+  it('an item that did not come back, or one being checked, has no came-back line', () => {
+    show(itemView());
+    expect(document.querySelector('.wi-came-back')).toBeNull();
+    cleanup();
+    show(itemView({ history: RETURNED, state: 'checking', tickedAt: NOW }));
+    expect(document.querySelector('.wi-came-back')).toBeNull();
+  });
+
+  it('a history of five acts folds the two earlier ones behind one disclosure; the newest three stay open', () => {
+    show(itemView({ history: RETURNED }));
+    const fold = document.querySelector('details.wi-earlier') as HTMLDetailsElement;
+    expect(fold.open).toBe(false);
+    expect(fold.querySelector('summary')?.textContent).toBe('2 earlier');
+    expect(fold.querySelectorAll('li')).toHaveLength(2);
+    expect(document.querySelectorAll('ul.wi-history[aria-label="History"] > li')).toHaveLength(3);
+  });
+
+  it('a history of four acts is drawn whole', () => {
+    show(itemView({ history: RETURNED.slice(0, 4) }));
+    expect(document.querySelector('details.wi-earlier')).toBeNull();
+    expect(document.querySelectorAll('ul.wi-history > li')).toHaveLength(4);
+  });
+
+  it('the title and the options take inline marks; why and a step take blocks, and a fenced command is a copy block', () => {
+    show(itemView({
+      kind: 'decide', title: 'Run `ccrc doctor` **now**', options: ['Keep `main`', 'Drop it'], recommended: 0,
+      recommendedWhy: 'It is *cheaper*.', why: 'First line.\n\n- one\n- two', how: ['Paste this:\n\n```bash\nccrc doctor\n```'],
+    }));
+    const title = document.querySelector('.wi-what')!;
+    expect(title.querySelector('p, ul, pre')).toBeNull();
+    expect(title.querySelector('code')?.textContent).toBe('ccrc doctor');
+    expect(title.textContent).toBe('Run ccrc doctor now');
+    expect(screen.getByRole('radio', { name: /Keep main/ })).toBeTruthy();
+    expect(document.querySelector('.wi-why-rec em')?.textContent).toBe('cheaper');
+    expect(document.querySelectorAll('.wi-card .wi-text ul > li')).toHaveLength(2);
+    expect(document.querySelector('.wi-steps .code-block pre')?.textContent).toBe('ccrc doctor');
+  });
+
+  it('a Markdown link or image links only what plain item text would: an http page and an outside document stay text', () => {
+    show(itemView({
+      why: '[a](http://example.com/a) ![b](http://example.com/b.png) [c](https://claude.ai/artifact/abc) ![d](https://claude.ai/artifact/d.png) [e](https://example.com/e)',
+    }), { programme: { name: 'Programme A', hue: null, homeProject: 'project-a' } });
+    const why = document.querySelector('.wi-text')!;
+    expect(why.querySelector('img')).toBeNull();
+    expect([...why.querySelectorAll('a')].map((a) => a.getAttribute('href'))).toEqual(['https://example.com/e']);
+    expect(why.textContent).toBe('a b c d e');
+  });
+
+  it('an item reference links in prose and never inside code', () => {
+    show(itemView({ why: 'See item 7, not `item 7`.' }), { itemHref: (id) => `/waiting/${id}` });
+    const why = document.querySelector('.wi-text')!;
+    expect([...why.querySelectorAll('a')].map((a) => a.getAttribute('href'))).toEqual(['/waiting/7']);
+    expect(why.querySelector('code')?.textContent).toBe('item 7');
+  });
+
+  it('the account hold\'s Clear is drawn once, inside the last block ("Your move"), and nowhere in the reading part', () => {
+    // The Overlord's hold item (#3489) carries its Clear with the item's other acts (call 1684); this wave's order puts every act
+    // in the last block, after everything there is to read.
+    show(itemView({ program: OVERLORD_ITEM_PROGRAMME, kind: 'do', title: `${READINESS_ITEM_TEXT.hold.title}: lane-a`,
+      why: READINESS_ITEM_TEXT.hold.why, how: [...READINESS_ITEM_TEXT.hold.how] }));
+    const detail = document.querySelector('.wi-detail')!;
+    const last = detail.lastElementChild!;
+    expect(last.getAttribute('aria-label')).toBe('Your move');
+    expect(document.querySelectorAll('[data-item-hold]')).toHaveLength(1);
+    expect(last.querySelector('[data-item-hold="lane-a"]')).not.toBeNull();
+    expect(detail.querySelector('.wi-card:not(.wi-act) [data-item-hold]')).toBeNull();
+    const clears = screen.getAllByRole('button', { name: FACT_WORDS.clear });
+    expect(clears).toHaveLength(1);
+    expect(last.contains(clears[0]!)).toBe(true);
+  });
+});
+
+describe('wave 186 fix round 1 (review 4189): links, options, steps', () => {
+  const PROG_A = { programme: { name: 'Programme A', hue: null, homeProject: 'project-a' } };
+
+  it('F1: an autolink inside a refused link\'s words is no link (an http page, a mail address, a document outside the Docs reader)', () => {
+    show(itemView({
+      why: '[a <http://evil.example/x> b](http://y.example) [c <mailto:x@example.com> d](http://y.example) [e <https://github.com/o/r/blob/main/docs/superpowers/specs/x.md> f](http://y.example)',
+    }), PROG_A);
+    const why = document.querySelector('.wi-card .wi-text')!;
+    expect(why.querySelectorAll('a')).toHaveLength(0);
+    expect(why.textContent).toBe('a http://evil.example/x b c mailto:x@example.com d e https://github.com/o/r/blob/main/docs/superpowers/specs/x.md f');
+  });
+
+  it('F1: under a script link too', () => {
+    show(itemView({ why: '[a <http://evil.example/x> b](javascript:alert(1))' }), PROG_A);
+    expect(document.querySelectorAll('.wi-card .wi-text a')).toHaveLength(0);
+  });
+
+  it('F2: an option takes marks but no links, the recommended one too; the title keeps its links', () => {
+    show(itemView({
+      kind: 'decide', title: 'Close item 12', options: ['See https://example.com/x', 'Open [runs](/runs)', 'Close item 12 **now**'], recommended: 1,
+      recommendedWhy: 'It is cheaper.',
+    }), { ...PROG_A, itemHref: (id) => `/waiting/${id}` });
+    const fieldset = document.querySelector('.wi-act fieldset')!;
+    expect(fieldset.querySelectorAll('a, img')).toHaveLength(0);
+    expect(fieldset.querySelector('strong')?.textContent).toBe('now');
+    expect(screen.getByRole('radio', { name: 'See https://example.com/x' })).toBeTruthy();
+    expect(screen.getByRole('radio', { name: 'Open runs Recommended' })).toBeTruthy();
+    expect(screen.getByRole('radio', { name: 'Close item 12 now' })).toBeTruthy();
+    expect(document.querySelector('.wi-what a')?.getAttribute('href')).toBe('/waiting/12');
+  });
+
+  it('A1: a How step that numbers itself is drawn once, by the list\'s own marker', () => {
+    show(itemView({ how: ['1. Open the shell', '2) Run the check', 'Then 3. stays', '9. Not its own index'] }));
+    expect([...document.querySelectorAll('ol.wi-steps > li')].map((l) => l.textContent)).toEqual(
+      ['Open the shell', 'Run the check', 'Then 3. stays', '9. Not its own index']);
+  });
+
+  it('A8: the fold\'s list is named from the words file', () => {
+    show(itemView({ history: [
+      { at: NOW - 50 * MIN, act: 'raise' as const, note: null }, { at: NOW - 40 * MIN, act: 'tick' as const, note: null },
+      { at: NOW - 30 * MIN, act: 'return' as const, note: 'One.' }, { at: NOW - 20 * MIN, act: 'tick' as const, note: null },
+      { at: NOW - 10 * MIN, act: 'return' as const, note: 'Two.' },
+    ] }));
+    expect(EARLIER_HISTORY_WORD).toBe('Earlier history');
+    expect(document.querySelector(`details.wi-earlier ul[aria-label="${EARLIER_HISTORY_WORD}"]`)).not.toBeNull();
   });
 });
