@@ -321,7 +321,8 @@ const TABLES = ['run_events', 'mail_deliveries', 'feed_events', 'lifecycle_event
   'continuity_act_keys', 'approval_census', 'approval_parks', 'overlord_fence_refusals',
   'continuity_hook_reports', 'continuity_witness_checks', 'coordinator_state', 'overlord_sequence', 'overlord_sequence_pruned', 'limit_samples',
   'programme_events', 'programme_picks', 'continuity_timer_refusals',
-  'overlord_invariant_findings', 'overlord_readiness', 'overlord_readiness_items', 'overlord_account_holds'] as const;
+  'overlord_invariant_findings', 'overlord_readiness', 'overlord_readiness_items', 'overlord_account_holds',
+  'label_cards', 'decision_labels'] as const;
 
 /** Each table's writers, `file#Class.method`, sorted and unique, read off the one scan (`sqlStatements.ts#sqlWrites`). `tables`
  *  is the table list to read: coord.db's by default, and the private store's for its own describe (Overlord W1 private store A). */
@@ -462,6 +463,10 @@ describe(TABLES_PIN, () => {
       decision_rows: ['server/src/coord/decisionModelStore.ts#moveDecisionRowInTx'],
       decision_host: ['server/src/coord/decisionModelStore.ts#setDecisionHostInTx'],
       decision_lines: ['admitDecisionLine', 'recordCanary'].map((f) => `server/src/coord/decisionModelStore.ts#${f}`),
+      // The label queue (Overlord W2, plan w2-label-queue.md Task 3): the weekly pick inserts cards; the answer's transaction
+      // closes one and writes its label, so a card's close and its label have one writer (measured labels are never stored).
+      label_cards: ['closeLabelCardInTx', 'pickLabelCardsInTx'].map((f) => `server/src/coord/labelQueueStore.ts#${f}`),
+      decision_labels: ['server/src/coord/labelQueueStore.ts#closeLabelCardInTx'],
       // The Overlord's account holds (Overlord W1 renewal readings H, §3.6): two writers, each a different move of one fact, the
       // hold and the operator door's clear. The hold has two callers behind one decider (renewal readings G): the generations
       // pass, and the designation store's `failPending` for a first start that failed the launch profile check.

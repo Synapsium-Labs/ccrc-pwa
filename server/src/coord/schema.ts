@@ -4800,6 +4800,23 @@ export const MIGRATIONS: readonly string[] = [
     PRIMARY KEY (build, part)
   );
   `,
+
+  // ── 135: user_version 134 -> 135 ──────────────────────────────────────────
+  // The label queue (Overlord W2, plan `w2-label-queue.md` Task 3; spec §3.7 H6): `label_cards`, the states the weekly lane
+  // picked for the operator, one card per state at a revision (`UNIQUE`); `decision_labels`, the operator's card labels, keyed
+  // by state and never by host or model (LQ7). Ids, words and hashes only, never text. Writers in `labelQueueStore.ts` alone:
+  // `pickLabelCardsInTx` inserts cards, `closeLabelCardInTx` closes one and writes its label. NEW TABLES only: an older build
+  // takes rule 3 and never names them. RE-MEASURE the slot before merge (it must print 134 before this entry is counted):
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  CREATE TABLE label_cards (id INTEGER PRIMARY KEY, week TEXT NOT NULL, row TEXT NOT NULL, revision TEXT NOT NULL,
+    stateHash TEXT NOT NULL, recordId INTEGER NOT NULL, pickedAt INTEGER NOT NULL, closedAt INTEGER, closedBy TEXT,
+    outcome TEXT CHECK (outcome IN ('labelled', 'not-sure')), UNIQUE (row, revision, stateHash));
+  CREATE TABLE decision_labels (id INTEGER PRIMARY KEY, row TEXT NOT NULL, revision TEXT NOT NULL, stateHash TEXT NOT NULL,
+    label TEXT NOT NULL, source TEXT NOT NULL, cardId INTEGER, actor TEXT NOT NULL, at INTEGER NOT NULL,
+    UNIQUE (row, revision, stateHash, source));
+  `,
 ];
 
 /** The version this build writes. `MIGRATIONS.length` and nothing else: a

@@ -792,9 +792,10 @@ describe('coord.db: migration 4 — runs.dispatchStartedAt', () => {
     // and MIGRATIONS[130] (docs_settings, the console-wide Docs settings row).
     // and MIGRATIONS[131] (overlord_readiness and overlord_readiness_items, the Overlord's readiness word).
     // and MIGRATIONS[132] (overlord_account_holds, the Overlord's account holds, Overlord W1 renewal readings H),
-    // and MIGRATIONS[133] (claude_build_frames, the box frames recipe's results, Desktop polish wave 187).
-    expect(COORD_SCHEMA_VERSION).toBe(134);
-    expect(MIGRATIONS.length).toBe(134);
+    // and MIGRATIONS[133] (claude_build_frames, the box frames recipe's results, Desktop polish wave 187),
+    // and MIGRATIONS[134] (label_cards and decision_labels, the label queue, Overlord W2).
+    expect(COORD_SCHEMA_VERSION).toBe(135);
+    expect(MIGRATIONS.length).toBe(135);
   });
 
   it('is ADDITIVE: every column migration 1 wrote is still on the table, unchanged', () => {
@@ -955,8 +956,9 @@ describe('coord.db: migration 11 — runs.kind and runs.reviews (design 2026-09-
 
     // and MIGRATIONS[131] (the Overlord's readiness word),
     // and MIGRATIONS[132] (the Overlord's account holds),
-    // and MIGRATIONS[133] (claude_build_frames, Desktop polish wave 187); the migration above is still entry 11.
-    expect(COORD_SCHEMA_VERSION).toBe(134);
+    // and MIGRATIONS[133] (claude_build_frames, Desktop polish wave 187),
+    // and MIGRATIONS[134] (the label queue, Overlord W2); the migration above is still entry 11.
+    expect(COORD_SCHEMA_VERSION).toBe(135);
     const row = db.prepare('SELECT kind, reviews FROM runs').get() as { kind: string; reviews: number | null };
     expect(row).toEqual({ kind: 'work', reviews: null });
     db.close();
