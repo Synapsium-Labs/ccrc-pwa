@@ -205,6 +205,7 @@
   "server/src/coord/overlordActRecords.ts#actJournalFold": 1,
   "server/src/coord/overlordActRecords.ts#actJournalHighest": 1,
   "server/src/coord/overlordActHead.ts#actHeadSignVerdict": 1,
+  "server/src/coord/overlordActHead.ts#actHeadLanePlan": 1,
   "shared/actJournalHead.ts#headExtends": 1,
   "server/src/coord/overlordAuthorityCoherence.ts#authorityCoherence": 1,
   "server/src/coord/overlordAuthorityCoherence.ts#authorityTailHeal": 1,

@@ -1319,6 +1319,7 @@ describe('the rulings: every egress of session-derived text goes through the mas
     // state word, an actor label and its kind, a time and a seq; the page's facts are integers; no session-written text.
     '/api/overlord/sequence': "the sequence's lines (closed kinds and state words, server-minted ids, actor labels and kinds, times and seqs), the cursor, the head, the prune floor and the restore generation, and its refusals' fixed phrases (its 503 says only that the sequence could not be read, never the store's text: review 3978 F4): no session-written text (Overlord W1 sequence C)",
     '/api/overlord/restore': "the authority guard's state: one of three closed words and a closed cause or reason word (AUTHORITY_STATE_WORDS, AUTHORITY_STATE_CAUSES, AUTHORITY_STATE_WHYS); no session-written text (Overlord W1 authority journal C)",
+    '/api/overlord/act-head': "the act journal's newest signed head (a day, a sequence, two hex digests, a base64 signature or a closed unsigned word), the server key's PEM public half and a hex digest or a closed word: no session-written text, and a signature and key the console checks byte for byte, which a mask must never touch (Overlord W2, act journal A)",
     '/api/linking': "the caller's project name, the operator's team key and override, and the measured visibility: closed words, a repository slug, a time; no session text (D-8147)",
   };
 

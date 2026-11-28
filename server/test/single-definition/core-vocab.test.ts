@@ -887,7 +887,11 @@ describe('Build 7 nouns', () => {
       'overlordReadinessStore.ts', 'overlordReadinessLane.ts',
       // The Overlord's request record (W2 request record A, §5.1): the three tables' SQL takes the caller's handle inside its
       // transaction, and names it by `import type`.
-      'overlordRequestStore.ts']);
+      'overlordRequestStore.ts',
+      // The Overlord act journal (W2 act journal A, §7.6): the writer's head row and the signed heads' SQL take the caller's handle,
+      // the lane and the head read carry the one the composition root gives them, and the act store's port (the interim copy until
+      // #3664 lands, then gone from this list) names it in its signature; each by `import type`.
+      'overlordActRecords.ts', 'overlordActJournal.ts', 'overlordActHeadStore.ts', 'overlordActHeadLane.ts']);
     const coordFiles = sources(coordDir);
 
     it('visits the whole directory — a moved directory must turn this red, not disarm it', () => {

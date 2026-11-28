@@ -60,6 +60,7 @@ import type { LinearRateService } from './linear/rate.js';
 import type { LinearRefresher } from './linear/refresher.js';
 import type { PerfRecorder } from './perf/recorder.js';
 import type { IsolationReader } from './isolationFacts.js';
+import type { readActHeadAnswer } from './coord/overlordActHeadLane.js';
 import type { ReviewFs, ReviewStore } from './review/store.js';
 import type { ResponseStamp } from '../../shared/responses.js';
 
@@ -268,6 +269,10 @@ export interface Deps {
    *  and each producer's reader; the watcher's `overlordReadiness` lane runs its pass, and `GET /api/overlord/readiness` serves its
    *  read. Absent (a test, a script): no pass runs, and the read door answers `unavailable`. */
   overlordReadiness?: ReadinessLane;
+  /** The act journal's signed head (Overlord W2, act journal A, `coord/overlordActHeadLane.ts`), built once in `index.ts`: the
+   *  watcher's `actHeadSign` lane runs `pass`, and `GET /api/overlord/act-head` serves `read`. Absent (a test, a script): no pass
+   *  runs, and the read door answers `unavailable`. */
+  actHead?: { pass(now: number): unknown; read(at: number | null): ReturnType<typeof readActHeadAnswer> };
   /** Optional future authority witness and condition seams; absence uses the W1 defaults. */
   ladderWitness?: NarrowingWitness;
   ladderInputs?: LadderConditionInputs;

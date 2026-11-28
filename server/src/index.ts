@@ -29,6 +29,10 @@ import { KeyedQueue } from './inject/queue.js';
 import { systemTimePorts } from './time/system.js';
 import { OverlordAuthorityJournal, overlordAuthorityFileAt } from './coord/overlordAuthorityJournal.js';
 import { OverlordAuthorityGuard, runOverlordAuthorityBoot, type AuthorityBootPort } from './coord/overlordAuthorityGuard.js';
+import { OverlordActJournal, overlordActsFileAt } from './coord/overlordActJournal.js';
+import { readActHeadAnswer, runActHeadSignPass } from './coord/overlordActHeadLane.js';
+import { loadOrCreateApprovalSigner, serverApprovalsDisabled, type ApprovalSigner } from './coord/approvalsign.js';
+import { digestDayFor, readDigestHour } from './coord/digest.js';
 import { raiseRestoreDetectedOn } from './coord/overlordRestoreLatch.js';
 import { OverlordAuthorityExchange } from './coord/overlordAuthorityExchange.js';
 import { witnessLinkOver } from './coord/overlordAuthorityWitnessLink.js';
@@ -206,6 +210,12 @@ const overlordAuthority: OverlordAuthorityJournal = new OverlordAuthorityJournal
 // verdict raises too (ruling F4; `coord/overlordRestoreLatch.ts`).
 raiseRestoreDetectedOn(overlordAuthorityGuard, { coord, journal: overlordAuthority, clock: time.clock, entropy: time.entropy, inTransaction: () => coordDb.isTransaction, warn: (line) => console.warn(line) });
 runOverlordAuthorityBoot(overlordAuthorityPort, overlordAuthorityGuard, (line) => console.warn(line));
+// The Overlord act journal (W2 act journal A, `coord/overlordActJournal.ts`, §7.6): the file's one writer, on the same guard, its
+// torn tail healed at boot after the authority journal's. Act rows A's store takes it as its port when its writers gain a caller.
+const overlordActs = new OverlordActJournal(overlordActsFileAt(cfg.ccrcDir), { clock: time.clock }, overlordAuthorityGuard);
+const actHeal = overlordActs.healTornTail(coordDb);
+if (actHeal.kind === 'healed') console.warn(`ccrc-server: the Overlord act journal's torn tail was kept aside as ${actHeal.name} and cut`);
+if (actHeal.kind === 'cut-failed') console.warn(`ccrc-server: the Overlord act journal's torn-tail cut failed (${actHeal.error})`);
 // The process's ONE `PoolEdgeLog` — beside `coord`, same reason as
 // `routes.ts`'s `LedgerLog`: `CoordStore.setAccountPools` calls `log.append`
 // INSIDE its transaction, so every caller needs to share this one instance
@@ -602,6 +612,21 @@ deps.invariantMonitor = invariantMonitorOver({
   clock: time.clock, entropy: time.entropy, log: (line) => console.warn(line),
 });
 deps.overlordReadiness = readinessLaneOver({ db: coordDb, coord, deps, operatorModel: operatorModel.store, limits: () => watcher.currentLimits() });   // the readiness word (§6.4)
+// The act journal's signed head (W2 act journal A): the lane's pass and the head read, over the journal, coord.db and the server's
+// one signing key, loaded once on first use (a key that cannot be loaded records the head unsigned, `key-unavailable`).
+let actHeadKey: ApprovalSigner | null | undefined;
+const actHeadSigner = (): ApprovalSigner | null => {
+  if (actHeadKey === undefined) { try { actHeadKey = loadOrCreateApprovalSigner(cfg.ccrcDir); } catch { actHeadKey = null; } }
+  return actHeadKey;
+};
+deps.actHead = {
+  pass: (now) => runActHeadSignPass({
+    db: () => coordDb, journal: overlordActs, signer: actHeadSigner, approvalsDisabled: () => serverApprovalsDisabled(cfg.ccrcDir),
+    isolation: () => deps.isolation?.read() ?? { kind: 'unmeasured', why: 'not-wired' },
+    dayOf: (t) => digestDayFor(t, readDigestHour(cfg.ccrcDir)), warn: (line) => console.warn(line),
+  }, now),
+  read: (at) => readActHeadAnswer({ db: () => coordDb, journal: overlordActs, publicKeyPem: () => actHeadSigner()?.publicKeyPem() ?? null }, at),
+};
 deps.responseStamp = () => responseStampNow(responseBoot, overlordRestore.restoreGeneration());
 const app = await buildServer(deps, bus, watcher);
 watcher.start();

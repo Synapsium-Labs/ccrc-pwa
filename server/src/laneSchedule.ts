@@ -145,6 +145,9 @@ export const DRIFT_SWEEP_MS = 900_000;
 
 /** The daily digest's beat (D-5300): once a minute at most it looks for a settled day. */
 export const DIGEST_BEAT_MS = 60_000;
+/** The act journal's head-signing beat (Overlord W2, act journal A): hourly, keyed on the digest's own day, so a day's head is
+ *  recorded within an hour of its first act and the digest reads the same day's. A beat with today's row standing reads no file. */
+export const ACT_HEAD_SIGN_BEAT_MS = 3_600_000;
 
 /** The child-reclaim lane (child-reclamation wave 4, spec §5.7). The
  *  census's cadence, for the census's reason — a child's eligibility moves on
@@ -221,7 +224,7 @@ export type LaneName =
   | 'claimRenew' | 'claimLapse' | 'stalls' | 'blockWakes' | 'admissionWake' | 'idleNudge' | 'mail' | 'mailHold' | 'inboxWake' | 'asks' | 'approvalPrune' | 'digestBeat' | 'pushOutbox'
   | 'childReclaim' | 'collect' | 'archivedExpiry' | 'deadCoordinator' | 'orphanTrees' | 'delegation'
   | 'sleepRunDone' | 'sleepIdleHours' | 'rollIdle' | 'diskAlarm' | 'diskLaneStall' | 'tmpCensus' | 'staleArchive' | 'runStuck' | 'runUntold' | 'runClose' | 'cases' | 'overlaps' | 'generations'
-  | 'launchProfile' | 'advisorCount' | 'timers' | 'sequenceRetention' | 'quiz' | 'responses' | 'linearPlanSync' | 'linearDrift' | 'linearMigration' | 'forecasts' | 'decisionAnchors' | 'skillInstall' | 'skillRollout' | 'limitSamples' | 'authorityWitness' | 'invariants' | 'overlordReadiness';
+  | 'launchProfile' | 'advisorCount' | 'timers' | 'sequenceRetention' | 'quiz' | 'responses' | 'linearPlanSync' | 'linearDrift' | 'linearMigration' | 'forecasts' | 'decisionAnchors' | 'skillInstall' | 'skillRollout' | 'limitSamples' | 'authorityWitness' | 'invariants' | 'overlordReadiness' | 'actHeadSign';
 
 export interface LaneRow {
   readonly name: LaneName | (string & {});
@@ -325,6 +328,9 @@ export const LANE_SCHEDULE: readonly LaneRow[] = [
   // The prune's failure is caught by `sweepApprovals`' own try (its sentence names the whole sweep), so no warnKey.
   { name: 'approvalPrune', cadenceMs: APPROVAL_PRUNE_MS, derivedFrom: null, clock: 'mono', flight: 'none', warnKey: null },
   { name: 'digestBeat', cadenceMs: DIGEST_BEAT_MS, derivedFrom: null, clock: 'mono', flight: 'none', warnKey: null, startsDue: true },
+  // The act journal's signed head (Overlord W2, act journal A, §7.6): one row a day, at most once an hour; the pass never throws
+  // and keeps its own warn line (`coord/overlordActHeadLane.ts`), so no warnKey.
+  { name: 'actHeadSign', cadenceMs: ACT_HEAD_SIGN_BEAT_MS, derivedFrom: null, clock: 'mono', flight: 'none', warnKey: null, startsDue: true },
   // The push outbox (Overlord §6.7, Table 11.1c; W1): the held items' reach, every due row sent once per claim, and the purge.
   // One pass at a time; a pass older than two send deadlines is abandoned, since each send has its own deadline timer.
   { name: 'pushOutbox', cadenceMs: OUTBOX_LANE_PERIOD_MS, derivedFrom: null, clock: 'mono', flight: 'skip',

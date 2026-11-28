@@ -185,7 +185,9 @@ describe('the head read', () => {
     runActHeadSignPass(r.deps, NOW);
     const deps = { db: () => r.db, journal: r.journal, publicKeyPem: () => r.signer!.publicKeyPem() };
     const a = readActHeadAnswer(deps, 1);
-    const recs = (r.file.read() as { records: { digest: string }[] }).records;
+    const read = r.file.read();
+    if (read.kind !== 'records') throw new Error('the fixture journal did not read');
+    const recs = read.records;
     expect(a).toMatchObject({ ok: true, wire: { v: 1, head: { sequence: 2, unsigned: null }, at: { sequence: 1, digest: recs[0]!.digest } } });
     expect(readActHeadAnswer(deps, 3)).toMatchObject({ ok: true, wire: { at: { sequence: 3, digest: 'absent' } } });
     expect(readActHeadAnswer(deps, null)).toMatchObject({ ok: true, wire: { at: null } });

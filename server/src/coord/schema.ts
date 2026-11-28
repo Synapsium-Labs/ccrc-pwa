@@ -4832,6 +4832,29 @@ export const MIGRATIONS: readonly string[] = [
   );
   CREATE INDEX overlord_request_moves_by_request ON overlord_request_moves (requestId, id);
   `,
+
+  // ── 136: user_version 135 -> 136 ──────────────────────────────────────────
+  // The Overlord act journal's two tables (spec §7.6 H27; plan `docs/superpowers/plans/2026-11-16-overlord-w2/w2-act-journal.md`
+  // Tasks A2 and A3): `overlord_act_journal_head`, the singleton head row of `~/.ccrc/overlord-acts.jsonl` (the sequence, journal
+  // id and digest of the last record whose act row committed, and the request floor only Confirm's adopt writes, act journal B),
+  // whose one writer in PR A is `coord/overlordActJournal.ts`'s append step; and `overlord_act_heads`, one signed (or unsigned,
+  // with its word) head a day, whose one writer is `coord/overlordActHeadStore.ts#recordActHeadInTx`. Neither holds a word of the
+  // operator's. NEW TABLES only: an older build takes rule 3 and never names them. The slot is the next free one by position on
+  // `main` when this was written; three open pieces take the same slot, so the second to land renumbers this entry and its pins
+  // (`coord-db.test.ts`'s version pins, the run-close switch's and the limit samples store's undo lists). RE-MEASURE the slot
+  // before merge (it must print 135 before this entry is counted):
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  CREATE TABLE overlord_act_journal_head (
+    id INTEGER PRIMARY KEY CHECK (id = 1), sequence INTEGER NOT NULL, journalId TEXT NOT NULL, digest TEXT NOT NULL,
+    at INTEGER NOT NULL, requestFloor INTEGER NOT NULL DEFAULT 0
+  );
+  CREATE TABLE overlord_act_heads (
+    day TEXT PRIMARY KEY, sequence INTEGER NOT NULL, journalId TEXT NOT NULL, digest TEXT NOT NULL, signature TEXT, unsigned TEXT,
+    at INTEGER NOT NULL, CHECK ((signature IS NULL) <> (unsigned IS NULL))
+  );
+  `,
 ];
 
 /** The version this build writes. `MIGRATIONS.length` and nothing else: a
