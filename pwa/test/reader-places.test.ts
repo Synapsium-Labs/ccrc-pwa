@@ -872,7 +872,7 @@ const RENDERED: ReaderRenderOutcome = {
 };
 
 const LINK: Omit<DocLinkContextValue, 'urls'> = {
-  project: 'demo', pageRef: null, pageAt: null, view: 'effective', section: 'specs', path: 'a.md', tree: treeOk(),
+  project: 'demo', pageRef: null, pageAt: null, pageVariant: null, view: 'effective', section: 'specs', path: 'a.md', tree: treeOk(),
   pageSource: 'committed', onFragment: () => {},
 };
 

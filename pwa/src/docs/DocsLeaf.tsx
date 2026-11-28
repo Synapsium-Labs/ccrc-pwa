@@ -528,7 +528,12 @@ export function DocsLeaf(p: {
   }, [cls, pendingFragment, setFragment]);
   // One pin object per (tree, page), so the range views' memos keyed by it hold across renders.
   const pin = useMemo(() => pinFor(tree, page), [tree, page]);
-  const link = useMemo<LinkBase>(() => linkBaseFor(page, tree, pin, visit.setFragment), [page, tree, pin, visit.setFragment]);
+  // The visit's `?variant=` goes with the page's links: it is the page's own, and the Docs screen has already dropped it from the page
+  // it hands down once a Layout choice ended it (X2 P5.1, I-2: one owner, `pageAfterVariantEnded`), so this reads no address and keeps
+  // no state of its own.
+  const link = useMemo<LinkBase>(
+    () => linkBaseFor(page, tree, pin, visit.setFragment, page.variant ?? null), [page, tree, pin, visit.setFragment],
+  );
   // On a version page, a raster (its own route's answer) and a class the visit reads no file for (`other`, whose Download
   // asks the file route) learn they are over their cap from that answer, and report its size and blob here, keyed by the
   // page they were told for, so another page never inherits them.

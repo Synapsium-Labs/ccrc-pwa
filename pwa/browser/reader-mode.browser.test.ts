@@ -17,8 +17,9 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { chromium, type Browser, type Frame, type Page } from 'playwright-core';
 import { SKINS } from '@ccrc/ui';
-import { DOC_SECTION_SLUGS, DOCS_RESPONSE_HEADERS } from '../../shared/docs';
+import { DOC_SECTION_SLUGS, DOCS_RESPONSE_HEADERS, docsVariantLayout, type ReaderLayout } from '../../shared/docs';
 import { READER_MODE_TEXT } from '../src/docs/reader/readerModeWords';
+import { READER_STORE_PREFIX } from '../src/lib/readerLimits';
 import { COMMIT_A, entry, treeOk, treeResponse } from '../test/docsFixtures';
 import { openApp, serveDist, sharedDist, type DistServer, type OpenedApp } from './app';
 import { resolveChrome } from './harness';
@@ -30,6 +31,8 @@ const TAP = 44;
 /** The device's remembered turn (`useReaderMode.ts#READER_TURN_STORAGE_KEY`), spelled out: this file reads the page's storage only,
  *  and imports no console module that boots a store. */
 const READER_TURN_STORAGE_KEY = 'ccrc-reader-turn';
+/** The library's prefs object under the reader's storage prefix, where the device's layout lives (`reader/layoutPref.ts`), spelled out from the one prefix. */
+const LAYOUT_PREFS_KEY = `${READER_STORE_PREFIX}pref:prefs`;
 
 /** Long enough to turn through several screens at every size the rows use: one short line a section, so a resize does not
  *  re-wrap a line, and a link in each, so a tap target is always at hand. The first paragraph holds the links the rows use. */
@@ -115,6 +118,11 @@ interface OpenOpts {
   readonly refuseFullScreen?: boolean;
   /** Another page is loaded first, so the Docs page is not the tab's first entry. */
   readonly prelude?: boolean;
+  /** The device's stored layout (X2 P5.1): written under the library's prefs key before the page's first script, by the top document
+   *  alone. Absent, nothing is stored and the reader opens in the default layout. */
+  readonly layout?: ReaderLayout;
+  /** The visit's standalone `?variant=` name (X2 P5.1). */
+  readonly variant?: string;
 }
 
 /** The leaf open inside the console (or as a Docs tab), the reader frame ready and the Reader mode entry drawn. */
@@ -146,7 +154,13 @@ async function open(o: OpenOpts): Promise<OpenedApp> {
       Element.prototype.requestFullscreen = function refused(): Promise<void> { return Promise.reject(new TypeError('refused for the row')); };
     });
   }
-  const url = `${server.origin}/docs/demo/${SECTION}/${NAME}`;
+  if (o.layout !== undefined) {
+    await app.ctx.addInitScript(([key, value]) => {
+      if (window !== window.top) return;
+      try { localStorage.setItem(key, value); } catch { /* no storage: the row then reads the default, and its control says so */ }
+    }, [LAYOUT_PREFS_KEY, JSON.stringify({ layout: o.layout })] as const);
+  }
+  const url = `${server.origin}/docs/demo/${SECTION}/${NAME}${o.variant === undefined ? '' : `?variant=${o.variant}`}`;
   let opened = app;
   if (o.docsTab === true) {
     // A tab of its own: `window.open` from the first page, whose new tab's first entry is the document.
@@ -162,7 +176,12 @@ async function open(o: OpenOpts): Promise<OpenedApp> {
   const page = opened.page;
   await page.waitForFunction(() => document.querySelector('.docs-reader iframe') !== null && document.querySelector('.doc-formatting') === null,
     undefined, { timeout: 90_000 });
-  await page.getByRole('button', { name: READER_MODE_TEXT.enter, exact: true }).first().waitFor({ timeout: 60_000 });
+  // The layout the visit opens in: the address's variant, else the stored choice. Under the shipped rule (default-only) Reader mode is
+  // drawn in the default layout only, so a row opened in another layout waits for the desk's layout note instead (the desk head has no
+  // Layout control, D-9180: the note is a line under its row).
+  const opensIn = (o.variant === undefined ? null : docsVariantLayout(o.variant)) ?? o.layout ?? 'default';
+  if (opensIn === 'default') await page.getByRole('button', { name: READER_MODE_TEXT.enter, exact: true }).first().waitFor({ timeout: 60_000 });
+  else await page.locator('.docs-full > p.docs-note[data-layout-note]').first().waitFor({ timeout: 60_000 });
   const frame = await frameOf(page);
   await frame.waitForFunction(() => document.querySelector('[data-docreader-root]') !== null, undefined, { timeout: 90_000 });
   await page.bringToFront();
@@ -1037,6 +1056,99 @@ describe('screen pages, on the real 1.2.0 release (XR2.3)', () => {
       expect(inReader, 'XL is larger than the default').toBeGreaterThan(before);
       expect(inReader, 'XL is 22 px').toBe(22);
       expect(after, 'the size holds after leaving reader mode').toBe(inReader);
+    });
+  }, 240_000);
+});
+
+// Reader mode and the layouts (X2 P5.1, D-8975), at 1280 by 800. The shipped rule is `default-only` (the coordinator's ruling of
+// 2026-11-28): reader mode is offered in the default layout alone, so the visit's `?variant=B` (`review`) draws no Reader mode action and
+// the stored pref is untouched. The rows that follow that one enter from another layout, which only a build whose `READER_LAYOUT_RULE` is
+// `remount` offers, so they run only with `CCRC_MEASURE_REMOUNT=1` set, against such a build (see `reader-layouts.browser.test.ts`, whose
+// `default-only:` rows are the shipped behaviour at both widths). Under `remount` entering from another layout mounts the document again in
+// `default`, and leaving mounts the reader's own layout back. The unit rows of the same names are `reader-mode-mount.test.tsx`'s (pinned
+// to `remount` through its mock); these are the real frame's. The frame is sandboxed with no
+// `allow-same-origin`, so its layout is read through Playwright's frame: a non-default layout names itself on the root, the default has no
+// name. A remount swaps one iframe for another, so each wait reads the newest frame again.
+describe('default-only: reader mode and the visit\'s variant (X2 P5.1), 1280 by 800', () => {
+  it('default-only: with ?variant=B on the page (review), no Reader mode action is drawn, and the stored pref is untouched', async () => {
+    const app = await open({ view: DESK, layout: 'classic', variant: 'B' });
+    await using(app, async () => {
+      const { page } = app;
+      await becomes(async () => {
+        try {
+          return await (await frameOf(page)).evaluate(() => document.querySelector('[data-docreader-root]')?.getAttribute('data-docreader-layout') ?? 'default');
+        } catch { return null; }
+      }, 'review', 'the visit\'s review at the start', page, 30_000);
+      const stored = await page.evaluate((k) => localStorage.getItem(k), LAYOUT_PREFS_KEY);
+      expect((JSON.parse(stored ?? '{}') as { layout?: unknown }).layout, 'CONTROL: the stored choice is classic, the visit\'s review is not stored').toBe('classic');
+      await page.locator('.docs-full > p.docs-note[data-layout-note]').waitFor({ state: 'visible', timeout: 30_000 });
+      expect(await page.getByRole('button', { name: READER_MODE_TEXT.enter, exact: true }).count(), 'a Reader mode action is drawn in review').toBe(0);
+      expect(await page.evaluate((k) => localStorage.getItem(k), LAYOUT_PREFS_KEY), 'the stored pref is untouched').toBe(stored);
+    });
+  }, 240_000);
+});
+
+describe.runIf(process.env['CCRC_MEASURE_REMOUNT'] === '1')('remount: reader mode and the layouts (X2 P5.1), 1280 by 800 (opt-in: CCRC_MEASURE_REMOUNT=1, a build whose rule is remount)', () => {
+  const layoutAndReading = async (page: Page): Promise<{ layout: string; reading: boolean } | null> => {
+    try {
+      const frame = await frameOf(page);
+      return await frame.evaluate(() => {
+        const root = document.querySelector('[data-docreader-root]');
+        return root === null ? null : { layout: root.getAttribute('data-docreader-layout') ?? 'default', reading: root.hasAttribute('data-reading') };
+      });
+    } catch {
+      return null; // the old frame is gone and the new one is not in yet
+    }
+  };
+  const prefsOf = (page: Page): Promise<string | null> => page.evaluate((k) => localStorage.getItem(k), LAYOUT_PREFS_KEY);
+
+  /** Taps Reader mode and waits for reader mode in the default layout, then leaves by the overlay's Exit and waits for `back`. */
+  async function enterAndLeave(page: Page, back: ReaderLayout): Promise<void> {
+    await page.getByRole('button', { name: READER_MODE_TEXT.enter, exact: true }).first().click();
+    await page.waitForFunction(() => document.querySelector('.docs-reading')?.getAttribute('data-reader-mode') === 'full-screen', undefined, { timeout: 15_000 });
+    await becomes(() => layoutAndReading(page), { layout: 'default', reading: true }, 'the default layout\'s frame with the turn in force', page, 30_000);
+    const inReader = await modeOf(page);
+    expect(inReader.attr, 'reader mode is on').toBe('full-screen');
+    expect(await page.locator('.docs-reader iframe').count(), 'one frame stands').toBe(1);
+    // The remounted frame is held under the reading ground until its ready has had two frames: a tap on its top band before the hold
+    // lifts reaches a frame that has not wired its reader acts. Wait for the lift, and a beat for the frame's own listeners (the 400 ms
+    // the overlay rows wait between acts).
+    await page.waitForFunction(() => document.querySelector('.docs-reader')?.hasAttribute('data-reader-hold') === false, undefined, { timeout: 15_000 });
+    await page.waitForTimeout(400);
+    await showOverlay(page);
+    await page.locator('.docs-reading-exit').click();
+    await page.waitForFunction(() => document.querySelector('.docs-reading')?.hasAttribute('data-reader-mode') === false, undefined, { timeout: 15_000 });
+    await becomes(async () => (await layoutAndReading(page))?.layout ?? null, back, `the ${back} layout back`, page, 30_000);
+    expect(await page.locator('.docs-reader iframe').count(), 'one frame stands after leaving').toBe(1);
+    expect((await modeOf(page)).attr, 'reader mode is off').toBeNull();
+  }
+
+  for (const layout of ['classic', 'editorial', 'review', 'guided'] as const) {
+    it(`remount: entering from ${layout} remounts in default and leaving restores ${layout}`, async () => {
+      const app = await open({ view: DESK, layout });
+      await using(app, async () => {
+        const { page } = app;
+        await becomes(async () => (await layoutAndReading(page))?.layout ?? null, layout, `the ${layout} layout at the start`, page, 30_000);
+        const stored = await prefsOf(page);
+        expect((JSON.parse(stored ?? '{}') as { layout?: unknown }).layout, 'CONTROL: the stored choice is the layout').toBe(layout);
+        await enterAndLeave(page, layout);
+        expect(await prefsOf(page), 'reader mode never writes the stored layout').toBe(stored);
+        console.log(`XRB-FIGURE layout-remount ${JSON.stringify({ from: layout, stored })}`);
+      });
+    }, 240_000);
+  }
+
+  it('remount: with ?variant=B on the page, reader mode reads in default and leaving restores review, and the stored pref is untouched', async () => {
+    // The visit's `B` is `review` (`DOCS_VARIANT_LAYOUT`) and beats the device's stored classic for this visit.
+    const app = await open({ view: DESK, layout: 'classic', variant: 'B' });
+    await using(app, async () => {
+      const { page } = app;
+      await becomes(async () => (await layoutAndReading(page))?.layout ?? null, 'review', 'the visit\'s review at the start', page, 30_000);
+      const stored = await prefsOf(page);
+      expect((JSON.parse(stored ?? '{}') as { layout?: unknown }).layout, 'CONTROL: the stored choice is classic, the visit\'s review is not stored').toBe('classic');
+      await enterAndLeave(page, 'review');
+      expect(await prefsOf(page), 'the stored pref is untouched').toBe(stored);
+      console.log(`XRB-FIGURE layout-remount ${JSON.stringify({ from: 'review (?variant=B)', stored })}`);
     });
   }, 240_000);
 });

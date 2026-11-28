@@ -7,8 +7,11 @@ import { AUTO, SKINS, SYSTEM, THEMES } from '@ccrc/ui';
 import type { FleetSession, RunSummary } from '../../../shared/api';
 import { fleetTree } from '../fleet/fleetTree';
 import { isRunClosed } from '../fleet/runWords';
+import { readerLayoutHandle } from '../docs/readerLayoutHandle';
 import { readerModeHandle } from '../docs/readerModeHandle';
-import { READER_MODE_KEY, READER_MODE_TEXT } from '../docs/reader/readerModeWords';
+import { chooseReaderLayout } from '../docs/reader/layoutPref';
+import { READER_LAYOUTS } from '../docs/reader/policy';
+import { READER_MODE_KEY, READER_MODE_TEXT, readerLayoutCommandTitle } from '../docs/reader/readerModeWords';
 import { matchRoute, placePath, ROUTES, sessionPath } from '../lib/routes';
 import type { Command, CommandContext } from './registry';
 import { sessionEntries } from './sessionEntries';
@@ -100,6 +103,24 @@ export const SESSION_COMMANDS: readonly { id: string; title: string }[] = [
   { id: 'open-terminal', title: 'Open the terminal' },
   { id: 'session-pr', title: 'Open the pull request' },
 ];
+
+/** One command per reader layout (X2 P5.1, D-9180), the desk head's way to choose it, on every width: `Layout: <name>` for each of the
+ *  layouts in their own order (`READER_LAYOUTS`, named by `readerLayoutCommandTitle`, the one list the Layout row's options read).
+ *  Offered exactly where the Layout row would be drawn: the Docs screen's handle answers `readerLayoutRowDrawn` now, so no other
+ *  screen and no reader mode lists them. Unlike `toggle-reader-mode` they ARE listed in the open palette, and they have no key. The
+ *  run writes the per-device pref through the Layout row's own path (`chooseReaderLayout`), the layout already shown included, and
+ *  asks the handle again as `toggle-reader-mode`'s run does (m-1): a run that reaches it where the row is not drawn (a list that went
+ *  stale, reader mode entered meanwhile, another screen) does nothing. */
+function readerLayoutCommands(): Command[] {
+  const rowDrawn = (): boolean => readerLayoutHandle()?.layoutRowDrawn() === true;
+  return READER_LAYOUTS.map((layout): Command => ({
+    id: `reader-layout-${layout}`,
+    title: readerLayoutCommandTitle(layout),
+    group: 'Docs',
+    when: rowDrawn,
+    run: () => { if (rowDrawn()) chooseReaderLayout(layout); },
+  }));
+}
 
 export function baseCommands(): Command[] {
   return [
@@ -245,5 +266,6 @@ export function baseCommands(): Command[] {
         if (handle !== null && (handle.offered() || handle.on())) handle.toggle();
       },
     },
+    ...readerLayoutCommands(),
   ];
 }

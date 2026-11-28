@@ -83,7 +83,7 @@ const basePin = (commit = BASE): DocPin => headPin(commit);
 const draftPin = (): DocPin => ({ kind: 'draft', branch: 'main', head: C1, section: 'specs', path: 'a.md', fp: 'f'.repeat(64) });
 
 const LINK: Omit<DocLinkContextValue, 'urls'> = {
-  project: 'demo', pageRef: null, pageAt: null, view: 'effective', section: 'specs', path: 'a.md', tree: treeOk(),
+  project: 'demo', pageRef: null, pageAt: null, pageVariant: null, view: 'effective', section: 'specs', path: 'a.md', tree: treeOk(),
   pageSource: 'committed', onFragment: () => {},
 };
 
@@ -583,5 +583,36 @@ describe('links on a version page (refinement (o), M9.10)', () => {
     const input = await mounted(r);
     act(() => { input.onLink({ kind: 'relative', path: 'b.md', fragment: null }); });
     expect(navigate).toHaveBeenCalledWith(`/docs/demo/specs/b.md?ref=ws/a&at=${C3}`);
+  });
+});
+
+describe('the tab\'s comparison base through the body (X2 P5.4, parity spec 5.6)', () => {
+  const BASE_KEY = 'ccrc:reader:v1:changes-base:demo:specs:a.md';
+  const PICK = 'e'.repeat(40);
+
+  it('flags: a body\'s mount reads the tab\'s base at each library mount, and a comparison it is asked for is kept', async () => {
+    const r = rig();
+    render(frame(r));
+    const input = await mounted(r);
+    expect(input.changesBase, 'a body with history hands the mount the base').toBeTypeOf('function');
+    expect(input.changesBase!()).toBeNull();
+    // The reader picks a comparison: the frame asks `changes`, and the next read of the base is that pick.
+    await input.changes!(PICK);
+    expect(window.sessionStorage.getItem(BASE_KEY)).toBe(PICK);
+    expect(input.changesBase!()).toBe(PICK);
+    cleanup();
+    // A new body for the doc in the same tab (a reload) is handed the pick.
+    const r2 = rig();
+    render(frame(r2));
+    expect((await mounted(r2)).changesBase!()).toBe(PICK);
+  });
+
+  it('flags: a body with no opened pin has no history, so no base is handed to its mount', async () => {
+    const r = rig();
+    window.sessionStorage.setItem(BASE_KEY, PICK);
+    render(frame(r, { opened: null }));
+    const input = await mounted(r);
+    expect(input.changesBase).toBeUndefined();
+    expect(input.changes).toBeUndefined();
   });
 });

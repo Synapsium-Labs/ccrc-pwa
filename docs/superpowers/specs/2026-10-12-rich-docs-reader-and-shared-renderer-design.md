@@ -193,7 +193,7 @@ These `enhance` options replace today's defaults, which read `location`, `localS
 - Storage backends. It gets a snapshot and calls a writer.
 - Hosting: no server, footer, title or section list.
 - Product vocabulary turned on by default (see the scrub list in §3.7).
-- The standalone server's other layouts: the design-prototype variants and the old `classic` layout. Only the default layout ships.
+- The standalone server's other layouts ship as library layouts beside the default: `classic`, `editorial`, `review` and `guided` (amended 2026-11-28; X2 P5, D-8762).
 
 ### 3.4 Rules (Agreed)
 

@@ -5,13 +5,17 @@
 // `lib/api.ts`. Delivery (`useReaderMode.ts`, the reading container) asks these and performs the acts it is handed: it
 // decides nothing. Every decision is one row of one table (`readerModeStep`), so a test can hold each row.
 //
-// The amendment's three changes to the plan's text: `readerModeOffered` takes no layout or rule (the layout rule moved
-// to P5.1, so `READER_REMOUNT_QUIET_MS`, `READER_LAYOUT_RULE` and the layout note are defined there, not here);
-// `readerModeStep` gains XR2.1's events `frame-exit` and `frame-toggle`; and the act `toggle-overlay` is not defined
+// The amendment's three changes to the plan's text: `readerModeOffered` took no layout or rule in wave XR (the layout rule moved
+// to P5.1); `readerModeStep` gains XR2.1's events `frame-exit` and `frame-toggle`; and the act `toggle-overlay` is not defined
 // (the overlay is the state's `overlay` field), while XR2.1's `start-reading` and `stop-reading` are.
+//
+// The layout rule (X2 P5.1, D-8975): reader mode reads in the default layout. `READER_LAYOUT_RULE` says how a device in another
+// layout gets there: `remount` (entering mounts the frame again in `default`, leaving mounts the reader's own layout back,
+// `readerLayoutRemount`, `READER_REMOUNT_QUIET_MS` after the last progress message) or `default-only` (reader mode is offered in the
+// default layout alone and Page details says so, `readerModeLayoutNote` in the words file, from `layoutAllowsReaderMode` here). The
+// words file reads this one (`timeLeftMinutes`, `layoutAllowsReaderMode`); this file imports no words.
 
-import type { DocsFolderLocation, DocsPageLocation } from '../../../../shared/docs';
-
+import type { DocsFolderLocation, DocsPageLocation, ReaderLayout } from '../../../../shared/docs';
 /** The document reader mode is entered for (spec §4.1), as `doc-changed` compares it: a leaf path's project or folder,
  *  section and path, with no ref, commit, view or fragment, so a new commit or a same-page link spelled another way is the
  *  same document and another file is not. NUL joins the parts (no part can hold it). `null` has one meaning: the page is
@@ -127,6 +131,20 @@ export const READER_WAKE_IDLE_MS = 300000;
 
 /** How long an exit from full screen waits for a pop that is already in flight before it steps back itself. */
 export const READER_EXIT_SETTLE_MS = 100;
+
+/** How long after the frame's last `progress` message a same-document remount for reader mode's layout waits (X2 P5.1, spec
+ *  2026-11-20 4.3): a remount made while the frame is still reporting scrolling would lose the reading position's last write. */
+export const READER_REMOUNT_QUIET_MS = 400;
+
+/** How a device whose layout is not `default` gets into reader mode (X2 P5.1, D-8975). `remount`: the frame is mounted again in
+ *  `default` for reader mode's duration and the reader's own layout comes back on leaving; the layout changes nothing about what is
+ *  offered. `default-only`: reader mode is offered only while the layout is `default`, and Page details says so beside the Layout
+ *  row. The rule is `default-only` (the coordinator's ruling of 2026-11-28): entering reader mode from `review` at 412 by 915
+ *  measured a worst of 2353 ms over five runs on a quiet sitting, over lab E4's 1.4 s (and worse on loaded sittings), so a device in
+ *  another layout is told to choose `default` instead of waiting for a remount. A quiet-device re-measure at acceptance may restore
+ *  `remount` (a follow-up, not built); the remount machinery stays in place, and its tests pin the rule to `remount` for that day. */
+export const READER_LAYOUT_RULE: ReaderLayoutRule = 'default-only';
+export type ReaderLayoutRule = 'remount' | 'default-only';
 
 /** The longest an exit's own step back is waited for (wave 62, ticket x6-fu-reentry-flag): while that step's landing has not
  *  arrived, reader mode is not offered (`readerModeOffered`'s `exitLanding`). The landing clears the wait; this bound clears it
@@ -251,11 +269,67 @@ export function readerModeStep(state: ReaderModeState, event: ReaderModeEvent): 
  *  back is still on its way (wave 62, ticket x6-fu-reentry-flag; a fact the hook keeps, from its step to that step's landing or
  *  `READER_EXIT_LANDING_MS`): an entry then would push a new reader place while the old one's step back is still moving the tab,
  *  and that landing would arrive under the new reading, so the entry is refused until it lands. An exit still waiting on its
- *  settle has stepped nothing yet, so it does not hold this: a re-entry then cancels the settle, as before. */
+ *  settle has stepped nothing yet, so it does not hold this: a re-entry then cancels the settle, as before. `layout` is the layout the
+ *  frame is in and `rule` the layout rule (X2 P5.1), both required: under `default-only` reader mode is offered in the default layout
+ *  alone, and under `remount` the layout changes nothing. */
 export function readerModeOffered(
-  input: { frameReady: boolean; plainView: boolean; modalMounted: boolean; figureOpen: boolean; exitLanding: boolean },
+  input: {
+    frameReady: boolean; plainView: boolean; modalMounted: boolean; figureOpen: boolean; exitLanding: boolean;
+    layout: ReaderLayout; rule: ReaderLayoutRule;
+  },
 ): boolean {
   return readerModeDrawn(input) && !input.modalMounted && !input.exitLanding;
+}
+
+/** Whether the layout rule lets reader mode be offered in `layout` (X2 P5.1): under `remount` always; under `default-only` in the
+ *  default layout alone. The words file's `readerModeLayoutNote` asks it. */
+export function layoutAllowsReaderMode(layout: ReaderLayout, rule: ReaderLayoutRule): boolean {
+  return rule === 'remount' || layout === 'default';
+}
+
+/** What a Layout choice does to the frame (X2 P5.1), the one decision of the three arms. `mounted` is the layout the bridge was last
+ *  asked to mount (the frame's, or the one a remount in flight is on its way to), `chosen` the reader's choice, `reading` the reading
+ *  in force. The layout the frame is in is nothing to do (`ignore`); reader mode on holds the frame in the default layout, so any other
+ *  layout waits for the next exit, which gives the choice back (`defer`); otherwise the frame is mounted again in it at once
+ *  (`remount`). */
+export function readerLayoutChoice(i: { mounted: ReaderLayout; chosen: ReaderLayout; reading: ReaderReading }): 'remount' | 'defer' | 'ignore' {
+  if (i.chosen === i.mounted) return 'ignore';
+  return i.reading === 'off' ? 'remount' : 'defer';
+}
+
+/** Whether the Layout row is drawn, in Page details (the desk's row has no Layout control, D-9180), and so whether the palette's Layout
+ *  commands are offered and run (the one rule both ask): a reader frame is ready for a Markdown leaf (`frameReady`, outside the plain
+ *  view), and never while reader mode is on (X2 P5.1: the console is under the reading ground then, and a choice made there would only
+ *  wait for the exit). */
+export function readerLayoutRowDrawn(input: { frameReady: boolean; plainView: boolean; readerModeOn: boolean }): boolean {
+  return input.frameReady && !input.plainView && !input.readerModeOn;
+}
+
+/** The layout to mount again in for a change of reader mode's reading, or `null` for no remount (X2 P5.1, D-8975). `mounted` is the
+ *  layout the frame is in now (or is on its way to), `chosen` the layout the reader asked for (`readerMountLayout` with reader mode
+ *  off), `reading` the reading being set (`off` leaves reader mode). Under `remount`: entering from any layout but `default`
+ *  remounts in `default`; leaving a mount that is not in `chosen` remounts in `chosen`; anything else is set in place. Under
+ *  `default-only` nothing remounts for the layout: reader mode is not offered outside `default`, so no entry comes from another. */
+export function readerLayoutRemount(
+  i: { mounted: ReaderLayout; chosen: ReaderLayout; reading: ReaderReading; rule: ReaderLayoutRule },
+): ReaderLayout | null {
+  if (i.rule === 'default-only') return null;
+  if (i.reading !== 'off') return i.mounted === 'default' ? null : 'default';
+  return i.mounted === i.chosen ? null : i.chosen;
+}
+
+/** Whether a same-page link's anchor rides a swap into `default` that is still loading, instead of opening a frame in the layout the
+ *  mount carries now (X2 P5.1, I-4b): reader mode is on (`reading` is not `off`) and the swap in flight, `pending` (`null` for none),
+ *  is into `default`, the layout reader mode reads in. The frame the anchor opens is then the default one, and no review frame is made
+ *  only to be replaced. The bridge asks it of the swap it holds, the body of the layout it last asked for, so they cannot disagree. */
+export function readerAnchorRidesSwap(i: { reading: ReaderReading; pending: ReaderLayout | null }): boolean {
+  return i.reading !== 'off' && i.pending === 'default';
+}
+
+/** How long to wait before a remount for reader mode's layout: until `READER_REMOUNT_QUIET_MS` after the frame's last `progress`
+ *  message (`lastProgressAt`, a clock reading, or `null` for none yet), and none at all when that time has passed. */
+export function readerRemountDelayMs(now: number, lastProgressAt: number | null): number {
+  return lastProgressAt === null ? 0 : Math.max(0, lastProgressAt + READER_REMOUNT_QUIET_MS - now);
 }
 
 /** Whether the entry is drawn (the head's Reader mode action, the one bar's control): the offer less its two press-time facts, a
@@ -264,8 +338,10 @@ export function readerModeOffered(
  *  review 4192 F6) is set by a Forward onto a dead reader entry, with focus possibly on the action: unmounting it then dropped
  *  that focus to the page's body, and the wait is at most `READER_EXIT_LANDING_MS`, so the action stays drawn and a press is
  *  refused meanwhile. */
-export function readerModeDrawn(input: { frameReady: boolean; plainView: boolean; figureOpen: boolean }): boolean {
-  return input.frameReady && !input.plainView && !input.figureOpen;
+export function readerModeDrawn(
+  input: { frameReady: boolean; plainView: boolean; figureOpen: boolean; layout: ReaderLayout; rule: ReaderLayoutRule },
+): boolean {
+  return input.frameReady && !input.plainView && !input.figureOpen && layoutAllowsReaderMode(input.layout, input.rule);
 }
 
 /** Whether ccrc draws its own Exit with no frame to give an overlay (X6 XR fix round 1): reader mode is on and no frame stands.

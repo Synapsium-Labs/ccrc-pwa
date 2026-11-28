@@ -5,7 +5,7 @@
 // or an inert span with no `href`.
 import { createContext, useContext, type ComponentProps, type MouseEvent, type ReactNode } from 'react';
 import type { Element as HastElement } from 'hast';
-import type { DocSectionSlug, DocsRefSpec, DocsTreeOk } from '../../../shared/docs';
+import type { DocSectionSlug, DocsRefSpec, DocsTreeOk, ReaderLayout } from '../../../shared/docs';
 import { openExternal } from '../lib/markdown';
 import { navigate } from '../lib/router';
 import { DOCS_HEAD_TEXT, DOC_LINK_OUTSIDE_PAGE } from './docsText';
@@ -20,6 +20,11 @@ export interface DocLinkContextValue {
   readonly pageRef: DocsRefSpec | null;
   /** The page's version (`at=`, rich-docs spec G6); `null` has one meaning, the latest. Its links and images follow it. */
   readonly pageAt: string | null;
+  /** The reader layout the page's visit names (`?variant=`, X2 P5.1); `null`: it names none, so the reader opens in the device's own
+   *  layout. Its in-app links carry it (`docLinkTarget`), as they carry `pageRef`, so a visit stays in its layout. A listing page, an
+   *  outside folder's page and a page whose reader chose a layout from the Layout row (the choice ends the visit's variant) have
+   *  none. Every builder of the context says it. */
+  readonly pageVariant: ReaderLayout | null;
   readonly view: 'effective' | 'committed';
   readonly section: DocSectionSlug;
   readonly path: string;

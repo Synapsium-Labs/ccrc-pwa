@@ -36,7 +36,7 @@ const treeOf = (src: string): HastRoot => {
 /** The page every case renders on: `specs/a.md` of `demo`, at the ref `ws/a`, in the committed view. */
 function ctxFor(d: Detached, over: Partial<DocLinkContextValue> = {}): DocLinkContextValue {
   return {
-    project: 'demo', pageRef: { kind: 'bare', name: 'ws/a' }, pageAt: null, view: 'committed', section: 'specs', path: 'a.md',
+    project: 'demo', pageRef: { kind: 'bare', name: 'ws/a' }, pageAt: null, pageVariant: null, view: 'committed', section: 'specs', path: 'a.md',
     tree: treeOk(), pageSource: 'committed', urls: d.urls, onFragment: vi.fn(), ...over,
   };
 }

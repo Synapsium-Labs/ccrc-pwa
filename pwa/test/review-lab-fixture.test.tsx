@@ -120,7 +120,7 @@ async function markdownBuild(): Promise<string> {
   if (outcome.kind !== 'tree') throw new Error(`fixture: ${outcome.kind}`);
   const detached = detachUrls(outcome.tree);
   const link: Omit<DocLinkContextValue, 'urls'> = {
-    project: 'demo', pageRef: page.ref, pageAt: null, view: page.view, section: page.section, path: page.path, tree,
+    project: 'demo', pageRef: page.ref, pageAt: null, pageVariant: null, view: page.view, section: page.section, path: page.path, tree,
     pageSource: 'committed', onFragment: () => {},
   };
   const imagePin: DocPin = { kind: 'committed', commit: COMMIT_A, servedRef: SERVED, section: 'specs', path: 'swatch.png' };

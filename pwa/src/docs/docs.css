@@ -298,6 +298,15 @@
   background: var(--bg-surface); color: var(--ink-primary);
   font: var(--weight-regular) var(--text-input) / 1 var(--font-ui);
 }
+/* The Layout row in Page details (X2 P5.1): a label and a native select, and the layout rule's note beside them. The select's
+   ground and ink are the filter's (the pair the contrast audit holds on --bg-surface); it floors on --tap-min in its own rule. */
+.docs-layout-row { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-1) var(--sp-2); min-width: 0; }
+.docs-layout-select {
+  min-height: var(--tap-min); padding: 0 var(--sp-2);
+  border: 1px solid var(--edge-strong); border-radius: var(--r-md);
+  background: var(--bg-surface); color: var(--ink-primary);
+  font: var(--weight-regular) var(--text-input) / 1 var(--font-ui);
+}
 /* The filter's visible label (D-5502): the placeholder says what the box is; the preflight's half-strength
    default is replaced by the tertiary ink, which design/contrast-check.mjs holds on --bg-surface. */
 .docs-filter::placeholder { color: var(--ink-tertiary); opacity: 1; }

@@ -20,6 +20,8 @@ import { parseMarkdown } from '../src/lib/markdownParse';
 import { utf8Bytes } from '../../shared/utf8';
 import type { DocLinkContextValue } from '../src/docs/DocLink';
 import { linkBaseFor } from '../src/docs/docsLinkBase';
+import { DOCS_BANNER_TEXT, DOCS_HEAD_TEXT } from '../src/docs/docsText';
+import { chooseReaderLayout, resetReaderLayoutChoiceForTests } from '../src/docs/reader/layoutPref';
 import { pinFor } from '../src/docs/useDocsVisit';
 import { planImageRef, rasterDataUrl, SVG_DATA_PREFIX } from '../src/docs/DocImage';
 import { createExportAssets, type ExportAssets } from '../src/docs/export/exportAssets';
@@ -50,6 +52,7 @@ afterEach(() => {
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
   history.replaceState(null, '', '/');
+  resetReaderLayoutChoiceForTests();
 });
 
 // ---- the render job, as a promise -----------------------------------------------------------------------------------------
@@ -425,7 +428,7 @@ describe('print view', () => {
   it('print view: a doc link prints its target as text, a foreign link prints its text only', async () => {
     const tree = await treeOfMd('See [the doc](other.md#part), [far](https://far.example/p), [mail](mailto:a@b.example) and [here](#top).\n\n## Top\n');
     const ctx: DocLinkContextValue = {
-      project: 'demo', pageRef: null, pageAt: null, view: 'effective', section: 'specs', path: 'a.md', tree: treeOk(),
+      project: 'demo', pageRef: null, pageAt: null, pageVariant: null, view: 'effective', section: 'specs', path: 'a.md', tree: treeOk(),
       pageSource: 'committed', urls: new WeakMap(), onFragment: () => {},
     };
     const asked: string[] = [];
@@ -606,7 +609,7 @@ describe('print: what the worker prepares (printPlan.prepKeyOf, the one gate pre
 describe('print: which URL a printed image loads from (printPlan.imagesFor)', () => {
   const tree = treeOk({ entries: [entry('specs', 'a.md'), entry('specs', 'a.png'), entry('specs', 'b.svg')] });
   const page = leaf('/docs/demo/specs/a.md');
-  const link: DocLinkContextValue = { ...linkBaseFor(page, tree, pinFor(tree, page), () => {}), urls: new WeakMap() };
+  const link: DocLinkContextValue = { ...linkBaseFor(page, tree, pinFor(tree, page), () => {}, page.variant ?? null), urls: new WeakMap() };
   const keyOf = (ref: string): string => {
     const plan = planImageRef(link, ref, null);
     if (plan.kind !== 'pinned') throw new Error(`fixture: ${ref} is not pinned`);
@@ -1256,7 +1259,7 @@ describe('print: from the Docs screen', () => {
       const page = pageAt(url);
       if (page.kind !== 'path') throw new Error('fixture');
       const { urls: _u, onFragment: _o, ...built } = ctx;
-      const { onFragment: _f, ...answered } = linkBaseFor(page, tree, pinFor(tree, page), () => {});
+      const { onFragment: _f, ...answered } = linkBaseFor(page, tree, pinFor(tree, page), () => {}, page.variant ?? null);
       expect(built).toEqual(answered);
     };
     const draftAnswer = (): DocsFileAnswer => {
@@ -1273,7 +1276,7 @@ describe('print: from the Docs screen', () => {
         project: 'demo', pageRef: null, pageAt: null, view: 'effective', section: 'specs', path: 'a.md', pageSource: 'committed',
       });
       expect(ctx.tree).toEqual(tree);
-      expect(Object.keys(ctx).sort()).toEqual(['onFragment', 'pageAt', 'pageRef', 'pageSource', 'path', 'project', 'section', 'tree', 'urls', 'view']);
+      expect(Object.keys(ctx).sort()).toEqual(['onFragment', 'pageAt', 'pageRef', 'pageSource', 'pageVariant', 'path', 'project', 'section', 'tree', 'urls', 'view']);
       sameAsTheFunction(ctx, '/docs/demo/specs/a.md', tree);
     });
 
@@ -1293,6 +1296,64 @@ describe('print: from the Docs screen', () => {
       expect(ctx).toMatchObject({ project: 'demo', pageRef: null, pageAt: COMMIT_B, view: 'effective', path: 'a.md', pageSource: 'committed' });
       sameAsTheFunction(ctx, `/docs/demo/specs/a.md?at=${COMMIT_B}`, tree);
     });
+  });
+
+  it('layouts: after a Layout choice on a ?variant page, Open committed view, Back to the draft, a version and Print\'s links carry no variant', async () => {
+    // I-2: "a Layout choice ended the visit's variant at this address" has ONE owner (`layoutPref.ts`), and the Docs screen derives the
+    // page it hands every view from it, so every link built from the page follows, none reading the raw address. The address itself is
+    // left as it is. Each link is read before the choice (it names the visit's variant) and after it.
+    const draftTree = treeOk({ drafts: holder(), entries: [entry('specs', 'a.md', { draft: draftOf('modified') })] });
+    const linkNamed = (name: string): string | null => {
+      const a = [...document.querySelectorAll('a')].find((x) => (x.getAttribute('aria-label') ?? x.textContent ?? '').includes(name));
+      return a?.getAttribute('href') ?? null;
+    };
+    const arms: ReadonlyArray<{ what: string; url: string; tree?: ReturnType<typeof treeOk>; read: () => string | null; before: string; after: string }> = [
+      {
+        what: 'Open committed version', url: '/docs/demo/specs/a.md?ref=main&variant=B', tree: draftTree,
+        read: () => linkNamed(DOCS_HEAD_TEXT.openCommitted),
+        before: '/docs/demo/specs/a.md?ref=main&view=committed&variant=B', after: '/docs/demo/specs/a.md?ref=main&view=committed',
+      },
+      {
+        what: 'Back to the draft', url: '/docs/demo/specs/a.md?ref=main&view=committed&variant=B', tree: draftTree,
+        read: () => linkNamed(DOCS_BANNER_TEXT.backToDraft),
+        before: '/docs/demo/specs/a.md?ref=main&variant=B', after: '/docs/demo/specs/a.md?ref=main',
+      },
+      {
+        what: 'Back to the latest', url: `/docs/demo/specs/a.md?at=${COMMIT_B}&variant=B`,
+        read: () => linkNamed(DOCS_HEAD_TEXT.backToLatest),
+        before: '/docs/demo/specs/a.md?variant=B', after: '/docs/demo/specs/a.md',
+      },
+    ];
+    for (const arm of arms) {
+      const r = rig();
+      open(arm.url, leafLoaders('a.md', fileAs('a.md', '# A', 'markdown'), arm.tree), r.reader);
+      await waitFor(() => expect(r.inputs.length).toBeGreaterThan(0));
+      await waitFor(() => expect(arm.read(), `${arm.what}: before a choice`).toBe(arm.before));
+      act(() => { chooseReaderLayout('guided'); });
+      await waitFor(() => expect(arm.read(), `${arm.what}: after a choice`).toBe(arm.after));
+      expect(location.pathname + location.search, `${arm.what}: the address was changed`).toBe(arm.url);
+      cleanup();
+      resetReaderLayoutChoiceForTests();
+    }
+    // Print's links: the printed tree's doc link names its target, built from the page the screen handed Print.
+    const linked: PrintTree = {
+      nodes: [{ t: 'el', n: 'p', a: {}, c: [{ t: 'el', n: 'a', a: { target: 'other.md' }, c: [{ t: 'text', v: 'the doc' }] }] }],
+    };
+    const r = rig(() => Promise.resolve(renderedWith(linked)));
+    open('/docs/demo/specs/a.md?variant=B', leafLoaders('a.md', fileAs('a.md', '# A', 'markdown')), r.reader);
+    await waitFor(() => expect(r.inputs.length).toBeGreaterThan(0));
+    act(() => { r.inputs[0]!.onReady(); });
+    await waitFor(() => expect(r.landed).toHaveLength(1));
+    await settle();
+    fire('beforeprint');
+    // The target is an absolute address on the page's origin, so the page's own path and query are what is read.
+    expect(printRoot()?.textContent, 'CONTROL: before a choice a printed doc link names the variant').toContain('/docs/demo/specs/other.md?variant=B)');
+    fire('afterprint');
+    act(() => { chooseReaderLayout('guided'); });
+    fire('beforeprint');
+    expect(printRoot()?.textContent, 'after a choice a printed doc link still names the variant').toContain('/docs/demo/specs/other.md)');
+    expect(printRoot()?.textContent).not.toContain('variant');
+    fire('afterprint');
   });
 
   it('print: no allow-modals anywhere', () => {

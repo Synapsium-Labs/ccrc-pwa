@@ -89,7 +89,8 @@ const noop = (): void => {};
  *  empty URL map (a printed tree names its URLs as targets and refs, not through the detached map). */
 function linkContextOf(page: DocsPageLocation | null, tree: DocsTreeOk | null): DocLinkContextValue | null {
   if (page === null || tree === null || page.kind !== 'path') return null;
-  return { ...linkBaseFor(page, tree, pinFor(tree, page), noop), urls: new WeakMap() };
+  // The variant is the page's own: the Docs screen hands Print the page with it dropped once a Layout choice ended it (I-2).
+  return { ...linkBaseFor(page, tree, pinFor(tree, page), noop, page.variant ?? null), urls: new WeakMap() };
 }
 
 export function usePrint(i: UsePrintInput): PrintControl | null {

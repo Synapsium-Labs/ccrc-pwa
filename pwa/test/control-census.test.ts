@@ -532,6 +532,8 @@ const CONTROLS: Record<string, string> = {
   'docs/DocsHead.tsx <button> docs-action docs-reader-mode':
     "TOKEN. Reader mode (the reader-mode spec 3.1), the first action of the row: a <button> wearing the header's link-action "
     + 'class, `.docs-action`, whose rule carries the floor.',
+  'docs/DocsHead.tsx <select> docs-layout-select':
+    "TOKEN. The Layout row's native select in Page details (X2 P5.1, spec 2026-11-18 4.2), beside Print: its own rule carries the floor.",
   'docs/DocsHead.tsx <a> docs-action': 'TOKEN. View on GitHub and Open committed version, standalone links in the header.',
   'docs/DocsIndexView.tsx <button> docs-row': 'TOKEN. A project row of the Docs index, one button per row (spec 4.4).',
   'docs/DocsTreeView.tsx <button> docs-row': 'TOKEN. A section or entry row of a Docs directory, the same rule.',

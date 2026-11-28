@@ -6,7 +6,7 @@
 // through. Pure: no React, no DOM, no module state, and no input is ever written. `docsLinks.ts` re-exports these names,
 // so every importer keeps its path and each name is still defined once, here.
 import {
-  docsPageUrl, githubBlobUrl, resolveDocRef, type DocSectionSlug, type DocsPageLocation, type DocsRefSpec,
+  docsPageUrl, githubBlobUrl, resolveDocRef, type DocSectionSlug, type DocsPageLocation, type DocsRefSpec, type ReaderLayout,
 } from '../../../shared/docs';
 import { DOC_LINK_INERT_SENTENCE, type DocLinkInertReason } from './docsText';
 import type { DocLinkContextValue } from './DocLink';
@@ -24,7 +24,11 @@ export type DocsPageTarget =
   | { kind: 'section'; section: DocSectionSlug }
   | { kind: 'path'; section: DocSectionSlug; path: string; dirSlash: boolean; view?: 'effective' | 'committed';
       /** Absent: the page's own version (a leaf page's `at`, else the latest); `null`: the latest; a sha: that version. */
-      at?: string | null }
+      at?: string | null;
+      /** The reader layout the link's visit names (X2 P5.1, `?variant=`); absent or `null`: none. Never inherited from the page by
+       *  `docsLocation`: a listing's links carry none, and a link that stays in the page's visit (a doc link, the same page in another
+       *  view, a mockup's route) passes the page's own. */
+      variant?: ReaderLayout | null }
   /** This leaf at the version `at`, or at the latest for `null` (rich-docs spec G6): Back to the latest, and W8b's
    *  `version` op. Keeps the page's project, ref and frame; `view` is `effective` (a version is committed bytes). */
   | { kind: 'version'; at: string | null };
@@ -56,6 +60,7 @@ export function docsLocation(page: DocsPageLocation, to: DocsPageTarget): DocsPa
         // Refinement (o): a leaf's version follows its links, as a GitHub blob URL's commit does; a directory has none.
         at: to.dirSlash ? null : to.at !== undefined ? to.at : page.kind === 'path' ? page.at : null,
         view: to.view ?? 'effective', frame: 'inline',
+        ...(to.variant == null ? {} : { variant: to.variant }),
       };
   }
 }
@@ -87,7 +92,10 @@ export function docLinkTarget(ctx: DocLinkContextValue, raw: string): DocLinkTar
         return { kind: 'fragment', fragment: r.fragment };
       }
       const here: DocsPageLocation = { kind: 'project', project: ctx.project, ref: ctx.pageRef };
-      const href = docsPageUrl(docsLocation(here, { kind: 'path', section: r.section, path: r.path, dirSlash: false, at: ctx.pageAt }));
+      // The visit's layout (`?variant=`) goes with the link, as its ref and version do (X2 P5.1, M11.9).
+      const href = docsPageUrl(docsLocation(here, {
+        kind: 'path', section: r.section, path: r.path, dirSlash: false, at: ctx.pageAt, variant: ctx.pageVariant,
+      }));
       return { kind: 'in-app', href, fragment: r.fragment };
     }
     case 'fragment':

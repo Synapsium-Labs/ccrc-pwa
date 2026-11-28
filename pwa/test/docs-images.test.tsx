@@ -128,8 +128,8 @@ function docUi(src: string | HastRoot, o: DocOpts = {}) {
   const d = detachUrls(typeof src === 'string' ? treeOf(src) : src);
   const assets = o.assets ?? fakeAssets();
   const ctx: DocLinkContextValue = {
-    project: page.project, pageRef: page.ref, pageAt: page.at, view: page.view, section: page.section, path: page.path, tree,
-    pageSource: 'committed', urls: d.urls, onFragment: vi.fn(),
+    project: page.project, pageRef: page.ref, pageAt: page.at, pageVariant: null, view: page.view, section: page.section, path: page.path, tree,
+    pageSource:'committed', urls: d.urls, onFragment: vi.fn(),
   };
   const page$ = (
     <article>
@@ -430,7 +430,7 @@ describe('M4.U1: nothing hostile becomes src, and nothing is fetched for it', ()
     cleanup();
     const page = leafAt('/docs/demo/specs/a.md');
     const ctx: DocLinkContextValue = {
-      project: 'demo', pageRef: null, pageAt: null, view: 'effective', section: 'specs', path: 'a.md', tree: withImage(),
+      project: 'demo', pageRef: null, pageAt: null, pageVariant: null, view: 'effective', section: 'specs', path: 'a.md', tree: withImage(),
       pageSource: 'committed', urls: d.urls, onFragment: vi.fn(),
     };
     const noAssets = render(
@@ -1054,7 +1054,7 @@ describe('the plain view, the reader and the mockup planner share one pin rule a
   function linkCtx(url: string, tree: DocsTreeOk): DocLinkContextValue {
     const page = leafAt(url);
     return {
-      project: page.project, pageRef: page.ref, pageAt: page.at, view: page.view, section: page.section, path: page.path, tree,
+      project: page.project, pageRef: page.ref, pageAt: page.at, pageVariant: null, view: page.view, section: page.section, path: page.path, tree,
       pageSource: 'committed', urls: new WeakMap(), onFragment: vi.fn(),
     };
   }

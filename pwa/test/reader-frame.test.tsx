@@ -16,6 +16,7 @@ import {
 import { ReaderFrame, lazyMountReader, type ReaderDeps } from '../src/docs/ReaderFrame';
 import type { ReaderMount, ReaderMountInput } from '../src/docs/reader/bridge';
 import type { ReaderChrome, ReaderLink } from '../src/docs/reader/policy';
+import { chooseReaderLayout } from '../src/docs/reader/layoutPref';
 import { ReaderBarContext, type ReaderBar } from '../src/docs/readerBar';
 import { leafName } from '../src/docs/docsTree';
 import { READER_FALLBACK_NOTE, READER_SHEET_TEXT } from '../src/docs/reader/readerText';
@@ -80,7 +81,7 @@ function chooseTheme(value: string): void {
 vi.mock('../src/docs/share', () => ({ copyText: vi.fn(async () => {}) }));
 
 const LINK: Omit<DocLinkContextValue, 'urls'> = {
-  project: 'demo', pageRef: null, pageAt: null, view: 'effective', section: DOC_SECTION_SLUGS[0]!, path: 'a.md', tree: treeOk(),
+  project: 'demo', pageRef: null, pageAt: null, pageVariant: null, view: 'effective', section: DOC_SECTION_SLUGS[0]!, path: 'a.md', tree: treeOk(),
   pageSource: 'committed', onFragment: () => {},
 };
 
@@ -769,6 +770,56 @@ describe('host appearance following', () => {
     expect(mount.follow).toHaveBeenCalledTimes(1);
     expect(h.mountFn).toHaveBeenCalledTimes(1);
     expect(h.handle.destroy).not.toHaveBeenCalled();
+  });
+
+  it('a layout swap follows the appearance the new frame was seeded with, at the new frame\'s ready (m-3)', async () => {
+    // The same reconcile as a same-page reopening's, but a swap is made later, by the bridge, when the layout's texts have loaded: the
+    // new library mount reads the root as it mounts, and the root may have moved back before React's observer saw the intermediate
+    // stamp. At the new mount's `ready` the body takes the seed as followed and re-reads the root.
+    document.documentElement.dataset.theme = 'light';
+    let nextId = 0;
+    const frames = new Map<number, FrameRequestCallback>();
+    vi.spyOn(window, 'requestAnimationFrame').mockImplementation((cb) => {
+      const id = ++nextId;
+      frames.set(id, cb);
+      return id;
+    });
+    vi.spyOn(window, 'cancelAnimationFrame').mockImplementation((id) => { frames.delete(id); });
+    let visibleTheme = 'light';
+    let seed: ReaderMount['seed'] = { hosted: true, stamp: '|light' };
+    const remount = vi.fn();
+    const h = harness();
+    const mount: ReaderMount = {
+      ...h.handle,
+      get seed() { return seed; },
+      layout: 'default',
+      remount,
+      follow: vi.fn(() => { visibleTheme = document.documentElement.dataset.theme ?? ''; }),
+    };
+    h.mountFn.mockImplementation(async (_el, input) => { h.inputs.push(input); return mount; });
+    render(frame(h));
+    const input = await ready(h);
+    await settled();
+    act(() => { input.onReady(); });
+    act(() => { chooseReaderLayout('guided'); });
+    expect(remount, 'CONTROL: the choice asked the mount for guided').toHaveBeenCalledWith(expect.objectContaining({ layout: 'guided' }));
+    // The swap: the new library mount read the root dark, and the root moved back to light before the observer ran.
+    await act(async () => {
+      document.documentElement.dataset.theme = 'dark';
+      seed = { hosted: true, stamp: '|dark' };
+      visibleTheme = 'dark';
+      document.documentElement.dataset.theme = 'light';
+      input.onReady();
+      await Promise.resolve();
+    });
+    act(() => {
+      const pending = [...frames.values()];
+      frames.clear();
+      for (const callback of pending) callback(0);
+    });
+    expect(mount.follow, 'the swapped frame was left showing the root it was seeded with').toHaveBeenCalledTimes(1);
+    expect(visibleTheme).toBe('light');
+    delete document.documentElement.dataset.theme;
   });
 
   it.each(['openAt', 'onFragment'] as const)('a synchronous fallback from %s stops the reopen and appearance follow', async (source) => {

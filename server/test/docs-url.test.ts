@@ -158,7 +158,7 @@ describe('M3.2: a page URL never carries a commit', () => {
 
   it('declares the pin keys and the page keys exactly', () => {
     expect(DOCS_PIN_KEYS).toEqual(PINS);
-    expect(DOCS_PAGE_KEYS).toEqual(['ref', 'at', 'view', 'frame']);
+    expect(DOCS_PAGE_KEYS).toEqual(['ref', 'at', 'view', 'frame', 'variant']);
   });
 
   it.each(PINS)('%s gives commit-in-page on every page kind, ahead of every other query word', (k) => {
@@ -300,7 +300,90 @@ describe('the version key at= (rich-docs spec G6, M9.11)', () => {
     expect(parse(`/docs/demo/specs/m.html?frame=full&at=${C40}&ref=ws/a`)).toMatchObject({
       ok: true, canonical: `/docs/demo/specs/m.html?ref=ws/a&at=${C40}&frame=full`,
     });
-    expect(DOCS_PAGE_KEYS).toEqual(['ref', 'at', 'view', 'frame']);
+    expect(DOCS_PAGE_KEYS).toEqual(['ref', 'at', 'view', 'frame', 'variant']);
+  });
+});
+
+// The layout variant (X2 P5.1, spec 2026-11-18 4.2; D-8762): `?variant=` on a path page names one of the standalone reader's five
+// layouts for one visit. A value that is not one of the five names is dropped at the parse, never copied: the canonical URL has no
+// `variant` key, so the screen replace-navigates to it and the visit opens in the per-device layout.
+describe('the layout variant key variant= (X2 P5.1)', () => {
+  it('a standalone name on a path page parses to its layout and is written back last, as that name', () => {
+    for (const [name, layout] of [['AB', 'default'], ['A', 'editorial'], ['B', 'review'], ['C', 'guided'], ['classic', 'classic']] as const) {
+      const r = parse(`/docs/demo/specs/a.md?variant=${name}`);
+      expect(r, name).toMatchObject({ ok: true, canonical: `/docs/demo/specs/a.md?variant=${name}` });
+      expect(r.ok && r.loc, name).toEqual(leaf('a.md', { variant: layout }));
+      expect(docsPageUrl(leaf('a.md', { variant: layout })), name).toBe(`/docs/demo/specs/a.md?variant=${name}`);
+    }
+    // Last in the query, whatever the arrival order, and the round trip holds with every other key.
+    expect(docsPageUrl(leaf('m.html', { ref: { kind: 'bare', name: 'ws/a' }, at: C40, frame: 'full', variant: 'review' })))
+      .toBe(`/docs/demo/specs/m.html?ref=ws/a&at=${C40}&frame=full&variant=B`);
+    expect(parse(`/docs/demo/specs/m.html?variant=B&frame=full&at=${C40}&ref=ws/a`)).toMatchObject({
+      ok: true, canonical: `/docs/demo/specs/m.html?ref=ws/a&at=${C40}&frame=full&variant=B`,
+    });
+  });
+
+  it('a location with no variant writes none, and a parse with none leaves the field out', () => {
+    expect(docsPageUrl(leaf('a.md'))).toBe('/docs/demo/specs/a.md');
+    const r = parse('/docs/demo/specs/a.md');
+    expect(r.ok && 'variant' in r.loc).toBe(false);
+  });
+
+  it('is refused as unknown-param on the index, a project and a section', () => {
+    expect(why('/docs?variant=B')).toBe('unknown-param');
+    expect(why('/docs/demo?variant=B')).toBe('unknown-param');
+    expect(why('/docs/demo/specs?variant=B')).toBe('unknown-param');
+    expect(why('/docs/demo/specs/a.md?variant=B')).toBe('ok');
+  });
+
+  it('is refused on an outside folder page, which takes no query key', () => {
+    expect(why('/docs/~notes/specs/a.md?variant=B')).toBe('unknown-param');
+  });
+
+  it('an unknown, empty, malformed or wrong-case value is dropped: no variant, and the canonical URL has no variant key', () => {
+    for (const value of ['', 'D', 'ab', 'b', 'Classic', 'AB%20', '%E0%A4%A', 'edit', 'review', 'default', 'AB,B']) {
+      const r = parse(`/docs/demo/specs/a.md?variant=${value}`);
+      expect(r, `value ${JSON.stringify(value)}`).toMatchObject({ ok: true, canonical: '/docs/demo/specs/a.md' });
+      expect(r.ok && 'variant' in r.loc, `value ${JSON.stringify(value)}`).toBe(false);
+    }
+    // A key with no `=` at all has an empty value, as every key does.
+    expect(parse('/docs/demo/specs/a.md?variant')).toMatchObject({ ok: true, canonical: '/docs/demo/specs/a.md' });
+    // The drop does not touch the page's other keys.
+    expect(parse(`/docs/demo/specs/a.md?ref=ws/a&variant=zzz&at=${C40}`)).toMatchObject({
+      ok: true, canonical: `/docs/demo/specs/a.md?ref=ws/a&at=${C40}`,
+    });
+  });
+
+  it('a value longer than the longest name is never copied: a 4096-character value is dropped, whatever it spells', () => {
+    const long = 'B'.repeat(4096);
+    const r = parse(`/docs/demo/specs/a.md?variant=${long}`);
+    expect(r).toMatchObject({ ok: true, canonical: '/docs/demo/specs/a.md' });
+    expect(JSON.stringify(r), 'the value is not in the answer').not.toContain('BBBB');
+    // Eight characters is one over `classic`'s seven; seven characters that are not a name are dropped too.
+    expect(parse('/docs/demo/specs/a.md?variant=classics')).toMatchObject({ ok: true, canonical: '/docs/demo/specs/a.md' });
+    expect(parse('/docs/demo/specs/a.md?variant=classic')).toMatchObject({ ok: true, canonical: '/docs/demo/specs/a.md?variant=classic' });
+    // A percent-escaped spelling of a name is that name, as every key's value is decoded once.
+    expect(parse('/docs/demo/specs/a.md?variant=%42')).toMatchObject({ ok: true, canonical: '/docs/demo/specs/a.md?variant=B' });
+  });
+
+  it('a repeated variant is repeated-param, as every key is, and a directory keeps no meaning for it but is not refused', () => {
+    expect(why('/docs/demo/specs/a.md?variant=B&variant=C')).toBe('repeated-param');
+    expect(why('/docs/demo/specs/dir/?variant=B')).toBe('ok');
+  });
+
+  it('variant: a directory page drops it', () => {
+    // A directory is no document, so it has no layout to open in (`at` and `frame` are dropped there too): the parse leaves the key
+    // out of the location, the canonical URL has none, and a directory location that carries one writes none.
+    const r = parse('/docs/demo/specs/dir/?variant=B');
+    expect(r).toMatchObject({ ok: true, canonical: '/docs/demo/specs/dir/' });
+    expect(r.ok && 'variant' in r.loc, 'a directory location with a variant').toBe(false);
+    expect(docsPageUrl(leaf('dir', { dirSlash: true, variant: 'review' }))).toBe('/docs/demo/specs/dir/');
+    // The leaf beside it keeps it.
+    expect(parse('/docs/demo/specs/dir/a.md?variant=B')).toMatchObject({ ok: true, canonical: '/docs/demo/specs/dir/a.md?variant=B' });
+  });
+
+  it('a pin key still gives commit-in-page ahead of a variant', () => {
+    expect(why(`/docs/demo/specs/a.md?variant=B&commit=${C40}`)).toBe('commit-in-page');
   });
 });
 

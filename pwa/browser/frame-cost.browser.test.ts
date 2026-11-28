@@ -24,6 +24,11 @@
 //   No cost assertion in the block: the numbers go to the console and the PR body. It passes no `record`, so a
 //   `window-overrun` fails its case with no figures printed.
 //
+// - Per layout (X2 P5.1, spec 2026-11-18 section 6): the reader's other four layouts each have a srcdoc budget row per skin beside the
+//   default's (`reader srcdoc budget, <skin>, <layout> layout: …`), over THAT layout's own BASE (`layoutBaseChars`: the default's BASE
+//   plus what the layout's enhance bundle, stylesheet and CSP add at the 1.2.0 pin), and an opt-in paired timing run per layout
+//   (`reader paired timing per layout`, `CCRC_MEASURE=1` with `CCRC_PAIRED_READER_MODE_ONLY_DIST` as the layout's BASE).
+//
 // Neutral names only (`project-a`, `lane-a`, `ws-<n>`); the fixture is deterministic (`fleetFixture`).
 // Run: `( cd pwa && CCRC_CHROME=<a Chrome or Chromium binary> ./node_modules/.bin/vitest run --config vitest.browser.config.ts browser/frame-cost.browser.test.ts )`.
 // Measure: the same with `CCRC_MEASURE=1` and `--reporter=verbose -t measurement`. Name a reporter explicitly: with
@@ -34,16 +39,19 @@
 // figures (script, task, span, deferred requests, whether the drain went quiet, the window's wall-clock start, `at`,
 // and, in the ratio case, what React rendered, `renders`) into its `task.meta.frameCost`, which the JSON reporter
 // keeps, whether the attempt passes, fails or times out (`keepOnFinish`).
-import { mkdirSync } from 'node:fs';
+import { mkdirSync, readFileSync } from 'node:fs';
+import { createRequire } from 'node:module';
 import path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { chromium, errors, type Browser, type Page } from 'playwright-core';
 import { INSTRUMENT, PHOSPHOR, REFINED, SKINS } from '@ccrc/ui';
-import { DOC_SECTION_SLUGS, DOCS_RESPONSE_HEADERS } from '../../shared/docs';
+import { frameCsp, frameDocument, type FrameAssets, type RenderInput } from '@synapsium-labs/pinax-lib/frame';
+import { DOC_SECTION_SLUGS, DOCS_RESPONSE_HEADERS, READER_LAYOUTS, type ReaderLayout } from '../../shared/docs';
+import { READER_STORE_PREFIX } from '../src/lib/readerLimits';
 import { COMMIT_A, entry, treeOk, treeResponse } from '../test/docsFixtures';
 import { resolveChrome } from './harness';
 import { MEASURE, readerTimingLoad } from './measurement';
-import { READER_PAIRED_COUNT, readerPairedStats, type ReaderTimingPair } from './reader-paired-verdict';
+import { READER_PAIRED_COUNT, readerPairedStats, readerPairedVerdict, type ReaderTimingPair } from './reader-paired-verdict';
 import {
   backlogFrame, countRenders, fleetApi, fleetFixture, fleetFrame, fleetFrameAt, FIXTURE_NOW_MS, frameCost, INFLIGHT_CAP_MS, longTranscript, medianOf,
   openApp, QUIET_CAP_MS, serveDist, sharedDist, SPAN_SLACK_MS, summarize, type AppFixture, type AppView, type DistServer, type FrameCostRecord,
@@ -518,9 +526,18 @@ describe('measurement — C6 Step 0/4', () => {
   const BASE_SRCDOC_CHARS = 840_371;
   const MAX_SRCDOC_GROWTH = 191_736;
 
-  async function openReaderOnce(skin: string, origin = server!.origin): Promise<{ openToReadyMs: number; srcdocChars: number }> {
+  /** `layout`: the device's layout, stored under the library's prefs key before the page's first script (X2 P5.1, `reader/layoutPref.ts`);
+   *  absent, the open is exactly what it was before layouts (nothing stored: the default layout). Answers the layout the frame's root
+   *  names once it is ready (`default` has no name). */
+  async function openReaderOnce(skin: string, origin = server!.origin, layout?: ReaderLayout): Promise<{ openToReadyMs: number; srcdocChars: number; layout: string }> {
     const app = await openApp(browser!, { skin, theme: PHOSPHOR, width: 1280, tab: 'console' }, fixture());
     try {
+      if (layout !== undefined) {
+        await app.ctx.addInitScript(([key, value]) => {
+          if (window !== window.top) return;
+          try { localStorage.setItem(key, value); } catch { /* no storage: the open then reads the default, and the layout check says so */ }
+        }, [`${READER_STORE_PREFIX}pref:prefs`, JSON.stringify({ layout })] as const);
+      }
       await app.page.addInitScript(() => {
         const w = window as unknown as { __readerReadyAt: number; __readerSrcdocChars: number };
         w.__readerReadyAt = Number.NaN;
@@ -557,11 +574,42 @@ describe('measurement — C6 Step 0/4', () => {
       });
       expect(Number.isFinite(got.openToReadyMs) && got.openToReadyMs > 0, 'the mount-start mark and the ready moment were both read').toBe(true);
       expect(got.srcdocChars, 'the hosted frame was inserted with a srcdoc').toBeGreaterThan(0);
+      // The sandboxed frame has no readable `contentDocument`: its root's layout name is read through Playwright's frame.
+      const inFrame = await (await app.page.locator('.docs-reader iframe').elementHandle())?.contentFrame();
+      const framed = inFrame === null || inFrame === undefined ? 'no frame'
+        : await inFrame.evaluate(() => document.querySelector('[data-docreader-root]')?.getAttribute('data-docreader-layout') ?? 'default');
       expect(app.errors, 'no page error').toEqual([]);
-      return got;
+      return { ...got, layout: framed };
     } finally {
       await app.ctx.close();
     }
+  }
+
+  // ---- each layout's own BASE, at the pin (X2 P5.1; X1 spec section 10 test 8) -------------------------------------------------
+  // A layout is the same library frame with its own enhance bundle and stylesheet (`reader/assets.ts`), so its BASE (the library's bytes
+  // with no hosted appearance, no console faces) is the default's BASE plus what that layout's two texts and its CSP add over the
+  // default's. The library's own frame builder (`frameDocument`, `frameCsp`) is asked for both over the same one-paragraph document and
+  // nonce, with the layout's texts as the console loads them (`layoutAssets`) and none of the console's faces: the difference is the
+  // layout's share of the BASE at 1.2.0, and the measured BASE for `default` (above) carries the rest. The hosted candidate of a layout then
+  // owes the same growth budget over it as the default does (`MAX_SRCDOC_GROWTH`: the two faces and the appearance in the seed).
+  // A paired run (below) with a built BASE for the layout checks this derivation by its own srcdoc size control.
+  const LAYOUT_DOC: RenderInput = { result: { outcome: 'rendered', html: '<h1 id="t">T</h1><p>x</p>', meta: { title: 'T', frontList: null } } };
+  // The library's own files, read from the installed package (the same bytes `reader/assets.ts` imports as `?raw` for the app: that module
+  // is not imported here, because the browser config's transform does not take its `?raw` imports).
+  const FRAME_ASSETS_DIR = path.join(path.dirname(createRequire(import.meta.url).resolve('@synapsium-labs/pinax-lib/package.json')), 'assets', 'frame');
+  const frameText = (name: string): string => readFileSync(path.join(FRAME_ASSETS_DIR, name), 'utf8');
+  function layoutAssets(layout: ReaderLayout): FrameAssets {
+    const base = {
+      guard: frameText('guard.js'), bootstrap: frameText('bootstrap.js'), css: frameText('reader.css'),
+      enhance: frameText(layout === 'default' ? 'enhance.js' : `enhance-${layout}.js`),
+    };
+    return layout === 'default' ? base : { ...base, layoutCss: frameText(`layout-${layout}.css`) };
+  }
+  async function bareFrameChars(layout: ReaderLayout): Promise<number> {
+    return frameDocument(LAYOUT_DOC, { csp: frameCsp(layout), layout, nonce: '0'.repeat(32), assets: layoutAssets(layout) }).length;
+  }
+  async function layoutBaseChars(layout: ReaderLayout): Promise<number> {
+    return layout === 'default' ? BASE_SRCDOC_CHARS : BASE_SRCDOC_CHARS + (await bareFrameChars(layout)) - (await bareFrameChars('default'));
   }
 
   const PAIR_BASE_DIST = process.env['CCRC_PAIRED_READER_BASE_DIST'];
@@ -632,6 +680,84 @@ describe('measurement — C6 Step 0/4', () => {
       expect(srcdocChars, `${skin} srcdoc growth against BASE`).toBeLessThanOrEqual(BASE_SRCDOC_CHARS + MAX_SRCDOC_GROWTH);
     }, 120_000);
   }
+
+  // A row per other layout (X2 P5.1): the same ordinary page, opened in the layout the device chose, its srcdoc against THAT layout's own
+  // BASE (`layoutBaseChars`) under the same growth budget. The default's rows above are unchanged. The open-to-`ready` figure of each
+  // open is printed beside the size (timing has no assertion here, as for the default: the paired run below decides it).
+  for (const layout of READER_LAYOUTS.filter((l) => l !== 'default')) {
+    for (const skin of SKINS.map((k) => k.id)) {
+      it(`reader srcdoc budget, ${skin}, ${layout} layout: one ordinary Docs page, over that layout's own BASE`, async () => {
+        const base = await layoutBaseChars(layout);
+        const opened = await openReaderOnce(skin, server!.origin, layout);
+        console.log(`FRAME-COST-READER-SIZE ${skin} layout=${layout} srcdoc=${opened.srcdocChars} base=${base} growth=${opened.srcdocChars - base} limit=${base + MAX_SRCDOC_GROWTH} openToReady=${opened.openToReadyMs.toFixed(0)}ms`);
+        expect(opened.layout, 'CONTROL: the frame is in the layout the device chose').toBe(layout);
+        expect(base, 'CONTROL: the layout\'s own BASE differs from the default\'s (its texts are in it)').not.toBe(BASE_SRCDOC_CHARS);
+        expect(opened.srcdocChars, `${skin} ${layout}: the hosted frame is larger than its BASE (the faces and the appearance are in it)`).toBeGreaterThan(base);
+        expect(opened.srcdocChars, `${skin} ${layout}: srcdoc growth against the layout's own BASE`).toBeLessThanOrEqual(base + MAX_SRCDOC_GROWTH);
+      }, 120_000);
+    }
+  }
+
+  // The same paired method for each other layout (X2 P5.1; the file's header says how the default's is run). The layout's BASE here is the
+  // mode-only candidate (`CCRC_PAIRED_READER_MODE_ONLY_DIST`): the same library bytes and the layouts, with the hosted decision forced
+  // false, so it is the 1.2.0 frame in that layout with no hosted appearance. (`CCRC_PAIRED_READER_BASE_DIST` is the build before layouts,
+  // which reads every layout as the default, and cannot be a layout's BASE.) Each layout and skin opens as the default's paired run does:
+  // two BASE/BASE controls around the BASE/hosted comparison, 20 pairs each, the lead flipped on the second round; the verdict is
+  // `readerPairedVerdict`'s for the hosted arm (the difference at most 30 ms). Controls on size: the BASE's srcdoc is exactly the derived
+  // `layoutBaseChars`, which checks that derivation, and the hosted one is larger. No timing assertion, as for the default: the verdict
+  // lines are the record.
+  it.runIf(MEASURE && PAIR_MODE_ONLY_DIST !== undefined)('reader paired timing per layout: interleaved BASE and hosted opens, each layout over its own BASE', async () => {
+    const layouts = READER_LAYOUTS.filter((l) => l !== 'default');
+    const requested = process.env['CCRC_PAIRED_READER_LAYOUTS']?.split(',') ?? layouts;
+    expect(requested.every((l) => layouts.some((x) => x === l)), 'known layouts in CCRC_PAIRED_READER_LAYOUTS').toBe(true);
+    console.log(`FRAME-COST-PAIRED-LAYOUTS-LOAD ${JSON.stringify({ startLoad: readerTimingLoad(), layouts: requested })}`);
+    let base: DistServer | undefined;
+    try {
+      base = await serveDist(PAIR_MODE_ONLY_DIST!);
+      const failures: string[] = [];
+      for (const layout of layouts.filter((l) => requested.includes(l))) {
+        const expectedBase = await layoutBaseChars(layout);
+        const run = async (key: string, arm: 'control' | 'hosted', skin: string, round: number): Promise<{ pairs: ReaderTimingPair[]; sizes: { base: number[]; candidate: number[] } }> => {
+          const pairs: ReaderTimingPair[] = [];
+          const sizes = { base: new Set<number>(), candidate: new Set<number>() };
+          for (let i = 0; i < READER_PAIRED_COUNT; i += 1) {
+            const order = (i + round) % 2 === 1 ? (['base', 'candidate'] as const) : (['candidate', 'base'] as const);
+            const sample = { base: 0, candidate: 0 };
+            for (const side of order) {
+              const origin = side === 'base' || arm === 'control' ? base!.origin : server!.origin;
+              try {
+                const open = await openReaderOnce(skin, origin, layout);
+                if (open.layout !== layout) throw new Error(`${key}: the frame opened in ${open.layout}, not ${layout}`);
+                sample[side] = open.openToReadyMs;
+                sizes[side].add(open.srcdocChars);
+              } catch (error) {
+                console.log(`FRAME-COST-PAIRED-LAYOUTS-INTERRUPTED ${JSON.stringify({ key, pair: i + 1, side, pairs })}`);
+                throw error;
+              }
+            }
+            pairs.push({ baseMs: sample.base, candidateMs: sample.candidate });
+          }
+          return { pairs, sizes: { base: [...sizes.base], candidate: [...sizes.candidate] } };
+        };
+        for (const { id: skin } of SKINS) {
+          const opening = await run(`${layout}:${skin}:control-opening`, 'control', skin, 1);
+          const hosted = await run(`${layout}:${skin}:hosted`, 'hosted', skin, 2);
+          const closing = await run(`${layout}:${skin}:control-closing`, 'control', skin, 2);
+          const verdict = readerPairedVerdict('hosted', hosted.pairs, {
+            opening: [readerPairedStats(opening.pairs).ratio, readerPairedStats(opening.pairs).ratio],
+            closing: [readerPairedStats(closing.pairs).ratio, readerPairedStats(closing.pairs).ratio],
+          });
+          console.log(`FRAME-COST-PAIRED-LAYOUTS ${JSON.stringify({ layout, skin, expectedBase, verdict, controls: { opening: readerPairedStats(opening.pairs), closing: readerPairedStats(closing.pairs) }, sizes: hosted.sizes })}`);
+          if (hosted.sizes.base.length !== 1 || hosted.sizes.base[0] !== expectedBase) failures.push(`${layout}:${skin}: the BASE srcdoc is not the derived ${expectedBase} (${hosted.sizes.base.join(', ')})`);
+          if (hosted.sizes.candidate.length !== 1 || hosted.sizes.candidate[0]! <= expectedBase) failures.push(`${layout}:${skin}: the hosted srcdoc size control failed`);
+        }
+      }
+      expect(failures, 'paired srcdoc controls per layout').toEqual([]);
+    } finally {
+      console.log(`FRAME-COST-PAIRED-LAYOUTS-LOAD ${JSON.stringify({ endLoad: readerTimingLoad() })}`);
+      await base?.close();
+    }
+  }, 3_600_000);
 
   // The renders have a browser of their own, launched with RENDER_ARGS and closed here (only when CCRC_RENDERS is set),
   // so a run that measures cost and takes the captures together still measures cost on a stock Chrome.

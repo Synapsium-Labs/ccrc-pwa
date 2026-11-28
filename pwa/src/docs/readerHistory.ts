@@ -18,6 +18,14 @@
 //   log again. The mount waits for the seed with no client time limit, as the docs loaders have none by design (the server
 //   bounds the read).
 //
+// The comparison base (X2 P5.4, parity spec 5.6): every `changes(sha)` request first asks `readerChangesBaseToRecord` (L1, the
+// library's own "which request to record" rule) whether it is a pick of the reader's own, and a pick is kept per doc in the tab's
+// session storage (`readerDocChangesBaseKey`), so `changesBase()` seeds it into the next mount of the same doc in the same tab (a
+// reload, a link back) and never into another tab. The shas a mount was seeded with (the last visit's, from the library's `seen`
+// field in page storage, judged by `readerSeenSha` and never trusted for its shape, and the base) are read when `changesBase()` is
+// asked, right before each mount, and kept per body: the frame moves `seen` before it asks, so no later reading stands for them.
+// Nothing is written to `seen`.
+//
 // The day filter a version list is cut to (`only`) is kept in the visit's `history.state` and never in the URL (M8.22): the
 // URL names the commit, and the same URL is two entries with two filters when the user went back. `openVersion` records
 // the filter it wants for the URL it opens; the page that mounts on that URL turns it into a mark in the entry it stands
@@ -34,9 +42,12 @@ import type { DocsHistoryLoader, DocsLoaders } from './failures';
 import type { FetchQueue } from './fetchQueue';
 import { readerDiff } from './reader/diff';
 import {
-  readerChangesBase, readerChangesTexts, readerLogAsk, readerServedHash, readerVersionMove, readerVersionSeed,
+  readerChangesBase, readerChangesBaseToRecord, readerChangesTexts, readerDocChangesBaseKey, readerLogAsk, readerSeenKey, readerSeenSha,
+  readerServedHash, readerVersionMove, readerVersionSeed,
   type ReaderPinRead, type ReaderVersionSeed,
 } from './reader/history';
+import { readerDocKey } from './reader/policy';
+import { enumerablePageStorage, readKey, tabStorage, writeKey } from '../lib/storage';
 import { partChangeTexts } from './reader/partChanges';
 import type { MdPart } from './range/mdParts';
 import { rangeOfTooLarge } from './range/rangePolicy';
@@ -80,6 +91,12 @@ export interface ReaderHistoryBody {
   /** The seed for this body's mount; resolves once and never rejects: `null` for a served hash that is not a full commit,
    *  and for a body that ended first. */
   readonly seed: Promise<ReaderVersionSeed | null>;
+  /** The comparison base this tab holds for the doc (X2 P5.4), read now from session storage: the stored text, or `null` for none (no
+   *  base kept, no per-doc key, an unreadable store). Not judged here: whether it is a full sha is `policy.ts#readerSeedChangesBase`'s
+   *  one judgement. Asked by the bridge right before each library mount, so a mount made after a pick seeds the pick, and the call is
+   *  the record of what that mount was seeded with: it adds the base and the last visit's sha as they stand to the body's seeded shas,
+   *  which no request for them is then recorded against. */
+  changesBase(): string | null;
   /** The marks of the changes between the commit `sha` and this body, or `null` for unavailable. */
   changes(sha: string): Promise<ReaderChangeMarks | null>;
   openVersion(v: { sha?: string; only?: string }): void;
@@ -153,10 +170,44 @@ export function startReaderHistory(i: ReaderHistoryInput): ReaderHistoryBody {
     if (ended()) resolve(null);
     else i.signal.addEventListener('abort', () => resolve(null), { once: true });
   });
+  // The day filter the seed kept (a one-day version, `version.only` in the library's words): a mount seeded with one asks only that
+  // day's sha, so no request of it is a pick (`readerChangesBaseToRecord`). Set when the seed is made, before the mount that asks.
+  let seededOnly: string | null = null;
   const seed: Promise<ReaderVersionSeed | null> = Promise.race([
-    readLog().then((log) => (ended() ? null : readerVersionSeed(served, draft, log, i.only))),
+    readLog().then((log) => {
+      const s = ended() ? null : readerVersionSeed(served, draft, log, i.only);
+      seededOnly = s === null ? null : s.only;
+      return s;
+    }),
     endedFirst,
   ]);
+
+  // The comparison base of the tab (X2 P5.4, parity spec 5.6): kept per doc in session storage, recorded by `changes` below, seeded
+  // back by `changesBase`. The doc's key is the one the frame's own per-doc state uses; a doc with none keeps nothing.
+  const docKey = readerDocKey(i.project, i.show.section, i.show.path);
+  const lastVisit = (): string | null => (docKey === null ? null : readerSeenSha(readKey(readerSeenKey(docKey), enumerablePageStorage)));
+  /** The stored text as it stands, a string or nothing: whether it is a full sha is the policy's one judgement
+   *  (`readerSeedChangesBase`, on the way to the seed), so none is made here. */
+  const storedBase = (): string | null => (docKey === null ? null : readKey(readerDocChangesBaseKey(docKey), tabStorage));
+  // Every sha seeded into a library mount of this body, as each mount was made with it: the library writes `seen := this commit` BEFORE
+  // it asks `changes(prior)`, so a reading of `seen` at the request is the commit itself, and another tab's open can move it between
+  // two mounts. `changesBase()` is asked by the bridge synchronously right before each mount, so it reads the last visit and the
+  // stored base THEN (the two the frame is then seeded with) and adds both; nothing is read at the request's time or at the body's start.
+  const seededShas = new Set<string>();
+  /** Keeps the sha of a request that is a pick of the reader's own (`readerChangesBaseToRecord`, the library's rule decides). A write
+   *  that fails changes nothing: the next mount seeds the base it had. */
+  const recordPick = (sha: string): void => {
+    if (docKey === null) return;
+    const rec = readerChangesBaseToRecord(sha, { seeded: seededShas, only: seededOnly });
+    if (rec !== null) writeKey(readerDocChangesBaseKey(docKey), rec, tabStorage);
+  };
+  const changesBase = (): string | null => {
+    const visit = lastVisit();
+    if (visit !== null) seededShas.add(visit);
+    const base = storedBase();
+    if (base !== null) seededShas.add(base.toLowerCase());
+    return base;
+  };
 
   /** A committed pin's bytes read by range after the file route's `too-large`: the text, or `unavailable`. */
   const rangeText = async (
@@ -234,8 +285,12 @@ export function startReaderHistory(i: ReaderHistoryInput): ReaderHistoryBody {
 
   return {
     seed,
+    changesBase,
     async changes(sha) {
       if (ended() || i.loaders === null || i.queue === null) return null;
+      // Every comparison reaches here, so a pick of the reader's is kept as the tab's base on its request (a comparison that then
+      // answers unavailable is asked again by the next mount, as the library's own rule asks).
+      recordPick(sha);
       if (i.part !== undefined && i.part !== null) return partChanges(sha, i.part, i.loaders, i.queue);
       const base = readerChangesBase(pin, sha);
       if (base === null) return null;

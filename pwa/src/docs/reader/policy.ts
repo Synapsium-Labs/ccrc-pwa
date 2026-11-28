@@ -11,12 +11,85 @@
 // Each `null` here has one meaning, stated at the function.
 import { DOCS_PARSE_BUDGET_MS } from '../../lib/markdownLimits';
 import { utf8ByteLength } from '../../lib/markdownGuard';
-import { READER_COPY_WRITE_MAX_BYTES, READER_DOC_KEY_MAX_UNITS, READER_LAB_DRAW_WATCHDOG_MS } from '../../lib/readerLimits';
+import {
+  READER_COPY_WRITE_MAX_BYTES, READER_DOC_KEY_MAX_UNITS, READER_LAB_DRAW_WATCHDOG_MS, READER_STORE_PREFIX,
+} from '../../lib/readerLimits';
 import { docLinkTarget } from '../docLinkTarget';
 import type { DocLinkContextValue } from '../DocLink';
-import type { DocSectionSlug } from '../../../../shared/docs';
+import { READER_LAYOUTS, docsVariantLayout, isDocsCommit, type DocSectionSlug, type ReaderLayout } from '../../../../shared/docs';
 import type { ReaderHiddenChar } from './readerText';
 import type { ReaderReading } from './readerMode';
+
+/** The reader's layouts (X2 P5.1, D-8762): defined once, in `shared/docs.ts` (the page grammar's `?variant=` map names them too), and
+ *  re-exported here so the mount's callers keep naming them from the policy. */
+export { READER_LAYOUTS };
+export type { ReaderLayout };
+
+/** The layout a standalone `?variant=` name means (`AB`, `A`, `B`, `C`, `classic`; X2 P5.1), or `default` for anything else, `null`
+ *  included. Reads the one map in `shared/docs.ts` (`docsVariantLayout`). */
+export function layoutFromVariant(v: string | null): ReaderLayout {
+  return v === null ? 'default' : docsVariantLayout(v) ?? 'default';
+}
+
+/** Whether `v` is a layout NAME (`default`, `classic`, `editorial`, `review`, `guided`), as the library's `prefs` object stores one:
+ *  not a standalone `?variant=` name. */
+function isReaderLayout(v: unknown): v is ReaderLayout {
+  return typeof v === 'string' && (READER_LAYOUTS as readonly string[]).includes(v);
+}
+
+/** The prefs object the library keeps under the reader's `pref:prefs` key, as text parsed to a plain object, or `null` when the text is
+ *  absent, does not parse, or is not a plain object. */
+function prefsObject(raw: string | null): Record<string, unknown> | null {
+  if (raw === null) return null;
+  try {
+    const v: unknown = JSON.parse(raw);
+    return typeof v === 'object' && v !== null && !Array.isArray(v) ? (v as Record<string, unknown>) : null;
+  } catch {
+    return null;
+  }
+}
+
+/** The device's layout from the stored prefs text (`ccrc:reader:v1:pref:prefs`, the library's own JSON object): its `layout` field when
+ *  that is one of the five layout names, else `default` (absent, unparsable, not an object, or a name no build knows). */
+export function readerLayoutOfPref(raw: string | null): ReaderLayout {
+  const layout = prefsObject(raw)?.['layout'];
+  return isReaderLayout(layout) ? layout : 'default';
+}
+
+/** The prefs text with `layout` set and every other field exactly as it was (the library owns the rest and keeps fields it does not
+ *  know); unparsable or non-object text becomes `{"layout": …}` alone. */
+export function withLayoutInPref(raw: string | null, layout: ReaderLayout): string {
+  return JSON.stringify({ ...(prefsObject(raw) ?? {}), layout });
+}
+
+/** The storage key of the library's reader prefs object (`pref:prefs` under the reader's prefix): where the `layout` field lives, and
+ *  the one key whose writes by the frame the storage port rewrites (`withStoredLayoutKept`). */
+export const READER_PREFS_KEY = `${READER_STORE_PREFIX}pref:prefs`;
+
+/** The prefs text a frame writes (`value`, its whole snapshot of the object) with the `layout` field as it stands in storage (`stored`,
+ *  the text under the same key now), so the frame is never a writer of the field (`layoutPref.ts` is the only one, I1, I-3): the stored
+ *  field is copied as it is, whatever its value; with none stored (absent, no field, not an object) the write carries none. Every other
+ *  field of the write is kept as it came, in its order. A `value` that is no JSON object is nobody's prefs and is returned as it is,
+ *  and so is one with no `layout` where none is stored. */
+export function withStoredLayoutKept(value: string, stored: string | null): string {
+  const next = prefsObject(value);
+  if (next === null) return value;
+  const kept = prefsObject(stored);
+  if (kept !== null && 'layout' in kept) return JSON.stringify({ ...next, layout: kept['layout'] });
+  if (!('layout' in next)) return value;
+  const { layout: _dropped, ...rest } = next;
+  return JSON.stringify(rest);
+}
+
+/** The layout a mount is made in: reader mode on for this document means `default` whatever the device, the visit or the page says
+ *  (reader mode reads in the default layout, D-8975; this is X6.68's layout half); else the layout this page's reader chose from the
+ *  Layout row (`chosen`, `null` for none), else the visit's (`?variant=`) when it names one, else the device's. */
+export function readerMountLayout(
+  i: { pref: ReaderLayout; visit: ReaderLayout | null; chosen: ReaderLayout | null; readingOn: boolean },
+): ReaderLayout {
+  if (i.readingOn) return 'default';
+  return i.chosen ?? i.visit ?? i.pref;
+}
 
 /** A link as the host's classifier of the frame's href yields it (mirrors the library's host-link shape; nothing is
  *  imported from it). The frame's content is untrusted: `external` is re-derived from its `url` before it is used. */
@@ -227,6 +300,51 @@ export function readerMountPlan(
   return profile === 'lab-draw'
     ? { draw: 'auto', watchdogMs: READER_LAB_DRAW_WATCHDOG_MS, store: false, chrome: 'frame-bar', history: false, appearance: false }
     : { draw: docsDrawFor(e17), watchdogMs: readerWatchdogMs(bytes), store: true, chrome, history: true, appearance: true };
+}
+
+/** The words the reader's attention marks and ID rule skip before an ID (the review strip's "you or operator" row addresses, and the
+ *  ID qualifiers: `programme`, `program`, `at-scale`, `addendum`, and the version words `v1` to `v20`, each as itself, with `'s` and
+ *  with the typographic `’s` (U+2019); 64 words, the library's cap being 200 and a word's being 64 code units, X2 P5.4).
+ *  D-9176: the standalone reader's qualifier was a PATTERN for any version word (`v\d[\w.]*`, with an optional possessive), and the
+ *  library takes plain words only (measured 2026-11-28: it matches each listed word whole, case-insensitive; `v2.1` and `v21` are not
+ *  matched by `v2` or `v1`), so a version above `v20` or with a dot (`v2.1`, `v1.2.0`) before an ID no longer stops that ID from
+ *  linking. The list is the whole set; widening it is one edit here. */
+export const READER_QUALIFIERS: readonly string[] = (() => {
+  const words = ['programme', 'program', 'at-scale', 'addendum'];
+  for (let n = 1; n <= 20; n += 1) words.push(`v${n}`, `v${n}'s`, `v${n}’s`);
+  return words;
+})();
+
+/** The addressees the review strip's attention marks answer to: `you` (the library's default) and `operator`. */
+const READER_ADDRESSEES: readonly string[] = ['you', 'operator'];
+
+/** What a Docs mount's `features` object holds (X2 P5.4, parity spec 5.6): the reading-layer flags (`rules`, the In short switch and
+ *  the vocabulary) beside, on ccrc's bar, the chrome switches (the frame's bar off, its top space trimmed), in one object. */
+export interface ReaderFeatures {
+  readonly rules: true;
+  readonly inShort: true;
+  readonly vocabulary: { readonly addressees: string[]; readonly qualifiers: string[] };
+  readonly chrome?: { readonly bar: false; readonly topSpace: false };
+}
+
+/** The `features` a mount seeds, or `null` for none: the reader lab's `lab-draw` mount seeds none (it is a timed draw, not a reading),
+ *  and every Docs mount seeds the flags, with the chrome switches too on ccrc's bar (`host-bar`). A fresh object, and fresh lists,
+ *  every call: the library holds what it is handed. */
+export function readerFeatures(profile: ReaderMountProfile | undefined, chrome: ReaderChrome): ReaderFeatures | null {
+  if (profile === 'lab-draw') return null;
+  return {
+    ...(chrome === 'host-bar' ? { chrome: { bar: false as const, topSpace: false as const } } : {}),
+    rules: true,
+    inShort: true,
+    vocabulary: { addressees: [...READER_ADDRESSEES], qualifiers: [...READER_QUALIFIERS] },
+  };
+}
+
+/** The comparison base a mount seeds (X2 P5.4): the stored one (`raw`, what `readerHistory` kept for this doc in this tab, or what an
+ *  input handed) only when the mount carries history and the value is a full sha (40 or 64 lower-case hex digits); else `null`, one
+ *  meaning: "seed no base". */
+export function readerSeedChangesBase(history: boolean, raw: string | null): string | null {
+  return history && raw !== null && isDocsCommit(raw) ? raw : null;
 }
 
 /** Reader mode's asks of one mount (`readerMountPlan` takes reader mode's state through this, X6 XR1.4): a Docs mount asks for

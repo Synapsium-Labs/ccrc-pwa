@@ -154,6 +154,8 @@ describe("the ids are W2's door table's", () => {
       'go-settings-overlord',
       // The reader-mode plan, Task XR1.5: `r` enters and leaves reader mode on a Docs page; the palette never lists it.
       'toggle-reader-mode',
+      // X2 P5.1 (D-9180): one per reader layout, last; offered only where the Layout row would be drawn.
+      'reader-layout-default', 'reader-layout-classic', 'reader-layout-editorial', 'reader-layout-review', 'reader-layout-guided',
     ].sort());
   });
 });
@@ -257,7 +259,10 @@ describe('the top search: terms, tier and search-only (D-6714)', () => {
       // Overlord W1 home C: Go to Settings › Overlord the same way; its place is pinned below.
       && id !== 'go-settings-overlord'
       // Reader mode's `r` (X6 XR1.5) is read without the same way: its `when` keeps it out of the palette.
-      && id !== 'toggle-reader-mode');
+      && id !== 'toggle-reader-mode'
+      // The reader layouts' five commands (D-9180) are read without the same way: their `when` keeps them off every other screen, and
+      // their place (last) and titles are pinned in reader-mode-commands.test.ts.
+      && !id.startsWith('reader-layout-'));
     // Desktop-polish PL5a adds `go-waiting` (a top route's door); the table is read without it, and its own place is below.
     const rankedBefore = (q: string): string[] => ranked(q).filter((id) => id !== 'go-waiting');
     for (const [q, ids] of BEFORE) expect(rankedBefore(q), JSON.stringify(q)).toEqual(ids);
