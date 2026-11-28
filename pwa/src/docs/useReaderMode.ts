@@ -175,7 +175,7 @@ interface Sink {
   frame(f: ReaderModeFrame | null): void;
   turn(t: ReaderTurn): void;
   figure(open: boolean): void;
-  landing(on: boolean): void;
+  stepping(on: boolean): void;
 }
 
 /** The mutable half of the hook: refs and handles, in closures. One per mount of the hook, never rebuilt by a render.
@@ -205,9 +205,10 @@ function createController(sink: Sink, initialTurn: ReaderTurn) {
    *  cleared by that step's landing (the dispatcher's `exitReader`) or by `READER_EXIT_LANDING_MS`. `readerModeOffered` reads it, so
    *  no entry pushes a reader place under a landing still to come. A fact of this hook's own, beside the record's `exitPending`,
    *  which the dispatcher writes and this hook reads through no port: that mark is also set by an exit waiting on its settle, which
-   *  a re-entry cancels, while this one stands only once a step was taken. */
-  let landing = false;
-  let landingTimer: ReturnType<typeof setTimeout> | null = null;
+   *  a re-entry cancels, while this one stands only once a step was taken. Not named `landing`: that name is the landing line's,
+   *  read in the PWA by `conflictWords.ts` alone (the rings' one-owner scan). */
+  let stepping = false;
+  let steppingTimer: ReturnType<typeof setTimeout> | null = null;
   let alive = true;
 
   // ── the wake lock (spec 6.3) ──
@@ -268,15 +269,15 @@ function createController(sink: Sink, initialTurn: ReaderTurn) {
   const stepBelow = (): void => {
     input.places.markExitPending(true);
     if (input.places.stepBack() === 0) input.places.markExitPending(false);
-    else setLanding(true);
+    else setStepping(true);
   };
-  /** The one writer of `landing`: React hears of it (the head's offer), and an armed wait is bounded by `READER_EXIT_LANDING_MS`. */
-  function setLanding(on: boolean): void {
-    if (landingTimer !== null) clearTimeout(landingTimer);
-    landingTimer = on ? setTimeout(() => { landingTimer = null; setLanding(false); }, READER_EXIT_LANDING_MS) : null;
-    if (landing === on) return;
-    landing = on;
-    if (alive) sink.landing(on);
+  /** The one writer of `stepping`: React hears of it (the head's offer), and an armed wait is bounded by `READER_EXIT_LANDING_MS`. */
+  function setStepping(on: boolean): void {
+    if (steppingTimer !== null) clearTimeout(steppingTimer);
+    steppingTimer = on ? setTimeout(() => { steppingTimer = null; setStepping(false); }, READER_EXIT_LANDING_MS) : null;
+    if (stepping === on) return;
+    stepping = on;
+    if (alive) sink.stepping(on);
   }
   const requestFullScreen = (): void => {
     const c = container;
@@ -403,12 +404,12 @@ function createController(sink: Sink, initialTurn: ReaderTurn) {
     plainView: input.plainView,
     modalMounted: document.querySelector('[role="dialog"]') !== null,
     figureOpen: figure,
-    exitLanding: landing,
+    exitLanding: stepping,
   });
   /** The offer less the modal-layer clause, the context's render-time answer read now: a listing (the shortcut sheet is a
    *  dialog itself) asks this, never `offered`. */
   const available = (): boolean => readerModeOffered({
-    frameReady: frame?.ready === true, plainView: input.plainView, modalMounted: false, figureOpen: figure, exitLanding: landing,
+    frameReady: frame?.ready === true, plainView: input.plainView, modalMounted: false, figureOpen: figure, exitLanding: stepping,
   });
   const exit = (cause: 'exit-tap' | 'key'): void => step({ kind: cause });
   const enter = (_by: 'button' | 'key'): void => {
@@ -524,15 +525,15 @@ function createController(sink: Sink, initialTurn: ReaderTurn) {
       const unregister = places.register({
         on: (): boolean => state.on,
         // A crossing landing: while on, Back crossed the reader place; while off, the landing of this hook's own step back, which
-        // ends its wait (`landing`).
-        exitReader: (_closeOverlay: boolean): void => { step({ kind: 'place-popped' }); setLanding(false); },
+        // ends its wait (`stepping`).
+        exitReader: (_closeOverlay: boolean): void => { step({ kind: 'place-popped' }); setStepping(false); },
         leaveDead: stepBelow,
       });
       if (places.standingOnDead()) stepBelow();
       return unregister;
     },
     // A remount on the same controller (StrictMode's simulated one): a wait whose bound the teardown cleared is armed again.
-    start: (): void => { alive = true; if (landing) setLanding(true); },
+    start: (): void => { alive = true; if (stepping) setStepping(true); },
     /** The screen unmounting: the decider's `leave` (the console back, the fill cleared, full screen left; no step back, no
      *  focus), then the hook's own teardown: its timers and the wake lock. */
     teardown(): void {
@@ -541,8 +542,8 @@ function createController(sink: Sink, initialTurn: ReaderTurn) {
       for (const act of answer.acts) perform(act);
       if (settleTimer !== null) clearTimeout(settleTimer);
       settleTimer = null;
-      if (landingTimer !== null) clearTimeout(landingTimer);
-      landingTimer = null;
+      if (steppingTimer !== null) clearTimeout(steppingTimer);
+      steppingTimer = null;
       clearIdle();
       const s = sentinel;
       sentinel = null;
@@ -563,9 +564,9 @@ export function useReaderMode(o: { doc: string | null; plainView: boolean; place
   // The turn is the device's remembered one, read from storage once, as the hook starts (`screens` when none is kept).
   const [turn, setTurnState] = useState<ReaderTurn>(readStoredTurn);
   const [figure, setFigureState] = useState(false);
-  const [landing, setLandingState] = useState(false);
+  const [stepping, setSteppingState] = useState(false);
   const [ctl] = useState(() => createController(
-    { state: setState, live: setLive, frame: setFrameState, turn: setTurnState, figure: setFigureState, landing: setLandingState }, turn,
+    { state: setState, live: setLive, frame: setFrameState, turn: setTurnState, figure: setFigureState, stepping: setSteppingState }, turn,
   ));
   const { doc, plainView } = o;
   const places = o.places ?? READER_PLACES;
@@ -601,12 +602,12 @@ export function useReaderMode(o: { doc: string | null; plainView: boolean; place
   const value = useMemo<ReaderModeContextValue>(() => ({
     // `readerModeOffered` owns the rule. The modal-layer test is read at each `enter` and in the handle, not at render.
     state, turn, setTurn: ctl.setTurn,
-    offered: readerModeOffered({ frameReady: frame?.ready === true, plainView, modalMounted: false, figureOpen: figure, exitLanding: landing }),
+    offered: readerModeOffered({ frameReady: frame?.ready === true, plainView, modalMounted: false, figureOpen: figure, exitLanding: stepping }),
     enter: ctl.enter, exit: ctl.exit, menu: ctl.menu, escOverlay: ctl.escOverlay, activity: ctl.activity, dismiss: ctl.dismiss,
     aa: ctl.aa, frame,
     setFrame: ctl.setFrame, dropFrame: ctl.dropFrame, setFigure: ctl.setFigure, setFallback: ctl.setFallback, readingFor: ctl.readingFor,
     frameExit: ctl.frameExit, frameToggle: ctl.frameToggle,
-  }), [ctl, state, frame, plainView, turn, figure, landing]);
+  }), [ctl, state, frame, plainView, turn, figure, stepping]);
   const container = useMemo<ReaderModeContainer>(() => ({
     setContainer: ctl.setContainer, on: state.on, how: state.on ? state.how : undefined, live, focusFrame: ctl.focusFrame,
   }), [ctl, state, live]);
