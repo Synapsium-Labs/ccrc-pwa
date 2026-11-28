@@ -27,7 +27,8 @@ describe('the label queue vocabulary', () => {
     // here until it is listed, and then it meets the forbidden names below.
     const card: Record<keyof CardView, true> = { id: true, row: true, question: true, fields: true, answers: true, pickedAt: true, week: true };
     const field: Record<keyof CardField, true> = { name: true, quoted: true, text: true };
-    const read: Record<keyof LabelCardsAnswer, true> = { ok: true, cards: true, open: true, pickedThisWeek: true, week: true, skipped: true };
+    const read: Record<keyof LabelCardsAnswer, true> = { ok: true, cards: true, open: true, heldBack: true, pickedThisWeek: true, week: true,
+      skipped: true };
     const skipped: Record<keyof LabelCardsAnswer['skipped'], true> = { absent: true, unmeasured: true, noReader: true };
     const forbidden = ['verdict', 'p', 'band', 'line', 'probability'];
     for (const keys of [card, field, read, skipped]) expect(Object.keys(keys).filter((k) => forbidden.includes(k))).toEqual([]);
