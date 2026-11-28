@@ -184,6 +184,12 @@ one, and stamps news for an open one; it keeps the peer quotas.
   fast run, where the first form had imported `heldUntilAcked` into the stall module.
 - **`news-writer-is-a-non-stamper`**: the sequence stamp census lists `stampRequestNewsInTx` with the request kind's
   non-stampers. It writes the line of news and its time, and no state word.
+- **`held-filter-beside-its-decider`** (call 1995): the mail sweep's filter of held deliveries is
+  `envelope.ts#notHeldUntilAcked(due, origins)`, beside `heldUntilAcked`. It applies the rule to the due list and decides
+  nothing new: a held report is left out, every other row passes in its order, and a row whose mail is not found is kept,
+  as it was when the filter stood in the pass, since a null origin is no report. A throwing read is not caught. `mailPass`
+  makes one call to it. This keeps the delivery decide suite's acceptance pin, at most 150 code lines in `mailPass`, which
+  the first full run found at 151, without a longer line. The ruling refused joining the two lines.
 - **`forms-census-narrowed-by-hold`** (call 1943).
 - **`console-two-rows`** (call 1940, clarified): one console source file, two rows, and one case pair in its words suite.
 - **`masker-already-in-the-route-deps`** (item 5): no port was added; the mail door uses the composition's `deps.masker`.
@@ -201,7 +207,7 @@ Deciders registered at floor 1 (every mutant killed), each run through the floor
 | `requestMail.ts#mailDesignationOf` | 10 | not registered | 1 |
 | `requestMail.ts#requestMailVerdict` | 41 | not registered | 1 |
 | `peerBound.ts#reportMailVerdict` | 15 | not registered | 1 |
-| `envelope.ts#fixedLineMailOf` (the report row, `heldUntilAcked`, `fixedLinePushOf`, `heldDeliveryIdsOf`) | +16 (F25 to F40) | 1 | 1 |
+| `envelope.ts#fixedLineMailOf` (the report row, `heldUntilAcked`, `fixedLinePushOf`, `heldDeliveryIdsOf`, `notHeldUntilAcked`) | +21 (F25 to F45) | 1 | 1 |
 | `shared/ledgers.ts#goalRatification` | 12 (+2: the request arm ratified, and answering `effect-unmeasured`) | 1 | 1 |
 | `shared/ledgers.ts#modificationSource` | 4 (+2: the request ignored, an item preferred over it) | 1 | 1 |
 | `shared/ledgers.ts#parseRatifiedBy` | 4 (the id check dropped, `request` always unreadable, another kind taking the id, the kind guard bypassed) | not registered | 1 |
@@ -243,6 +249,11 @@ Hand mutations, each red and then restored byte for byte (measured with `git dif
   the sequence stamp census, the literal source pin ratchet and the tests' type check. Each was found red on the fast run,
   each is fixed in the second push, and each now passes alone through `ccrc test`. The readers suite now reads the store
   through the symbol scan, so the ratchet's count for `store.ts` is unchanged.
+- **The delivery decide suite was not run here before the second push.** It reads `watch.ts` as text, so a fast run does not
+  select it. The first full run found `mailPass` at 151 code lines. The third push moves the filter out
+  (`held-filter-beside-its-decider`), and the suite passes alone.
+- **A known flake in the first full run**: a focus-timing row of the delegation adoption card's browser suite failed its
+  own precondition (issue #3419). It is not this change's.
 
 ## 9. What PR B reads from this one
 

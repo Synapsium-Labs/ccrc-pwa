@@ -24,7 +24,7 @@ import { providerRetrySubject } from '../../shared/provider-retry.js';
 import { INBOX_WAKE_SUBJECT, renderInboxWakeBody } from '../../shared/overlordInbox.js';
 import { SPOT_PROBE_SUBJECT } from '../src/continuity/renewalFeed.js';
 import { mkTmp, removeTmpFixtures } from './tmpHelpers.js';
-import { sourceOfSymbol } from './scan/symbols.js';
+import { callsIn, sourceOfSymbol, symbolOf } from './scan/symbols.js';
 import { ID, PEER, NOW, emptyBox, echoedBox, seedRegistry, literalSends, keyPresses, sendCalls, primed, designate, queueMail, rowOf,
   sweepFar, sweepMany, expectUntouched } from './helpers/reportHoldSweep.js';
 
@@ -257,6 +257,13 @@ describe('the stall watch', () => {
       heldDeliveryIds: heldDeliveryIdsOf(read2.mail, read2.deliveries) }, later);
     expect(verdicts).toHaveLength(1);
     expect(verdicts[0]).toMatchObject({ act: 'notify', arm: 'mail-stuck' });
+  });
+
+  it('7c. the mail pass leaves the held out of its due list through the one filter beside the hold rule (call 1995)', () => {
+    // `notHeldUntilAcked` (envelope.ts) is called once in the pass, and the pass names the rule itself nowhere else.
+    const calls = callsIn(symbolOf('server/src/watch.ts', 'FleetWatcher.mailPass')).map((c) => c.name);
+    expect(calls.filter((n) => n === 'notHeldUntilAcked')).toHaveLength(1);
+    expect(calls).not.toContain('heldUntilAcked');
   });
 
   it('7b. the watcher passes the hold into both stall judgements that run the mail-stuck arm (the worker and the coordinator)', () => {

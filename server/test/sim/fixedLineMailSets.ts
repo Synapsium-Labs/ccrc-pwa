@@ -75,6 +75,16 @@ export function fixedLineMailOfCases(m: EnvelopeModule): Record<string, SuiteCas
       const heldDeliveries = [{ id: 100, mailId: 11, toId: OTHER }, { id: 101, mailId: 10, toId: OVERLORD }, { id: 102, mailId: 99, toId: OVERLORD }];
       expect([...m.heldDeliveryIdsOf(heldMail, heldDeliveries)]).toEqual([101]);
       expect([...m.heldDeliveryIdsOf([], heldDeliveries)]).toEqual([]);
+      // the mail sweep's due list less the held: a held report is left out, every other row passes in its order, a row whose mail
+      // is not found is kept (no report), an empty list is empty, and the rows are the caller's own objects
+      const origins = { mailOrigin: (mailId: number) => heldMail.find((x) => x.id === mailId) ?? null };
+      const due = [{ id: 103, mailId: 99, toId: OVERLORD, extra: 'c' }, { id: 101, mailId: 10, toId: OVERLORD, extra: 'a' },
+        { id: 100, mailId: 11, toId: OTHER, extra: 'b' }];
+      const kept = m.notHeldUntilAcked(due, origins);
+      expect(kept.map((d) => d.id)).toEqual([103, 100]);
+      expect(kept[0]).toBe(due[0]);
+      expect(m.notHeldUntilAcked([], origins)).toEqual([]);
+      expect(m.notHeldUntilAcked(due.filter((d) => d.id !== 101), origins).map((d) => d.id)).toEqual([103, 100]);
       expect(m.fixedLinePushOf({ fromId: 'coord-a', subject: 'x', mailToId: 'overlord' })).toBe('record-only');
       for (const x of [{ fromId: 'timer', subject: 'timer: 1 due (4)', mailToId: 'overlord' }, { fromId: 'coord-a', subject: 'x', mailToId: OTHER },
         { fromId: 'operator', subject: operatorMessageSubject(1), mailToId: OVERLORD }]) expect(m.fixedLinePushOf(x)).toBeUndefined();
@@ -223,6 +233,11 @@ const FIXED_LINE_MAIL_OF_SET: MutantSet<EnvelopeModule> = {
     { id: 'F38 the stall read finds the mail by the delivery id', old: 'mail.find((m) => m.id === d.mailId) ?? null', new: 'mail.find((m) => m.id === d.id) ?? null' },
     { id: 'F39 the stall read holds a delivery whose mail is unread', old: 'mail.find((m) => m.id === d.mailId) ?? null', new: 'mail.find((m) => m.id === d.mailId) ?? mail[0] ?? null' },
     { id: 'F40 the stall read names the mail id', old: '    .map((d) => d.id));', new: '    .map((d) => d.mailId));' },
+    { id: 'F41 the sweep filter keeps the held', old: "return due.filter((d) => !heldUntilAcked(d.toId, origins.mailOrigin(d.mailId), { kind: 'not-designated' }));", new: 'return [...due];' },
+    { id: 'F42 the sweep filter keeps only the held', old: "return due.filter((d) => !heldUntilAcked(d.toId, origins.mailOrigin(d.mailId),", new: "return due.filter((d) => heldUntilAcked(d.toId, origins.mailOrigin(d.mailId)," },
+    { id: 'F43 the sweep filter reads the delivery id as the mail id', old: 'origins.mailOrigin(d.mailId), { kind', new: 'origins.mailOrigin((d as unknown as { id: number }).id), { kind' },
+    { id: 'F44 the sweep filter drops a row whose mail is not found', old: "return due.filter((d) => !heldUntilAcked(d.toId, origins.mailOrigin(d.mailId), { kind: 'not-designated' }));", new: "return due.filter((d) => origins.mailOrigin(d.mailId) !== null && !heldUntilAcked(d.toId, origins.mailOrigin(d.mailId), { kind: 'not-designated' }));" },
+    { id: 'F45 the sweep filter reorders', old: "return due.filter((d) => !heldUntilAcked(", new: "return [...due].reverse().filter((d) => !heldUntilAcked(" },
     { id: 'F24 the timer row never matched', old: "m.fromId === TIMER_MAIL_SENDER && m.mailToId === OVERLORD_IDENTITY", new: 'false' },
   ],
   suite: fixedLineMailOfCases,

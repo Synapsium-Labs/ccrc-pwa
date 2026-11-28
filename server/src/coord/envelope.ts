@@ -309,6 +309,16 @@ export function heldUntilAcked(toId: string, origin: { readonly fromId: string; 
   return row !== 'generic' && row.hold === 'acked';
 }
 
+/** The mail sweep's due list less every delivery the table holds until acked (a report to the Overlord; request ids A), in its
+ *  order: `heldUntilAcked` applied to each row, with no designation read (the report row is never `designatedOnly`). `origins`
+ *  is the store's mail origin read (`CoordStore.mailOrigin`). A row whose mail is not found (`null`) is KEPT, as `heldUntilAcked`
+ *  holds nothing for a null origin: an unknown mail is no report, and the sweep's own ladder then judges it as it judges every
+ *  row. A read that throws is not caught here, so it leaves the sweep as it did when the filter stood in the pass. */
+export function notHeldUntilAcked<T extends { readonly mailId: number; readonly toId: string }>(due: readonly T[],
+  origins: { mailOrigin(mailId: number): { readonly fromId: string; readonly subject: string; readonly toId: string } | null }): T[] {
+  return due.filter((d) => !heldUntilAcked(d.toId, origins.mailOrigin(d.mailId), { kind: 'not-designated' }));
+}
+
 /** The ids of `deliveries` whose mail (found in `mail` by id) the table holds until acked: the stall watch's mail-stuck arm
  *  skips them (`StallSessionInput.heldDeliveryIds`). The report row is never `designatedOnly` (the table's census), so no
  *  designation is read. A delivery whose mail is not in `mail` is not held, as `heldUntilAcked` reads a null origin. */

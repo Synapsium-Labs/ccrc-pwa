@@ -231,7 +231,7 @@ import {
   toRunSummary, type MarkReleaseNotifiedResult,
   type OpenSibling, type RunRow,
 } from './coord/store.js';
-import { fixedLinePushOf, heldDeliveryIdsOf, heldUntilAcked, mailNudgeOf, sweepDesignationOf } from './coord/envelope.js';
+import { fixedLinePushOf, heldDeliveryIdsOf, mailNudgeOf, notHeldUntilAcked, sweepDesignationOf } from './coord/envelope.js';
 import { operatorNudgeFor } from './operatorModel/operatorNudge.js';
 import { finishFixedLineAck, settleNudge } from './operatorModel/nudgeLane.js';
 import { createInboxWakeLane } from './coord/overlordInboxWake.js';
@@ -8613,9 +8613,8 @@ export class FleetWatcher {
     // A row the ceiling rejected above may still sit in `dueBefore`: re-read. A delivery the fixed-line table holds until acked
     // (a report to the Overlord, request ids A) is left out HERE, before the ladder: it is no refusal, so it names no gate, and it
     // gets no gate stamp, no attempt, no wake, no park, nothing typed, and is read again next sweep (ruling call 1937). Its row
-    // is never `designatedOnly` (the table's census), so no designation is read for it.
-    const due = (unacked.length === 0 && !woke && !ceilinged ? dueBefore : store.dueDeliveries(now, MAIL_REPLAY_MS))
-      .filter((d) => !heldUntilAcked(d.toId, store.mailOrigin(d.mailId), { kind: 'not-designated' }));
+    // is never `designatedOnly` (the table's census), so no designation is read for it (`notHeldUntilAcked`, envelope.ts).
+    const due = notHeldUntilAcked(unacked.length === 0 && !woke && !ceilinged ? dueBefore : store.dueDeliveries(now, MAIL_REPLAY_MS), store);
     if (due.length === 0) return;
     // WHO IS COORDINATING SOMETHING LIVE — one read for the whole sweep, for
     // every row in it. The same bargain `hsCache` strikes one field over
