@@ -1246,7 +1246,7 @@ Red first: F1a could not find the stale sentence (the list drew nothing); F1c fo
 | FR3-2 | the "in all" note drawn while stale | F1c |
 | FR3-3 | the sheet does not note the mint | F1b-1 to F1b-4 |
 | FR3-4 | a good read does not clear `known` | F1b-3 (after the case was tightened so the box ended the link before the good read: the first version survived it) |
-| FR3-5 | a row's Revoke that ended does not forget | F1b-1, F1b-4 |
+| FR3-5 | an unlisted row's Revoke that ended does not forget (its `forgetKnown` callback removed) | F1b-1 alone (re-measured 2026-11-28, X5-FU item 5, row FU5-b: 1 of 88 across `artifact-sheet` and `artifact-list`; F1b-4 taps only Revoke all and stays green, review 4153's F3). The listed row's own callback removed reds no case (row FU5-c) |
 | FR3-6 | Revoke all that ended does not forget | F1b-4 |
 | FR3-7 | the sheet's `revokeId` that ended does not forget | F1b-5 |
 | FR3-8 | (an expiry filter's row; the filter was dropped on the round's review, so the row is withdrawn) | — |
@@ -1254,7 +1254,7 @@ Red first: F1a could not find the stale sentence (the list drew nothing); F1c fo
 | FR3-10 | `artifactUnlisted` ignores the scope | its second unit case |
 | FR3-11 | a good read clears every known capability again (`known: []`), not only those noted before it began | F2, both orderings (a list read held across a mint on the stale-pin path and on the offer-narrowed path, the revoke refused, the next read failing): no Revoke for the minted link |
 
-The round's own Opus review found no blocker. Taken: the expiry filter is dropped (the mint's end slides forward with use, and the console's clock is not the box's), so `ArtifactKnown` carries no end; a good read settles only the capabilities noted before it began (FR3-11; red first, both orderings could not find the link's Revoke); the note reads "Made from this console" (a grazed link or a refused revoke was never opened); F1a also asserts the unlisted row's own Revoke. Not taken: deriving `ArtifactKnown` from `ArtifactRow` with `Pick`, which would write the quoted key the archived-expiry guard refuses in console source; and moving the list's "only while stale" branching into one L1 function, which matches the list's existing `rows.length === 0` shape.
+The round's own Opus review found no blocker. Taken: the expiry filter is dropped (the mint's end slides forward with use, and the console's clock is not the box's), so `ArtifactKnown` carries no end; a good read settles only the capabilities noted before it began (FR3-11; red first, both orderings could not find the link's Revoke); the note reads "Made from this console" (a grazed link or a refused revoke was never opened); F1a also asserts the unlisted row's own Revoke. Not taken: deriving `ArtifactKnown` from `ArtifactRow` with `Pick`, because the note is the console's own record of a mint, kept apart from the box's wire row, so a field the row gains or changes is not a field of the note (corrected 2026-11-28, X5-FU item 5, review 4153's F1: the reason first written here, that the `Pick` would write the quoted key the archived-expiry guard refuses in console source, stopped being true once this same round dropped the end from `ArtifactKnown`, since a `Pick` of the four fields it keeps writes no such key, as `listWords.ts`'s own `Pick` already shows); and moving the list's "only while stale" branching into one L1 function, which matches the list's existing `rows.length === 0` shape.
 
 Row FR2-3 above is brought up to this tree (ten cases).
 
@@ -1334,3 +1334,22 @@ Red first: before the first code, the two budget cases and the unit failed (3 of
 The item's Opus review (asked for at high effort; it reported 15, low, in its own context) found nothing critical. Its important finding I1 is fixed above. Its minors were taken: M1, the first-frame test keyed on the bytes sent, so an empty first part would have charged the size twice (now the per-response flag, pinned); M2, the comments of `budgetSpent` and the sink now name what is charged; M3 and M4 are recorded above.
 
 Measured after the item: `artifacts-content` 59, `artifacts-store` 42, `artifacts-policy` 32, `artifacts-bytes` 28.
+
+#### Item 5, `x5-fu-a5-record-nits` (review 4153)
+
+All four are review 4153's advisory findings; no console source changes.
+
+- **F1.** Fix round 3's "Not taken" sentence gave a reason for declining a `Pick`-derived `ArtifactKnown` that stopped being true in that same round (the end was dropped from the note, and a `Pick` of the four fields it keeps writes no quoted end key; `listWords.ts`'s `artifactRevokeLabel` takes exactly that `Pick`). The sentence is corrected in place with a dated note: the `Pick` is still not taken, because the note is the console's own record of a mint, kept apart from the box's wire row.
+- **F2.** `F1b-1` (`pwa/test/artifact-sheet.test.tsx`) now reads the unlisted row's note, "Made from this console; not in the list last read.", written out in the test, in both lists. Red first by mutation, since the note was already drawn: with its `<span>` removed from `UnlistedView` (`ArtifactList.tsx`), `F1b-1` alone goes red (row FU5-a).
+- **F3.** Row FR3-5's red column named `F1b-4`, which taps only Revoke all. Re-measured: with the unlisted row's own `forgetKnown` callback removed, `F1b-1` alone goes red (row FU5-b), and the row now names it. Measured beside it: the listed row's own callback removed reds no case (row FU5-c). That callback forgets a capability the list last read holds; only a good read changes that list, and that read also settles every note taken before it began, so while the note stands the list it is checked against holds the id, and it is never drawn as unlisted. No case can see the callback, so none was added.
+- **F4.** The comment beside the sheet fixture's mint said the shared `MINT`'s end "the list would leave out"; the list has had no expiry filter since fix round 3. The comment now says no list reads the end, and the value only keeps the answer realistic.
+
+| Row | Mutation (`pwa/src/docs/artifact/ArtifactList.tsx`, made and reverted with the edit tools) | Red (`artifact-sheet` and `artifact-list`, 88) |
+|---|---|---|
+| FU5-a | the unlisted row's note `<span>` removed | `sheet: a link minted while its own re-read fails is still listed, and Revoke reaches it (review 4134 F1) > F1b-1: a pointer-down graze on Open spares a capability the list never held: both lists draw it, with its own Revoke, and Revoke ends it` (1 of 88) |
+| FU5-b | the unlisted row's Revoke without `forgetKnown` | the same `F1b-1` (1 of 88) |
+| FU5-c | the listed row's Revoke without `forgetKnown` | none (0 of 88) |
+
+The item's Opus review (asked for at high effort; it reported 15 in its own context) found nothing critical or important. Its minors were taken: the F3 sentence above says "the list last read", not the box's list; the note's sentence is written once in the test, as `UNLISTED` beside `STALE`. Recorded, not changed (outside this item, in the code already): a capability the box lists before its mint answer reaches the console can be revoked from the list before it is noted; the late answer then notes a revoked capability, and if the sheet's re-read after the mint also fails, the stale list draws it as made from this console, with a Revoke that ends nothing, until a good read. The window is a mint answer slower than a list read and a Revoke tap.
+
+Measured after the item: `artifact-sheet` 57, `artifact-list` 31.
