@@ -75,7 +75,8 @@ export function parseRelayBodyCases(m: BodyModule): Record<string, SuiteCase> {
     },
     'an unknown key is refused without naming it, even a prototype key': () => {
       expect(why(validRelay({ extra: 1 }))).toBe('unknown-key');
-      expect(why(JSON.parse(JSON.stringify(validRelay()).replace('{', '{"__proto__":{"x":1},')))).toBe('unknown-key');
+      // JSON.parse makes "__proto__" an own key; the text is built by prefixing, not by a replace
+      expect(why(JSON.parse(`{"__proto__":{"x":1},${JSON.stringify(validRelay()).slice(1)}`))).toBe('unknown-key');
       expect(why(validRelay({ fromId: 'lane-a' }))).toBe('unknown-key');
       // a key refused before any field, so a missing move does not hide it
       expect(why({ ...without(validRelay(), 'move'), constructor: 1 })).toBe('unknown-key');
