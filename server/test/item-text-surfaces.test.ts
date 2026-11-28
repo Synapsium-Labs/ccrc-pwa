@@ -9,7 +9,8 @@ import { CoordStore } from '../src/coord/store.js';
 import { itemPushPayload } from '../src/pushOutbox.js';
 import { itemMailBody, itemMailSubject, tickMail } from '../src/coord/ledgersMail.js';
 import { insertSystemMailTx } from '../src/coord/rundefsTx.js';
-import { registerLedgerCoordinatorRoutes } from '../src/coord/ledgersRoutes.js';
+import { registerLedgerCoordinatorRoutes, waitingViewOf } from '../src/coord/ledgersRoutes.js';
+import { TICK_UNANSWERED_MS } from '../../shared/ledgers.js';
 import { Bus } from '../src/bus.js';
 import { gatherCardFacts, type CardFactsDeps } from '../src/continuity/cardFacts.js';
 import type { ChildMark, ChildReclaimGeneration } from '../../shared/api.js';
@@ -40,6 +41,27 @@ describe('an item title in a summary is plain text', () => {
     const mail = tickMail(item, null);
     expect(mail.ok && mail.subject).toBe(`done: item ${id}: ${RAW}`);
     expect(itemMailBody(item, null)).toContain(RAW);
+  });
+
+  it('the waiting read finds the tick mail of an item with a marked title, so an answered tick never reads stale (fix round 2, F4)', () => {
+    const c = store();
+    c.openRun({ program: 'prog-a', title: 'PROG-A', project: 'project-a', wave: 1, waveOf: 1, claimedBy: 'lane-a' });
+    const id = raiseOn(c, 'prog-a', 'lane-a');
+    // The tick, as the operator's tick route queues it: the subject is the builder's, the raw title in it.
+    c.tickWithMail(id, null, NOW, (item) => insertSystemMailTx(c, null, {
+      fromId: 'operator', toId: 'lane-a', runId: null, kind: 'answer', subject: itemMailSubject(item), body: 'b',
+    }));
+    const delivery = c.db.prepare('SELECT d.id AS id FROM mail_deliveries d JOIN mail m ON d.mailId = m.id WHERE m.subject = ?')
+      .get(`done: item ${id}: ${RAW}`) as { id: number } | undefined;
+    if (delivery === undefined) throw new Error('the tick mail was not queued under the raw-title subject');
+    // The coordinator acknowledged it; the window has long passed. A reader that looked the mail up by any other subject would
+    // find none and call the tick unanswered.
+    c.markAcked(delivery.id, NOW + 1_000);
+    const later = NOW + TICK_UNANSWERED_MS + 60_000;
+    const view = waitingViewOf(c, later, () => 'alive', () => ({ kind: 'unmeasured' }));
+    const row = view.items.find((i) => i.id === id);
+    expect(row?.state).toBe('checking');
+    expect(row?.stale).toBe(false);
   });
 
   it('a tick mail queued with the raw-title subject is still found by both readers (the stale label\'s and the duplicate guard\'s)', () => {

@@ -181,12 +181,16 @@ export const earlierActsWord = (n: number): string => `${n} earlier`;
 /** The accessible name of the folded acts' list (fix round 1 of wave 186, A8). */
 export const EARLIER_HISTORY_WORD = 'Earlier history';
 
-/** A How step's text without a number of its own: a step whose text begins with its own index and a full stop or a bracket
- *  (`1. Open the shell` as step 1) drops that number, since the list draws it (fix round 1 of wave 186, A1). Any other number
- *  is the writer's words and stays. */
-export function stepWithoutOwnNumber(step: string, index: number): string {
-  const m = /^\s*(\d{1,3})[.)]\s+(?=\S)/.exec(step);
-  return m !== null && Number(m[1]) === index + 1 ? step.slice(m[0].length) : step;
+/** The How steps without the numbers they carry themselves, decided for the whole list (fix round 2 of wave 186, F6; round 1's
+ *  A1 decided step by step). Only when EVERY step begins with its own sequence number from 1 and a full stop or a bracket
+ *  (`1. Open the shell`, `2) Run the check`) is each number dropped, since the list draws it; otherwise every step is left as
+ *  written, so an inline enumeration (`1) the server, 2) the agent`) or a step that happens to start with a number keeps it. */
+export function stepsWithoutOwnNumbers(steps: readonly string[]): readonly string[] {
+  const heads = steps.map((step, i) => {
+    const m = /^\s*(\d{1,3})[.)]\s+(?=\S)/.exec(step);
+    return m !== null && Number(m[1]) === i + 1 ? m[0].length : -1;
+  });
+  return heads.every((h) => h > 0) ? steps.map((step, i) => step.slice(heads[i])) : steps;
 }
 
 /** An item's history split for drawing: the earlier acts behind the disclosure (empty when nothing folds) and the acts drawn

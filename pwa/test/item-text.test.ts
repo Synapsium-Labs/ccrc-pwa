@@ -92,7 +92,9 @@ describe('itemPlainLines: the same projection, line by line (fix round 1, F6)', 
 
 describe('itemPlainText: bounded time', () => {
   it('a 20000-character run of stars, brackets, backticks, tildes or "[a](" returns fast', () => {
-    for (const s of ['*'.repeat(20000), '['.repeat(20000), '`'.repeat(20000), '~'.repeat(20000), '[a]('.repeat(5000), ' *x'.repeat(7000), '`a``b```c'.repeat(2200), '<'.repeat(20000), '[['.repeat(10000) + 'a' + '](x)'.repeat(10000)]) {
+    for (const s of ['*'.repeat(20000), '['.repeat(20000), '`'.repeat(20000), '~'.repeat(20000), '[a]('.repeat(5000), ' *x'.repeat(7000), '`a``b```c'.repeat(2200), '<'.repeat(20000), '[['.repeat(10000) + 'a' + '](x)'.repeat(10000),
+      // Fix round 2, F3: openers that all meet one glob or bound closer (the memo of a refused closer keeps these linear).
+      '*a '.repeat(20000) + 'b/*', '*a '.repeat(20000) + 'b*c', '~~a '.repeat(20000) + 'b/~~']) {
       const t = performance.now();
       itemPlainText(s);
       // Linear time is well under this on a loaded box; a quadratic scan of 20000 characters takes seconds.

@@ -42,6 +42,17 @@ only when `linkRuns` reads its whole address as one link. So item text links exa
 
 It never links a `javascript:` or `http:` address, or a document outside the Docs reader (D27, D28).
 
+An outside link says where it goes (fix round 2, F1, the coordinator's rule). A link the policy accepted that leaves the
+console (an absolute `https` address) and whose words are not exactly its own address draws its words as the link, then the
+destination's host in round brackets as plain secondary text outside the anchor and its name: "the runbook (github.com)".
+The host is the address parser's: lower case, a non-ASCII name encoded, a port only when it is not the default. An image
+drawn as its link follows the same rule with its alt text as the words. A console path, a Docs reader path and an item
+reference stay in the console and show none. No list of look-alike spellings is judged: words can say anything ("Approve in
+the console"), so every such link shows its host. The link step marks an anchor whose words are its own address
+(`TEXT_SELF_ATTR`); the item's anchor (`WithHost`, `markdown.tsx`) draws the host after any other. The transcript and the Docs
+reader do not run it, and the summary projection never carries the host. The policy also refuses an address with a userinfo
+part (`https://github.com@evil.example/`), which reads as one host and opens another (F9).
+
 ### Old prose (the guard)
 
 The guard is `pwa/src/lib/remarkItemGuard.ts`, and it runs in the item profile only. These shapes are measured in
@@ -84,8 +95,9 @@ untouched, and one case feeds the same text to both renderers.
 
 ### The copy block
 
-The transcript's `CodeBlock` gains one word, `Copy failed`. It shows for 1.6 s when the page has no clipboard or the browser
-refuses the write, beside `Copy` and `Copied`, where those words already live. Copy copies the block's text exactly. The
+The transcript's `CodeBlock` gains one word, `Copy failed`. The Docs reader's code blocks share that component
+(`pwa/src/docs/DocsLeaf.tsx`), so the word shows there too (fix round 2, F5). It shows for 1.6 s when the page has no clipboard
+or the browser refuses the write, beside `Copy` and `Copied`, where those words already live; before, nothing showed. Copy copies the block's text exactly. The
 control is a native button, so it is reachable by keyboard and has its focus ring. The `pre` scrolls inside its own box.
 
 ### The prose class
@@ -203,9 +215,9 @@ Each finding was fixed with its case red first; the cases name the finding.
 | F4 the tick mail subject was projected | the subject is main's, byte for byte | `item-text-surfaces.test.ts` "the tick mail subject is main's …" and "a tick mail queued with the raw-title subject is still found by both readers" (both red on the projected subject) |
 | F5 no client summary surface went red without its projection | one jsdom case per surface | `item-summary-surfaces.test.tsx` S1 to S6; each projection call replaced by the raw value reds its own case |
 | F6 an action item's why showed raw marks in the row | `itemPlainLines` (`shared/itemText.ts`): each line projected, joined by a newline | `item-summary-surfaces.test.tsx` "S2b …" and `item-text.test.ts` "itemPlainLines: …" |
-| F7 the page and the projection had drifted | no single-tilde strikethrough in the item profile; the projection reads a paragraph as one text, takes a mail address in angle brackets, keeps an escape, and pairs the nearest closing run as the page does | `item-parity.test.tsx`: one corpus fed to both, 20 texts alike; three expected differences held, each with its reason (a two-line list, a table, a setext heading). The corpus found a fourth drift the review did not name: the projection skipped a bound closing run (`*b*c`) and paired a later one |
+| F7 the page and the projection had drifted | no single-tilde strikethrough in the item profile; the projection reads a paragraph as one text, takes a mail address in angle brackets, keeps an escape, and pairs the nearest closing run as the page does | `item-parity.test.tsx`: one corpus fed to both, 20 texts alike; the listed differences held, each with its reason and both sides' text pinned (a two-line list, a table, a setext heading; round 2 adds a task item, a thematic break, a line-end backslash and the A3 rewrite). The corpus found a fourth drift the review did not name: the projection skipped a bound closing run (`*b*c`) and paired a later one |
 | F8 a saved copy's line left the item's edge in Refined | the item route's list wrappers (`.wl-route > .wl`) take the item's measure | `item-reading.browser.test.ts` "F8 at 1280/1440/2000" in both skins: red in Refined by 32, 100 and 128 px, green in Instrument before and after |
-| A1 a step that numbers itself read "1. 1." | a step whose text begins with its own index and `.` or `)` drops it (`stepWithoutOwnNumber`, `ledgerWords.ts`); any other number stays | `item-view.test.tsx` "A1: …" |
+| A1 a step that numbers itself read "1. 1." | decided for the whole list in round 2 (F6): only when every step begins with its own sequence number from 1 and `.` or `)` is each number dropped (`stepsWithoutOwnNumbers`, `ledgerWords.ts`); otherwise every step stays as written | `item-view.test.tsx` "A1: …" and the two F6 cases |
 | A2 an escape and a character reference were decoded | the guard puts such a text back to its source (`asWritten`, `remarkItemGuard.ts`); the parser still reads an escaped mark as no mark. The projection keeps both too | `item-markdown.test.tsx` old-prose rows (A2), the parity corpus, `item-text.test.ts` |
 | A3 (the half that matters) a link whose words are another address | words that read as an address or a path, other than the link's own, are drawn as where it opens | `item-markdown.test.tsx` "a link whose words are an address or a path …" |
 | A4 a footnote leaked chrome | footnotes off in the item profile, and reference definitions too (with footnotes off, `[^1]: x` would otherwise parse as a definition and vanish) | `item-markdown.test.tsx` "a footnote is its words …" and the old-prose row for a definition |
@@ -217,8 +229,29 @@ The reviewer's P1 third address, `https://github.com/o/r/blob/main/x.md`, is an 
 rule (D28 refuses a path through a Docs section), so once walked it is judged a link like any other; the case uses a section
 path, which D28 refuses.
 
+## Fix round 2 (review 4219)
+
+Narrow, as ruled: one rule and five small items, each with its case red first.
+
+| finding | the fix | the case, and what was red |
+|---|---|---|
+| F1 round 1's A3 fell to other spellings | the coordinator's rule (see Links): every outside link whose words are not its own address shows its host after it | `item-view.test.tsx` "fix round 2: an outside link says where it goes": one case per spelling (code, bold, a trailing bold mark, an image's alt, a bare domain, an address inside a phrase, a no-break space, a full-width solidus, "Approve in the console"), an ordinary worded link, the own-address cases, the console, Docs and item links with no host, the encoded non-ASCII host and ports, a title, and one property case over a corpus of spellings. 12 were red before; the full-width solidus was already caught by A3's rewrite. With the host taken out, 13 cases go red. `item-reading.browser.test.ts` "F1 at 390", both skins: the host is one line, outside the anchor and its name, no sideways scroll (red with the host taken out) |
+| F9 an address with a userinfo part | `linkOf` refuses it (`ledgerLinks.ts`) | "F9: an address with a userinfo part is refused" |
+| F2 the parity case listed three differences | four more listed, each with its reason; both sides' text pinned; a line break counts as a space in the page's words; the page is read without the host | `item-parity.test.tsx`, the listed differences |
+| F3 the projection's memo had no case | three glob- and bound-closer inputs in the bounded-time case | `item-text.test.ts`: with the memo removed it takes about 4 s, against 250 ms |
+| F4 the stale label's reader had no case | the waiting read, over an item with a marked title whose tick mail was answered, reads it not stale | `item-text-surfaces.test.ts` "the waiting read finds the tick mail …": red when that reader projects the title |
+| F6 A1 was too eager | decided for the whole list | the two F6 cases (an inline enumeration, one step numbering itself) and A1's shape |
+| F5 the `Copy failed` word reaches the Docs reader | named in the note (The copy block) | none: words only |
+
+The old case "a Markdown link or image links only what plain item text would" now reads its one outside link's host after its
+words. No after picture holds an outside link, so none was re-taken.
+
 ## Follow-ups (not this wave)
 
+- The coordinator's, from review 4219 (one ticket): F7 (the recommendation's why as a radio group's description carries a
+  copy block's bar words), F8 (a table cell's escaped pipe shows its backslash), F10 (the long-text path with a splitter is
+  untested), F11 (two footnote constructs are redundant), F12 (the migration note's edge is not measured). F13 is ruled not
+  this PR's.
 - The coordinator's, from review 4189: A5 (the bounded-time case counts wall time), A6 (tables, setext underlines and
   the like still show marks in a summary), A10 (a CRLF block copies its `\r`), the other half of A3 (a link whose words
   imitate a control), and keying the tick mail's lookup by its subject's head.

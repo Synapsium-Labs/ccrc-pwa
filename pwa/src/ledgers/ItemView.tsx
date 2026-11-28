@@ -72,7 +72,7 @@ import { AccountHoldClear } from '../overlord/AccountHoldClear';
 import { holdLaneOfItem } from '../overlord/overlordSettingsWords';
 import {
   ageWords, CAME_BACK_WHY_WORD, cameBackNote, closedItemWords, EARLIER_HISTORY_WORD, earlierActsWord, historyFold, itemNumber,
-  itemPills, KIND_WORD, NOT_CURRENT_ACTS_WORD, RECOMMENDED_WORD, RECOMMENDED_WHY_HEADING, stepWithoutOwnNumber,
+  itemPills, KIND_WORD, NOT_CURRENT_ACTS_WORD, RECOMMENDED_WORD, RECOMMENDED_WHY_HEADING, stepsWithoutOwnNumbers,
 } from './ledgerWords';
 import './ledgers.css';
 
@@ -626,7 +626,7 @@ export function ItemView({ item, onTick, onDismiss, programmeLive, now, programm
           {item.how.length > 0 && (
             <section>
               <h3 className="wi-h">How</h3>
-              <ol className="wi-steps" aria-label="How">{item.how.map((s, i) => <li key={`${i}:${s}`}><ItemText text={stepWithoutOwnNumber(s, i)} links={links} /></li>)}</ol>
+              <ol className="wi-steps" aria-label="How">{stepsWithoutOwnNumbers(item.how).map((s, i) => <li key={`${i}:${s}`}><ItemText text={s} links={links} /></li>)}</ol>
             </section>
           )}
           {migration !== undefined && (item.action?.verb === 'linear-map' || item.action?.verb === 'linear-report') && (
