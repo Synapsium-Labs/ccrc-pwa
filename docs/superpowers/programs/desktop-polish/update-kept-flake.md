@@ -58,12 +58,13 @@ the file took 193 s once (120 of 120), the box busier then.
 | F real-directory box | 49 ms | 46–49 ms |
 | The original case, same box | 4570 ms in the whole file; 4903 ms and 4845 ms alone | |
 
-No arm reaches half the bound (10 s) here, so ruling 2's report did not apply.
+No arm reaches half the bound (10 s) here. The brief asked for a report to the coordinator, before anything else, if one
+did; none was owed.
 
 **The ratio, said plainly.** Arm E is about three quarters of the original: 3406 of 4570 ms (75 %), and 3681 of 4903 ms
 (75 %) alone. Its cost is the real full update `onKeptV1` makes before the rollback (migration, placement and spine,
-all this tree's code). If the slow runner keeps that share, arm E lands near 15.6 s there (0.75 × 20.9 s), about 78 % of
-its 20 s bound. The other five arms together are about 0.7 s here, roughly 3 s on that runner. So the split takes the
+all this tree's code). If the slow runner keeps that share, arm E lands near 15.6 s there, about 78 % of
+its 20 s bound (3406 / 4570 × 20.9 s). The other five arms together are 0.7–0.9 s here, roughly 3–4 s on that runner. So the split takes the
 other five arms out of reach, but arm E keeps about three quarters of the old case's time. Its margin on the slowest hosted runner is about 4 s, not
 the 15 s or more the rest get.
 
@@ -90,7 +91,8 @@ With no mutant, all seven cases passed in the same scratch tree.
 caught by neither the original nor the split. With the return gone, the verb dies on `BOX_BUILD[0]: unbound variable`
 before it reaches the refusal, at exit 1. The arm asserts only that the refusal sentence is absent, and a crash
 satisfies that. The `set +u` mutant in the table is the nearest edit the arm does catch: it lets the run go on with an
-unparsed stamp, and that run then refuses. No assertion was added (ruling 4). An exit-code assertion in arm D would
+unparsed stamp, and that run then refuses. No assertion was added: the brief said to report an arm that catches nothing,
+never to invent an assertion for it. An exit-code assertion in arm D would
 close the gap and is the coordinator's to rule on.
 
 **Arm E's distinct catch is in the update, not the check.** On the rollback check itself, arm E fails only where arm A
