@@ -79,6 +79,7 @@ import { PROGRAMME_HEALTH_MUTANT_SETS } from './programmeHealthSets.js';
 import { WITNESS_MUTANT_SETS } from './witnessSets.js';
 import { ISOLATION_MUTANT_SETS } from './isolationSets.js';
 import { CHAT_MUTANT_SETS } from './chatSets.js';
+import { REPLY_MUTANT_SETS } from './replySets.js';
 import { REQUEST_MUTANT_SETS } from './requestSets.js';
 import { ACT_ROWS_MUTANT_SETS } from './overlordActsSets.js';
 import { simulate } from './run.js';
@@ -324,6 +325,7 @@ const MUTANT_SETS: Record<string, MutantSet<never>> = {
   ...WITNESS_MUTANT_SETS,
   ...ISOLATION_MUTANT_SETS,
   ...CHAT_MUTANT_SETS,
+  ...REPLY_MUTANT_SETS,
   ...ACCOUNT_LOAD_MUTANT_SETS,
   ...REQUEST_MUTANT_SETS,
   ...ACT_ROWS_MUTANT_SETS,

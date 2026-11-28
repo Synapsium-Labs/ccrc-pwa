@@ -28,8 +28,10 @@ import { OVERLORD_DOORS } from '../src/coord/overlordDoors.js';
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const SRC = path.join(REPO, 'server', 'src');
 const STORE_DIR = 'server/src/operatorModel/';
-const TEXT_READERS = new Set(['messageById', 'unsettledMessages', 'settledRows', 'unnudged', 'messagesPage']);
-const PRIVATE_TABLES = /\b(?:operator_messages|read_ledger)\b/;
+// The chat's PR B adds the Overlord's replies: `repliesPage` and `repliesSince` return a reply's words (the Overlord's words about the
+// operator's affairs, under the same rule), and `overlord_replies` is a private table.
+const TEXT_READERS = new Set(['messageById', 'unsettledMessages', 'settledRows', 'unnudged', 'messagesPage', 'repliesPage', 'repliesSince']);
+const PRIVATE_TABLES = /\b(?:operator_messages|read_ledger|overlord_replies)\b/;
 const VERBS = new Set(['get', 'post', 'put', 'delete']);
 
 /** The hand-kept operator doors (`METHOD path`, each with the file that registers it and its reason) that may read text: the

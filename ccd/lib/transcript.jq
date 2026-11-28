@@ -8,7 +8,9 @@
 # banner, as `_transcript_limit_banner` answers it), `agent_end` (how a background agent's transcript tail ends: `finished`,
 # `open`, `rate-limit [<resetsAt>]` or `none`, for the restart manifest's program, D-8368); and, for ccd/session-hook.sh's
 # roster-card wake arm (R-5a, D-8201), `idle_compaction_open` (whether the newest
-# compaction is an idle one with no turn since). Everything else is a
+# compaction is an idle one with no turn since), and, for the same hook's main-turn Stop reply report (Overlord W1 chat,
+# PR B), `turn_reply($w; $k)` (the reply of the turn a raw tail window ends in, after the last reported key, `{entryUuid, text}` or nothing) and
+# `reply_report` (its report body, the text cut at a code point). Everything else is a
 # helper. A named jq argument (`--arg u`) is not visible inside a module, so
 # the uuid travels as a parameter.
 #
@@ -396,3 +398,86 @@ def loads_body($o; $x; $id; $rid; $lp; $rc; $ver; $wd; $cf; $at):
             hooks: (if $o.hookCmds == "unmeasured" or ($x[$n:] | sl_every(bad | not) | not) then "unmeasured" else $x[$n:] | sort end),
             skills: $o.skills, agents: $o.agents, tools: $o.tools, toolServers: $o.toolServers}}
   + (if $cf != "" and $o.carried == true then {carriedFrom: $cf} else {} end);
+
+# THE REPLY OF THE TURN A WINDOW ENDS IN (Overlord W1 chat, PR B; plan w1-chat.md Task 5, slug a-reply-is-a-turns-text). The session hook's main-turn `Stop` arm hands `turn_reply` the last REPLY_READ_MAX_BYTES
+# of the transcript, as a string (the parameter is how it travels: a named `--arg` is not visible inside a module), and reports
+# what it answers: ONE object `{entryUuid, text}`, or nothing.
+#   * The window's first line may be cut: every line is parsed alone (`turn_row`, each parse's `try` inside its own array
+#     constructor, the jq 1.6 rule above) and a line that does not parse, or parses to anything but an object, is stepped over.
+#     A line with a lone surrogate escape is read through `unsurrogate` as everywhere in this module, which rewrites that
+#     line's surrogate escapes (a valid pair on that one line too), so such a row's emoji read as other characters: rare, and
+#     the reply is the Overlord's own text, not a decision.
+#   * Sidechain rows (`isSidechain == true`) are no part of the main thread's turn: they neither open it nor key it nor
+#     add text. Rows that are neither user nor assistant are stepped over.
+#   * A REPLY IS ONE TURN'S TEXT (review 4173 F1, call 1952): `$k` is the key of the reply the hook last reported for this session
+#     (`$REG/<id>.replykey`, "" when none is kept). When a main-thread row of the window bears it, THE TURN begins right after that
+#     row, whatever opened the turn: a background-task notice or a typed command (neither is a prompt) after a reported Stop takes
+#     in nothing of the reported reply, and a prompt the model took in the middle of a turn does not move the start, so the turn's
+#     earlier text is still reported. The row is found from the end by the same tail recursion. A key the window does not hold
+#     (the window has moved past it, or it is another transcript's) or no key falls back to the rule below.
+#   * Failing that, THE TURN begins after the newest main-thread user row that is a real prompt, by this module's own `prompt` (the one
+#     definition the continuation reader uses: not a tool result, not meta, not a compact summary, not a slash command's
+#     echo, a leading tag or an interruption notice). It is found from the end, by a tail recursion that stops at the first
+#     hit (no `first`, `limit` or `label`, the jq 1.6 rule above), so a window of large tool results costs one pass.
+#     A WINDOW WITH NO PROMPT ANSWERS NOTHING: its assistant rows may be the tail of a turn that began before the window
+#     (the cut ate its prompt), and sending them as "the reply" would hand the Overlord's chat half of a reply, or an
+#     earlier turn's, under this turn's key. A prompt with no assistant row after it answers nothing, as does a turn with
+#     no text.
+#   * An API ERROR ROW (`isApiErrorMessage == true`) is Claude Code's own notice, not the Overlord's words, so it is stepped over
+#     as `complete` steps over it: its text is no part of the reply and it never keys one. A turn whose assistant rows are all
+#     error rows answers nothing.
+#   * THE TEXT is the `text` blocks of every main-thread assistant row after the prompt, in order (a plain-string content
+#     counts as one), joined by one blank line; a block that is only whitespace (`jsws`) is not text. Thinking, redacted
+#     thinking, tool input and tool output (a tool result is a user row) are never in it. One turn is many rows, as Claude
+#     Code writes one row per content block, so a turn of text, a tool call and more text is two blocks, not one.
+#   * THE KEY, `entryUuid`, is the uuid of the turn's LAST main-thread assistant row that is not an API error row, whether or not that row has text, in
+#     the 36-character lower-case shape `continued_in` reads (a row with no such uuid answers nothing, as nothing could key it).
+#   * THE ANSWERED IDS (review 4173 F2, call 1953): `answers` are the operator-message ids the turn's own prompt rows name, each line
+#     of each main-thread user row from the turn's start that is a real prompt (`prompt`) read by `nudge`, the picked-up arm's one
+#     grammar, ascending and without repeats. A tool result is never a prompt, so a message's text the Overlord read through its door
+#     names nothing. A line the operator typed or pasted that is shaped like the nudge does name its id: the server verifies each id
+#     (this session's, readable) and links only a verified one, so the worst such a line can do is make the reply more private or link
+#     it to another of the session's own messages. Past `reply_answers_max` (a copy of REPLY_ANSWERS_MAX) the newest are sent with
+#     `answersCut: true`, and the server records that reply off the record.
+# `reply_cut($max)` cuts a string to at most `$max` UTF-8 bytes at a code point, never mid-character, and says whether it did;
+# `reply_report($w; $k; $id; $turnAt; $at; $max)` is the report's body over a window: the `reply` kind's six fields and `fromId`.
+# It carries no `fromUuid`: the hook adds the event's own session id at each send (`_hook_reply_send`), so a body spooled before the
+# registry's uuid moved is sent under the current one (review 4173 F3). `droppedBefore` is the hook's spool's to add, never this body's.
+# THE OPERATOR-MESSAGE NUDGE LINE (moved here from the session hook's `DOOR_NUDGE_JQ` by chat PR B's fix round 1, call 1953, so the
+# hook's picked-up arm and the reply's answered ids read ONE grammar; its digit test is spelled without `all`, which this module
+# never uses (continued-in-parity.test.ts, D-4940), and answers as the hook's did): a string that is EXACTLY
+# `renderOperatorMessageNudge` (server/src/coord/envelope.ts) answers its message id as a number, a canonical positive safe integer;
+# anything else answers nothing. session-hook-door-reports.test.ts holds it to the renderer, character by character.
+def nudge: "ccrc-mail: you have new mail. Operator message " as $h | ": read it with your messages door." as $t | if startswith($h) and endswith($t) and length > ($h | length) + ($t | length) then .[($h | length):-($t | length)] | select((length <= 15 or (length == 16 and . <= "9007199254740991")) and (explode | [.[] | select(. < 48 or . > 57)] == [] and .[0] != 48)) | tonumber else empty end;
+def tr_isuuid: type == "string" and length == 36 and ([explode[] | select((. == 45 or (. >= 48 and . <= 57) or (. >= 97 and . <= 102)) | not)] == []);
+def tr_nonblank: explode as $c | def f($i): if $i >= ($c | length) then false elif ($c[$i] | jsws) then f($i + 1) else true end; f(0);
+def tr_rows($w): [$w | split("\n")[] | select(length > 0) | [turn_row] | .[]
+  | select(type == "object" and .isSidechain != true and (.type == "user" or .type == "assistant"))];
+def tr_find($rows; $i): if $i < 0 then null elif $rows[$i].type == "user" and ($rows[$i] | prompt) then $i else tr_find($rows; $i - 1) end;
+def tr_key($rows; $k; $i): if $k == "" or $i < 0 then null elif $rows[$i].uuid == $k then $i else tr_key($rows; $k; $i - 1) end;
+def tr_texts: (.message | if type == "object" then .content else null end) as $c
+  | if ($c | type) == "string" then [$c]
+    elif ($c | type) == "array" then [$c[] | select(type == "object" and .type == "text" and (.text | type) == "string") | .text]
+    else [] end;
+def tr_turn($w; $k):
+  tr_rows($w) as $rows
+  | (tr_key($rows; $k; ($rows | length) - 1) // tr_find($rows; ($rows | length) - 1)) as $p
+  | if $p == null then empty
+    else [$rows[$p + 1:][] | select(.type == "assistant" and .isApiErrorMessage != true)] as $a
+    | if ($a | length) == 0 or ($a[-1].uuid | tr_isuuid | not) then empty
+      else [$a[] | tr_texts[] | select(tr_nonblank)] as $t
+      | if $t == [] then empty
+        else {entryUuid: $a[-1].uuid, text: ($t | join("\n\n")),
+              answers: ([$rows[$p:][] | select(.type == "user" and prompt) | tr_texts[] | split("\n")[] | nudge] | unique)} end
+      end
+    end;
+def turn_reply($w; $k): tr_turn($w; $k) | {entryUuid, text};
+def reply_cut($max): if utf8bytelength <= $max then {text: ., truncated: false}
+  else (.[:$max] | explode) as $c
+  | [foreach $c[] as $x (0; . + (if $x < 128 then 1 elif $x < 2048 then 2 elif $x < 65536 then 3 else 4 end); .)] as $s
+  | {text: ($c[:([$s[] | select(. <= $max)] | length)] | implode), truncated: true} end;
+def reply_answers_max: 64;
+def reply_report($w; $k; $id; $turnAt; $at; $max):
+  tr_turn($w; $k) | (.text | reply_cut($max)) as $c
+  | {kind: "reply", entryUuid, turnAt: $turnAt, text: $c.text, truncated: $c.truncated, answers: .answers[-reply_answers_max:]}
+  + (if (.answers | length) > reply_answers_max then {answersCut: true} else {} end) + {fromId: $id, at: $at};

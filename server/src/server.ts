@@ -77,6 +77,7 @@ import { registerNameListRoutes } from './operatorModel/nameListRoutes.js';
 import { promptTargetVerdict, type PromptTargetVerdict } from './operatorModel/messages.js';
 import { NO_DESIGNATION, promptRecheck, recordOperatorPrompt } from './operatorModel/promptRecord.js';
 import { moveOperatorMessage } from './operatorModel/messageLine.js';
+import { insertReplyResponse, replyResponsesFor } from './coord/responsesStore.js';
 import { readOperatorSecretMeta } from './coord/ledgersSecrets.js';
 import { coordinatorPresenceIn, type WaitingView } from '../../shared/ledgers.js';
 import { attributionVerdict } from './coord/attribution.js';
@@ -2427,6 +2428,10 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
       // The pick-up's move and its sequence line, in one synchronous segment (call 1218).
       pickUp: (m, at) => deps.operatorModel === undefined ? { ok: false, error: 'not-open', detail: 'no private store' }
         : moveOperatorMessage({ store: deps.operatorModel, coordDb: deps.coord?.db, warn: (l) => { console.warn(l); } }, m, 'pick-up', 'hook', at) },
+    // The reply report (Overlord W1 chat, PR B): the record in the private store, then its response row in coord.db.
+    replies: { designation: () => deps.coord?.designationRead() ?? { kind: 'unmeasured', why: 'no coordination store' }, mask: (t) => (deps.masker ?? SHAPE_ONLY_MASKER).maskText(t),
+      record: (r) => deps.operatorModel?.recordReply(r) ?? { ok: false, error: 'not-open', detail: 'no private store' },
+      respond: (rid, at) => (deps.coord === undefined || deps.responseStamp === undefined ? { inserted: false } : insertReplyResponse(deps.coord.db, rid, deps.responseStamp(), at)) },
     attribute: (id, uuid) => attributionVerdict(deps.io, deps.cfg, id, uuid, 'fromUuid'),
     attributeReader: (id, uuid) => attributionVerdict(deps.io, deps.cfg, id, uuid, 'byUuid'),
     // The card's registry reads (the row's child mark, or that the registry could not say; its incarnation) and declared
@@ -2571,6 +2576,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     chat: { readRunner, messages: deps.operatorModel,
       generationsOf: (i) => (deps.coord === undefined ? { ok: false, detail: 'no coordination store' } : generationsOf(deps.coord.db, i)),
       readinessChanges: (s, u) => deps.coord?.readinessChanges(s, u) ?? { ok: false, detail: 'no coordination store' },
+      replyResponses: (ids) => (deps.coord === undefined ? { ok: false, detail: 'no coordination store' } : replyResponsesFor(deps.coord.db, ids)),
       links: () => (deps.fleetState === undefined ? [] : [deps.fleetState]), io: deps.io },
     invariants: deps.invariantMonitor === undefined || deps.coord === undefined ? undefined : invariantsReadOver(deps.invariantMonitor, deps.coord.db),
     // Read at call time, as the continuity routes read `deps.time`: a test server may hand none.

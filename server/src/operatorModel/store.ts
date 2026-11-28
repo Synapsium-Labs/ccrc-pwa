@@ -6,8 +6,9 @@
 //   `moveMessage`, which asks `messageMove` (L1) first and refuses what it refuses;
 // - read-ledger lines are written only by `recordRead`;
 // - the private-name list (`private_name_list`, `private_name_entries`) is written only by `replacePrivateNames`;
-// - the privacy journal is appended only through the issuer `recordMessage` calls inside its transaction (and, from
-//   Task 3, by the store's open, which re-anchors it).
+// - `overlord_replies` rows are inserted only by `recordReply` (Overlord W1 chat, PR B), and never changed after;
+// - the privacy journal is appended only through the issuer `recordMessage` and `recordReply` call inside their transactions
+//   (and, from Task 3, by the store's open, which re-anchors it).
 // No transaction spans `coord.db` and this file: a caller that also writes `coord.db` commits here first.
 import type { DatabaseSync } from 'node:sqlite';
 import os from 'node:os';
@@ -16,9 +17,10 @@ import { isRecordedActor } from '../auth/attributionIdentity.js';
 import type { RecordedActor } from '../auth/callerIdentity.js';
 import { tx } from '../coord/tx.js';
 import {
-  MESSAGE_STATES, READ_DOORS, READ_OUTCOME_MAX_CHARS, READ_SCOPE_MAX_CHARS, isGenerationRead, isMessageState, isReadCaller, isReadDoor,
-  isReadTurnState, isSettledBy,
-  type MessageActor, type MessageEvent, type MessageState, type OperatorMessageRow, type ReadCaller, type ReadDoor, type ReadLine,
+  MESSAGE_STATES, READ_DOORS, READ_OUTCOME_MAX_CHARS, READ_SCOPE_MAX_CHARS, REPLY_ANSWERS_MAX, isGenerationRead, isMessageState, isReadCaller, isReadDoor,
+  isReadTurnState, isSettledBy, replyLinks,
+  type MessageActor, type MessageEvent, type MessageState, type OperatorMessageRow, type OverlordReplyRow, type ReadCaller, type ReadDoor,
+  type ReadLine, type ReplyNamedMessage,
 } from '../../../shared/operatorMessages.js';
 import { capMessageText, messageMove, nextMessageId, sha256Of } from './messages.js';
 import { READ_CEILING_OUTCOME, READ_SERVED_OUTCOME } from '../../../shared/overlordInbox.js';
@@ -87,6 +89,34 @@ export interface MessageRecorded {
   readonly offRecord: boolean;
 }
 
+/** One reply to record, as the report door's `reply` arm states it (Overlord W1 chat, PR B). */
+export interface ReplyRecordInput {
+  /** The server's clock at the record. */
+  readonly at: number;
+  /** The hook's clock at the turn's end. */
+  readonly turnAt: number;
+  readonly sessionId: string;
+  /** The designation's term at the record (`replyTargetVerdict`). */
+  readonly term: number;
+  readonly entryUuid: string;
+  /** Masked by the arm; capped here, with the same cap and mark as a message. */
+  readonly text: string;
+  /** The message ids the turn's own prompt rows name (the report's `answers`, at most REPLY_ANSWERS_MAX; call 1953), and whether
+   *  the hook cut that list. They say what the reply answered once each is verified here. */
+  readonly answers: readonly number[];
+  readonly answersCut: boolean;
+}
+export interface ReplyRecorded {
+  readonly id: number;
+  readonly cut: boolean;
+  readonly inReplyTo: number | null;
+  readonly offRecord: boolean;
+  /** True when this session already recorded this entry: that record is answered, and nothing is written. */
+  readonly replay: boolean;
+  /** The record's own time (the stored row's on a replay), which its response row is stamped with. */
+  readonly at: number;
+}
+
 /** One entry of the uploaded name list as the store holds it: the shape `entryOf` makes (`shared/private-names.mjs`), keyed
  *  hashes and a token count, never a name. */
 export interface NameListEntryRow { readonly h: string; readonly f: string; readonly n: number; readonly mode: NameListMode }
@@ -113,6 +143,25 @@ const revive = (r: RawRow): OperatorMessageRow => ({
   offRecord: r.offRecord === 1,
 });
 
+/** A reply row's columns, named (no `SELECT *`): its session is not among them, because every row is the designated session's of
+ *  its time, as a message row is. */
+const REPLY_COLUMNS = 'id, at, turnAt, term, entryUuid, text, cut, sha256, inReplyTo, offRecord';
+interface RawReply {
+  id: number; at: number; turnAt: number; term: number; entryUuid: string; text: string; cut: number; sha256: string;
+  inReplyTo: number | null; offRecord: number;
+}
+const reviveReply = (r: RawReply): OverlordReplyRow => ({
+  id: r.id, at: r.at, turnAt: r.turnAt, term: r.term, entryUuid: r.entryUuid, text: r.text, cut: r.cut === 1, sha256: r.sha256,
+  inReplyTo: r.inReplyTo, offRecord: r.offRecord === 1,
+});
+
+/** The store's highest ISSUED id, over messages and replies (Overlord W1 chat, PR B; the coordinator's ruling, call 1888, slug
+ *  `reply-ids-ride-the-one-id-sequence`): a reply takes its id from the privacy journal's one issued-id sequence, recorded with the
+ *  journal's existing `privacy-message-issued` record, so the journal's grammar gains no kind and a server below PR B reads a journal
+ *  holding reply issues as it reads a crash between an append and a commit: coherent, the next id above its highest. Both writers'
+ *  next id and the open's coherence read this one statement, so an id names exactly one row of the private store. Ids are not
+ *  dense in either table; nothing may assume they are. */
+const HIGHEST_ISSUED_SQL = 'SELECT max(m) AS m FROM (SELECT max(id) AS m FROM operator_messages UNION ALL SELECT max(id) AS m FROM overlord_replies)';
 /** What the citing door learns of one message (RQ19): never a field that carries text. */
 export interface CitedMessageFacts {
   readonly state: MessageState | 'unknown'; readonly at: number; readonly sha256: string; readonly hashMatches: boolean;
@@ -173,7 +222,7 @@ export class OperatorModelStore {
           throw new StoreStop({ error: 'journal-unreadable', detail: `${this.privacy.code}: ${this.privacy.detail}` });
         }
         if (!this.db.isTransaction) throw new Error('OperatorModelStore: the privacy record must be appended inside the insert\'s transaction');
-        const highest = (this.db.prepare('SELECT max(id) AS m FROM operator_messages').get() as { m: number | null }).m;
+        const highest = (this.db.prepare(HIGHEST_ISSUED_SQL).get() as { m: number | null }).m;
         const witnessed = this.witnessedIds?.witnessHighestIds();
         const floor = witnessed === undefined || witnessed === 'unmeasured' || witnessed.message === null
           ? highest : Math.max(highest ?? 0, witnessed.message);
@@ -186,6 +235,70 @@ export class OperatorModelStore {
         ).run(issued.id, m.at, m.sessionId, m.term, m.actor.subject, capped.sha256, m.composedKey, capped.text, capped.cut ? 1 : 0,
           state, m.mark ? m.at : null, m.mark ? 'mark' : null, m.offRecord ? 1 : 0);
         return { ok: true, value: { id: issued.id, cut: capped.cut, state, replay: false, offRecord: m.offRecord } };
+      });
+    } catch (err) {
+      if (err instanceof StoreStop) return { ok: false, ...err.answer };
+      return { ok: false, error: 'write-failed', detail: message(err) };
+    }
+  }
+
+  /** The one writer of `overlord_replies` (Overlord W1 chat, PR B): one row a turn, keyed by `(sessionId, entryUuid)`. A key
+   *  this session already recorded answers that record (`replay`) and writes nothing; the same key with other text refuses
+   *  `entry-reused`. Otherwise the text is capped by the one cutter, the id is issued by the privacy journal inside this
+   *  transaction, before the row, from the one issued-id sequence and with its one record (`HIGHEST_ISSUED_SQL`; no words), and
+   *  `replyLinks` says what the turn answered (review 4173 F2, call 1953): the ids the turn's own prompts name, each verified here
+   *  (it exists, is this session's, its off-the-record fact reads 0 or 1), and, only to widen off the record, the messages this
+   *  session picked up after its previous reply's record and at or before this one, both on this server's clock. A mistake falls
+   *  toward off the record. A refusal's detail never names the text. */
+  recordReply(r: ReplyRecordInput): StoreWrite<ReplyRecorded> {
+    if (typeof r.sessionId !== 'string' || !r.sessionId) return { ok: false, error: 'refused', detail: 'sessionId: empty' };
+    if (typeof r.entryUuid !== 'string' || !r.entryUuid) return { ok: false, error: 'refused', detail: 'entryUuid: empty' };
+    if (!isCount(r.term)) return { ok: false, error: 'refused', detail: 'term: not a non-negative safe integer' };
+    if (!isCount(r.at) || !isCount(r.turnAt)) return { ok: false, error: 'refused', detail: 'at and turnAt: non-negative safe integers' };
+    if (typeof r.text !== 'string' || r.text === '') return { ok: false, error: 'refused', detail: 'text: empty' };
+    if (!Array.isArray(r.answers) || r.answers.length > REPLY_ANSWERS_MAX || !r.answers.every((x) => Number.isSafeInteger(x) && x > 0)) {
+      return { ok: false, error: 'refused', detail: `answers: at most ${REPLY_ANSWERS_MAX} positive safe integers` };
+    }
+    if (typeof r.answersCut !== 'boolean') return { ok: false, error: 'refused', detail: 'answersCut: not a boolean' };
+    if (!this.db.isOpen) return { ok: false, error: 'not-open', detail: 'the private store is not open' };
+    const capped = capMessageText(r.text);
+    try {
+      return tx(this.db, (): StoreWrite<ReplyRecorded> => {
+        const prior = this.db.prepare('SELECT id, at, cut, sha256, inReplyTo, offRecord FROM overlord_replies WHERE sessionId = ? AND entryUuid = ?')
+          .get(r.sessionId, r.entryUuid) as { id: number; at: number; cut: number; sha256: string; inReplyTo: number | null; offRecord: number } | undefined;
+        if (prior !== undefined) {
+          if (prior.sha256 !== capped.sha256) throw new StoreStop({ error: 'refused', detail: 'entry-reused' });
+          return { ok: true, value: { id: prior.id, cut: prior.cut === 1, inReplyTo: prior.inReplyTo, offRecord: prior.offRecord === 1, replay: true, at: prior.at } };
+        }
+        if (this.privacy.kind === 'refused') {
+          throw new StoreStop({ error: 'journal-unreadable', detail: `${this.privacy.code}: ${this.privacy.detail}` });
+        }
+        if (!this.db.isTransaction) throw new Error('OperatorModelStore: the privacy record must be appended inside the insert\'s transaction');
+        // The one issued-id sequence (`HIGHEST_ISSUED_SQL`), with the witness's floor as `recordMessage` reads it.
+        const highest = (this.db.prepare(HIGHEST_ISSUED_SQL).get() as { m: number | null }).m;
+        const witnessed = this.witnessedIds?.witnessHighestIds();
+        const floor = witnessed === undefined || witnessed === 'unmeasured' || witnessed.message === null
+          ? highest : Math.max(highest ?? 0, witnessed.message);
+        const issued = this.privacy.issue(floor, r.at);
+        if (!issued.ok) throw new StoreStop({ error: issued.error, detail: issued.detail });
+        const previous = (this.db.prepare('SELECT max(at) AS a FROM overlord_replies WHERE sessionId = ?').get(r.sessionId) as { a: number | null }).a;
+        const answered = this.db.prepare('SELECT id, offRecord FROM operator_messages WHERE sessionId = ? AND pickedUpAt IS NOT NULL '
+          + 'AND pickedUpAt > ? AND pickedUpAt <= ? ORDER BY id').all(r.sessionId, previous ?? -1, r.at) as { id: number; offRecord: number }[];
+        // What the turn's own prompts name: each id verified before it is used (this session's, readable), else `unverified`, which
+        // makes the reply off the record and is never linked (call 1953 condition 1). An off-the-record fact that reads neither 0 nor
+        // 1 counts as off, in the window too.
+        const one = this.db.prepare('SELECT sessionId, offRecord FROM operator_messages WHERE id = ?');
+        const named = r.answers.map((id): ReplyNamedMessage => {
+          const row = one.get(id) as { sessionId: unknown; offRecord: unknown } | undefined;
+          return { id, verdict: row === undefined || row.sessionId !== r.sessionId ? 'unverified'
+            : row.offRecord === 0 ? 'on' : row.offRecord === 1 ? 'off' : 'unverified' };
+        });
+        const links = replyLinks(named, answered.map((m) => ({ id: m.id, offRecord: m.offRecord !== 0 })), r.answersCut);
+        this.db.prepare('INSERT INTO overlord_replies (id, at, turnAt, sessionId, term, entryUuid, sha256, text, cut, inReplyTo, offRecord) '
+          + 'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
+          .run(issued.id, r.at, r.turnAt, r.sessionId, r.term, r.entryUuid, capped.sha256, capped.text, capped.cut ? 1 : 0,
+            links.inReplyTo, links.offRecord ? 1 : 0);
+        return { ok: true, value: { id: issued.id, cut: capped.cut, inReplyTo: links.inReplyTo, offRecord: links.offRecord, replay: false, at: r.at } };
       });
     } catch (err) {
       if (err instanceof StoreStop) return { ok: false, ...err.answer };
@@ -365,6 +478,35 @@ export class OperatorModelStore {
       const more = newest.length > limit;
       return { rows: newest.slice(0, limit).reverse().map(revive), more };
     });
+  }
+
+  /** One page of the Overlord's replies (Overlord W1 chat, PR B), as `messagesPage` pages the messages: the newest `limit` rows
+   *  with an id below `beforeId` (every row when null), OLDEST FIRST, `more` exactly when an older one exists. A bad argument is
+   *  `unmeasured`, never a short page. A WORDS reader, called by the chat's thread door alone (`operator-message-readers.test.ts`). */
+  repliesPage(beforeId: number | null, limit: number): StoreRead<{ readonly rows: readonly OverlordReplyRow[]; readonly more: boolean }> {
+    if (beforeId !== null && !(Number.isSafeInteger(beforeId) && beforeId >= 1)) return { kind: 'unmeasured', why: 'beforeId: null or a positive safe integer' };
+    if (!Number.isSafeInteger(limit) || limit < 1 || limit > 500) return { kind: 'unmeasured', why: 'limit: a safe integer from 1 to 500' };
+    return this.read(() => {
+      const newest = (beforeId === null
+        ? this.db.prepare(`SELECT ${REPLY_COLUMNS} FROM overlord_replies ORDER BY id DESC LIMIT ?`).all(limit + 1)
+        : this.db.prepare(`SELECT ${REPLY_COLUMNS} FROM overlord_replies WHERE id < ? ORDER BY id DESC LIMIT ?`).all(beforeId, limit + 1)) as unknown as RawReply[];
+      return { rows: newest.slice(0, limit).reverse().map(reviveReply), more: newest.length > limit };
+    });
+  }
+
+  /** The replies recorded at or after `sinceMs`, oldest first, word for word (the checkpoint's thread, C37: the replies since the
+   *  operator's last break, rendered as untrusted data by the piece that assembles it). A WORDS reader; no caller in this PR. */
+  repliesSince(sinceMs: number): StoreRead<readonly OverlordReplyRow[]> {
+    if (!isCount(sinceMs)) return { kind: 'unmeasured', why: 'sinceMs: a non-negative safe integer' };
+    return this.read(() => (this.db.prepare(`SELECT ${REPLY_COLUMNS} FROM overlord_replies WHERE at >= ? ORDER BY id`)
+      .all(sinceMs) as unknown as RawReply[]).map(reviveReply));
+  }
+
+  /** The ids and times of the replies recorded at or after `sinceMs`, id order, never a text: the boot arm's read. */
+  replyIdsSince(sinceMs: number): StoreRead<readonly { readonly id: number; readonly at: number }[]> {
+    if (!isCount(sinceMs)) return { kind: 'unmeasured', why: 'sinceMs: a non-negative safe integer' };
+    return this.read(() => (this.db.prepare('SELECT id, at FROM overlord_replies WHERE at >= ? ORDER BY id').all(sinceMs) as { id: number; at: number }[])
+      .map((r) => ({ id: r.id, at: r.at })));
   }
 
   /** The row's session, never its text: the note-key reader's port (C3). */
@@ -643,7 +785,7 @@ export function openOperatorModelStore(dbPath: string, journalDir: string, at: n
       if (cut.ok) { healed = plan.name; first = file.read(); } else cutFailed = `; cutting it aside answered ${cut.error}`;
     }
   }
-  const storeHighest = (db.prepare('SELECT max(id) AS m FROM operator_messages').get() as { m: number | null }).m;
+  const storeHighest = (db.prepare(HIGHEST_ISSUED_SQL).get() as { m: number | null }).m;
   const seen = seenOf(first);
   const verdict = privacyCoherence(seen.kind === 'refused' ? { ...seen, detail: seen.detail + cutFailed } : seen, storeHighest);
   const done = (privacy: PrivacyOpenReport, issuer: PrivacyIssuer): OperatorModelOpen =>

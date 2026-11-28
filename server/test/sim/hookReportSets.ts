@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { expect } from 'vitest';
 import type { MutantSet, SuiteCase } from './mutate.js';
 import { AGENT_TYPE_MAX, DOOR_TOOL_PREFIX, REPORT_MODEL_MAX } from '../../../shared/continuity-reports.js';
+import { REPLY_ANSWERS_MAX, REPLY_REPORT_MAX_BYTES } from '../../../shared/operatorMessages.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');
 
@@ -18,6 +19,10 @@ const RS = { kind: 'reader-start', agentId: 'agent-1', agentType: 'reader', at: 
 const RP = { kind: 'reader-stop', agentId: 'agent-1', at: 5 };
 const MS = { kind: 'model-switch', how: 'switched', from: 'model-a', to: 'model-b', at: 5 };
 const PU = { kind: 'picked-up', messageId: 12, at: 5 };
+/** The reply report (Overlord W1 chat, PR B): a fixture text, never one that looks like a secret. */
+const RE_UUID = '0f1e2d3c-4b5a-4968-8776-a5b4c3d2e1f0';
+const RE = { kind: 'reply', entryUuid: RE_UUID, turnAt: 7, text: 'Done: project-a is green.', truncated: false, droppedBefore: null,
+  answers: [3, 9], answersCut: false, at: 8 };
 
 export function hookReportCases(m: HookReportsModule): Record<string, SuiteCase> {
   const f = (b: Record<string, unknown>): string | null => { const v = m.hookReportOf(b); return v.ok ? null : v.field; };
@@ -54,8 +59,45 @@ export function hookReportCases(m: HookReportsModule): Record<string, SuiteCase>
       each(PU, 'messageId', [1.5, 0, -1, '12', null, undefined, Number.MAX_SAFE_INTEGER + 2, NaN], 'messageId');
     },
     'an `at` that is not a non-negative safe integer, for every kind': () => {
-      for (const b of [W, RS, RP, { kind: 'readers-clear', at: 5 }, MS, PU]) each(b, 'at', [-1, 1.5, '5', null, undefined, Number.MAX_SAFE_INTEGER + 2], 'at');
+      for (const b of [W, RS, RP, { kind: 'readers-clear', at: 5 }, MS, PU, RE]) each(b, 'at', [-1, 1.5, '5', null, undefined, Number.MAX_SAFE_INTEGER + 2], 'at');
       expect(f({ ...PU, at: 0 })).toBeNull();
+    },
+    // The reply report (PR B): a good body, an absent `droppedBefore` read as null, the text bound in UTF-8 bytes, each field.
+    'a reply: the good body, and an absent droppedBefore reads null': () => {
+      expect(m.hookReportOf(RE)).toEqual({ ok: true, report: RE });
+      const { droppedBefore: _d, ...noDrop } = RE;
+      expect(m.hookReportOf(noDrop)).toEqual({ ok: true, report: RE });
+      expect(m.hookReportOf({ ...RE, droppedBefore: 3, truncated: true })).toEqual({ ok: true, report: { ...RE, droppedBefore: 3, truncated: true } });
+      expect(f({ ...RE, text: 'line one\n\nline two\twith a tab' })).toBeNull();
+    },
+    'a reply text one byte past REPLY_REPORT_MAX_BYTES is refused, and one at it is accepted': () => {
+      expect(f({ ...RE, text: 'a'.repeat(REPLY_REPORT_MAX_BYTES) })).toBeNull();
+      expect(f({ ...RE, text: 'a'.repeat(REPLY_REPORT_MAX_BYTES + 1) })).toBe('text');
+      // Bytes, not characters: a three-byte character makes a text of fewer characters than the bound one byte too long.
+      expect(f({ ...RE, text: `${'a'.repeat(REPLY_REPORT_MAX_BYTES - 2)}€` })).toBe('text');
+      each(RE, 'text', ['', 7, null, undefined], 'text');
+    },
+    'a reply entryUuid that is not a lowercase uuid, a non-integer turnAt, a non-boolean truncated': () => {
+      each(RE, 'entryUuid', [RE_UUID.toUpperCase(), RE_UUID.slice(1), `${RE_UUID}\n`, 'not-a-uuid', 7, null, undefined], 'entryUuid');
+      each(RE, 'turnAt', [-1, 1.5, '7', null, undefined], 'turnAt');
+      each(RE, 'truncated', ['false', 0, null, undefined], 'truncated');
+    },
+    'a reply droppedBefore that is not a positive integer': () => {
+      each(RE, 'droppedBefore', [0, -1, 1.5, '1'], 'droppedBefore');
+    },
+    // The answered ids (call 1953 condition 2): required, possibly empty, each a positive safe integer, at most REPLY_ANSWERS_MAX.
+    'a reply\'s answers are required, may be empty, and are each a positive safe integer within the bound': () => {
+      expect(m.hookReportOf({ ...RE, answers: [] })).toEqual({ ok: true, report: { ...RE, answers: [] } });
+      const full = Array.from({ length: REPLY_ANSWERS_MAX }, (_v, i) => i + 1);
+      expect(f({ ...RE, answers: full })).toBeNull();
+      expect(f({ ...RE, answers: [...full, REPLY_ANSWERS_MAX + 1] })).toBe('answers');
+      each(RE, 'answers', [undefined, null, 3, '3', [0], [-1], [1.5], ['3'], [Number.MAX_SAFE_INTEGER + 2]], 'answers');
+    },
+    'a reply\'s answersCut is a boolean; absent it reads false': () => {
+      const { answersCut: _c, ...noCut } = RE;
+      expect(m.hookReportOf(noCut)).toEqual({ ok: true, report: { ...RE, answersCut: false } });
+      expect(m.hookReportOf({ ...RE, answersCut: true })).toEqual({ ok: true, report: { ...RE, answersCut: true } });
+      each(RE, 'answersCut', ['true', 1, 0], 'answersCut');
     },
   };
 }
@@ -82,6 +124,21 @@ const MUTANTS = [
   { id: 'R18 the door prefix not required', old: 'v.startsWith(DOOR_TOOL_PREFIX) && ', new: '' },
   { id: 'R19 the tool name grammar not applied', old: ' && DOOR_TOOL_NAME_RE.test(v.slice(DOOR_TOOL_PREFIX.length))', new: '' },
   { id: 'R20 the key shape not applied', old: 'WITNESS_KEY_SHAPE.test(v)', new: 'v.length > 0' },
+  // The reply arm (Overlord W1 chat, PR B).
+  { id: 'R21 reply: the entryUuid check removed', old: "      if (!isEntryUuid(entryUuid)) return no('entryUuid');\n", new: '' },
+  { id: 'R22 reply: the turnAt check removed', old: "      if (!isCount(turnAt)) return no('turnAt');\n", new: '' },
+  { id: 'R23 reply: the text check removed', old: "      if (!isReplyText(text)) return no('text');\n", new: '' },
+  { id: 'R24 reply: the length bound dropped', old: ' && utf8Bytes(v) <= REPLY_REPORT_MAX_BYTES', new: '' },
+  { id: 'R25 reply: the bound counted in characters', old: 'utf8Bytes(v) <= REPLY_REPORT_MAX_BYTES', new: 'v.length <= REPLY_REPORT_MAX_BYTES' },
+  { id: 'R26 reply: an empty text admitted', old: "typeof v === 'string' && v !== '' && utf8Bytes(v)", new: "typeof v === 'string' && utf8Bytes(v)" },
+  { id: 'R27 reply: the truncated check removed', old: "      if (typeof truncated !== 'boolean') return no('truncated');\n", new: '' },
+  { id: 'R28 reply: the droppedBefore check removed', old: "      if (droppedBefore === undefined) return no('droppedBefore');\n", new: '' },
+  { id: 'R30 reply: the answers check removed', old: "      if (!Array.isArray(answers) || answers.length > REPLY_ANSWERS_MAX || !answers.every(isPos)) return no('answers');\n", new: '' },
+  { id: 'R31 reply: the answers bound dropped', old: ' || answers.length > REPLY_ANSWERS_MAX', new: '' },
+  { id: 'R32 reply: an answer of 0 admitted', old: '!answers.every(isPos)', new: '!answers.every(isCount)' },
+  { id: 'R33 reply: the answersCut check removed', old: "      if (answersCut === undefined) return no('answersCut');\n", new: '' },
+  { id: 'R34 reply: an absent answersCut read as cut', old: 'answersCut: answersCut === true', new: 'answersCut: answersCut !== false' },
+  { id: 'R29 reply: the uuid shape loosened to any case', old: 'const ENTRY_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;', new: 'const ENTRY_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;' },
 ] as const;
 
 const HOOK_REPORT_SET: MutantSet<HookReportsModule> = {

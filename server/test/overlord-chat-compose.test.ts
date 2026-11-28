@@ -11,11 +11,11 @@ import {
 } from '../src/coord/overlordChat.js';
 import {
   CHAT_EARLIER_PAGEABLE, chatDesignation, chatThreadComposed, earlierComposed, earlierScope, earlierStep, generationsFact, messagesFact,
-  readinessFact,
+  pageByCursor, readinessFact, repliesFact, responsesFact,
 } from '../src/coord/overlordChatDoor.js';
 import { historyDoorAnswer } from '../src/coord/overlordHistory.js';
 import * as l1Module from '../src/coord/overlordChat.js';
-import { composeChatCases, earlierPagePlanCases, readinessAtCases } from './sim/chatSets.js';
+import { chatPageCutCases, composeChatCases, earlierPagePlanCases, readinessAtCases } from './sim/chatSets.js';
 
 const run = (cases: Record<string, () => void | Promise<void>>): void => { for (const [name, c] of Object.entries(cases)) it(name, c); };
 
@@ -29,17 +29,22 @@ const gen = (term: number, n: number, startReportedAt: number, over: Partial<Gen
 const facts = (over: Partial<ChatFacts> = {}): ChatFacts => ({
   designation: { kind: 'designated', sessionId: 'lane-a-overlord', term: 1 },
   messages: { kind: 'rows', rows: [], more: false },
+  replies: { kind: 'rows', rows: [], more: false },
+  responses: { kind: 'rows', byReply: new Map() },
   generations: { kind: 'rows', rows: [] },
   readiness: { kind: 'rows', rows: [{ at: 0, word: 'ready' }], oldest: 0 },
   pageable: false,
   ...over,
 });
 const shape = (entries: readonly ChatEntry[]): string[] => entries.map((e) =>
-  e.kind === 'message' ? `m${e.row.id}` : e.kind === 'server-line' ? `s${e.messageId}:${e.word}` : `d${e.gen.term}.${e.gen.n}${e.current ? '*' : ''}${e.newTerm ? '+' : ''}`);
+  e.kind === 'message' ? `m${e.row.id}` : e.kind === 'server-line' ? `s${e.messageId}:${e.word}` : e.kind === 'reply' ? `r${e.row.id}`
+    : `d${e.gen.term}.${e.gen.n}${e.current ? '*' : ''}${e.newTerm ? '+' : ''}`);
 
 describe('readinessAt: the word in force at a time (sim/chatSets.ts)', () => run(readinessAtCases(l1Module)));
 
 describe('composeChat (sim/chatSets.ts)', () => run(composeChatCases(l1Module)));
+
+describe('chatPageCut: one page of both lists at one time floor (sim/chatSets.ts; PR B)', () => run(chatPageCutCases(l1Module)));
 
 describe('composeChat, beyond the set', () => {
   it('a server line carries its readiness word\'s line; the not-on-record line is its own', () => {
@@ -106,8 +111,30 @@ describe('the doors\' shaping (overlordChatDoor.ts)', () => {
   it('the thread\'s line: a thread with its messages is a served line counting them; one without is messages-unmeasured', () => {
     const t = composeChat(facts({ messages: { kind: 'rows', rows: [msg(1, 150), msg(2, 250)], more: false }, readiness: { kind: 'unmeasured', why: 'y' } }));
     expect(chatThreadComposed(t)).toEqual({ kind: 'rows', body: t, scope: 'session:lane-a-overlord', count: 2 });
-    const u = composeChat(facts({ messages: { kind: 'unmeasured', why: 'closed' } }));
+    const u = composeChat(facts({ messages: { kind: 'unmeasured', why: 'closed' }, replies: { kind: 'unmeasured', why: 'closed' } }));
     expect(chatThreadComposed(u)).toEqual({ kind: 'answer', body: u, scope: 'session:lane-a-overlord', outcome: 'messages-unmeasured' });
+  });
+
+  it('PR B: the line counts the replies it hands too, and a thread whose replies were read is served though its messages were not', () => {
+    const r = (id: number, at: number) => ({ id, at, turnAt: at, term: 1, entryUuid: `e0e0e0e0-0000-4000-8000-00000000000${id}`, text: `fixture reply ${id}`,
+      cut: false, sha256: 'b'.repeat(64), inReplyTo: null, offRecord: false });
+    const both = composeChat(facts({ messages: { kind: 'rows', rows: [msg(1, 150)], more: false }, replies: { kind: 'rows', rows: [r(2, 160), r(3, 170)], more: false } }));
+    expect(chatThreadComposed(both)).toMatchObject({ kind: 'rows', count: 3 });
+    const onlyReplies = composeChat(facts({ messages: { kind: 'unmeasured', why: 'closed' }, replies: { kind: 'rows', rows: [r(2, 160)], more: false } }));
+    expect(chatThreadComposed(onlyReplies)).toMatchObject({ kind: 'rows', count: 1 });
+    // Messages unreadable and an empty reply page hands no words: still messages-unmeasured.
+    const noWords = composeChat(facts({ messages: { kind: 'unmeasured', why: 'closed' } }));
+    expect(chatThreadComposed(noWords)).toMatchObject({ kind: 'answer', outcome: 'messages-unmeasured' });
+  });
+
+  it('PR B: a list\'s end cursor reads nothing of it; any other cursor asks the reader below it', () => {
+    const calls: Array<number | null> = [];
+    const read = (b: number | null) => { calls.push(b); return 'read' as const; };
+    expect([pageByCursor('end', read, 'empty' as const), pageByCursor(null, read, 'empty' as const), pageByCursor(12, read, 'empty' as const)]).toEqual(['empty', 'read', 'read']);
+    expect(calls).toEqual([null, 12]);
+    expect(repliesFact({ kind: 'unmeasured', why: 'r' })).toEqual({ kind: 'unmeasured', why: 'r' });
+    expect(responsesFact({ ok: false, detail: 'd' })).toEqual({ kind: 'unmeasured', why: 'd' });
+    expect(responsesFact({ ok: true, rows: new Map() })).toEqual({ kind: 'rows', byReply: new Map() });
   });
 
   it('the earlier scope names the row\'s session, the term and n, and the around; past the bound it drops the session', () => {

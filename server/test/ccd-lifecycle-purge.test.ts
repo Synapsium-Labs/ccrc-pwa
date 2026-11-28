@@ -2678,7 +2678,47 @@ describe('_reg_purge leaves no join record behind, whenever the hook\'s append l
     expect(h.sh(`_ws_slug_free demo still-river; echo "free=$?"`), 'and the slug is free').toContain('free=0');
   });
 
-  it('it is the LAST unlink, ONE rm call for the seven names: after generation, before the lock is released', () => {
+  // The reply report's spool (Overlord W1 chat PR B): the hook at a main Stop rewrites it whole (a temp file, then `mv`) without
+  // this lock, and looks at `generation` once more. A rewrite that lands after the loop's glob passed the name and before
+  // `generation` goes is taken by the same last `rm`; the spool holds the operator's affairs, so one left behind would be a leak.
+  it('window 1 for the reply report\'s spool: a rewrite after the loop passed it is removed after generation', () => {
+    const id = seed();
+    fs.writeFileSync(path.join(REGD(), `${id}.generation`), '0189abcd-1234-5678-9abc-0123456789ab');
+    const out = h.sh(`_usage_purge() { printf '{"kind":"reply"}\\n' > "$REG/$1.replyspool"; }; _reg_purge ${id}; echo "rc=$?"; echo "unremoved=[$REG_PURGE_UNREMOVED]"`);
+    expect(out).toContain('rc=0');
+    expect(out).toContain('unremoved=[]');
+    expect(fs.existsSync(path.join(REGD(), `${id}.replyspool`)), 'the spool rewritten in the window did not survive').toBe(false);
+    expect(fs.existsSync(path.join(REGD(), `${id}.generation`))).toBe(false);
+  });
+
+  // Its last reported key (the same PR's fix round 1, review 4173 F1) is written the same way, so it goes the same way.
+  it('window 1 for the reply report\'s key: a rewrite after the loop passed it is removed after generation', () => {
+    const id = seed();
+    fs.writeFileSync(path.join(REGD(), `${id}.generation`), '0189abcd-1234-5678-9abc-0123456789ab');
+    const out = h.sh(`_usage_purge() { printf '00000000-0000-4000-8000-000000000002\\n' > "$REG/$1.replykey"; }; _reg_purge ${id}; echo "rc=$?"; echo "unremoved=[$REG_PURGE_UNREMOVED]"`);
+    expect(out).toContain('rc=0');
+    expect(out).toContain('unremoved=[]');
+    expect(fs.existsSync(path.join(REGD(), `${id}.replykey`)), 'the key rewritten in the window did not survive').toBe(false);
+  });
+
+  it('a key that stands through the loop and is refused by the tail unlink is named, status 3', () => {
+    const id = seed();
+    fs.writeFileSync(path.join(REGD(), `${id}.generation`), '0189abcd-1234-5678-9abc-0123456789ab');
+    const one = h.sh(`_usage_purge() { mkdir "$REG/$1.replykey"; }; _reg_purge ${id}; echo "rc=$?"; echo "unremoved=[$REG_PURGE_UNREMOVED]"`);
+    expect(one).toContain('rc=3');
+    expect(one).toContain(`unremoved=[${path.join(REGD(), `${id}.replykey`)}]`);
+  });
+
+  it('a spool that stands through the loop and is refused by the tail unlink is named, status 3', () => {
+    const id = seed();
+    fs.writeFileSync(path.join(REGD(), `${id}.generation`), '0189abcd-1234-5678-9abc-0123456789ab');
+    // A DIRECTORY, so only the tail unlink can meet it (the loop's glob already passed).
+    const one = h.sh(`_usage_purge() { mkdir "$REG/$1.replyspool"; }; _reg_purge ${id}; echo "rc=$?"; echo "unremoved=[$REG_PURGE_UNREMOVED]"`);
+    expect(one).toContain('rc=3');
+    expect(one).toContain(`unremoved=[${path.join(REGD(), `${id}.replyspool`)}]`);
+  });
+
+  it('it is the LAST unlink, ONE rm call for the nine names: after generation, before the lock is released', () => {
     const id = seed();
     fs.writeFileSync(path.join(REGD(), `${id}.generation`), '0189abcd-1234-5678-9abc-0123456789ab');
     fs.writeFileSync(path.join(REGD(), `${id}.joined`), 'a-1\n');
@@ -2689,11 +2729,11 @@ describe('_reg_purge leaves no join record behind, whenever the hook\'s append l
       [ -z "$names" ] || printf '%s\\n' "$names" >> '${log}'; command rm "$@"; }
       _reg_purge ${id}`);
     const calls = fs.readFileSync(log, 'utf8').split('\n').filter(Boolean);
-    expect(calls.at(-1), 'the last call takes the join record\'s two names, the launch record, the start spool, the anchor\'s owed mark and the loads report\'s two files at once')
-      .toBe(`${id}.joined ${id}.joinedprev ${id}.deleg ${id}.startpending ${id}.anchor-owed ${id}.loadpending ${id}.loadlast `);
+    expect(calls.at(-1), 'the last call takes the join record\'s two names, the launch record, the start spool, the anchor\'s owed mark, the loads report\'s two files and the reply report\'s two at once')
+      .toBe(`${id}.joined ${id}.joinedprev ${id}.deleg ${id}.startpending ${id}.anchor-owed ${id}.loadpending ${id}.loadlast ${id}.replyspool ${id}.replykey `);
     expect(calls.at(-2), 'and right before it the generation went').toBe(`${id}.generation `);
     expect(calls.filter((c) => c.includes('.joined ') || c.includes('.joinedprev ')), 'the loop took each first, one call apiece')
-      .toEqual([`${id}.joined `, `${id}.joinedprev `, `${id}.joined ${id}.joinedprev ${id}.deleg ${id}.startpending ${id}.anchor-owed ${id}.loadpending ${id}.loadlast `]);
+      .toEqual([`${id}.joined `, `${id}.joinedprev `, `${id}.joined ${id}.joinedprev ${id}.deleg ${id}.startpending ${id}.anchor-owed ${id}.loadpending ${id}.loadlast ${id}.replyspool ${id}.replykey `]);
   });
 
   it('a refusal of that unlink is its own condition: status 3, and each path still standing is named', () => {

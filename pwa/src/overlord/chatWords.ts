@@ -14,12 +14,22 @@
 // lifetime and the read after a send. Beyond those, the hook and the part keep only the timer's bookkeeping, the view's own state
 // and a few guards.
 //
+// THE OVERLORD'S REPLIES (PR B) are the record's too: a recorded reply is drawn once, and where its transcript entry is live it
+// TAKES THAT ROW'S PLACE (`mergeLive`, `historyItemsToChat`). The thread is read in pages (`foldNewestPage`, `foldOlderPage`,
+// `visibleEntries`): an older page lands before what is drawn, the refresh of the newest page never drops it, and a divider is
+// drawn once and never over nothing. The reply's receipt (seen for a second, at most one request a second) and its handled
+// offer are decided here too; the part and its row only wire them.
+//
 // The one harness surface this leans on is Claude Code's transcript (the live generation's stream, and what a pane turn is).
 // It is read only through the readers that already exist (`buildChatItems`, the history door's items), so another harness
 // changes those readers, not this file.
 import type { SessionStatus, SessionStreamMsg } from '../../../shared/api';
-import type { ChatEarlierAnswer, ChatEntry, ChatSendAnswer, ChatThread, ChatTicks, TickStage } from '../../../shared/overlordChat';
+import type {
+  ChatEarlierAnswer, ChatEntry, ChatOlder, ChatSendAnswer, ChatThread, ChatTicks, ReplyResponse, TickStage,
+} from '../../../shared/overlordChat';
 import { CHAT_PAGE_ROWS, TICK_STAGES, tickStageWords } from '../../../shared/overlordChat';
+import { READ_CEILING_WINDOW_MS } from '../../../shared/overlordInbox';
+import { RECEIPTS_MAX_PER_BODY, type ReceiptIn } from '../../../shared/responses';
 import { carriesOperatorMessageMarker, operatorMessageNudgeIdOf } from '../../../shared/operatorMessages';
 import { injectedPromptOf } from '../../../shared/injected-prompts.mjs';
 import type { ChatItem } from '../session/chatItems';
@@ -110,15 +120,27 @@ export type ChatRow =
   | { readonly kind: 'untrusted-block'; readonly key: string; readonly text: string };
 
 const entryKey = (e: ChatEntry): string =>
-  e.kind === 'message' ? `msg-${e.row.id}` : e.kind === 'server-line' ? `line-${e.messageId}` : `gen-${e.gen.term}-${e.gen.n}`;
+  e.kind === 'message' ? `msg-${e.row.id}` : e.kind === 'server-line' ? `line-${e.messageId}` : e.kind === 'reply' ? `reply-${e.row.id}`
+    : `gen-${e.gen.term}-${e.gen.n}`;
 
-/** A record unit: a message with its server line, or a divider, with the time it sits at. */
-interface Unit { readonly at: number; readonly id: number | null; readonly rows: ChatRow[] }
+export type ReplyEntry = Extract<ChatEntry, { kind: 'reply' }>;
+const NO_IDS: ReadonlySet<number> = new Set();
 
-function unitsOf(thread: readonly ChatEntry[]): Unit[] {
+/** A record unit: a message with its server line, a reply, or a divider, with the time it sits at. */
+interface Unit { readonly at: number; readonly id: number | null; readonly rows: ChatRow[]; readonly reply?: ReplyEntry }
+
+/** The thread's units in its order. A reply id already drawn (by an earlier unit, or in `skip`) is not drawn again. */
+function unitsOf(thread: readonly ChatEntry[], skip: ReadonlySet<number>): Unit[] {
   const units: Unit[] = [];
+  const replies = new Set<number>();
   for (const e of thread) {
     const row: ChatRow = { kind: 'entry', key: entryKey(e), entry: e };
+    if (e.kind === 'reply') {
+      if (skip.has(e.row.id) || replies.has(e.row.id)) continue;
+      replies.add(e.row.id);
+      units.push({ at: e.row.at, id: null, rows: [row], reply: e });
+      continue;
+    }
     if (e.kind === 'server-line') {
       const owner = units.at(-1);
       if (owner !== undefined && owner.id === e.messageId) { owner.rows.push(row); continue; }
@@ -149,22 +171,66 @@ function userTurnsOf(item: ChatItem): { readonly key: string; readonly text: str
   return null;
 }
 
+/** The event uuid of a live assistant text row, or null for any other row. */
+const assistantUuidOf = (item: ChatItem): string | null => (item.kind === 'message' && item.event.kind === 'assistant' ? item.event.uuid : null);
+/** The row uuid a recorded reply's `entryUuid` may name: an assistant text row's, or a tool call's (review 4173 F10: the key is the
+ *  turn's last assistant row whether or not it has text, so a turn that ends on a tool call keys its reply on that row). */
+const keyUuidOf = (item: ChatItem): string | null => assistantUuidOf(item) ?? (item.kind === 'tool' ? item.use.uuid : null);
+
+/** The live indexes a recorded reply's text stands for, besides its own row: a reply is the text of every block of its turn joined,
+ *  so each live assistant text row between the turn's start (the newest user turn of any origin before the entry, or the start
+ *  of the list) and the entry is dropped. Tool rows, dividers and the user turns themselves stay. `entries`: the recorded
+ *  replies' `entryUuid`s. A turn with no recorded reply (one still streaming) is not in the set. */
+function liveTurnText(live: readonly ChatItem[], entries: ReadonlySet<string>): ReadonlySet<number> {
+  const dropped = new Set<number>();
+  const done = new Set<string>();
+  live.forEach((item, at) => {
+    const uuid = keyUuidOf(item);
+    if (uuid === null || !entries.has(uuid) || done.has(uuid)) return;
+    done.add(uuid);
+    for (let i = at - 1; i >= 0 && userTurnsOf(live[i]!) === null; i -= 1) if (assistantUuidOf(live[i]!) !== null) dropped.add(i);
+  });
+  return dropped;
+}
+
 /** The record's thread placed in the live transcript (question 13), total:
  *  - a message whose nudge line is a live user turn is drawn at that turn's place, once;
  *  - every other record unit (a message not yet typed, a divider) sits after the newest live row whose time is at or before its
  *    own, or before every live row when none is, in the thread's order;
  *  - a message id is drawn once, whatever both sources say; a nudge naming an id the page does not hold is a link row;
+ *  - a recorded reply whose `entryUuid` is a live assistant row TAKES THAT ROW'S PLACE: one row, the recorded reply, and the other
+ *    live rows of the same record (two text blocks share a uuid) are not drawn; nor is any live assistant text row of the same
+ *    turn (`liveTurnText`: the reply is the turn's whole text, so those words would show twice); a reply with no live row sits by time, as a
+ *    message does; a reply id is drawn once, and not at all when `drawnReplies` (an earlier page's) already holds it;
  *  - every other user turn is a ccrc line or a pane turn, never the operator's words. */
-export function mergeLive(thread: readonly ChatEntry[], live: readonly ChatItem[]): readonly ChatRow[] {
-  const units = unitsOf(thread);
+export function mergeLive(thread: readonly ChatEntry[], live: readonly ChatItem[], drawnReplies: ReadonlySet<number> = NO_IDS): readonly ChatRow[] {
+  const units = unitsOf(thread, drawnReplies);
   const byId = new Map<number, Unit>();
-  for (const u of units) if (u.id !== null) byId.set(u.id, u);
+  const byEntry = new Map<string, Unit>();
+  for (const u of units) {
+    if (u.id !== null) byId.set(u.id, u);
+    if (u.reply !== undefined && !byEntry.has(u.reply.row.entryUuid)) byEntry.set(u.reply.row.entryUuid, u);
+  }
   const placed = new Set<Unit>();
   const seen = new Set<number>();
   const out: { at: number | null; rows: ChatRow[] }[] = [];
-  for (const item of live) {
+  const turnText = liveTurnText(live, new Set(byEntry.keys()));
+  for (const [at, item] of live.entries()) {
+    if (turnText.has(at)) continue;
     const turns = userTurnsOf(item);
-    if (turns === null) { out.push({ at: liveAt(item), rows: [{ kind: 'live', key: item.key, item }] }); continue; }
+    if (turns === null) {
+      const uuid = keyUuidOf(item);
+      const recorded = uuid === null ? undefined : byEntry.get(uuid);
+      if (recorded !== undefined) {
+        // A tool row the reply is keyed on stays drawn after it: the call is no part of the reply's text (F10).
+        const tool: ChatRow[] = item.kind === 'tool' ? [{ kind: 'live', key: item.key, item }] : [];
+        if (!placed.has(recorded)) { placed.add(recorded); out.push({ at: liveAt(item), rows: [...recorded.rows, ...tool] }); }
+        else if (tool.length > 0) out.push({ at: liveAt(item), rows: tool });
+        continue;
+      }
+      out.push({ at: liveAt(item), rows: [{ kind: 'live', key: item.key, item }] });
+      continue;
+    }
     const rows: ChatRow[] = [];
     for (const t of turns) {
       const o = turnOrigin(t.text);
@@ -214,23 +280,161 @@ export function earlierPageOf(r: ChatEarlierRead):
  *  measurement pinned: `role` and `text` (and `uuid` for its key). An assistant item is its text; a user item goes through
  *  `turnOrigin` like a live one (a nudge becomes a link to its message); an item with no readable role or text is one untrusted
  *  block, never dropped and never the operator's words. */
-export function historyItemsToChat(items: readonly Readonly<Record<string, unknown>>[]): readonly ChatRow[] {
-  return items.map((it, i): ChatRow => {
+export function historyItemsToChat(items: readonly Readonly<Record<string, unknown>>[], replies: readonly ReplyEntry[] = []): readonly ChatRow[] {
+  const byEntry = new Map<string, ReplyEntry>();
+  for (const r of replies) if (!byEntry.has(r.row.entryUuid)) byEntry.set(r.row.entryUuid, r);
+  const drawn = new Set<number>();
+  // The reply is the turn's whole text: the assistant text items back from its entry to the previous user item are not drawn.
+  const turnText = new Set<number>();
+  const found = new Set<string>();
+  items.forEach((it, at) => {
+    const uuid = it['uuid'];
+    if (typeof uuid !== 'string' || !byEntry.has(uuid) || found.has(uuid) || it['role'] !== 'assistant') return;
+    found.add(uuid);
+    for (let i = at - 1; i >= 0 && items[i]!['role'] !== 'user'; i -= 1) {
+      if (items[i]!['role'] === 'assistant' && typeof items[i]!['text'] === 'string') turnText.add(i);
+    }
+  });
+  return items.flatMap((it, i): ChatRow[] => {
+    if (turnText.has(i)) return [];
     const key = `h-${typeof it['uuid'] === 'string' ? it['uuid'] : i}`;
     const text = it['text'];
     const role = it['role'];
-    if (typeof text === 'string' && role === 'assistant') return { kind: 'history-text', key, text };
+    if (typeof text === 'string' && role === 'assistant') {
+      const recorded = typeof it['uuid'] === 'string' ? byEntry.get(it['uuid']) : undefined;
+      if (recorded === undefined) return [{ kind: 'history-text', key, text }];
+      if (drawn.has(recorded.row.id)) return [];
+      drawn.add(recorded.row.id);
+      return [{ kind: 'entry', key: entryKey(recorded), entry: recorded }];
+    }
     if (typeof text === 'string' && role === 'user') {
       const o = turnOrigin(text);
-      if (o.kind === 'nudge') return { kind: 'message-link', key, id: o.id };
-      if (o.kind === 'ccrc') return { kind: 'ccrc-line', key, name: o.name };
-      return { kind: 'pane-turn', key, text };
+      if (o.kind === 'nudge') return [{ kind: 'message-link', key, id: o.id }];
+      if (o.kind === 'ccrc') return [{ kind: 'ccrc-line', key, name: o.name }];
+      return [{ kind: 'pane-turn', key, text }];
     }
     let block: string;
     try { block = typeof text === 'string' ? text : JSON.stringify(it); } catch { block = ''; }
-    return { kind: 'untrusted-block', key, text: block };
+    return [{ kind: 'untrusted-block', key, text: block }];
   });
 }
+
+/** The reply ids a set of rows draws (an earlier page's), so the thread does not draw them again. */
+export function replyIdsOf(rows: readonly ChatRow[]): ReadonlySet<number> {
+  const ids = new Set<number>();
+  for (const r of rows) if (r.kind === 'entry' && r.entry.kind === 'reply') ids.add(r.entry.row.id);
+  return ids;
+}
+
+/** The reply entries among `entries`, for an earlier page to take its rows' places. */
+export const replyEntriesOf = (entries: readonly ChatEntry[]): readonly ReplyEntry[] =>
+  entries.filter((e): e is ReplyEntry => e.kind === 'reply');
+
+// ── the thread in pages (the coordinator's ruling 4) ───────────────────────────────────────────────────────────────────
+
+/** What the chat has read of the thread: every entry drawn, oldest first; `older`, where the next older page starts (null when
+ *  nothing older is on record); `paged`, whether an older page has been read (until then the entries are the newest page's own). */
+export interface ChatPaged {
+  readonly entries: readonly ChatEntry[];
+  readonly older: ChatOlder | null;
+  readonly paged: boolean;
+}
+
+/** `ordered`'s entries, each once at its first place, with the content of `fresh`'s copy when there is one (a row read again, its
+ *  ticks moved). The identity is the row's own: a message by id, its server line by that id, a reply by id, a divider by `(term, n)`. */
+function placedOnce(ordered: readonly ChatEntry[], fresh: readonly ChatEntry[]): ChatEntry[] {
+  const latest = new Map(fresh.map((e) => [entryKey(e), e] as const));
+  const seen = new Set<string>();
+  const out: ChatEntry[] = [];
+  for (const e of ordered) {
+    const k = entryKey(e);
+    if (seen.has(k)) continue;
+    seen.add(k);
+    out.push(latest.get(k) ?? e);
+  }
+  return out;
+}
+
+/** The newest page, read (again), folded into what is drawn. Before any older page the entries are the page's own and the cursor
+ *  follows it. After one, every row drawn stays (a row the page pushed off stays between the pages: no gap), a row read again takes
+ *  the fresh content, and the cursor stays at the oldest page read. No Overlord resets everything to the page. */
+export function foldNewestPage(drawn: ChatPaged | null, page: ChatThread): ChatPaged {
+  if (drawn === null || !drawn.paged || page.designation === 'none') return { entries: page.entries, older: page.older, paged: false };
+  return { entries: placedOnce([...drawn.entries, ...page.entries], page.entries), older: drawn.older, paged: true };
+}
+
+/** An older page, folded before what is drawn, or null when the page cannot be drawn (messages or replies could not be read: an
+ *  older page of an unreadable part is no page, never an empty one; or no Overlord). A server below PR B holds no reply part. */
+export function foldOlderPage(drawn: ChatPaged, page: ChatThread): ChatPaged | null {
+  if (page.designation === 'none' || page.messages.kind !== 'read' || page.replies?.kind === 'unmeasured') return null;
+  return { entries: placedOnce([...page.entries, ...drawn.entries], page.entries), older: page.older, paged: true };
+}
+
+/** The entries to draw. While an older page exists a divider older than the oldest message or reply drawn is not drawn (it would
+ *  sit over nothing; the older page brings it), and a divider is drawn once by `(term, n)`. */
+export function visibleEntries(drawn: ChatPaged | null): readonly ChatEntry[] {
+  if (drawn === null) return [];
+  if (drawn.older === null) return drawn.entries;
+  let oldest = Number.POSITIVE_INFINITY;
+  for (const e of drawn.entries) if (e.kind === 'message' || e.kind === 'reply') oldest = Math.min(oldest, e.row.at);
+  return drawn.entries.filter((e) => e.kind !== 'divider' || e.at >= oldest);
+}
+
+/** The longest the chat waits after a read-ceiling refusal: the ceiling's own window (one hour; `READ_CEILING_WINDOW_MS`), so the
+ *  wait is under a browser timer's limit (2^31 - 1 ms) however large the server's `retryAfterS` is. */
+export const CEILING_WAIT_MAX_MS = READ_CEILING_WINDOW_MS;
+/** The wait when a refusal carries no usable retry time: a minute, six coalescer spacings (the ceiling is an hourly count). */
+export const CEILING_WAIT_DEFAULT_MS = 60_000;
+
+/** Not before when, after a read-ceiling refusal at `now`: the server's `retryAfterS` seconds, at most `CEILING_WAIT_MAX_MS`; the
+ *  default wait when the refusal carries no time, or one that is no wait (not a number, negative, infinite). Total. */
+export function ceilingNotBefore(now: number, retryAfterS: number | undefined): number {
+  const usable = retryAfterS !== undefined && Number.isFinite(retryAfterS) && retryAfterS >= 0;
+  return now + (usable ? Math.min(retryAfterS * 1000, CEILING_WAIT_MAX_MS) : CEILING_WAIT_DEFAULT_MS);
+}
+
+// ── a reply on screen: its receipt and its handled offer ───────────────────────────────────────────────────────────────
+
+/** A reply counts as opened when at least half of it has been on screen for this long (C67). */
+export const REPLY_DWELL_MS = 1_000;
+/** The receipts' spacing: at most one request this often, however many replies are seen. */
+export const RECEIPT_SPACING_MS = 1_000;
+/** The visibility steps the observer reports, so a crossing of one half is never missed. */
+export const REPLY_SEEN_STEPS: readonly number[] = Array.from({ length: 21 }, (_, i) => i / 20);
+
+/** Whether a reply is seen enough: half of it is visible, or, for a reply taller than the viewport (half of which can never be
+ *  visible), half of the viewport is filled by it. */
+export function replySeenEnough(m: { readonly ratio: number; readonly visibleHeight: number; readonly rootHeight: number }): boolean {
+  return m.ratio >= 0.5 || (m.rootHeight > 0 && m.visibleHeight >= m.rootHeight / 2);
+}
+
+/** When the next receipt request may go: not before the spacing after the last one. Null `lastSentAt`: none yet. */
+export function nextReceiptAt(lastSentAt: number | null, now: number): number {
+  return Math.max(now, lastSentAt === null ? now : lastSentAt + RECEIPT_SPACING_MS);
+}
+
+/** The next request's replies and its body: the waiting ids not yet posted, each once, in order, at most one body's worth. A
+ *  receipt is an `opened` one from the console (`useOpenedReceipt`'s shape), for a `reply` ref. */
+export function nextReceiptBatch(waiting: readonly number[], posted: ReadonlySet<number>):
+  { readonly ids: readonly number[]; readonly receipts: readonly ReceiptIn[] } {
+  const ids = [...new Set(waiting)].filter((id) => !posted.has(id)).slice(0, RECEIPTS_MAX_PER_BODY);
+  return { ids, receipts: ids.map((id) => ({ ref: { kind: 'reply' as const, id }, receipt: 'opened' as const, from: { source: 'console' as const } })) };
+}
+
+/** What a reply's handled control is: an offer naming the response row's id (a row not yet handled), "handled" (a row that is), or
+ *  nothing (no row, or rows that could not be read: a control with nothing to mark). */
+export type ReplyHandledOffer =
+  | { readonly kind: 'offer'; readonly id: number }
+  | { readonly kind: 'handled' }
+  | { readonly kind: 'none' };
+export function replyHandledOffer(r: ReplyResponse): ReplyHandledOffer {
+  if (r.kind !== 'row') return { kind: 'none' };
+  return r.handledAt === null ? { kind: 'offer', id: r.id } : { kind: 'handled' };
+}
+
+/** Whether a reply's opened receipt is watched for at all (review 4173 F11): only a reply that has a response row, since the server
+ *  can attach a receipt to nothing else. A reply whose row is missing or unread is watched once a later read shows its row. */
+export const replyReceiptWatched = (r: ReplyResponse): boolean => r.kind === 'row';
 
 // ── the words ─────────────────────────────────────────────────────────────────────────────────────────────────────────
 
@@ -267,7 +471,15 @@ export const THREAD_NO_ANSWER_WORDS = 'No answer from the server; this is the co
 export const THREAD_OFF_SHAPE_WORDS = "This server's answer could not be read; this is the conversation as last read.";
 export const READING_WORDS = 'Reading the conversation';
 export const NOBODY_TO_SEND_WORDS = 'No Overlord is started, so there is nobody to send to.';
-/** The thread holds the newest `CHAT_PAGE_ROWS` messages; this line says so when the door answers that older ones exist. */
+/** The control above the oldest row, while an older page is on record. */
+export const SHOW_OLDER_WORDS = 'Show older';
+/** An older page that could not be read: everything drawn stays, and the control stays for a retry. */
+export const OLDER_PAGE_UNREACHABLE_WORDS = 'Older messages could not be read now. Try again.';
+/** A server below PR B records no replies; the conversation shows only the operator's side and the live transcript. */
+export const NO_REPLIES_WORDS = "This server does not record the Overlord's replies.";
+export const REPLIES_UNMEASURED_WORDS = 'Replies could not be read';
+/** The thread holds the newest `CHAT_PAGE_ROWS` messages; this line says so when the door answers that older ones exist but names
+ *  no cursor for them (the control needs one). */
 export const OLDER_MESSAGES_WORDS = `Older messages are in the record; this shows the newest ${CHAT_PAGE_ROWS}.`;
 /** The off-the-record toggle's description while a message is on its way (review 4084 F2): the toggle is held then, so the clear
  *  that follows never undoes a press made during the wait. */

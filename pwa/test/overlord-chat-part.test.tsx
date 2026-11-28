@@ -15,7 +15,7 @@ const thread: ChatThread = {
   v: 1, designation: 'designated', sessionId: SID, term: 1,
   entries: [{ kind: 'divider', gen: { term: 1, n: 1 }, at: T0, current: true, newTerm: false, earlier: 'not-pageable' }],
   messages: { kind: 'read', value: { more: false } }, generations: { kind: 'read', value: { count: 1 } },
-  readiness: { kind: 'read', value: { oldest: null } },
+  readiness: { kind: 'read', value: { oldest: null } }, replies: { kind: 'read', value: { more: false } }, older: null,
 };
 const port = (): OverlordChatPort & { calls: () => number } => {
   let n = 0;

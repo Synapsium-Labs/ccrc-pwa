@@ -12,7 +12,7 @@
 // `bad-request` `not-pageable` until the history door gains its cursor. The items an `--around` page answers carry no
 // conversation id, so when paging joins, the ledger scope names the `around` (step 7's second arm), never a whole generation.
 import type { DesignationRead } from '../../../shared/overlord-designation.js';
-import type { OperatorMessageRow } from '../../../shared/operatorMessages.js';
+import type { OperatorMessageRow, OverlordReplyRow } from '../../../shared/operatorMessages.js';
 import type { ReadinessWord } from '../../../shared/overlord-readiness.js';
 import { READ_SCOPE_MAX_CHARS } from '../../../shared/operatorMessages.js';
 import type { RouteRefusal } from '../../../shared/refusal.js';
@@ -50,7 +50,8 @@ export function chatDesignation(read: DesignationRead): ChatDesignation {
     return { kind: 'refuse', word: 'unmeasured', detail: 'the Overlord designation could not be read' };
   }
   if (read.kind === 'not-designated') {
-    return { kind: 'none', thread: composeChat({ designation: { kind: 'none' }, messages: NONE_PART, generations: NONE_PART, readiness: NONE_PART, pageable: CHAT_EARLIER_PAGEABLE }) };
+    return { kind: 'none', thread: composeChat({ designation: { kind: 'none' }, messages: NONE_PART, replies: NONE_PART, responses: NONE_PART,
+      generations: NONE_PART, readiness: NONE_PART, pageable: CHAT_EARLIER_PAGEABLE }) };
   }
   return { kind: 'designated', sessionId: read.sessionId, term: read.term, identity: identityOf(read.sessionId, fact) };
 }
@@ -72,6 +73,27 @@ export type ReadinessChangesRead =
 
 export const messagesFact = (r: MessagesPageRead): ChatFacts['messages'] =>
   r.kind === 'measured' ? { kind: 'rows', rows: r.value.rows, more: r.value.more } : { kind: 'unmeasured', why: r.why };
+
+/** `repliesPage`'s answer (PR B). */
+export type RepliesPageRead =
+  | { readonly kind: 'measured'; readonly value: { readonly rows: readonly OverlordReplyRow[]; readonly more: boolean } }
+  | { readonly kind: 'unmeasured'; readonly why: string };
+/** `replyResponsesFor`'s answer (text-free). */
+export type ReplyResponsesRead =
+  | { readonly ok: true; readonly rows: ReadonlyMap<number, { readonly id: number; readonly handledAt: number | null }> }
+  | { readonly ok: false; readonly detail: string };
+
+export const repliesFact = (r: RepliesPageRead): ChatFacts['replies'] =>
+  r.kind === 'measured' ? { kind: 'rows', rows: r.value.rows, more: r.value.more } : { kind: 'unmeasured', why: r.why };
+
+export const responsesFact = (r: ReplyResponsesRead): ChatFacts['responses'] =>
+  r.ok ? { kind: 'rows', byReply: r.rows } : { kind: 'unmeasured', why: r.detail };
+
+/** One list's page by its query cursor: `end` reads nothing (an empty page, nothing older), anything else asks the reader below it
+ *  (null: the newest). The thread door reads each list through this, so `end` is decided once. */
+export function pageByCursor<T>(cursor: number | 'end' | null, read: (beforeId: number | null) => T, empty: T): T {
+  return cursor === 'end' ? empty : read(cursor);
+}
 
 export const generationsFact = (r: GenerationsRead): ChatFacts['generations'] =>
   r.ok ? { kind: 'rows', rows: r.rows } : { kind: 'unmeasured', why: r.detail };
@@ -99,8 +121,10 @@ export const isChatDoorKebab = (word: string): boolean => isChatKebab(word) || O
  *  `messages-unmeasured`. The 200 is the same either way: an unreadable part is in the thread as `unmeasured`. */
 export function chatThreadComposed(thread: ChatThread): ChatComposed {
   const scope = scopeOf(`session:${thread.sessionId ?? 'none'}`, 'session');
-  const count = thread.entries.filter((e) => e.kind === 'message').length;
-  if (thread.messages.kind === 'read') return { kind: 'rows', body: thread, scope, count };
+  // PR B: the line counts the replies it hands too; a thread whose messages could not be read is still a served line when it
+  // hands a reply's words, and `messages-unmeasured` when it hands no words at all.
+  const count = thread.entries.filter((e) => e.kind === 'message' || e.kind === 'reply').length;
+  if (thread.messages.kind === 'read' || count > 0) return { kind: 'rows', body: thread, scope, count };
   return { kind: 'answer', body: thread, scope, outcome: 'messages-unmeasured' satisfies ChatDoorOutcome };
 }
 

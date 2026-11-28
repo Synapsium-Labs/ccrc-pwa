@@ -10,7 +10,7 @@ const RESPONSE_KIND_MAP = {
   push: 'a push the push service accepted for at least one subscription',
   waiting: 'a Waiting on you row: an item or an ask, from its reach',
   digest: 'a decision line of a digest, from its claim',
-  reply: 'a chat reply of the Overlord (its writer waits on index question 10)',
+  reply: 'a chat reply of the Overlord, recorded when its turn ends',
 } as const;
 export type ResponseKind = keyof typeof RESPONSE_KIND_MAP;
 export const RESPONSE_KINDS = Object.keys(RESPONSE_KIND_MAP) as ResponseKind[];
@@ -93,6 +93,9 @@ export const UNMEASURED_WHYS = Object.keys(UNMEASURED_WHY_MAP) as UnmeasuredWhy[
 
 /** A Waiting on you row's longest window: seven days from its reach (§4.3 Table 4.3a), unrelated to token rotation. */
 export const WAITING_WINDOW_MS = 7 * 86_400_000;
+/** A chat reply row's window (Overlord W1 chat, PR B): a Waiting on you row's own window, read from it rather than spelt a second
+ *  time, so a reply the operator reads within it seals `opened`. The boot arm re-inserts a missing row only for a reply this young. */
+export const REPLY_WINDOW_MS = WAITING_WINDOW_MS;
 /** A failed reader defers a seal at most a day past the window's end, then the row seals `unmeasured`, `reader`. */
 export const SEAL_DEFER_MS = 86_400_000;
 /** The operator's retention of response rows, in whole days (§9.4 rule 10; question 16). The minimum covers the longest

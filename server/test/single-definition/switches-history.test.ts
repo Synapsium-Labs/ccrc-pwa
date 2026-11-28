@@ -1132,7 +1132,9 @@ describe('the launch record: one appender, one purge, and no reader in the tree 
     const close = all.findIndex((l, i) => i > open && l === '}');
     const named = all.map((l, i) => ({ l, i })).filter(({ l }) => !isBashComment(l) && bashNames(l));
     expect(named).toHaveLength(2);
-    expect(named[0]!.l).toContain('rm -f "$REG/$id.joined" "$REG/$id.joinedprev" "$REG/$id.deleg" "$REG/$id.startpending" "$REG/$id.anchor-owed" "$REG/$id.loadpending" "$REG/$id.loadlast" ||');
+    // The chat's PR B adds the reply report's spool, `replyspool`, and its last reported key, `replykey` (fix round 1), each written
+    // by the hook without a lock as `loadpending` is.
+    expect(named[0]!.l).toContain('rm -f "$REG/$id.joined" "$REG/$id.joinedprev" "$REG/$id.deleg" "$REG/$id.startpending" "$REG/$id.anchor-owed" "$REG/$id.loadpending" "$REG/$id.loadlast" "$REG/$id.replyspool" "$REG/$id.replykey" ||');
     expect(named[1]!.l.trim()).toContain('_reg_set "$id" deleg "$kept"');
     expect(named[1]!.i > open && named[1]!.i < close, 'the compaction write is inside _inflight_write').toBe(true);
   });

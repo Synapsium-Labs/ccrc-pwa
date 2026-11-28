@@ -201,6 +201,9 @@ export type GateWord = Extract<RouteRefusal,
   | 'not-the-overlord' | 'unavailable' | 'registry-unmeasurable' | 'renewing' | 'capability-missing' | 'authority-rolled-back'
   | 'overlord-off' | 'stale-designation' | 'launch-profile-unmet' | 'stale-generation' | 'unwitnessed' | 'unmeasured'
   | 'card-unread' | 'rung-below' | 'act-ceiling'>;
+/** Step 1's word as a value, for the one other door that refuses by the same rule: the report door's `reply` arm (Overlord W1 chat,
+ *  PR B, `server/src/operatorModel/replies.ts#replyTargetVerdict`), where only the designated session records a reply. Spelled here only. */
+export const NOT_THE_OVERLORD = 'not-the-overlord' satisfies GateWord;
 export type GateStep = '1' | '2' | '3' | '4' | '5' | '6' | '7' | '7a' | '8' | '9' | '10';
 export type GateRecord = 'fence-refusal' | 'witness-unwitnessed' | null;
 export type GateVerdict =

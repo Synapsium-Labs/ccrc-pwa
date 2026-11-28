@@ -17,7 +17,12 @@
 # The SIXTH (Overlord W1 door process B1): the hook's reports, a session with a door's side sends through `_hook_door_report`
 # (`ccrc-api sessions report`), each one `_hook_timeout` of REPORT_TIMEOUT_S (3 s) inside the same budget, on every PreToolUse of a door tool (the
 # witness, after every deny arm), SubagentStart, SubagentStop, a quiet Stop and a UserPromptSubmit carrying a nudge line: fail-open, spooled and
-# retried never, and no hookstate write. A PreToolUse of any other tool sends nothing (a session with a door still runs the arm's one jq).
+# retried never (but for the reply report below), and no hookstate write. A PreToolUse of any other tool sends nothing (a session with a door still runs the arm's one jq).
+# The ONE report that spools is the reply (Overlord W1 chat, PR B, `_hook_reply_report`): at a MAIN-thread Stop (never a SubagentStop) of a session with a
+# door, not a child, with a registry row, it reads the turn's reply from the transcript's tail and sends it through `ccrc-api sessions report`, after resending
+# its own spool `$REG/<id>.replyspool` (mode 0600, at most REPLY_SPOOL_MAX bodies, oldest first), all inside ONE REPORT_TIMEOUT_S (3 s) deadline that covers the read, the jq,
+# every resend and the send, each send also asking the invocation's one network budget (`_hook_net_bound`). A send that cannot be made or is not answered 200 is spooled
+# (401, 404, 408, 429, 5xx, no answer, a timeout, no time left); any other 4xx is refused for good and dropped. Fail-open, silent, and no hookstate write.
 # Since door process B2 the same sender also runs from the main case block: one `model-switch` report on PostModelSwitch from EVERY
 # main-thread, non-child session with a registry row (door or not), and one on a typed `/model` refused in a session with a door.
 # The THIRD, FOURTH and FIFTH share ONE network budget per invocation (`_hook_net_bound`, HOOK_NET_BUDGET_MS, 8 s, the
@@ -3333,7 +3338,74 @@ _hook_roster_card() {   # <event word> -> sets CARD_ROSTER (armed) or appends th
 # event or a refused prompt. The report rides the door's one sender, `_hook_door_report` (B1), defined here so these arms reach
 # it. Whether the pinned build passes a typed `/model` through UserPromptSubmit at all is the pull request's live step.
 REPORT_TIMEOUT_S=3
+# The reply report's three bounds (`_hook_reply_report`, below the door's sender), copies of shared/operatorMessages.ts's, held equal by session-hook-door-reports.test.ts:
+REPLY_READ_MAX_BYTES=4194304
+REPLY_REPORT_MAX_BYTES=65536
+REPLY_SPOOL_MAX=8
 _hook_door_report() { _hook_net_bound "$(( REPORT_TIMEOUT_S * 1000 ))" || return 0; printf '%s\n' "$1" | _hook_timeout "$NET_B" "$HOME/.local/bin/ccrc-api" sessions report "$id" --json - >/dev/null 2>&1 || { (( $? == 124 )) && HOOK_NET_HUNG=1; return 0; }; }   # <body JSON> -> one send; any failure is silent
+# ── THE REPLY REPORT (Overlord W1 chat, PR B; plan w1-chat.md Task 5, slugs a-reply-is-a-turns-text and reply-report-spools) ──
+# Defined here, beside the door's one sender, and CALLED after the loads arm (`_hook_reply_report || true`): defined above the child deny arm for the reason
+# `_hook_mail_hold` is (slug growth-counter-false-heredoc), so the growth check counts its comment lines as comments.
+# At a MAIN-thread `Stop` (never a SubagentStop) of a session with a door (`CCRC_DOOR_NONCE_SHA256`, a fact, never a role's name), not a child, whose registry row
+# stands, the hook reports the turn's reply, `{kind: "reply", entryUuid, turnAt, text, truncated, fromId, at, fromUuid}`, through the door's one sender verb
+# (`ccrc-api sessions report`), so the private store records it when the turn ends. The gate is builtins only and comes FIRST: a session with no door, a
+# child, a SubagentStop or a row that is gone pays no process at all (session-hook-door-reports.test.ts runs the function alone to pin it). The reply is read from the transcript, never from the Stop payload: the pinned
+# build's Stop payload may carry the turn's last assistant text (`last_assistant_message`), but one turn may hold several text entries (text, a tool call, more
+# text), and only the transcript has them all. `tail -c REPLY_READ_MAX_BYTES` of `transcript_path` (an absolute regular file) goes through `reply_report`
+# (ccd/lib/transcript.jq: `turn_reply`, the text cut at a code point to REPLY_REPORT_MAX_BYTES UTF-8 bytes with `truncated`); no reply is no report and nothing spooled.
+# A REPLY IS ONE TURN'S TEXT (review 4173 F1): the key of each body built is kept in `$REG/<id>.replykey` (owner-only, written through a temp file and `mv`,
+# a symlink never followed, taken by the registry purge and by a purge during the arm), and handed to `turn_reply`, so the next turn begins after that row
+# whatever opened it. The body carries no `fromUuid`: each send adds the event's own session id (`psid`, refused unsent when it is not uuid-shaped), so a body
+# spooled before the registry's uuid moved goes under the current one (F3).
+# THE ONE REPORT THAT SPOOLS: every other report is sent once because the next event heals a lost one, and nothing later heals a lost reply. Its spool,
+# `$REG/<id>.replyspool` (created under umask 077: the file holds the operator's affairs in the Overlord's words), is one body a line, written without a lock
+# while `generation` stands (the registry purge removes it once more after its lock, as `loadpending`), rewritten whole through a temp file and `mv`. At each
+# gated Stop the spool is resent oldest first, BEFORE this Stop's own report, and the first send that keeps its body stops the pass: the rest stay, this Stop's
+# own included, so a newer body is never sent before an older one (F2). A send is
+# answered by `CCRC_API_STATUS=line`'s `http <code>`: 200 removes the body; 401, 404, 408, 429, a 403 whose word is `stale-uuid`, any 5xx, no answer, a timeout, or no
+# time or network budget left keeps it (spooled, sent at the next Stop); any other 4xx (403 not-the-overlord, 400, 409; an older server with no reply arm answers
+# 400 bad-request) is refused for good, dropped, neither sent again nor spooled. Past REPLY_SPOOL_MAX bodies the oldest is dropped and counted: the count is added, as `droppedBefore`, to the body that now stands oldest
+# (the first one the gap is before), so it survives in the file to whichever Stop sends it. ONE deadline, REPORT_TIMEOUT_S from the arm's start, bounds the read, the
+# jq, every resend and the send; each send also asks `_hook_net_bound`, and one that runs out its bound (HOOK_NET_HUNG) stops every later send of the invocation, the
+# body staying spooled. Every path ends at the generation re-check (a purge during the arm orphans nothing). Prints nothing, never changes the exit code. Two
+# Stops of one session never overlap in practice (a turn lies between), and there is no lock: a lost append would be one the server's key makes a replay anyway.
+_hook_reply_send() {   # <body JSON> <deadline ms> -> 0 answered 200; 1 kept (not answered, hung, no time, no uuid, 401/404/408/429/stale-uuid/5xx); 2 refused for good (any other 4xx)
+  local out left=$(( $2 - $(_hook_epoch_ms) ))
+  [[ "$psid" =~ ^[0-9a-f-]{36}$ ]] && _hook_net_bound "$left" || return 1
+  out=$(printf '%s\n' "${1%\}},\"fromUuid\":\"$psid\"}" | CCRC_API_STATUS=line _hook_timeout "$NET_B" "$HOME/.local/bin/ccrc-api" sessions report "$id" --json - 2>&1)
+  case "$?" in 0) ;; 124) HOOK_NET_HUNG=1; return 1 ;; *) return 1 ;; esac
+  case "${out##*$'\n'}" in 'http 200') return 0 ;; 'http 401'|'http 404'|'http 408'|'http 429') return 1 ;; 'http 403') [[ "$out" == *'"stale-uuid"'* ]] && return 1; return 2 ;; 'http 4'[0-9][0-9]) return 2 ;; *) return 1 ;; esac
+}
+_hook_reply_report() {   # 0 on every path
+  local f="$REG/$id.replyspool" kf="$REG/$id.replykey" k="" t0 dl tp body="" sp=() keep=() gone=() l r pass=1 IFS=$'\n'
+  [[ "$event" == Stop && -z "$paid" && "${CCRC_DOOR_NONCE_SHA256-}" =~ ^[0-9a-f]{64}$ && "$id" =~ ^[A-Za-z0-9_-]+$ \
+    && -f "$REG/$id.generation" && ! -e "$REG/$id.child" && ! -L "$REG/$id.child" ]] || return 0
+  t0=$(_hook_epoch_ms); dl=$(( t0 + REPORT_TIMEOUT_S * 1000 )); [[ -f "$kf" && ! -L "$kf" ]] && { IFS= read -r k < "$kf"; } 2>/dev/null
+  [[ -f "$f" && ! -L "$f" ]] && { while IFS= read -r l; do [[ "$l" == '{'* ]] && sp+=("$l"); done < "$f"; } 2>/dev/null
+  tp=$(jq -r '.transcript_path | strings' <<<"$payload" 2>/dev/null)
+  if [[ "$tp" == /* && -f "$tp" ]]; then
+    body=$(_hook_timeout "$(_hook_left "$dl")" tail -c "$REPLY_READ_MAX_BYTES" -- "$tp" 2>/dev/null | _hook_timeout "$(_hook_left "$dl")" jq -Rsc -L "$ROSTER_CARD_LIB" \
+      --arg k "${k:0:36}" --arg id "$id" --argjson t "$t0" --argjson a "$(_hook_epoch_ms)" --argjson m "$REPLY_REPORT_MAX_BYTES" \
+      'include "transcript"; reply_report(.; $k; $id; $t; $a; $m)' 2>/dev/null) || body=""
+  fi
+  for l in ${sp[@]+"${sp[@]}"}; do
+    (( pass )) || { keep+=("$l"); continue; }
+    _hook_reply_send "$l" "$dl"; r=$?
+    (( r == 1 )) && { pass=0; keep+=("$l"); }
+  done
+  if [[ "$body" == '{'* ]]; then l=${body#*\"entryUuid\":\"}; { ( umask 077; printf '%s\n' "${l%%\"*}" > "$kf$$" ) && mv -f -- "$kf$$" "$kf"; } 2>/dev/null
+    (( pass )) && { _hook_reply_send "$body" "$dl"; r=$?; } || r=1; (( r == 1 )) && keep+=("$body"); fi
+  while (( ${#keep[@]} > REPLY_SPOOL_MAX )); do gone+=("${keep[0]}"); keep=("${keep[@]:1}"); done
+  # Each body dropped counts one and takes with it the count it carried, so a count is never lost; it moves to the body that now stands oldest.
+  (( ${#gone[@]} )) && { l=$(printf '%s\n' "${gone[@]}" "${keep[0]}" | jq -sc '(.[:-1] | map((.droppedBefore // 0) + 1) | add) as $n | .[-1] | .droppedBefore = ((.droppedBefore // 0) + $n)' 2>/dev/null) && [[ "$l" == '{'* ]] && keep[0]="$l"; }
+  if [[ "${keep[*]-}" != "${sp[*]-}" ]]; then
+    if (( ${#keep[@]} )); then
+      { ( umask 077; printf '%s\n' "${keep[@]}" > "$f$$" ) && mv -f -- "$f$$" "$f"; } 2>/dev/null || rm -f -- "$f$$" 2>/dev/null
+    else rm -f -- "$f" 2>/dev/null; fi
+  fi
+  [[ -e "$REG/$id.generation" ]] || rm -f -- "$f" "$f$$" "$kf" "$kf$$" 2>/dev/null   # a purge during the arm: side (a); `_reg_purge` is side (b)
+  return 0
+}
 MODEL_REPORT_JQ='def mdl: (if type == "string" then . elif type == "object" and (.id | type) == "string" then .id else "" end) | explode | map(select(. >= 32 and . <= 126)) | implode | .[0:128] | if . == "" then null else . end; def typed: (.prompt | strings | until(. == "" or (.[0:1] | IN(" ", "\t", "\n", "\r") | not); .[1:])) // "";'
 _hook_model_report() {   # <how> -> one model-switch report from a main-thread, non-child session with a registry row; silent on every failure
   local b; [[ -z "$paid" && "$id" =~ ^[A-Za-z0-9_-]+$ && -f "$REG/$id.generation" && ! -e "$REG/$id.child" && ! -L "$REG/$id.child" ]] || return 0   # the start report's own id, marker and child tests (`_hook_start_report`)
@@ -6538,14 +6610,14 @@ if [[ "$event" == PermissionRequest && -n "$apr" ]]; then _hook_approval_gate ||
 # full name, one newline and `jq -cS` of its input, `{}` when absent: plan question 6, which the door process computes the same way);
 # a subagent's start and stop (`aid`, the roster's id); `readers-clear` on a main-turn Stop with no background work (where the roster
 # empties, so one lost stop heals at the next quiet turn end); and "picked up", each prompt line that is EXACTLY the private store's nudge line
-# (`renderOperatorMessageNudge`, server/src/coord/envelope.ts; session-hook-door-reports.test.ts holds `DOOR_NUDGE_JQ` to it). Each is a SIDE
-# SEND: it writes nothing to the hookstate, spools nothing, retries nothing and fails open. It is the SIXTH declared network exception (see the
+# (`renderOperatorMessageNudge`, server/src/coord/envelope.ts; its one grammar is ccd/lib/transcript.jq's `nudge`, held to it by its test). Each is a SIDE
+# SEND: it writes nothing to the hookstate, spools nothing, retries nothing and fails open (the reply report spools: header). It is the SIXTH declared network exception (see the
 # header): `_hook_net_bound` gives it at most REPORT_TIMEOUT_S (a copy of the L0 constant, held equal by its test) of the invocation's one budget.
 # REPORT_TIMEOUT_S and the sender are defined above the main case block, whose model arms (door process B2) send through it too, from every non-child registry session.
-DOOR_NUDGE_JQ='def nudge: "ccrc-mail: you have new mail. Operator message " as $h | ": read it with your messages door." as $t | if startswith($h) and endswith($t) and length > ($h | length) + ($t | length) then .[($h | length):-($t | length)] | select((length <= 15 or (length == 16 and . <= "9007199254740991")) and (explode | all(. >= 48 and . <= 57) and .[0] != 48)) | tonumber else empty end;'
+DOOR_NUDGE_JQ='include "transcript"; '
 _hook_door_arms() {   # -> the event's reports, one `_hook_door_report` each
   local k="" q="" l; [[ "${tool:-}" == mcp__door__?* && "$pre_json" != *'"permissionDecision":"deny"'* ]] && k=$(printf '%s\n%s' "$tool" "$(jq -cS '.tool_input // {}' <<<"$payload")" | _apr_sha256); [[ -z "$paid" && "$bg" == 0 ]] && q=1
-  while IFS= read -r l; do _hook_door_report "$l"; done < <(jq -c --arg id "$id" --arg k "$k" --arg a "$aid" --arg j "${tmsub:+1}" --arg q "$q" --argjson at "$(_hook_epoch_ms)" "$DOOR_NUDGE_JQ"'(.session_id // "" | tostring) as $u | (.hook_event_name // "") as $e | (if $e == "PreToolUse" and $k != "" then {kind: "witness", key: $k, tool: .tool_name, agentId: (if $a != "" and ($j == "1" or ((.agent_type | type) == "string" and .agent_type != "")) then $a else null end)} elif $e == "SubagentStart" and $a != "" then {kind: "reader-start", agentId: $a, agentType: (.agent_type | if type == "string" then .[0:128] else null end)} elif $e == "SubagentStop" and $a != "" then {kind: "reader-stop", agentId: $a} elif $e == "Stop" and $q == "1" then {kind: "readers-clear"} elif $e == "UserPromptSubmit" then (.prompt | strings | split("\n")[] | nudge | {kind: "picked-up", messageId: .}) else empty end) + {fromId: $id, fromUuid: $u, at: $at}' <<<"$payload" 2>/dev/null)
+  while IFS= read -r l; do _hook_door_report "$l"; done < <(jq -c -L "$ROSTER_CARD_LIB" --arg id "$id" --arg k "$k" --arg a "$aid" --arg j "${tmsub:+1}" --arg q "$q" --argjson at "$(_hook_epoch_ms)" "$DOOR_NUDGE_JQ"'(.session_id // "" | tostring) as $u | (.hook_event_name // "") as $e | (if $e == "PreToolUse" and $k != "" then {kind: "witness", key: $k, tool: .tool_name, agentId: (if $a != "" and ($j == "1" or ((.agent_type | type) == "string" and .agent_type != "")) then $a else null end)} elif $e == "SubagentStart" and $a != "" then {kind: "reader-start", agentId: $a, agentType: (.agent_type | if type == "string" then .[0:128] else null end)} elif $e == "SubagentStop" and $a != "" then {kind: "reader-stop", agentId: $a} elif $e == "Stop" and $q == "1" then {kind: "readers-clear"} elif $e == "UserPromptSubmit" then (.prompt | strings | split("\n")[] | nudge | {kind: "picked-up", messageId: .}) else empty end) + {fromId: $id, fromUuid: $u, at: $at}' <<<"$payload" 2>/dev/null)
 }
 [[ "${CCRC_DOOR_NONCE_SHA256-}" =~ ^[0-9a-f]{64}$ && ! -e "$REG/$id.child" && ! -L "$REG/$id.child" ]] && { _hook_door_arms || true; }
 
@@ -6932,6 +7004,7 @@ _hook_approval_wait() {
 }
 if [[ "$event" == PermissionRequest && -n "$apr" ]]; then _hook_approval_wait || true; fi
 _hook_start_loads || true
+_hook_reply_report || true   # the reply report (Overlord W1 chat, PR B), defined beside the door's sender above
 # The two compaction arms run LAST, after the `working`/`done` stamp is on
 # disk: each calls the helper under one locally resolved deadline, and the
 # state write must never wait on either. Nothing below prints except one PreCompact payload: the refusal arm's block decision (`_hook_compact_refuse`, dark until the route says refuse; Overlord C39),

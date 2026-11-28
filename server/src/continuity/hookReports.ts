@@ -10,6 +10,8 @@ import {
   AGENT_TYPE_MAX, DOOR_TOOL_NAME_RE, DOOR_TOOL_PREFIX, REPORT_MODEL_MAX, WITNESS_KEY_SHAPE, isAgentId, isHookReportKind,
   isModelSwitchHow, READER_STALE_MS, WITNESS_WINDOW_MS, type HookReport, type ModelSwitchHow,
 } from '../../../shared/continuity-reports.js';
+import { REPLY_ANSWERS_MAX, REPLY_REPORT_MAX_BYTES } from '../../../shared/operatorMessages.js';
+import { utf8Bytes } from '../../../shared/utf8.js';
 import type { WitnessVerdict } from '../coord/overlordGate.js';
 
 export type HookReportVerdict = { readonly ok: true; readonly report: HookReport } | { readonly ok: false; readonly field: string };
@@ -23,6 +25,12 @@ const opt = <T>(v: unknown, ok: (x: unknown) => x is T): T | null | undefined =>
 const isTool = (v: unknown): v is string =>
   typeof v === 'string' && v.startsWith(DOOR_TOOL_PREFIX) && DOOR_TOOL_NAME_RE.test(v.slice(DOOR_TOOL_PREFIX.length));
 const isKey = (v: unknown): v is string => typeof v === 'string' && WITNESS_KEY_SHAPE.test(v);
+/** A transcript entry's uuid, as Claude Code writes it: lowercase 8-4-4-4-12 hex. */
+const ENTRY_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+const isEntryUuid = (v: unknown): v is string => typeof v === 'string' && ENTRY_UUID.test(v);
+/** A reply's text: 1 to `REPLY_REPORT_MAX_BYTES` UTF-8 bytes. Line breaks and tabs are the text's own, so control characters are
+ *  not refused here; the store keeps what it is given, masked and cut. */
+const isReplyText = (v: unknown): v is string => typeof v === 'string' && v !== '' && utf8Bytes(v) <= REPLY_REPORT_MAX_BYTES;
 
 const no = (field: string): HookReportVerdict => ({ ok: false, field });
 
@@ -68,6 +76,26 @@ export function hookReportOf(body: Record<string, unknown>): HookReportVerdict {
       const messageId = body['messageId'];
       if (!isPos(messageId)) return no('messageId');
       return { ok: true, report: { kind, messageId, at } };
+    }
+    case 'reply': {
+      // A refusal names the field only, never the text (a reply is the Overlord's words about the operator's affairs).
+      const entryUuid = body['entryUuid'];
+      if (!isEntryUuid(entryUuid)) return no('entryUuid');
+      const turnAt = body['turnAt'];
+      if (!isCount(turnAt)) return no('turnAt');
+      const text = body['text'];
+      if (!isReplyText(text)) return no('text');
+      const truncated = body['truncated'];
+      if (typeof truncated !== 'boolean') return no('truncated');
+      const droppedBefore = opt(body['droppedBefore'], isPos);
+      if (droppedBefore === undefined) return no('droppedBefore');
+      // The ids the turn's own prompt rows name (call 1953 condition 2): REQUIRED, and may be empty. An adapter that cannot name ids
+      // sends `[]` and gets the server's window alone; past REPLY_ANSWERS_MAX the hook sends the newest with `answersCut: true`.
+      const answers = body['answers'];
+      if (!Array.isArray(answers) || answers.length > REPLY_ANSWERS_MAX || !answers.every(isPos)) return no('answers');
+      const answersCut = opt(body['answersCut'], (x): x is boolean => typeof x === 'boolean');
+      if (answersCut === undefined) return no('answersCut');
+      return { ok: true, report: { kind, entryUuid, turnAt, text, truncated, droppedBefore, answers: answers as number[], answersCut: answersCut === true, at } };
     }
   }
 }

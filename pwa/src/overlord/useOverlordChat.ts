@@ -15,19 +15,24 @@
 // The port is declared HERE, by its consumer, for the three calls the chat makes; the shared client's three calls
 // (`api.overlordChat`, `overlordChatEarlier`, `overlordSend`) implement it, in `ChatPart.tsx`.
 //
+// The thread is read in pages (PR B): `thread(cursor)` reads one, and `chatWords.ts` decides what is drawn of them
+// (`foldNewestPage`, `foldOlderPage`, `visibleEntries`); the hook only holds the pages and one older read at a time. After a
+// read-ceiling refusal the wait is `ceilingNotBefore`'s (bounded; L1).
+//
 // The kept draft (question 5): a send carries a send key, 128 random bits in base64url, and the term of the thread it was
 // composed in. The key and term are bound to the draft's text: a retry of the same text after no answer carries the same
 // key and term, so the private store answers the first record again instead of recording twice; a recorded answer or an
 // edited draft makes a new key, and `stale-designation` drops the binding, so the next send carries the new thread's term.
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { SessionStatus, SessionStreamMsg } from '../../../shared/api';
-import type { ChatSendAnswer, ChatThread, ChatThreadAnswer, GenerationKey } from '../../../shared/overlordChat';
+import type { ChatEntry, ChatOlder, ChatSendAnswer, ChatThread, ChatThreadAnswer, GenerationKey } from '../../../shared/overlordChat';
 import { ApiError } from '../lib/apiError';
 import { apiErrorText, sendErrorText } from '../lib/api';
 import { onPageVisible } from '../lib/pageClock';
 import {
-  NOBODY_TO_SEND_WORDS, chatReadTrigger, chatRefusalRole, draftAfterSend, earlierPageOf, historyItemsToChat, nextReadAt,
-  pickUpReadEvery, sendNotice, type ChatEarlierRead, type ChatRow, type ThreadTrouble,
+  NOBODY_TO_SEND_WORDS, ceilingNotBefore, chatReadTrigger, chatRefusalRole, draftAfterSend, earlierPageOf, foldNewestPage, foldOlderPage,
+  historyItemsToChat, nextReadAt, pickUpReadEvery, replyEntriesOf, sendNotice, visibleEntries,
+  type ChatEarlierRead, type ChatPaged, type ChatRow, type ThreadTrouble,
 } from './chatWords';
 
 export type { ChatEarlierRead, ThreadTrouble };
@@ -37,9 +42,10 @@ export type ChatThreadRead = ChatThreadAnswer;
 
 export interface ChatSendOpts { readonly offRecord: boolean; readonly sendKey: string; readonly overlordTerm: number }
 
-/** The three calls the chat makes. Each answers; none throws on a refusal. A throw is read as no answer. */
+/** The calls the chat makes. Each answers; none throws on a refusal. A throw is read as no answer. `thread` reads one page of the
+ *  thread: the newest with no cursor, else the older page the cursor names (`ChatThread.older`). */
 export interface OverlordChatPort {
-  thread(): Promise<ChatThreadRead>;
+  thread(older?: ChatOlder | null): Promise<ChatThreadRead>;
   earlier(gen: GenerationKey, around: string | null): Promise<ChatEarlierRead>;
   send(sessionId: string, text: string, opts: ChatSendOpts): Promise<ChatSendAnswer>;
 }
@@ -50,9 +56,19 @@ export type EarlierState =
   | { readonly kind: 'rows'; readonly rows: readonly ChatRow[]; readonly next: string | null }
   | { readonly kind: 'unreachable'; readonly rows: readonly ChatRow[]; readonly cause: string | null };
 
+/** Whether an older page is being read, or the last one could not be. */
+export type OlderLoad = 'idle' | 'loading' | 'failed';
+
 export interface OverlordChat {
-  /** The last thread read, or null before the first. */
+  /** The last NEWEST page read, or null before the first. */
   readonly thread: ChatThread | null;
+  /** Every entry drawn: the newest page and the older pages read, oldest first (`chatWords.ts#visibleEntries`). */
+  readonly entries: readonly ChatEntry[];
+  /** Where the next older page starts, or null when nothing older is on record. */
+  readonly older: ChatOlder | null;
+  readonly olderLoad: OlderLoad;
+  /** Reads the next older page and puts it before what is drawn. */
+  readonly showOlder: () => void;
   readonly trouble: ThreadTrouble | null;
   readonly earlier: ReadonlyMap<string, EarlierState>;
   /** What the chat says after the last send, or null. */
@@ -85,6 +101,7 @@ const visible = (): boolean => typeof document === 'undefined' || document.visib
 
 export function useOverlordChat(port: OverlordChatPort): OverlordChat {
   const [thread, setThread] = useState<ChatThread | null>(null);
+  const [paging, setPaging] = useState<{ readonly paged: ChatPaged | null; readonly load: OlderLoad }>({ paged: null, load: 'idle' });
   const [trouble, setTrouble] = useState<ThreadTrouble | null>(null);
   const [earlier, setEarlier] = useState<ReadonlyMap<string, EarlierState>>(new Map());
   const [notice, setNotice] = useState<string | null>(null);
@@ -93,6 +110,8 @@ export function useOverlordChat(port: OverlordChatPort): OverlordChat {
   portRef.current = port;
   const alive = useRef(true);
   const threadNow = useRef<ChatThread | null>(null);
+  const pagedNow = useRef<ChatPaged | null>(null);
+  const loadNow = useRef<OlderLoad>('idle');
   const lastReadAt = useRef<number | null>(null);
   const notBefore = useRef(0);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -103,6 +122,12 @@ export function useOverlordChat(port: OverlordChatPort): OverlordChat {
   const status = useRef<SessionStatus | null>(null);
   const binding = useRef<{ text: string; key: string; term: number; sessionId: string } | null>(null);
   const earlierNow = useRef<Map<string, EarlierState>>(new Map());
+
+  const commitPaging = (paged: ChatPaged | null, load: OlderLoad): void => {
+    pagedNow.current = paged;
+    loadNow.current = load;
+    setPaging({ paged, load });
+  };
 
   // One coalescer for every trigger (question 10): a read already waiting absorbs any ask it would answer as soon, and an ask
   // that must read sooner (a trigger past a slower pick-up timer, a moved designation's at-once read) takes its place; a hidden
@@ -120,9 +145,10 @@ export function useOverlordChat(port: OverlordChatPort): OverlordChat {
     if (r.kind === 'thread') {
       threadNow.current = r.thread;
       setThread(r.thread);
+      commitPaging(foldNewestPage(pagedNow.current, r.thread), loadNow.current);
       setTrouble(null);
     } else if (r.kind === 'refused' && chatRefusalRole(r.error) === 'ceiling') {
-      notBefore.current = Date.now() + (r.retryAfterS ?? 0) * 1000;
+      notBefore.current = ceilingNotBefore(Date.now(), r.retryAfterS);
       setTrouble({ kind: 'ceiling' });
       // Read again after the server's retry time (question 9), a quiet thread and a refused first read too (review 4120 F2).
       ask.current();
@@ -220,9 +246,25 @@ export function useOverlordChat(port: OverlordChatPort): OverlordChat {
       const page = earlierPageOf(r);
       putEarlier(key, page.kind === 'unreachable'
         ? { kind: 'unreachable', rows, cause: page.cause }
-        : { kind: 'rows', rows: [...historyItemsToChat(page.items), ...rows], next: page.next });
+        : { kind: 'rows', rows: [...historyItemsToChat(page.items, replyEntriesOf(pagedNow.current?.entries ?? [])), ...rows], next: page.next });
     })();
   }, []);
 
-  return { thread, trouble, earlier, notice, showEarlier, send, noteFrame };
+  // One older page at a time, below the cursor the drawn thread names; what is drawn stays whatever the answer is.
+  const showOlder = useCallback((): void => {
+    const cur = pagedNow.current;
+    if (cur === null || cur.older === null || loadNow.current === 'loading') return;
+    const cursor = cur.older;
+    commitPaging(cur, 'loading');
+    void (async () => {
+      let r: ChatThreadRead;
+      try { r = await portRef.current.thread(cursor); } catch { r = { kind: 'no-answer' }; }
+      if (!alive.current) return;
+      const base = pagedNow.current ?? cur;
+      const folded = r.kind === 'thread' ? foldOlderPage(base, r.thread) : null;
+      commitPaging(folded ?? base, folded === null ? 'failed' : 'idle');
+    })();
+  }, []);
+
+  return { thread, entries: visibleEntries(paging.paged), older: paging.paged?.older ?? null, olderLoad: paging.load, showOlder, trouble, earlier, notice, showEarlier, send, noteFrame };
 }

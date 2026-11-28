@@ -98,6 +98,55 @@
   justify-self: stretch;
   min-width: 0;
 }
+/* The Overlord's reply (PR B): its words as plain text on the part's own ground, set left under a rule, so it is neither an operator
+   bubble nor a pane turn. The marks and the handled control are quiet, as the bubble's marks are. */
+.oc-chat .oc-reply {
+  justify-self: start;
+  max-width: 85%;
+  min-width: 0;
+  margin: 0;
+  display: grid;
+  gap: var(--sp-1);
+  border-left: 2px solid var(--edge-strong);
+  padding-left: var(--sp-3);
+}
+.oc-chat .oc-reply .oc-reply-text {
+  margin: 0;
+  min-width: 0;
+  font-size: var(--fs-base);
+  line-height: var(--lh-normal);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  color: var(--ink-primary);
+}
+.oc-chat .oc-reply .oc-reply-marks {
+  margin: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-1);
+}
+.oc-chat .oc-reply .oc-mark {
+  font: var(--weight-regular) var(--fs-xs) / 1.4 var(--family-ui);
+  color: var(--ink-secondary);
+  border: 1px solid var(--edge-subtle);
+  border-radius: var(--r-full);
+  padding: 0 var(--sp-2);
+}
+.oc-chat .oc-reply .oc-handled,
+.oc-chat .oc-reply .oc-quiet { text-align: left; }
+.oc-chat .oc-reply .oc-handled-offer {
+  display: grid;
+  gap: var(--sp-1);
+  justify-items: start;
+  min-width: 0;
+}
+/* The older page's control, above the oldest row: centred, its quiet lines under it. */
+.oc-chat .oc-older {
+  display: grid;
+  gap: var(--sp-1);
+  justify-items: center;
+  min-width: 0;
+}
 .oc-chat .oc-pane-turn {
   justify-self: start;
   max-width: 85%;
