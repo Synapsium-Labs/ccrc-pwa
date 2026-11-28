@@ -36,6 +36,15 @@ export function cardFieldsOf(row: DecisionQuestionRow, refs: Readonly<Record<str
   return unmeasured ? { kind: 'skip', word: 'unmeasured' } : { kind: 'fields', fields };
 }
 
+/** A choice row's options, as its record names them (`card-options-from-the-record`): the slugs of its `programme` ref field
+ *  (`programme.pick`'s shortlist). A yes-no row has none. */
+export function cardOptionsOf(row: DecisionQuestionRow, refs: Readonly<Record<string, string | readonly string[]>>): readonly string[] {
+  if (row.type !== 'choice') return [];
+  const field = row.fields.find((f) => f.kind === 'ref' && f.refKind === 'programme');
+  const v = field === undefined ? undefined : refs[field.name];
+  return v === undefined ? [] : typeof v === 'string' ? [v] : v;
+}
+
 /** The answers a card offers (LQ12): a yes-no row, yes, no and not-sure; a choice row, each of its options, none, not-sure. */
 export function cardAllowedAnswers(row: DecisionQuestionRow, options: readonly string[]): readonly LabelAnswer[] {
   if (row.type === 'yes-no') return ['yes', 'no', 'not-sure'];

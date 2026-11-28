@@ -384,7 +384,7 @@ const CARD_VIEW_SET: MutantSet<Cards> = {
 const REF_NEEDS_SET: MutantSet<Queue> = {
   modulePath: QUEUE_TS,
   mutants: [
-    { id: 'RN1', old: "if (refKind === 'goals-version') { noReader = true; continue; }", new: "if (refKind === 'goals-version') continue;" },
+    { id: 'RN1', old: '{ noReader = true; continue; }', new: 'continue;' },
     { id: 'RN2', old: "if (refKind === undefined) return { kind: 'malformed' };", new: 'if (refKind === undefined) continue;' },
     { id: 'RN3', old: "if (ids.length === 0 || ids.some((i) => i === null)) return { kind: 'malformed' };", new: '' },
     { id: 'RN4', old: "/^[1-9][0-9]{0,15}$/.test(v)", new: "/^[0-9]+$/.test(v)" },

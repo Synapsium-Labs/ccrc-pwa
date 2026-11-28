@@ -37,7 +37,10 @@ export const isLabelQueueKebab = (token: string): boolean =>
   || (LABEL_CARD_OUTCOMES as readonly string[]).includes(token)
   || (LABEL_DOOR_REFUSALS as readonly string[]).includes(token)
   || (LABEL_SKIP_WORDS as readonly string[]).includes(token)
+  || (NO_READER_REF_KINDS as readonly string[]).includes(token)
   || (DECISION_LABEL_SOURCES as readonly string[]).includes(token);
+/** The ref kinds this build has no card reader for (the coordinator's ruling on the gap): their spelling is the first producer's. */
+const NO_READER_REF_KINDS = ['goals-version'] as const;
 
 /** LQ3: the rows a card may serve, in catalogue order: those whose `labelSources` name `label-queue`. */
 export function cardRowsOf(q: typeof DECISION_QUESTIONS): readonly DecisionRowId[] {
@@ -205,7 +208,7 @@ export function cardRefNeeds(row: DecisionQuestionRow, refs: Readonly<Record<str
   for (const [name, value] of Object.entries(refs)) {
     const refKind = row.fields.find((f) => f.name === name)?.refKind;
     if (refKind === undefined) return { kind: 'malformed' };
-    if (refKind === 'goals-version') { noReader = true; continue; }
+    if ((NO_READER_REF_KINDS as readonly string[]).includes(refKind)) { noReader = true; continue; }
     if (refKind === 'programme') continue;
     const ids = (typeof value === 'string' ? [value] : value).map(refId);
     if (ids.length === 0 || ids.some((i) => i === null)) return { kind: 'malformed' };

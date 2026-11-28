@@ -13,7 +13,9 @@
 // keeps it and a revision change drops it by the key alone. "The newest record" of a state is the newest by this table's own
 // order (`id`) among the records of that revision, whatever its host, model or line generation.
 import type { DatabaseSync } from 'node:sqlite';
-import { DECISION_LABEL_SOURCES, DECISION_QUESTIONS, isDecisionRowId, type DecisionRowId } from '../../../shared/decisionModel.js';
+import {
+  DECISION_LABEL_SOURCES, DECISION_QUESTIONS, isDecisionRowId, type DecisionRowId, type DecisionRowMode,
+} from '../../../shared/decisionModel.js';
 import { LABEL_CARD_OUTCOMES, type LabelCardOutcome } from '../../../shared/labelQueue.js';
 import { utcIsoWeek } from '../time/rules.js';
 import type { LabelledAnswer } from './decisionLines.js';
@@ -248,6 +250,26 @@ export function labelRefFactsOf(
         return 'unmeasured';
       }
     },
+  };
+}
+
+/** The doors' store over one handle: it meets `labelCardRoutes.ts#LabelCardStore` (C6) by shape, so this C5 file imports nothing
+ *  from the doors and asks none of their deciders (F13). */
+export function labelCardStoreOf(db: DatabaseSync): {
+  openCards(): readonly LabelCardRow[];
+  card(id: number): LabelCardRow | 'absent';
+  rowMode(row: DecisionRowId): DecisionRowMode | 'unreadable';
+  record(recordId: number): ReturnType<typeof labelRecordOf>;
+  pickedThisWeek(week: string): number;
+  close(id: number, close: Parameters<typeof closeLabelCardInTx>[2]): ReturnType<typeof closeLabelCardInTx>;
+} {
+  return {
+    openCards: () => openLabelCards(db),
+    card: (id) => labelCardById(db, id),
+    rowMode: (row) => { const r = decisionRowRead(db, row); return r.kind === 'row' ? r.state.mode : 'unreadable'; },
+    record: (recordId) => labelRecordOf(db, recordId),
+    pickedThisWeek: (week) => labelCardCounts(db, week).pickedThisWeek,
+    close: (id, close) => closeLabelCardInTx(db, id, close),
   };
 }
 

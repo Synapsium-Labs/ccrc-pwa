@@ -3,7 +3,7 @@
 // a slot of the ten, and a card's fields rebuilt from its record and the texts the door read. Pure: no store, no clock.
 import { describe, expect, it } from 'vitest';
 import { DECISION_QUESTIONS as Q } from '../../shared/decisionModel.js';
-import { cardFieldsOf, type CardRefText } from '../src/coord/labelCards.js';
+import { cardFieldsOf, cardOptionsOf, type CardRefText } from '../src/coord/labelCards.js';
 import {
   cardHoldsSlot, cardRefNeeds, labelBudget, labelsNeeded, nextCandidate, openSlotsHeld, pickRowFactsOf, stateDrawability, type RefFound,
 } from '../src/coord/labelQueue.js';
@@ -128,6 +128,15 @@ describe('nextCandidate and pickRowFactsOf', () => {
     const f = pickRowFactsOf({ row: Q['relay.method'], mode: 'armed', answers: cleanAll, lastCardWeekStart: 7,
       waiting: [{ stateHash: 'a', recordId: 1, at: 1, verdict: 'yes', p: 0.99, drawability: 'drawable' }] });
     expect(f).toMatchObject({ needed: 'none', mode: 'armed', lastCardWeekStart: 7, waiting: [{ stateHash: 'a', markedAtNext: false }] });
+  });
+});
+
+describe('cardOptionsOf: a choice row\'s options from its record', () => {
+  it('the programme ref field\'s slugs on a choice row; none on a yes-no row', () => {
+    expect(cardOptionsOf(Q['programme.pick'], { candidates: ['prog-a', 'prog-b'] })).toEqual(['prog-a', 'prog-b']);
+    expect(cardOptionsOf(Q['programme.pick'], { candidates: 'prog-a' })).toEqual(['prog-a']);
+    expect(cardOptionsOf(Q['programme.pick'], {})).toEqual([]);
+    expect(cardOptionsOf(Q['programme.any'], { candidates: ['prog-a'] })).toEqual([]);
   });
 });
 
