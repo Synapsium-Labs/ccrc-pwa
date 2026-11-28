@@ -164,8 +164,10 @@ describe('reader mode: the mount plan', () => {
       expect(a.onProgress).toBeTypeOf('function');
       a.onProgress!(0.25);
       expect(onProgress).toHaveBeenCalledWith(0.25);
-      // The frame's own bar is turned off only on ccrc's bar: a frame-bar mount asks for progress and keeps its bar.
-      expect('features' in a).toBe(chrome === 'host-bar');
+      // The frame's own bar is turned off only on ccrc's bar: a frame-bar mount asks for progress and keeps its bar. Every Docs mount
+      // carries `features` since P5.4 (the reading-layer flags), so the bar is read from its chrome switches.
+      const features = (a as { features?: { chrome?: unknown } }).features;
+      expect(features?.chrome !== undefined).toBe(chrome === 'host-bar');
     }
     const lab = rig({ profile: 'lab-draw', chrome: 'host-bar', onProgress: vi.fn() });
     await lab.run();

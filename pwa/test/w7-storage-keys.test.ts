@@ -218,8 +218,15 @@ describe('W8a: the reader\'s keys stay under its own prefix (M8.15)', () => {
       mount: mount as never, store: () => port as never,
       assets: () => Promise.resolve({ guard: 'g', bootstrap: 'b', enhance: 'e', css: 'c' }),
     });
-    const calls = mount.mock.calls as unknown as Array<[HTMLElement, { adapters: { store: unknown; storePrefix: string } }]>;
-    expect(calls[0]![1].adapters.store).toBe(port);
+    const calls = mount.mock.calls as unknown as Array<[HTMLElement, { adapters: { store: HostStorage; storePrefix: string } }]>;
+    // The page store, behind the one-key write rewrite that keeps the stored layout (X2 P5.1, I-3): every other key's write,
+    // a read and a removal reach the page store as they came.
+    const store = calls[0]![1].adapters.store;
+    store.setItem(`${READER_STORE_PREFIX}doc:demo:sec:a.md:seen`, '"x"');
+    expect(port.setItem).toHaveBeenCalledWith(`${READER_STORE_PREFIX}doc:demo:sec:a.md:seen`, '"x"');
+    expect(store.getItem(`${READER_STORE_PREFIX}doc:demo:sec:a.md:seen`)).toBe('"x"');
+    store.removeItem(`${READER_STORE_PREFIX}doc:demo:sec:a.md:seen`);
+    expect(port.removeItem).toHaveBeenCalledWith(`${READER_STORE_PREFIX}doc:demo:sec:a.md:seen`);
     expect(calls[0]![1].adapters.storePrefix).toBe(READER_STORE_PREFIX);
   });
 

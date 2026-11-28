@@ -1827,3 +1827,10 @@ One Opus review of P5.4's diff: no Critical, one Important (the test gap on the 
 #### Slips
 
 Twice a subagent ran several test files in one shell loop, against one file per call.
+
+#### Checks before the push (both tasks, 2026-11-28)
+
+- **The whole pwa suite**, in nine runs by the test files' first letter, 701 files: its first full run was red in three files, each a pin of what this wave changed that no earlier run had read: `browser-dist` (the new browser file's shared build written in another shape than the pin's), `reader-mode-mount` (a frame-bar mount carries `features` since P5.4) and `w7-storage-keys` (the store handed the library is the page store behind the write rewrite, not the page store itself). Each was fixed in the pin and re-run green; every other file was green at the first run.
+- **The typechecks**: pwa (`tsc --noEmit -p tsconfig.json`) and `ui`, exit 0; the server's source, exit 0. The server's test typecheck (`-p test/tsconfig.tests.json`) was killed by the test slice's 6 GiB memory cap twice on a loaded box and is unmeasured here; the pull request's run measures it.
+- **The browser files**, one per run: `frame-cost` (19; one fleet-frame timing window overran once under load and passed alone), `reader-frame` (61), `reader-appearance` (28), `reader-mode` (24, one expected fail, five opt-in skips), `reader-mode-head` (2), `reader-places` (10), `reader-history` (12), `reader-layouts` (59, fourteen opt-in skips), `docs-compact-head` (156, one skip), `palette-search` (12), `docs-print` (11, nine skips), `docs-export` (18).
+- **The server's scans**: the rings, single-definition, the census suites, `docs-parity`, `docs-url`, `anchors`, `citations`, `deviation-refs` (against `origin/main`), `topology-clean`, `growth-check`, `ccd-line-citations`, `consolidation-census`, `private-names` and `ci-ledger-guard`, 90 files: one red row, W7's storage-type census, which pins the port file's storage types and now names `rewritingWrites` beside `memoryStorage`; green after.

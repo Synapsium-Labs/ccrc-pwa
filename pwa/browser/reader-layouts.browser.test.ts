@@ -67,8 +67,10 @@ const DARK = 'phosphor';
 
 let browser: Browser;
 let server: DistServer;
+let dist: string;
 beforeAll(async () => {
-  server = await serveDist(sharedDist());
+  dist = sharedDist();
+  server = await serveDist(dist);
   browser = await chromium.launch({ executablePath: resolveChrome(), headless: true });
 }, 180_000);
 afterAll(async () => { await browser?.close(); await server?.close(); });

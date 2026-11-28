@@ -401,10 +401,11 @@ describe('W7 PWA census: REAL rows (reporting, not ratcheting; spec §5.1 rule 3
     expect(countBy(outside, (s) => s.kind)).toEqual({});
   });
 
-  it('storageTypes(): the port\'s StoragePort and its in-memory instance, and 0 local storage types outside it', () => {
+  it('storageTypes(): the port\'s StoragePort, its in-memory instance and its one-key write rewrite, and 0 local storage types outside it', () => {
     const sites = storageTypes();
     show('storageTypes', sites);
-    expect(sites.filter((s) => s.file === STORAGE_PORT).map((s) => s.symbol)).toEqual(['(module)', 'memoryStorage']);
+    // `rewritingWrites` (X2 P5.1, I-3): the reader mount's layout-keeping store is the port's own wrapping, held in the port's file.
+    expect(sites.filter((s) => s.file === STORAGE_PORT).map((s) => s.symbol)).toEqual(['(module)', 'rewritingWrites', 'memoryStorage']);
     held('storageTypes outside lib/storage.ts', sites.filter((s) => s.file !== STORAGE_PORT), 0);
   });
 
