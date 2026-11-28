@@ -28,7 +28,10 @@ The plan is a snapshot of 2026-11-16. Measured on `main` at `9d3a88b0eb`:
   Table 11.6 row.
 - **The decider** (`server/src/coord/overlordMayAct.ts`, L1, C5): `overlordMayAct`, `grantCovers`, the facts and target types,
   the dormant `GrantFact` and `CommandFact`, the bound `MayActAllow` with its one minter, `isMayActAllow` and
-  `spendMayActAllow`, and `mayActRank`, the answers' order.
+  `spendMayActAllow`, and `mayActRank`, the answers' order. `isMayActKebab` admits every word the decider quotes to the
+  coordination directory's kebab-token census (`server/test/mail-routes.test.ts`, one admission line, applied by packet with
+  the file's holder's yes), each from its one list: the steps, the grant condition kinds, an answer's verdicts, and L0's
+  answer, cover, cell and isolation words.
 - **W2's one door** (`server/src/coord/overlordMayActW2.ts`, L1): `mayActW2`, which names every fact it passes and never
   spreads its input, so a caller cannot pass a grant, a command, an entry, answer verdicts or an arming through it.
 - **The policy port**: `overlordPolicy.ts` (L2, types only: the port, its question, its check and the door's verdict, with the
