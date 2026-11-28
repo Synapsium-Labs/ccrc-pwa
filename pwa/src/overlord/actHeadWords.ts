@@ -6,7 +6,7 @@
 //
 // The line names the head by its record number and its signed state only. It never carries a record's content or an actor (the
 // head holds neither: a day, a sequence, a journal id and a digest).
-import type { HeadExtends } from '../../../shared/actJournalHead';
+import { isActHead, type HeadExtends } from '../../../shared/actJournalHead';
 
 /** What the console checked of the signature: it verified, it did not, this browser has no Ed25519, or the head is unsigned. */
 export type ActHeadVerify = 'verified' | 'failed' | 'cannot-verify-here' | 'not-signed';
@@ -31,6 +31,20 @@ export interface ActHeadLineWords { readonly text: string; readonly tone: ActHea
 
 const LEAD = 'Overlord act journal';
 const recordNo = (n: number): string => n.toLocaleString('en-US');
+
+/** The digest's line for its `actHead` field (`shared/actJournalHead.ts#DigestActHead`), read through this one guard: "Overlord
+ *  act journal: record 1,234, signed" or "… unsigned (shared-user)"; a failed head read says so; no field, or a field out of shape,
+ *  draws no line. */
+export function actHeadDigestLine(field: unknown): string | null {
+  if (field === undefined) return null;
+  if (field === 'unmeasured') return `${LEAD}: its head could not be read`;
+  if (!isActHead(field)) return null;
+  const f = field as { readonly sequence: number; readonly signature?: unknown; readonly unsigned?: unknown };
+  const at = `record ${recordNo(f.sequence)}`;
+  if (typeof f.unsigned === 'string' && f.signature === null) return `${LEAD}: ${at}, unsigned (${f.unsigned})`;
+  if (typeof f.signature === 'string' && f.unsigned === null) return `${LEAD}: ${at}, signed`;
+  return null;
+}
 
 /** The line, or `null` when there is nothing to draw (no head yet). */
 export function actHeadOneLine(view: ActHeadView): ActHeadLineWords | null {

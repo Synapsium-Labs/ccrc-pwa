@@ -67,13 +67,14 @@ export function runActHeadSignPass(deps: ActHeadLaneDeps, now: number): ActHeadP
     const day = deps.dayOf(now);
     const todayRead = actHeadForDay(db, day);
     const today = todayRead.kind === 'unmeasured' ? { unmeasured: todayRead.why } : todayRead.value === 'absent' ? 'absent' as const : 'present' as const;
-    let head: ActHeadLaneFile = { kind: 'empty' };
+    const seen: { head: ActHeadLaneFile } = { head: { kind: 'empty' } };
     const plan = actHeadLanePlan({
       today,
-      file: () => (head = fileOf(deps.journal.readVerified())),
+      file: () => (seen.head = fileOf(deps.journal.readVerified())),
       verdict: () => actHeadSignVerdict({ isolation: deps.isolation(), approvalsDisabled: deps.approvalsDisabled(), keyAvailable: deps.signer() !== null }),
     });
     if (plan.kind === 'warn') deps.warn(`ccrc-server: the act journal's head for ${day} was not recorded (${plan.why}); the next beat tries again`);
+    const head = seen.head;
     if (plan.kind !== 'record' || head.kind !== 'head') return { plan };
     const h = { day, sequence: head.sequence, journalId: head.journalId, digest: head.digest };
     const signature = plan.verdict.sign ? deps.signer()?.signActHead(h) ?? null : null;
