@@ -97,8 +97,33 @@ header (slug `reply-receipts-dwell-on-view`).
 - **`reply-store-refusal-words`**: the plan said a store refusal answers 502 with the store's word; the words are `RouteRefusal`s
   with their own statuses: `write-failed`, `journal-unreadable` and `journal-unwritable` 503, `not-open` 409, and `refused` (the same
   entry with other text, `entry-reused`) 409 `conflict`. The detail never names the text.
-- **`reply-spool-drops-refused-for-good`**: a spooled body answered 403, 400, 409 or another 4xx but 401, 404, 408 and 429 is
-  refused for good and dropped, as the loads report's sender drops one; only 200 removes a body otherwise.
+- **`reply-spool-drops-refused-for-good`** (corrected in fix round 1, review 4173 F3): a body answered 400, 409, a 403 whose word is
+  anything but `stale-uuid` (`not-the-overlord`), or another 4xx but 401, 404, 408 and 429 is refused for good and dropped, as the
+  loads report's sender drops one; only 200 removes a body otherwise. A 403 `stale-uuid` is KEPT and ends the pass, as the start
+  report's sender keeps it, because the body carries no uuid of its own: each send adds the event's session id (slug
+  `reply-sends-under-the-current-uuid`), so a body spooled before the registry's uuid moved lands under the current one.
+- **`reply-links-fall-toward-off-the-record`** (the coordinator's rule for every link a reply carries, call 1952): where the turn's
+  bounds or the answered messages cannot be decided exactly, the reply is never made more public than the most private message it
+  may answer. It is written once, in `replyLinks` (`shared/operatorMessages.ts`), and pinned by `sim/replySets.ts`'s cases and
+  mutants L1 to L9: off the record is an OR over the cut, every named id that is off the record or unverified, and every message in
+  the window; the link is only ever a verified named id, else the window's newest.
+- **`a-reply-is-one-turn-after-the-reported-key`** (review 4173 F1): the plan's turn begins at the newest real prompt, and a turn a
+  background-task notice or a typed command opens at idle is no prompt, so it took in the turn before it and sent the earlier reply
+  again, on the record even when the first was not. The hook now keeps the key of the reply it built last, `$REG/<id>.replykey`
+  (owner-only, through a temp file and `mv`, a symlink never followed, taken by the registry purge and by a purge during the arm,
+  census 65), and the turn begins right after that row when the window holds it, whatever opened it; a mid-turn prompt no longer
+  moves the start either. A key the window does not hold (it moved past it, or another transcript) falls back to the prompt rule.
+  A body that is spooled still moves the key: it was reported.
+- **`reply-answers-name-the-messages`** (review 4173 F2, call 1953): a reply's links came from the server's record time, so a body
+  recorded late took in messages its turn never saw, and the true answer to them was recorded on the record with no link. The
+  report now carries `answers`, the message ids the turn's own prompt rows name, read by the picked-up arm's one grammar (moved into
+  the transcript library, slug `nudge-grammar-lives-in-the-library`: text unchanged, characterized before the move, about 1 ms of
+  parse per door event, measured), at most `REPLY_ANSWERS_MAX` (64), the newest with `answersCut` past it. The store verifies each
+  id (it exists, is this session's, its off-the-record column reads 0 or 1) and links only a verified one. The old window (this
+  session's pick-ups after its previous recorded reply, on the server's clock) stays, only to widen off the record. The two boxes'
+  clocks are compared nowhere: a pick-up is the server's clock, `turnAt` the fleet box's, and nothing reads `turnAt`.
+- **`reply-sends-in-order`** (review 4173 F2): after a body is kept, nothing newer is sent in that pass, this Stop's own included, so
+  a newer reply is never recorded before an older one.
 - **`dropped-count-rides-the-spool-head`**: past `REPLY_SPOOL_MAX` the oldest body is dropped and its count, with any count it
   carried, moves to the body that now stands oldest, so the count lives in the one spool file and is never lost.
 - **`api-error-rows-are-not-the-reply`**: an assistant row with `isApiErrorMessage: true` is Claude Code's error notice, not the
@@ -122,12 +147,12 @@ header (slug `reply-receipts-dwell-on-view`).
 
 | Decider | Mutants | Killed |
 |---|---|---|
-| `shared/operatorMessages.ts#replyLinks` (new) | L1 offRecord ignored, L2 the oldest id answered, L3 the last message decides offRecord | 3/3 |
+| `shared/operatorMessages.ts#replyLinks` (new; rewritten in fix round 1) | L1 the window's offRecord ignored, L2 the oldest named id links, L3 the window's last message decides, L4 a named off or unverified id ignored, L5 only an off id counts, L6 an unverified id links, L7 the cut ignored, L8 the window links before a named id, L9 the oldest window id links | 9/9 |
 | `server/src/operatorModel/replies.ts#replyTargetVerdict` (new) | V1 any session records, V2 unmeasured records | 2/2 |
 | `server/src/coord/overlordChat.ts#chatPageCut` (new) | P1 the floor ignored, P2 the earlier time, P3 rows left out not counted as more, P4 the next cursor from the newest kept row, P5 a list with none kept skips its rows, P6 an older page with a list unreadable, P7 a row at the floor dropped | 7/7 |
 | `server/src/coord/overlordChat.ts#composeChat` (existing set, 7 before) | C8 unreadable replies read as an empty page, C9 unreadable response rows read as no row, C10 the divider floor ignored, C11 a reply before a message at the same millisecond | 11/11 |
 | `shared/overlordChat.ts#readChatThread` (existing set, 5 before) | R6 absent replies read as an empty part, R7 an unknown response kind reads no-row, R8 an older server's older page dropped | 8/8 |
-| `server/src/continuity/hookReports.ts#hookReportOf` (existing set, 20 before) | R21 entryUuid, R22 turnAt, R23 text, R24 the length bound dropped, R25 the bound in characters, R26 an empty text, R27 truncated, R28 droppedBefore, R29 the uuid in any case | 29/29 |
+| `server/src/continuity/hookReports.ts#hookReportOf` (existing set, 20 before) | R21 entryUuid, R22 turnAt, R23 text, R24 the length bound dropped, R25 the bound in characters, R26 an empty text, R27 truncated, R28 droppedBefore, R29 the uuid in any case; fix round 1: R30 the answers check, R31 its bound, R32 an answer of 0, R33 the answersCut check, R34 an absent answersCut read as cut | 34/34 |
 
 By hand (each red, each reverted, each suite alone):
 - M1 the reply arm's designation check dropped: the route suite 2 red (not the designated session; an unreadable designation);
@@ -138,6 +163,18 @@ By hand (each red, each reverted, each suite alone):
 - M6 the boot arm's insert skipped: 1 red (the crash-between case);
 - M7 the reply's text in the arm's log line: 1 red (no line names the text);
 - M8 the journal grammar gains a kind: 1 red (the characterization of main's grammar).
+
+Fix round 1 (review 4173), by hand, each red, each reverted, each suite alone (before the round, each had no case: M9 is the
+review's measured gap, the gate pinned for `tail` only, and M16 the review's surviving mutant):
+- M9 the arm's first `jq` moved above the gate: the hook suite 1 red (the arm run alone with no PATH records it; F9);
+- M10 this Stop's own body sent after a kept one: 1 red (F2);
+- M11 a 403 `stale-uuid` refused for good: 1 red (F3);
+- M12 the hook passes no key to the library: 2 red (F1, the hook's half);
+- M13 the library's key search always misses: the transcript suite 5 red (F1, the library's half);
+- M15 the receipt watched for a reply with no response row: the receipts suite 1 red (F11);
+- M16 the reply writer's highest read from its own table alone: the replies suite 1 red (F7; it survived the review).
+The console's `mergeLive` set gains M13 (a reply keyed on a tool row not matched) and M14 (the keyed tool row not drawn), each
+killed (F10).
 
 The console's rows (the PWA's words sets in `sim/chatSets.ts`, each killed): `mergeLive` gains M5 to M12 (a recorded reply drawn
 beside its live row, the turn's earlier text drawn beside it, the turn start ignored, the tool row dropped, among them),
@@ -159,6 +196,8 @@ Median of five runs at a main `Stop`, load 8 to 11, the script in the run's temp
 | A door, a 4 MiB transcript whose last turn is at its end, sent | 76 ms, about 54 ms added |
 | A door, one turn spanning the whole 4 MiB, the text cut to 64 KiB | 69 ms |
 
+These were measured before fix round 1, which adds one builtin `read` of the key and, when a body is built, one subshell and an
+`mv` to keep the key; a session with no door still pays nothing, pinned since that round by running the function alone with no PATH.
 A slow or dead door costs at most `REPORT_TIMEOUT_S` (3 s), one deadline over the read, the jq, every resend and the send, and a send
 that runs out its bound stops every later send of the invocation; the arm prints nothing and never changes how a `Stop` ends.
 
@@ -178,6 +217,25 @@ been run locally. All four were this change's own, and one commit fixed them:
   line, and only the call stays after the loads arm: 39 net code lines. Locally the check skips unless armed, and it measures the
   committed head, which is why the first measure (39, by hand) missed it.
 
+## Fix round 1 (review 4173, calls 1952 and 1953)
+
+- **One merge of main** (9d3a88b0eb), a merge, two conflicts, both sides kept: the floors runner's imports (`REPLY` beside the request
+  record's `REQUEST`) and the gate file (the act catalogue's `act-ceiling` word beside the exported step 1 word). The censuses and
+  counts were re-derived after it (the suites below were run on the merged tree).
+- **The growth cap**: `session-hook.sh` measures 40 net code lines against its merge-base by the check's own counter, armed, on the
+  committed head, against a cap of 40. The key's read rides the deadline line, the key's write and the in-order send take one line,
+  and the uuid and `stale-uuid` changes sit on existing lines; the grammar move replaced the definition's line and changed the call
+  line in place. Nothing was raised or exempted.
+- **A line inside a message** (condition 4): a prompt whose own text holds a line shaped like the nudge names that id, exactly as the
+  picked-up arm would read it; a tool result (a message's text the Overlord read through its door) is never a prompt and names
+  nothing. Measured through the store: such an id that is another of the session's own messages links the reply to it, and its
+  off-the-record fact only makes the reply more private; another session's id or an unknown one is never linked and makes the
+  reply off the record. Nothing worse was found.
+- **Who lands second on the held files**: `server/src/operatorModel/store.ts` is the request record's second part's (claim 7729,
+  #3647, a draft in CI) and `server/src/continuity/routes.ts` overlord-v1's (claim 7672, #3629); each hunk was packeted and approved
+  before the edit. #3647 most likely lands first: its import line sits beside this PR's first `store.ts` hunk and its new interface
+  near the second, and the second lander keeps both. `routes.ts`'s one line is inside this PR's own reply arm.
+
 ## Known limits
 
 - `reply-lost-past-the-arm-deadline`: a turn whose newest prompt is a pasted text of about 3.5 MB takes about 5.4 s in jq (the
@@ -195,6 +253,22 @@ been run locally. All four were this change's own, and one commit fixed them:
 - The paging and receipt deciders have unit cases, not mutant sets.
 - `repliesSince` has no caller yet: the checkpoint's thread (C37) reads it when that piece ships.
 - In `session-hook.test.ts` two "real tmux, private socket" cases failed in this box's runs, the same with the reply arm switched off.
+- `reply-response-window-and-acted-rule` (review 4173 F4, ticketed for the responses piece): the reply's response row uses the
+  seven-day Waiting on you window as a stand-in for the spec's "until the next break" (Table 4.3a), because the tree has no break yet,
+  and no lane gives a reply row an owner, so a reply row seals `opened` or `unmeasured`, never `acted`, even when the operator answered
+  in the thread. The responses piece owes both the real window and the acted rule.
+- `reply-counts-checked-not-stored` (review 4173 F5): the hook's `droppedBefore` and `truncated` are checked at the door and stored
+  nowhere: a reply the hook cut past 64 KiB is stored with the store's own cut mark only, and the spool's dropped count reaches no
+  record. "Never lost" in `dropped-count-rides-the-spool-head` means within the hook's spool file only.
+- `reply-turn-outside-the-window-records-nothing` (review 4173 F8): a turn whose start (its prompt, or the reported key) falls
+  outside the 4 MiB tail window records nothing, with no spool entry and no count. The hook's arm also answers one empty body for
+  three causes it does not tell apart: the deadline passed, the window held no start, and the turn had no text.
+- `reply-response-has-an-unmeasured-arm` (review 4173 F12 a): the reply entry's `response` has a third arm, `unmeasured` (the
+  response rows could not be read), beside the plan's `row` and `no-row`, so an unread row is never drawn as "no row".
+- `reply-arm-one-deadline` (review 4173 F12 b): the plan gives each send its own deadline; the arm has ONE `REPORT_TIMEOUT_S`
+  deadline over the read, the jq, every resend and the send (each send also asks the invocation's network budget).
+- `reply-entry-uuid-shape-is-one-harness` (review 4173 F12 c): the door's validator requires a lowercase uuid as the entry key,
+  Claude Code's shape (see "What would change for another harness").
 
 ## Older builds
 
@@ -220,7 +294,11 @@ The record, the door and the chat are the product's: everything behind the repor
 nothing of Claude Code. Two parts know one harness's files, the transcript definition (`turn_reply` over Claude Code's JSONL) and the
 `Stop` arm; another harness's adapter sends the same report from its own turn end. Where that does not hold:
 - `entryUuid` must be a lowercase uuid (`hookReportOf`), which is Claude Code's entry key: a harness without one mints a stable uuid
-  per turn;
+  per turn (slug `reply-entry-uuid-shape-is-one-harness`);
+- `answers` is REQUIRED and may be empty (call 1953 condition 2): the message ids the turn's own prompts name. An adapter that cannot
+  name ids sends `[]` and gets the server's window alone, which only ever makes a reply more private; a turn that answers no message
+  (an empty list and an empty window) is on the record with no link. Past `REPLY_ANSWERS_MAX` it sends the newest with
+  `answersCut: true`, and that reply is off the record;
 - the console's merge matches `entryUuid` against Claude Code's live transcript rows (`buildChatItems`), so another harness's live
   view needs its own key there, as chat A's note says of the live generation;
 - `turnAt` is the hook's clock, as every hook report's `at` is.

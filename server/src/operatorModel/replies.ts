@@ -1,9 +1,9 @@
 // The Overlord's replies, decided (context C11, L1; Overlord W1 chat, PR B, plan `w1-chat.md` Task 5, operator item 327). Pure:
 // no fs, no clock, no SQL. The report door's `reply` arm (`continuity/routes.ts`, L4) asks `replyTargetVerdict` before anything
 // is masked or recorded; the private store's one reply writer (`store.ts#recordReply`, L3) asks `replyLinks`
-// (`shared/operatorMessages.ts`, L0) for what a reply answers. A reply id is issued by the message ids' own rule
-// (`messages.ts#nextMessageId`, above the store's highest and the privacy journal's highest), over the reply sequence (slug
-// `reply-ids-share-the-id-rule`), so one decider says how an id survives a restore.
+// (`shared/operatorMessages.ts`, L0) for what a reply answers. A reply id is issued from the privacy journal's ONE issued-id
+// sequence, shared with the operator's messages and recorded with its existing kind (slug `reply-ids-ride-the-one-id-sequence`,
+// call 1888), above the highest id either table holds, so a restore never reissues one.
 import type { DesignationRead } from '../../../shared/overlord-designation.js';
 import { NOT_THE_OVERLORD } from '../coord/overlordGate.js';
 

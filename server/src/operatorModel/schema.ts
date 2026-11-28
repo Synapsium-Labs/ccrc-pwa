@@ -66,7 +66,8 @@ export const OPERATOR_MODEL_MIGRATIONS: readonly string[] = [
   'ALTER TABLE operator_messages ADD COLUMN offRecord INTEGER NOT NULL DEFAULT 0 CHECK (offRecord IN (0, 1));',
   // Migration 4 (Overlord W1, the chat, PR B, Task 5; operator item 327): the Overlord's replies, one row a main-thread turn of the
   // designated session that ended with text, recorded when the turn ends. A table of its own, never among the operator's
-  // messages (slug `replies-are-their-own-table`). Ids are issued above the privacy journal's highest reply id, never by SQLite.
+  // messages (slug `replies-are-their-own-table`). Ids come from the privacy journal's one issued-id sequence, shared with the
+  // messages, with its existing record kind (slug `reply-ids-ride-the-one-id-sequence`, call 1888), never from SQLite.
   // One key a turn: the session and its last assistant entry, so a resent report is a replay. One writer, `recordReply`.
   `CREATE TABLE overlord_replies (
     id         INTEGER PRIMARY KEY,
