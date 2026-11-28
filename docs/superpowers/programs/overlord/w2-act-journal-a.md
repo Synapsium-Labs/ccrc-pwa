@@ -14,17 +14,18 @@ locally and pushed with it.
 
 ## 1. Step 0: what `main` held, measured against the plan
 
-The plan is a snapshot of 2026-11-16 (`main` at `b779a9c20`). The first two stages measured `main` at `ac09ad60da`:
+The plan is a snapshot of 2026-11-16 (`main` at `b779a9c20`). The first two stages measured `main` at `ac09ad60da`; the last stage
+re-measured each row at `1a2471681e` (#3664 merged), and only the first and the `MIGRATIONS` rows moved:
 
 | The plan says | `main` holds | What this PR did |
 |---|---|---|
-| The record type and the port are act rows A's (`ActJournalRecord`, `ActJournalPort`) | Not on `main` before the last stage: #3664's (`server/src/coord/overlordActs.ts`, `overlordActsStore.ts`), with the act states, the natural key's target kinds and the target list's kinds in its own L0 file (`shared/overlordActs.ts`) | The first stages wrote against one typed interim block in `overlordActRecords.ts` (the type, its three word lists and the port with its answer; call 2007, Q2; call 2023). The port's ok answer carries a sequence number, as the plan declares (#3664's fix round, the coordinator's 41354). Last stage: (fill in) |
+| The record type and the port are act rows A's (`ActJournalRecord`, `ActJournalPort`) | Not on `main` before the last stage: #3664's (`server/src/coord/overlordActs.ts`, `overlordActsStore.ts`), with the act states, the natural key's target kinds and the target list's kinds in its own L0 file (`shared/overlordActs.ts`) | The first stages wrote against one typed interim block in `overlordActRecords.ts` (the type, its three word lists and the port with its answer; call 2007, Q2; call 2023). The port's ok answer carries a sequence number, as the plan declares (#3664's fix round, the coordinator's 41354). Last stage: the block is gone. The record type, its body and natural key come from `overlordActs.ts`, the three lists and the target reference from `shared/overlordActs.ts`, the port and its answer from `overlordActsStore.ts`; `OverlordActRecord` is an alias of `ActJournalRecord`; a single-definition area file (`act-record-one-shape.test.ts`) holds each name to its one home; the grammar file leaves the coordination handle list. #3664's two fix-round cases run against the real writer (§3) |
 | The verified-head cache ships first, in the adapter (F16) | On `main` (`chainedJournalFile.ts`, `verifiedHeadHolds`) | Used as it is |
 | `shared-user` is the isolation piece's word, not built | Built: `shared/isolation.ts` (`ISOLATION_WORDS`, `IsolationRead`), read through `deps.isolation` | The grammar's `isolation` field and the sign verdict read it |
 | The shipped tree carries `server/dist/` beside `deploy/` (question 9, Task A4 Step 1) | Yes: `deploy/build-release.sh` stages `server/dist` with the tracked `deploy/` | The helper stays in `deploy/`, importing `../server/dist/server/src/` |
 | `ApprovalSigner` has `signRuling` and `publicKeyPem` | As written; the signer is loaded lazily in the coordination routes | Gains `signActHead` (question 7); the lane loads the same key through the same module, once, on first use |
 | `CCRC_DOCTOR_CHECKS` and the doctor's verdict helpers | As written; the array's lines are cited by number elsewhere | The check's name joins an existing array line, so no cited line moves |
-| `MIGRATIONS` | 135 entries | One migration at the next free slot, 136 when written; three other open pieces take the same slot, so the second to land renumbers (§2, point 6) |
+| `MIGRATIONS` | 135 entries; 136 at the last stage (#3664's act rows) | One migration at the next free slot: 136 when written, 137 after the merge of `main` (§2, point 6) |
 | `DigestAnswer` and the digest view | In `shared/api.ts`, which the brief keeps out of this PR | The digest's head line rides `DigestAnswer & DigestActHead`, declared in `shared/actJournalHead.ts` |
 
 ## 2. The coordinator's nine points
@@ -63,11 +64,19 @@ The plan is a snapshot of 2026-11-16 (`main` at `b779a9c20`). The first two stag
    no box token, no step-up. Its census lines, derived on `main` at `ac09ad60da`: the auth gate's scanned routes 345 -> 346, its
    HTTP half 342 -> 343, the gated count 222 -> 223, the exempt count stays 120 (the suite and `gate.ts`'s docstring); the box-token
    census's `OVERLORD_OPERATOR_DOORS` gains it and its count 18 -> 19; the mask census lists it EXEMPT with its reason (slug
-   `act-head-read-is-exempt`); `CLAUDE.md`'s sentence of session-gated Overlord reads names it. Re-derived at the last merge.
-6. **One coordination-database migration**, both tables, at slot 136 when written: `overlord_act_journal_head` and
-   `overlord_act_heads`. Its pins: the coordination database's two version pins and a comment, and the two undo lists (the run-close
-   switch's and the limit samples store's). **This PR carries a migration**, at the same slot as request ids A, act rows A (#3664)
-   and the label queue; the second to land renumbers this one entry and those pins.
+   `act-head-read-is-exempt`); `CLAUDE.md`'s sentence of session-gated Overlord reads names it. Re-derived on the merged tree at
+   the last stage: #3664 adds no route, so every line stands as written, and the gate, box-token, mask and lane suites read them
+   green there. **What the answer holds:** the act journal's newest head and nothing else: a version, the head (a day, a
+   sequence, the journal id, a hex digest, and a base64 signature or a closed unsigned word) or absent, the server key's PEM
+   public half or null, and the asked sequence with its hex digest or a closed word. No session-written text and no other field
+   rides that answer. The console checks the signature against the head and the key byte for byte, so a mask that rewrote any
+   run of them would break that check. The mask census row's reason says the same.
+6. **One coordination-database migration**, both tables, at slot 136 when written and **137 in the pushed tree** (after the merge
+   of `main`, where #3664's act rows hold 136): `overlord_act_journal_head` and `overlord_act_heads`. Its pins: the coordination
+   database's two version pins and their comments, and the two undo lists (the run-close switch's, and the limit samples store's,
+   whose count is now `COORD_SCHEMA_VERSION - 12`). **This PR carries a migration.** The label queue and request ids A land
+   before it and take the next slots; the coordinator gives this branch one more merge and the renumber of this one entry and
+   those pins at its landing.
 7. **The lane rides the lane schedule's table:** `actHeadSign` (hourly, `startsDue`, monotonic, `ACT_HEAD_SIGN_BEAT_MS` beside the
    digest's beat), run by the watcher's `sweepActHeadSign` beside `sweepDigest`; no timer of its own. With no act written (every box
    at merge) a pass reads today's row, finds no record, writes nothing and logs nothing; the head read answers `head: 'absent'`; the
@@ -101,6 +110,15 @@ The plan is a snapshot of 2026-11-16 (`main` at `b779a9c20`). The first two stag
   floor 1; the callers census; the snapshot pin (the act journal's file, torn directory and stem in `NAMES`, planted in both
   fixtures); the writers map; the coordination handle list; the gate, box-token, mask and lane censuses (point 5, point 7). Every
   file another worker held was changed only after its holder answered yes to the exact diff (§6).
+- **The last stage.** One merge of `main` at `1a2471681e` (conflicts in the schema, its three pin suites, the handle list and the
+  writers map, each resolved keeping both sides whole, `main`'s first); the interim block replaced by imports (§1);
+  `server/test/single-definition/act-record-one-shape.test.ts`; and `server/test/overlord-act-journal-store.test.ts`, which runs
+  #3664's two fix-round cases (a fact changed between the append and the apply: the highest id for a write, the row's state for a
+  settle) against the real writer over a real coordination database. Each answers `journal-append`; inside the caller's
+  transaction only the apply's savepoint is undone (no act row, no act line, the head row still written); the guard is told
+  `trailing` for the acts journal; and a door that rolls back, as the port's door contract says, takes the head row back while the
+  record stays in the file. A third case passes the journal's highest act id, as the writer's caller does: a dropped row then moves
+  no id, and a row raised above the journal's highest still throws.
 
 ## 4. Departures, by slug
 
@@ -155,7 +173,10 @@ By hand, each run against its suite and reverted (in a scratch copy, never the t
 (17 cases red), the append outside a transaction (1), the heal's cut without the sound-prefix check (1), the `from` check skipped
 (2), the apply before the head row (3), a failure after the append not told to the guard (1); the doctor check's six (torn tail
 PASS 3, fleet skip dropped 1, malformed WARN 5, line count dropped 1 after a new case, unmeasured PASS 1, missing helper arm 1),
-one more removed as redundant.
+one more removed as redundant. In the last stage, in the tree and reverted: a throw from the apply not told to the guard (the three
+fix-round cases red), the apply run before the head row (the same three red), and a planted second `ActJournalAppend` in the
+grammar file (the one-shape case red). The six rows above, and #3664's six act rows, were re-run on the merged tree: every mutant
+killed.
 
 ## 6. Held files
 
@@ -163,10 +184,12 @@ Each was changed only after its holder answered yes to the exact diff, by size a
 (chat B's worker), the kebab census (label queue A's), the doctor file (docs artifacts follow-up's, twice), and in the middle stage
 the migration and its pins (request ids A's), the coordination handle list and the server file (act rows A's), the Overlord routes,
 the root and the floors (chat B's), the lane schedule, the watcher, the deps, `gate.ts` and the gate, box-token, mask and lane
-censuses (label queue A's), and `CLAUDE.md` (overlord-v1's).
+censuses (label queue A's), and `CLAUDE.md` (overlord-v1's). In the last stage: the handle list's interim entry dropped (act rows
+A's yes) and the mask census row's stronger reason (label queue A's yes). The merge's resolution of the schema and its pins
+followed request ids A's keep-both note and the coordinator's GO, and request ids A was sent the resolved diff.
 
 What the holders measured for whoever lands second: the migration's slot, its pins and the limit store's undo count meet request
-ids A's (also at 136, with its three columns and an index), act rows A's and the label queue's; the gate's counts with the label
+ids A's (with its three columns and an index) and the label queue's, act rows A's being on `main` at 136 now; the gate's counts with the label
 queue's two doors and one lane read 348 scanned, 345 HTTP, 225 gated, 120 exempt and 68 monotonic; the coordination handle list
 keeps act rows A's entries and comment beside these, closed once; the root keeps chat B's reply boot block after
 `deps.responseStamp`, with the act head block before that line. Each lander keeps every side's added lines and removes none.
@@ -190,3 +213,5 @@ keeps act rows A's entries and comment beside these, closed once; the root keeps
    once each holder answered.
 5. **The fleet-box class case** could not arbitrate on this box (an environmental `browser-mcp` WARN, the same on `main`); the new
    row was measured with that one key set aside, scratch only.
+6. **The pwa type check of the last stage** was killed by the test slice's shared memory cap on the local fallback, twice; the last
+   stage changes no pwa file, the pwa's act-head suites passed on the merged tree, and the pull request's type check is the judge.
