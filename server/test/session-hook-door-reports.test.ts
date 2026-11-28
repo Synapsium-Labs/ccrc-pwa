@@ -230,6 +230,28 @@ describe('picked up: each prompt line that is exactly the nudge line', () => {
   });
 });
 
+// CHARACTERIZATION of the picked-up arm's outputs (chat PR B fix round 1, call 1953 condition 3): pinned green on the tree BEFORE the
+// nudge grammar moved into the transcript library, and unchanged by that move. Each row is a prompt and the exact reports it sends.
+describe('picked up, characterized: the reports each prompt sends', () => {
+  const n = renderOperatorMessageNudge;
+  const ROWS: Array<[string, unknown, unknown[]]> = [
+    ['one nudge line', n(41), [41]],
+    ['the line twice', `${n(5)}\n${n(5)}`, [5, 5]],
+    ['lines around it, a blank line and a trailing newline', `before\n\n${n(3)}\nafter\n`, [3]],
+    ['the largest safe id and the smallest', `${n(9007199254740991)}\n${n(1)}`, [9007199254740991, 1]],
+    ['a carriage return ends no line: the line is not exact', `${n(8)}\r\n${n(9)}`, [9]],
+    ['the line inside a longer line', `quoted: ${n(4)}`, []],
+    ['a prompt that is not a string', ['not', 'a', 'string'], []],
+    ['no prompt at all', undefined, []],
+    ['an empty prompt', '', []],
+  ];
+  it.each(ROWS)('%s', (_name, said, ids) => {
+    run({ ...common, hook_event_name: 'UserPromptSubmit', ...(said === undefined ? {} : { prompt: said }) });
+    expect(reports().map((r) => [r['kind'], r['messageId']])).toEqual(ids.map((id) => ['picked-up', id]));
+    expect(reports().every((r) => r['fromId'] === ID && r['fromUuid'] === UUID && Number.isInteger(r['at']))).toBe(true);
+  });
+});
+
 describe('the nudge pattern is the renderer\'s (one jq definition, held to renderOperatorMessageNudge)', () => {
   const hookText = fs.readFileSync(HOOK, 'utf8');
   const def = /^DOOR_NUDGE_JQ='([^']+)'$/m.exec(hookText)?.[1];
