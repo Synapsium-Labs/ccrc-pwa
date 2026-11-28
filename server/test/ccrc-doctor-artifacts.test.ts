@@ -16,6 +16,9 @@ installDoctorHooks();
 interface Names { a: string; b: string; port: number }
 const label = (): string => 't' + randomBytes(6).toString('hex');
 const names = (): Names => ({ a: `${label()}.duckdns.org`, b: `${label()}.duckdns.org`, port: 7791 });
+// The cases that assert the Linux unit reader's words run as Linux on every runner: on a Mac `_box_unit_env_shell` words an
+// undecided line otherwise (review 4211 A1), as `FORCE_LINUX` does in ccrc-expose-artifacts.test.ts.
+const AS_LINUX = { OSTYPE: 'linux-gnu' };
 
 /** The three keys as `ccrc expose artifacts` writes them, appended to the fixture's exposure file; `omit` drops keys. */
 function plantKeys(home: string, n: Names, omit: string[] = []): void {
@@ -334,4 +337,77 @@ describe('ccrc doctor: artifacts', () => {
     expect(m, 'ccd/ccrc-doctor-checks holds _DR_ARTIFACT_FIXED').not.toBeNull();
     expect(ARTIFACT_NOT_FOUND_BODY).toContain(m![1]!);
   });
+});
+
+// X5-FU items 3 and 4: a shaped artifact label, the console port as the service manager reads it, the stored-port remedy only
+// where it can work, and no shell read error from any check when the exposure file is a directory.
+describe('ccrc doctor: artifacts (X5-FU)', () => {
+  it('doctor: a shaped artifact label FAILs, naming the key and never the value', () => {
+    const shaped = `sk-${randomBytes(5).toString('hex')}`;
+    const n = { ...names(), a: `${shaped}.duckdns.org` };
+    const home = artifactBox('ccrc-doctor-art-mask-', n);
+    const r = runDoctor(home);
+    expect(artifactLine(r.stdout), r.stdout).toBe('FAIL artifacts: CCRC_ARTIFACT_ORIGIN has a name the console\'s answer mask would alter '
+      + '(it has a credential\'s shape), so no link could reach you; choose another label');
+    expect(r.stdout, 'the value is never printed').not.toContain(shaped);
+    expect(r.stderr).toBe('');
+  }, SLOW);
+
+  it('doctor: a CCRC_PORT line with a space before its = FAILs', () => {
+    const n = names();
+    const home = artifactBox('ccrc-doctor-art-spaced-', n);
+    const env = join(home, '.ccrc', 'ccrc.env');
+    writeFileSync(env, readFileSync(env, 'utf8').replace('CCRC_PORT=7788\n', 'CCRC_PORT =7788\n'));
+    const r = runDoctor(home, ['doctor'], AS_LINUX);
+    expect(artifactLine(r.stdout), r.stdout).toMatch(/^FAIL artifacts: .*\/\.ccrc\/ccrc\.env names CCRC_PORT in a shape this reader does not decide \(a space around '='/);
+    expect(remedyFor(r.stdout, 'artifacts')).toMatch(/^ {2}remedy: rewrite the line naming CCRC_PORT in .*\/\.ccrc\/ccrc\.env, .*, then restart: /);
+  }, SLOW);
+
+  it('doctor: a CCRC_PORT the exposure file names FAILs, and the remedy sends the line to ccrc.env (review 4202 F4)', () => {
+    // Every ccrc expose write drops that line, so doctor judges as the arm does and never names the exposure file as its home.
+    const home = artifactBox('ccrc-doctor-art-expport-', names());
+    const exp = join(home, '.ccrc', 'exposure.env');
+    writeFileSync(exp, readFileSync(exp, 'utf8') + 'CCRC_PORT=07789\n');
+    const r = runDoctor(home, ['doctor'], AS_LINUX);
+    expect(artifactLine(r.stdout), r.stdout).toMatch(/^FAIL artifacts: .*\/\.ccrc\/exposure\.env names CCRC_PORT, and every ccrc expose write rewrites that file without it/);
+    const remedy = remedyFor(r.stdout, 'artifacts');
+    expect(remedy).toMatch(/^ {2}remedy: move the CCRC_PORT line to .*\/\.ccrc\/ccrc\.env, then restart: /);
+    expect(remedy).not.toContain('exposure.env');
+    // A line there in a shape the Linux reader does not decide: the remedy is still to move it, never to rewrite it in place.
+    // (On a Mac the shell reader's rewrite-or-delete remedy comes first, and the next run says to move it: the follow-up.)
+    writeFileSync(exp, readFileSync(exp, 'utf8').replace('CCRC_PORT=07789\n', 'CCRC_PORT =7789\n'));
+    const u = runDoctor(home, ['doctor'], AS_LINUX);
+    expect(artifactLine(u.stdout), u.stdout).toMatch(/^FAIL artifacts: .*\/\.ccrc\/exposure\.env names CCRC_PORT in a shape this reader does not decide/);
+    expect(remedyFor(u.stdout, 'artifacts')).toMatch(/^ {2}remedy: remove the CCRC_PORT line from .*\/\.ccrc\/exposure\.env and write it in .*\/\.ccrc\/ccrc\.env as KEY=value, digits only, then restart: /);
+  }, 2 * SLOW);
+
+  it('doctor: with no artifact keys, a CCRC_PORT line with a space before its = is still a skip', () => {
+    // The port is read only for keys that stand: a box with no tier is not failed for a line the tier would refuse.
+    const home = healthy('ccrc-doctor-art-unset-spaced-');
+    writeFileSync(join(home, '.ccrc', 'ccrc.env'), 'CCRC_PORT =7788\n');
+    const r = runDoctor(home);
+    expect(skipLineFor(r.stdout, 'artifacts'), r.stdout).toContain('no artifact names set');
+    expect(r.stdout).not.toMatch(/^(PASS|WARN|FAIL) artifacts: /m);
+  }, SLOW);
+
+  it('doctor: beside a console on the default artifact port the stored-port remedy is the console\'s, not --off', () => {
+    const n = { ...names(), port: 7790 };
+    const home = artifactBox('ccrc-doctor-art-defport-', n);
+    const env = join(home, '.ccrc', 'ccrc.env');
+    writeFileSync(env, readFileSync(env, 'utf8').replace('CCRC_PORT=7788\n', 'CCRC_PORT=7790\n'));
+    const r = runDoctor(home);
+    expect(artifactLine(r.stdout), r.stdout).toBe('FAIL artifacts: CCRC_ARTIFACT_PORT="7790" is the console\'s own port');
+    expect(remedyFor(r.stdout, 'artifacts')).toMatch(/^ {2}remedy: the console itself listens on 7790, the port ccrc expose artifacts writes for the tier: move the console \(CCRC_PORT in .*\/\.ccrc\/ccrc\.env\) and restart: .*, then ccrc expose artifacts --off and ccrc expose artifacts$/);
+  }, SLOW);
+
+  it('doctor: a whole run with the exposure file a directory prints no shell read error', () => {
+    const home = healthy('ccrc-doctor-art-expdir-');
+    const p = join(home, '.ccrc', 'exposure.env');
+    rmSync(p, { force: true });
+    mkdirSync(p);
+    const r = runDoctor(home);
+    expect(r.stderr, 'no check reads the directory aloud').toBe('');
+    expect(lineFor(r.stdout, 'exposure'), r.stdout).toMatch(/^FAIL exposure: .*is there and cannot be read/);
+    expect(lineFor(r.stdout, 'artifacts'), r.stdout).toMatch(/^WARN artifacts: .*is not a readable regular file/);
+  }, SLOW);
 });

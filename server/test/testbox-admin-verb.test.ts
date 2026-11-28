@@ -113,9 +113,17 @@ describe('ccrc testbox-admin: the dispatch and the status (D-8166, TC3)', () => 
     expect(readTestboxAdminStatus((r.stdout ?? '').trim()).ok).toBe(true);
   });
 
-  it('status never prints an address or a path, and reads the connection, the pin, the act and the parity record', () => {
+  // A unit that started a second ago, so it is not yet read as one that is gone (the reap tests are at the end of this file). The
+  // second row forces what the clock can do by chance: the newest time at most ten seconds earlier whose last four digits are the
+  // port's, well inside the reap window.
+  const aSecondAgo = (): number => Date.now() - 1000;
+  const holdingThePort = (): number => { const t = aSecondAgo(); return t - (((t - 2222) % 10000) + 10000) % 10000; };
+  it.each([
+    ['', aSecondAgo],
+    [', though its start time holds the port\'s digits', holdingThePort],
+  ])('status never prints an address or a path, and reads the connection, the pin, the act and the parity record%s', (_title, startOf) => {
     const h = fixture();
-    const startedAt = Date.now() - 1000;   // a unit that started a second ago: it is not yet read as one that is gone (the reap tests are at the end of this file)
+    const startedAt = startOf();
     writeState(h, [
       `address=${ADDR}`, 'port=2222', 'login=deploy', `fingerprint=${FP}`, 'connected=1', `box_sha256=${SHA}`,
       `act_id=${ID}`, 'act_sub=repair', 'act_phase=copy', 'act_phases=verify:12,copy:5', 'act_outcome=running', `act_started=${startedAt}`,
@@ -124,9 +132,14 @@ describe('ccrc testbox-admin: the dispatch and the status (D-8166, TC3)', () => 
     const parity = { v: 1, result: 'pass', prs: [], fixtures: [], release: 'v1.2.3', toolsKey: 'k1', fingerprint: FP, boxFileSha256: SHA, at: 1700000000001 };
     writeFileSync(join(h.home, '.ccrc', 'testbox-parity.json'), JSON.stringify(parity) + '\n');
     const r = run(h, ['status']);
-    expect(r.out).not.toContain(ADDR);
-    expect(r.out).not.toContain(h.home);
-    expect(r.out).not.toContain('2222');
+    // The search runs over KNOWN text, so it cannot collide. The act's start time is the one value of the output this case does not
+    // choose (it is read off the clock), so its text is replaced by a placeholder first, and the read below checks it is the act's
+    // `startedAt`. Everything else printed comes from this case's state lines and fixtures, none of which holds the port's digits.
+    const known = r.out.replace(`"startedAt":${startedAt},`, '"startedAt":"<startedAt>",');
+    expect(known).not.toContain(String(startedAt));
+    expect(known).not.toContain(ADDR);
+    expect(known).not.toContain(h.home);
+    expect(known).not.toContain('2222');
     const read = readTestboxAdminStatus(r.out.trim());
     expect(read.ok, JSON.stringify(read)).toBe(true);
     if (!read.ok) return;

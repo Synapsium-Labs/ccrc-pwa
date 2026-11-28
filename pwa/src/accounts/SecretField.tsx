@@ -21,9 +21,10 @@ import { useLocation } from '../lib/router';
  *   1815, review 4139 F1): the value stays in the field, so the retry the confirm starts sends it once more, and the host empties
  *   the field with `clear` on the door's answer and on every refusal, never on a first `step-up-required`. What `peek` returns
  *   lives in the request body it builds and nowhere else: the host reads it inside the request, and makes its retry outside the
- *   send, so no value stands in the scope its retry is made in (review 4167 F1). From the press to the end of the step (its send
- *   in flight, then the step) the host passes `held`, which disables the field, so nothing is typed into it before the retry reads
- *   it (F2; review 4183 F1). The Show toggle is not held (it sends nothing). Held, the field is still emptied by its own rule (a
+ *   send, so no value stands in the scope its retry is made in (review 4167 F1). From the press until its retry has been sent (its
+ *   send in flight, then the step, then from the confirm until the retry is sent, whose own send in flight follows) the host passes
+ *   `held`, which disables the field, so nothing is typed into it before the retry reads it (F2; review 4183 F1; review 4191 F1).
+ *   The Show toggle is not held (it sends nothing). Held, the field is still emptied by its own rule (a
  *   page hide, a route change that keeps it mounted), and a retry that finds it emptied sends nothing and says so: it never sends
  *   less than the first send carried. The account sheets read with `take` and never pass `held`, as before.
  * - `multiline` draws an uncontrolled text area instead (the private-name list): unmasked, because the operator must see the
