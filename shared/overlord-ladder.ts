@@ -1,6 +1,6 @@
 // The Overlord's authority ladder, vocabulary (Overlord spec §7.5, Table 7.5a, H25; plan
 // `docs/superpowers/plans/2026-11-14-overlord-w1/w1-ladder.md` Task 1): L0, one concern. The four rungs, the cause
-// table's row shape and its rows, the rung cells, the condition readings and the narrowing words. It imports NOTHING,
+// table's row shape and its rows, the condition readings and the narrowing words (the rung cells are the act catalogue's). It imports NOTHING,
 // not even `node:*`, because the PWA bundles this file. Every union below is the key set of a const map, and each map
 // has a runtime list beside it, so a new member is a compile error in the map and never a silent wire change.
 
@@ -98,6 +98,13 @@ export const LADDER_CAUSE_MAP = {
     kind: 'latch', effect: { kind: 'cap', cap: 'advise' }, notice: 'item',
     spec: 'an invariant-monitor violation (Table 7.5a, §10.4)',
   },
+  // The act catalogue A (W2 plan w2-act-catalogue.md question 3): raised by the gate runner through `raiseLatch` when step 10's
+  // ceiling half refuses `act-ceiling`, unless one stands. Before W3 the effective rung is at most `advise`, so the cap changes
+  // nothing a session sees; the evidence is kept and the operator sees and clears it.
+  'act-ceiling-hit': {
+    kind: 'latch', effect: { kind: 'cap', cap: 'advise' }, notice: 'none',
+    spec: 'an act ceiling hit (Table 7.5a, §7.5)',
+  },
   'no-witness-since-boot': {
     kind: 'condition', effect: { kind: 'cap', cap: 'advise' }, notice: 'none',
     spec: "since boot, no witness off the server's volume has answered (Table 7.5a, §7.6)",
@@ -118,17 +125,8 @@ export function isLadderCauseKey(v: unknown): v is string {
   return typeof v === 'string' && v.length <= LADDER_CAUSE_MAX && LADDER_CAUSE_KEY_RE.test(v);
 }
 
-/** W1's rung cells (plan question 8). W2's act catalogue takes these rows over. `off` has no cell (§11.2). */
-const RUNG_CELL_MAP = {
-  read: { chat: 'allow', advise: 'allow', full: 'allow' },
-  'write-note': { chat: 'allow', advise: 'allow', full: 'allow' },
-  acknowledge: { chat: 'allow', advise: 'allow', full: 'allow' },
-  // D-8809: the Overlord confirms one team candidate for a project, a call made in the operator's name: at `full` only.
-  'link-team': { chat: 'refuse', advise: 'refuse', full: 'allow' },
-} as const satisfies Readonly<Record<string, Readonly<Record<Exclude<Rung, 'off'>, 'allow' | 'refuse'>>>>;
-export type LadderActKind = keyof typeof RUNG_CELL_MAP;
-export const LADDER_ACT_KINDS = Object.keys(RUNG_CELL_MAP) as LadderActKind[];
-export const RUNG_CELLS: typeof RUNG_CELL_MAP = RUNG_CELL_MAP;
+// The rung cells (plan question 8) moved into the act catalogue, `shared/overlord.ts` (W2 act catalogue A1): each act kind's
+// row carries its cells under `rungs`, and `rungStep` reads them there.
 
 /** The words every reader of the ladder shares. They are L0 because the read's wire carries them (plan F7). */
 const CONDITION_READING_MAP = {
