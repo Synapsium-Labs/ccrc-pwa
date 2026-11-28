@@ -10,6 +10,7 @@ import { TESTBOX_ADMIN_CODE_SENTENCE, readTestboxBusyHolder } from '../../../sha
 import type { LinkingRefusal } from '../../../shared/linking';
 import type { HandoffRefusal, RouteRefusal } from '../../../shared/refusal';
 import { ANSWER_MAX, type LinearItemAct } from '../../../shared/ledgers';
+import { LANE_ARM_TEXT, isLaneArmLane } from '../../../shared/lane-arm';
 import { ApiError } from './apiError';
 import { busyHolderSentence } from '../fleet/testboxAdminWords';
 import { laneActRefusal } from '../fleet/accountWords';
@@ -873,7 +874,8 @@ export function testboxRouteText(err: unknown): string | null {
  */
 export const OVERLORD_PLACE_REFUSAL_TEXT: Readonly<Record<
   | 'capability-missing' | 'authority-rolled-back' | 'journal-unreadable' | 'unavailable' | 'overlord-exists' | 'overlord-single-account'
-  | 'launch-profile-unmet' | 'overlord-sandbox-unmet' | 'overlord-body-alive' | 'overlord-attempt-pending' | 'auth-off' | 'not-found',
+  | 'launch-profile-unmet' | 'overlord-sandbox-unmet' | 'overlord-body-alive' | 'overlord-attempt-pending' | 'auth-off' | 'not-found'
+  | 'overlord-lanes-unarmed',
   string>> = {
   'capability-missing': 'This server does not advertise a capability word this needs, so nothing was changed.',
   'authority-rolled-back': "The Overlord's authority reads rolled back, so nothing was changed. Confirm the restore first.",
@@ -887,7 +889,25 @@ export const OVERLORD_PLACE_REFUSAL_TEXT: Readonly<Record<
   'overlord-attempt-pending': 'A start is already pending on the designation. Wait for it to go live or fail.',
   'auth-off': 'Sign-in must be on to start the Overlord.',
   'not-found': 'No Overlord is designated, so there is nothing to act on.',
+  // overlord-v1's guard (call 1887): Start and a Rebind that starts a body, while a lane the body needs is not live.
+  'overlord-lanes-unarmed': 'A lane the Overlord needs is not live, so it was not started. Set it live in Settings, on the Shadow lanes card.',
 };
+
+/** How a lane the refusal names reads, in the card's words (overlord-v1's guard): the server's three readings only. */
+const LANE_READING_TEXT: Readonly<Record<string, string>> = { shadow: 'in shadow', gated: 'set live, but its gate is closed', unread: 'could not be read' };
+/** The lanes an `overlord-lanes-unarmed` answer names, by the Shadow lanes card's own row names, or null when the answer's list
+ *  is not one this console can read (the sentence is then drawn alone). */
+function unarmedLanesText(b: Record<string, unknown>): string | null {
+  if (!Array.isArray(b.lanes) || b.lanes.length === 0) return null;
+  const parts: string[] = [];
+  for (const x of b.lanes as unknown[]) {
+    if (typeof x !== 'object' || x === null) return null;
+    const { lane, reads } = x as Record<string, unknown>;
+    if (!isLaneArmLane(lane) || typeof reads !== 'string' || !Object.hasOwn(LANE_READING_TEXT, reads)) return null;
+    parts.push(`${LANE_ARM_TEXT.rows[lane].legend} (${LANE_READING_TEXT[reads]!})`);
+  }
+  return `Not live: ${parts.join(', ')}.`;
+}
 
 /** The place's Rebind refused `stale-designation`: the binding its forced call named has moved (home C). */
 export const REBIND_MOVED_TEXT = 'The Overlord changed since you looked, so nothing was stopped. The page reads it again.';
@@ -926,6 +946,7 @@ const OVERLORD_DETAIL_WORDS: ReadonlySet<string> = new Set(['authority-rolled-ba
 const OVERLORD_NAMED_TEXT: Readonly<Record<string, (body: Record<string, unknown>) => string | null>> = {
   'capability-missing': (b) => (typeof b.needs === 'string' ? `It needs ${b.needs}.` : null),
   'overlord-single-account': (b) => (typeof b.count === 'number' ? `It counts ${b.count}.` : null),
+  'overlord-lanes-unarmed': unarmedLanesText,
 };
 
 /** A failed Overlord door in words: its word's sentence, with the capability word a raise `needs`, the accounts counted, or the

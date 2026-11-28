@@ -324,8 +324,9 @@ describe('with continuity-v1 among the server\'s words (as the real SERVER_CAPS 
   });
 });
 
-// The Overlord's own card is one fixed line today (`CARD_OVERLORD_LINE`), so no full-server fixture can make it more than one
-// page. The page arithmetic of the recording fence is the door's, whoever's card it pages, so this case builds the continuity
+// The Overlord's own card (its W1 card since overlord-v1) is short in a full-server fixture: a fresh designation holds no
+// messages, timers or notes, so no such fixture makes it more than one page cheaply. The page arithmetic of the recording
+// fence is the door's, whoever's card it pages, so this case builds the continuity
 // routes by hand over a session whose card is three pages, behind a scripted gate: the read door passes it as the Overlord
 // (`kind: 'pass'`) and the recording row's fence refuses it, as the real runner does for a read with no act key.
 describe('a multi-page card read behind a gate whose card-record fence refuses (review 2803 F3)', () => {

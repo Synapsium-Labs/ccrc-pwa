@@ -6,6 +6,8 @@
 // `accountSetVerdict`, with the step-up each door asks; and designation B's `rebindVerdict`, `overlordBodyOf`, `restartVerdict` and
 // `pendingDeadlineOf` (Rebind, Restart, and the deadline sweep's one action per pass), and `renewalSetOf` (the write-set step).
 import { DEAD_CAUSES, type BuildAgreement, type DeadCause, type FleetSession } from '../../../shared/api.js';
+import { OVERLORD_HISTORY_OP } from '../../../shared/agent-protocol.js';
+import { ANCHOR_SLOT_LANE, CONTINUITY_LANE, LAUNCH_PROFILE_LANE, type LaneArmLane, type LaneArmRowView } from '../../../shared/lane-arm.js';
 import { DESIGNATE_CCD_WORDS, DESIGNATE_SERVER_WORDS } from '../../../shared/overlord-designation.js';
 import type { AttemptAction, DesignationRead, DesignationView, OverlordModelClass, RebindSaw, SettleFact } from '../../../shared/overlord-designation.js';
 import { orgSpread, type OrgSpread } from '../../../shared/accountOrg.js';
@@ -20,6 +22,39 @@ import { heldOutOfList, type AccountHoldsRead } from '../../../shared/renewal-re
 import type { AccountLimits } from '../limits.js';
 import { parsePoolAnswer, poolRostered, resolvedAccountPool } from '../poolrule.js';
 import { rowStanding } from '../sessionReading.js';
+import { historyUnreachableText, type HistoryAgentChoice, type HistoryLink } from './overlordHistory.js';
+
+// ── the lanes and the history op a start needs (overlord-v1's guard, call 1887; the plan's entry rows E11 and E18) ─────────
+
+/** The lane-arm rows the Overlord's body needs live before a Start or a rebind places it: its renewals (`continuity`), its
+ *  launch profile (`launch-profile`), and its anchor card (`anchor-slot`: in shadow the hook prints today's role card, which
+ *  tells the body it is a coordinator). Read, and named on the refusal, in this order. The same three as the replay quiz's
+ *  `W1A_ARM_ROWS` today, and legitimately a list of its own: that one is the lanes the quiz baseline guards, which any later
+ *  W1a lane joins, and this one is what a start needs, which a later lane joins only by a ruling of its own. */
+export const DESIGNATE_LANES: readonly LaneArmLane[] = [CONTINUITY_LANE, LAUNCH_PROFILE_LANE, ANCHOR_SLOT_LANE];
+/** How a lane that is not live reads on the refusal, and nothing else rides it (the store's own detail is the server log's):
+ *  `shadow` (stored shadow, or never written, as the lane-arm owner reads an absent row), `gated` (stored live while its gate
+ *  is closed) or `unread` (the row could not be read, or holds a token this build does not know: never live, never shadow). */
+export type LaneReading = 'shadow' | 'gated' | 'unread';
+export interface UnarmedLane { readonly lane: LaneArmLane; readonly reads: LaneReading }
+/** One lane's reading from the lane-arm owner's own view (`laneArm.ts#laneArmRowViewOf`), or null while it is live. A lane the
+ *  door handed no view for reads `unread`. */
+export function laneReadingOf(v: LaneArmRowView | undefined): LaneReading | null {
+  if (v === undefined) return 'unread';
+  if (v.live) return null;
+  if (v.stored === 'shadow' || v.stored === 'absent') return 'shadow';
+  return v.stored === 'live' ? 'gated' : 'unread';
+}
+const unarmedLanes = (views: readonly LaneArmRowView[]): readonly UnarmedLane[] => DESIGNATE_LANES.flatMap((lane) => {
+  const reads = laneReadingOf(views.find((v) => v.lane === lane));
+  return reads === null ? [] : [{ lane, reads }];
+});
+/** The history op's reading for a start (E18): the history door's own chooser over the agent links
+ *  (`overlordHistory.ts#historyAgentFor`), one connected agent serving it or not (none, or several). It is asked only in remote
+ *  mode: a server with no fleet link by configuration (local mode, `DesignateFacts.fleetMode`) is not asked and not refused
+ *  (call 1887's ruling 5b and call 1893: a single-box install can Start). The mode is the configuration's, never read from the
+ *  list's length (call 1941, review 4172 F1): in local mode the list holds the server's own fleet state, which serves no op. */
+export type HistoryAgentFact = HistoryAgentChoice<HistoryLink>['kind'];
 
 /** The ccd words the create itself needs, past `DESIGNATE_CCD_WORDS`' first five, are in that list already (the eight). */
 export interface AccountFacts {
@@ -43,6 +78,12 @@ export interface DesignateFacts {
   readonly accounts: AccountFacts;
   /** The door's `projectHome(…, { state: 'set', set }, …)`; `null` is no lane placeable, and the pick falls back. */
   readonly home: ProjectedHome | null;
+  /** The lane-arm owner's view of each of `DESIGNATE_LANES` (step 3b). */
+  readonly lanes: readonly LaneArmRowView[];
+  /** The server's fleet mode, from its configuration (`config.ts#FleetMode`): step 2's history arm asks remote mode only. */
+  readonly fleetMode: 'local' | 'remote';
+  /** Whether the history op is served (step 2's arm, E18), asked in remote mode only. */
+  readonly historyAgent: HistoryAgentFact;
 }
 
 /** The kebab words this decider and its store (`overlordDesignationStore.ts`) spell as literals that are no wire refusal:
@@ -61,8 +102,8 @@ export const isDesignationKebab = (w: string): boolean => (DESIGNATION_KEBABS as
 
 export type DesignateVerdict =
   | { readonly act: 'refuse'; readonly word: 'overlord-exists' | 'capability-missing' | 'launch-profile-unmet'
-      | 'overlord-single-account'; readonly detail: string;
-      readonly needs?: readonly string[]; readonly count?: number }
+      | 'overlord-single-account' | 'overlord-lanes-unarmed'; readonly detail: string;
+      readonly needs?: readonly string[]; readonly count?: number; readonly lanes?: readonly UnarmedLane[] }
   | { readonly act: 'refuse-input'; readonly why: 'unspellable' }
   | { readonly act: 'unmeasured'; readonly why: string }
   | { readonly act: 'create'; readonly wrapper: string; readonly acctorder: string; readonly poolset: string };
@@ -148,12 +189,23 @@ function createSteps(f: Omit<DesignateFacts, 'read'>): DesignateVerdict {
     if (!needs.includes('pool-set')) needs.push('pool-set');
     if (f.probe.kind !== 'not-run') detail = "the agent's pool answer could not be read";
   }
+  // The history op (E18) rides the same arm, in remote mode only: a link that does not serve it is a missing op; local mode is
+  // not asked (a server with no fleet link by configuration).
+  const history = f.fleetMode === 'remote' && f.historyAgent !== 'agent' ? f.historyAgent : null;
+  if (history !== null) needs.push(OVERLORD_HISTORY_OP);
   if (needs.length > 0) {
-    return { act: 'refuse', word: 'capability-missing', detail: detail || `missing: ${needs.join(', ')}`, needs };
+    const base = detail || `missing: ${needs.join(', ')}`;
+    return { act: 'refuse', word: 'capability-missing', detail: history === null ? base : `${base}; ${historyUnreachableText(history)}`, needs };
   }
   // 3. the builds the launch profile hashes against must agree.
   if (f.builds !== 'agreed') {
     return { act: 'refuse', word: 'launch-profile-unmet', detail: f.builds === 'skewed' ? 'skewed' : 'unmeasured' };
+  }
+  // 3b. the lanes the body needs must be live (call 1887): a Start with one in shadow is wrong, not degraded.
+  const unarmed = unarmedLanes(f.lanes);
+  if (unarmed.length > 0) {
+    return { act: 'refuse', word: 'overlord-lanes-unarmed', lanes: unarmed,
+      detail: `not live: ${unarmed.map((u) => `${u.lane} (${u.reads})`).join(', ')}` };
   }
   // 4. a set the grammar cannot spell is the caller's input error.
   const spelled = poolSetSpelling(f.accountPools);
@@ -251,7 +303,8 @@ export function overlordBodyOf(f: { readonly sessionId: string; readonly listedI
 export type RestartVerdict =
   | { readonly ok: true; readonly endAttempt: string | null } | { readonly ok: false; readonly error: 'not-found' }
   | { readonly ok: false; readonly error: 'overlord-attempt-pending' }
-  | { readonly ok: false; readonly error: 'overlord-body-alive'; readonly detail: 'alive' | 'restarting' | 'unmeasured' };
+  | { readonly ok: false; readonly error: 'overlord-body-alive'; readonly detail: 'alive' | 'restarting' | 'unmeasured' }
+  | { readonly ok: false; readonly error: 'overlord-lanes-unarmed'; readonly lanes: readonly UnarmedLane[]; readonly detail: string };
 
 /** Restart the Overlord (C23): the resume path for a body that is asleep or gone. An `up` body has nothing to restart, a `down`
  *  one is being restarted by its supervisor (an `ensure` would only race it), and an `unmeasured` one is never acted on. No live
@@ -259,10 +312,15 @@ export type RestartVerdict =
  *  `overlord-attempt-pending`, whatever the bound body reads (`restart-refuses-while-an-attempt-is-pending`): two Overlord bodies
  *  are never started side by side, and a forced rebind's stop is not undone by one tap. At or past the deadline the attempt is
  *  over: an accepted Restart names it in `endAttempt`, and the door ends it as failed before its ordinary steps
- *  (`restart-ends-an-overdue-attempt`), so the operator is never locked out while the deadline sweep is not Live. The door and
- *  readiness's `restartable` both ask this one decider. */
+ *  (`restart-ends-an-overdue-attempt`), so the operator is never locked out while the deadline sweep is not Live.
+ *  Last, a body it would restart needs the anchor slot live (call 1941, amending call 1887's "Restart never reads the lanes"): in
+ *  shadow the hook prints today's role card, which tells a revived body it is a coordinator, so Restart refuses
+ *  `overlord-lanes-unarmed` naming that lane alone, and ends no attempt. It reads no other lane: the launch profile's fields are in
+ *  the route record written at Start, and a renewal revives only with `continuity` live. The door passes the lane-arm owner's view
+ *  of the anchor slot; readiness's `restartable` asks this decider without one (`anchor` absent: the lane is not asked), so it
+ *  reads the binding and the body only. */
 export function restartVerdict(binding: { readonly sessionId: string; readonly pending: { readonly sessionId: string; readonly deadlineAt: number } | null } | null,
-  body: OverlordBodyState, now: number): RestartVerdict {
+  body: OverlordBodyState, now: number, anchor?: LaneArmRowView): RestartVerdict {
   if (binding === null) return { ok: false, error: 'not-found' };
   const p = binding.pending;
   if (p !== null && now < p.deadlineAt) return { ok: false, error: 'overlord-attempt-pending' };
@@ -270,7 +328,14 @@ export function restartVerdict(binding: { readonly sessionId: string; readonly p
     case 'up': return { ok: false, error: 'overlord-body-alive', detail: 'alive' };
     case 'down': return { ok: false, error: 'overlord-body-alive', detail: 'restarting' };
     case 'unmeasured': return { ok: false, error: 'overlord-body-alive', detail: 'unmeasured' };
-    case 'asleep': case 'gone': return { ok: true, endAttempt: p === null ? null : p.sessionId };
+    case 'asleep': case 'gone': {
+      const anchorReads = anchor === undefined ? null : laneReadingOf(anchor);
+      if (anchorReads !== null) {
+        return { ok: false, error: 'overlord-lanes-unarmed', lanes: [{ lane: ANCHOR_SLOT_LANE, reads: anchorReads }],
+          detail: `not live: ${ANCHOR_SLOT_LANE} (${anchorReads})` };
+      }
+      return { ok: true, endAttempt: p === null ? null : p.sessionId };
+    }
   }
 }
 

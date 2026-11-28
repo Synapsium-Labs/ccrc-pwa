@@ -12450,7 +12450,7 @@ export function backgroundOnlyRefusal(body: unknown): { count: number | null; ki
 
 /** One capability word the server advertises. Spelled once, as the keys of `SERVER_CAP_MAP`. */
 export type ServerCap = 'dispatch-live-gate-v1' | 'hook-main-state-v1' | 'ask-pairing-v1' | 'questions-v1' | 'review-rounds-v1' | 'goals-read-v1' | 'calls-v1' | 'plan-v1'
-  | 'timers-v1' | 'push-outbox-v1' | 'plan-phases-v1' | 'plan-inbound-v1' | 'plan-ticket-done-v1' | 'continuity-v1';
+  | 'timers-v1' | 'push-outbox-v1' | 'plan-phases-v1' | 'plan-inbound-v1' | 'plan-ticket-done-v1' | 'continuity-v1' | 'overlord-v1';
 
 /** Every word, with what it promises. The value is `true`; the promise is the comment, which a word's reader may
  *  rely on and nothing weaker. `PR_REASON_MAP`'s idiom: a word added to `ServerCap` and not here is TS2741. */
@@ -12531,8 +12531,13 @@ const SERVER_CAP_MAP: Readonly<Record<ServerCap, true>> = {
   /** Overlord W1 (Q33, gates B's R1; door process B1): this server runs the Overlord gate at the continuity start doors with
    *  the witness bound (`continuity/witnessPorts.ts`), so a designated Overlord's writes are fenced and witnessed, and the
    *  designation doors may designate and rebind (`DESIGNATE_SERVER_WORDS`). Added by the change that binds the witness, cut
-   *  after it: without the binding, every write door and each card's last page would refuse 502 at step 7a. */
-  'continuity-v1': true,
+   *  after it: without the binding, every write door and each card's last page would refuse 502 at step 7a.
+   *
+   *  `overlord-v1` (Overlord W1, Table 11.1d; on this line because the growth cap allows no new one): the Overlord's own
+   *  doors pass step 2 of the gate (the designated session only; step 1 still refuses every other caller), `ccrc-api`'s
+   *  Overlord rows send rather than refuse `capability-missing` unsent, the card door renders the Overlord's W1 card, and the
+   *  console draws the Overlord. Added by the change that completes W1, cut after every other W1 piece. */
+  'continuity-v1': true, 'overlord-v1': true,
 };
 
 /** The words this server advertises, in `GET /health`'s `caps`, and in the file a `server` or `both` node writes. */

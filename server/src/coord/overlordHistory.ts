@@ -58,6 +58,9 @@ const CAUSE_MAP: Record<HistoryUnreachableCause, string> = {
 };
 /** Every `HistoryUnreachableCause`, derived from the map. */
 export const HISTORY_UNREACHABLE_CAUSES = Object.keys(CAUSE_MAP) as HistoryUnreachableCause[];
+/** One cause's sentence, as the door's answer says it: the designate door's history arm says the chooser's two the same way
+ *  (overlord-v1's guard, E18). */
+export const historyUnreachableText = (cause: HistoryUnreachableCause): string => CAUSE_MAP[cause];
 
 /** Whether a kebab word is one this file names: a cause of `history-unreachable`, or the agent's refused request as a line's
  *  outcome. A word rides a door answer's `cause` or a read-ledger line, never a `refused` or `reject.code` (the coordination

@@ -2,7 +2,7 @@
 // (`coord/overlordRoutes.ts`) over a real `CoordStore` on a migrated coord db, a FAKE gate, a FAKE body (the `OverlordBody` port,
 // `ensure` included), a FAKE host, a fake journal and the fake clock and entropy. Every case binds a live Overlord first (a
 // designate, then `goLive` through the store, as `overlord-designate-route.test.ts` does).
-import { describe, it, expect, afterEach, afterAll, beforeAll } from 'vitest';
+import { describe, it, expect, afterEach, afterAll, beforeAll, vi } from 'vitest';
 import Fastify, { type FastifyInstance } from 'fastify';
 import type { DatabaseSync } from 'node:sqlite';
 import path from 'node:path';
@@ -21,7 +21,7 @@ import type { AuthorityAppender } from '../src/coord/overlordDesignationStore.js
 import type { AuthorityAppend, AuthorityAppendError } from '../src/coord/overlordAuthorityJournal.js';
 import type { AuthorityState } from '../src/coord/overlordAuthorityCoherence.js';
 import type { OverlordAuthorityMove } from '../src/coord/overlordAuthority.js';
-import type { OldBodyState, OverlordBodyState } from '../src/coord/overlordDesignation.js';
+import { DESIGNATE_LANES, type OldBodyState, type OverlordBodyState } from '../src/coord/overlordDesignation.js';
 import type { AccountGate, AccountGateAsk } from '../src/accounts/gate.js';
 import { gateActorOf } from '../src/accounts/audit.js';
 import { attributionIdentity } from '../src/auth/attributionIdentity.js';
@@ -161,6 +161,8 @@ async function rig(opts: { bound?: boolean; noOldBody?: boolean; noBodyFact?: bo
   const db = openCoordDb(path.join(dir, 'coord.db'));
   opened.push(db);
   const coord = new CoordStore(db);
+  // The lanes a start needs are live (overlord-v1's guard, call 1887); a case sets one back to shadow.
+  for (const lane of DESIGNATE_LANES) coord.setLaneArm(lane, 'live', 1);
   const gate = fakeGate(); const body = new FakeBody(); const journal = fakeJournal(); const host = new FakeHost();
   const time = fakeTime();
   const facts: Facts = {
@@ -959,5 +961,100 @@ describe('the unmeasured designation row', () => {
     expect(r.body.ops()).toEqual([]);
     expect(r.facts.bodyAsked).toEqual([]);
     expect(snapshot(r)).toEqual(before);
+  });
+});
+
+describe('the lane guard on Rebind (overlord-v1, call 1887)', () => {
+  it('a rebind that would start a body refuses 409 overlord-lanes-unarmed while a lane is not live, and stops and writes nothing', async () => {
+    const r = await rig();
+    r.coord.setLaneArm('anchor-slot', 'shadow', 2);
+    const before = snapshot(r);
+    const res = await rebind(r);
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toEqual({ ok: false, error: 'overlord-lanes-unarmed', detail: 'not live: anchor-slot (shadow)', lanes: [{ lane: 'anchor-slot', reads: 'shadow' }] });
+    expect(snapshot(r)).toEqual(before);
+  });
+
+  it('its own checks answer first: no binding is not-found, whatever the lanes read', async () => {
+    const r = await rig({ bound: false });
+    for (const lane of DESIGNATE_LANES) r.coord.setLaneArm(lane, 'shadow', 2);
+    expect((await rebind(r)).json()).toMatchObject({ error: 'not-found' });
+  });
+
+});
+
+// Call 1941 (review 4172 F3), amending call 1887's "Restart never reads the lanes": Restart reads the anchor slot, and that lane only.
+describe('the anchor slot on Restart (overlord-v1, call 1941)', () => {
+  const spyLanes = (r: Rig, fail?: string): string[] => {
+    const asked: string[] = [];
+    const real = r.coord.laneArmSetting.bind(r.coord);
+    r.coord.laneArmSetting = (lane) => { asked.push(lane); if (fail !== undefined && lane === 'anchor-slot') throw new Error(fail); return real(lane); };
+    return asked;
+  };
+
+  it('the anchor slot live, the other two in shadow: Restart restarts, and reads the anchor slot alone', async () => {
+    const r = await rig();
+    r.coord.setLaneArm('continuity', 'shadow', 2);
+    r.coord.setLaneArm('launch-profile', 'shadow', 2);
+    const asked = spyLanes(r);
+    const res = await restart(r);
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({ ok: true, sessionId: r.oldId, awake: true, prompted: true });
+    expect(asked).toEqual(['anchor-slot']);
+  });
+
+  it('the anchor slot in shadow: 409 overlord-lanes-unarmed naming it alone, and nothing is started, prompted or written', async () => {
+    const r = await rig();
+    for (const lane of DESIGNATE_LANES) r.coord.setLaneArm(lane, 'shadow', 2);
+    const before = snapshot(r);
+    const res = await restart(r);
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toEqual({ ok: false, error: 'overlord-lanes-unarmed', detail: 'not live: anchor-slot (shadow)', lanes: [{ lane: 'anchor-slot', reads: 'shadow' }] });
+    expect(r.body.log).toEqual([]);
+    expect(r.host.delivered).toEqual([]);
+    expect(snapshot(r)).toEqual(before);
+  });
+
+  it('the anchor slot unreadable: it reads unread, and the store\'s words go to one log line naming Restart, never the answer', async () => {
+    const r = await rig();
+    spyLanes(r, 'SQLITE_BUSY: the row\n is locked');
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const res = await restart(r);
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toEqual({ ok: false, error: 'overlord-lanes-unarmed', detail: 'not live: anchor-slot (unread)', lanes: [{ lane: 'anchor-slot', reads: 'unread' }] });
+    expect(res.body).not.toContain('SQLITE');
+    expect(warn.mock.calls.map((c) => String(c[0])).filter((l) => l.includes('lane-arm')))
+      .toEqual(['ccrc-server: Restart the Overlord refused: the lane-arm row of anchor-slot could not be read: SQLITE_BUSY: the row is locked']);
+    warn.mockRestore();
+    expect(r.body.log).toEqual([]);
+  });
+
+  it('an overdue attempt with the anchor slot in shadow: refused, and the attempt is not ended', async () => {
+    const r = await rig();
+    const made = await rebind(r);
+    expect(made.statusCode).toBe(200);
+    r.body.reset(); r.host.delivered.length = 0;
+    r.facts.bodyState = { kind: 'gone', cause: 'stopped' };
+    r.time.advance((made.json().deadlineAt as number) - r.time.ports.clock.wall());
+    r.coord.setLaneArm('anchor-slot', 'shadow', 2);
+    const before = snapshot(r);
+    const res = await restart(r);
+    expect(res.json()).toMatchObject({ ok: false, error: 'overlord-lanes-unarmed' });
+    expect(view(r)!.pending).not.toBeNull();
+    expect(snapshot(r)).toEqual(before);
+  });
+
+  it('every other answer comes first, whatever the anchor slot reads: not-found, attempt pending, body alive', async () => {
+    const none = await rig({ bound: false });
+    none.coord.setLaneArm('anchor-slot', 'shadow', 2);
+    expect((await restart(none)).json()).toMatchObject({ error: 'not-found' });
+    const pending = await rig();
+    expect((await rebind(pending)).statusCode).toBe(200);
+    pending.coord.setLaneArm('anchor-slot', 'shadow', 2);
+    expect((await restart(pending)).json()).toMatchObject({ error: 'overlord-attempt-pending' });
+    const up = await rig();
+    up.facts.bodyState = { kind: 'up' };
+    up.coord.setLaneArm('anchor-slot', 'shadow', 2);
+    expect((await restart(up)).json()).toMatchObject({ error: 'overlord-body-alive', detail: 'alive' });
   });
 });

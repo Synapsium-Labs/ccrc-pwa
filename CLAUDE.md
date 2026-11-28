@@ -815,6 +815,9 @@ while sign-in is dark) consults no box token and is session-gated when armed. Al
   brief exactly as the worker's does. A skill reaches a home through `ccrc update`'s install spine (`_inst_skills`,
   every rostered home) — never assume a server-only deploy carried it; doctor's `skills` check measures every home
   against the shipped tree, and `ccrc doctor --fix` cures it from the same tree.
+- **So does the Overlord** (`ccd/overlord-skill/SKILL.md`, `ccrc-overlord`, twenty-two clauses pinned by
+  `server/test/overlord-skill.test.ts`). It goes in no home: it is staged at `~/.cc-sessions/overlord-skill`, only the
+  `overlord` launch profile loads it, and it acts only while the server advertises `overlord-v1`.
 
 ## Open on `main` — do NOT assume these are fixed
 `MailDeliveryState` terminality: since **D-5997** (#532) `server/src/coord/store.ts` writes `mail_deliveries` in ONE

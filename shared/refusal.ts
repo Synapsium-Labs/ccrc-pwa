@@ -282,6 +282,9 @@ export const OVERLORD_REFUSALS = {
   'overlord-single-account': 409,
   // Designate and rebind: a property of the sandbox check failed (sandbox B). 409.
   'overlord-sandbox-unmet': 409,
+  // Designate and a rebind that starts a body: a lane the body needs (continuity, launch-profile, anchor-slot) is not live
+  // (overlord-v1's guard, call 1887). 409, a state of the world the operator changes on Settings' Shadow lanes card.
+  'overlord-lanes-unarmed': 409,
   // Recorded on the row, never answered: the journal refused the go-live record until the deadline (designation B;
   // the designation plan, question 10). 503, a box fault.
   'authority-unrecorded': 503,

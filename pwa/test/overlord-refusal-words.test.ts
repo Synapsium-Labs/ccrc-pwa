@@ -56,4 +56,21 @@ describe('overlordRefusalText', () => {
     expect(overlordRefusalText(refused('a-newer-word'), 'pause')).toBe('Refused: a-newer-word');
     expect(overlordRefusalText(new TypeError('Failed to fetch'), 'pause')).toBe('Failed to fetch');
   });
+
+  it('overlord-lanes-unarmed (overlord-v1\'s guard): its sentence says where lanes are set live, then each lane the answer names, by the card\'s row name', () => {
+    const lanes = [{ lane: 'continuity', reads: 'shadow' }, { lane: 'launch-profile', reads: 'gated' }, { lane: 'anchor-slot', reads: 'unread' }];
+    const sentence = OVERLORD_PLACE_REFUSAL_TEXT['overlord-lanes-unarmed'];
+    expect(sentence).toContain('Shadow lanes card');
+    for (const act of ['start', 'rebind'] as const) {
+      expect(overlordRefusalText(refused('overlord-lanes-unarmed', { lanes }), act)).toBe(`${sentence} Not live: Renew long-lived sessions (in shadow), `
+        + 'Launch profiles (set live, but its gate is closed), Anchor at every start (could not be read).');
+    }
+  });
+
+  it('overlord-lanes-unarmed with a lane list this console cannot read draws the sentence alone, never a guessed lane', () => {
+    const sentence = OVERLORD_PLACE_REFUSAL_TEXT['overlord-lanes-unarmed'];
+    for (const lanes of [undefined, [], 'continuity', [{ lane: 'a-newer-lane', reads: 'shadow' }], [{ lane: 'continuity', reads: 'asleep' }], [null]]) {
+      expect(overlordRefusalText(refused('overlord-lanes-unarmed', lanes === undefined ? {} : { lanes }), 'start'), JSON.stringify(lanes)).toBe(sentence);
+    }
+  });
 });

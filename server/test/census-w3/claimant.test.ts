@@ -171,6 +171,8 @@ describe('the claimant client census (D-7320)', () => {
   // The phases' and the inbound path's gate (programme work map WM0, D-8715; D-8736) is the sixth, one call over a case table of
   // the row's word (`plan.phase-ref`, `plan.take`, `plan.triage`), guarded by the plan rows' family test and the table's own non-empty test, `"$key" == plan.* && -n "$gate"`.
   // The ticket-done row (programme work map WM1, D-8727) is a row of that same table gate, not a call of its own (one table, one check).
+  // Since overlord-v1 (slug client-word-gate-is-one-table) the Overlord's rows are rows of that table too, so its check reads every
+  // row: the sixth call is guarded by the table's own non-empty test alone, `[[ -n "$gate" ]]`, the gate a table row sets.
   // The timers' gate (Overlord W1a, the timers piece) is the seventh, guarded by the timer rows' family test, `"$key" == timer.*`.
   it('REAL, pinned since Q3j: cap-reader calls in ccrc-api: exactly 7, the claimant guard, the review-rounds loop, the goals read\'s gate, the call record\'s gate, the plan door\'s gate, the phases\', inbound and ticket-done table gate and the timers\' gate (D-7322, D-7324, D-8125, D-8126, D-8181, D-8715, D-8727)', () => {
     expect(capReaderCalls().map((s) => [s.guarded, s.text.trim()])).toEqual([
@@ -179,7 +181,7 @@ describe('the claimant client census (D-7320)', () => {
       [true, 'if [[ "$key" == \'goals.show\' ]] && ! _api_server_cap goals-read-v1 && _api_server_cap \'\'; then'],
       [true, 'if [[ "$key" == \'calls.record\' ]] && ! _api_server_cap calls-v1 && _api_server_cap \'\'; then'],
       [true, 'if [[ "$key" == plan.* ]] && ! _api_server_cap plan-v1 && _api_server_cap \'\'; then'],
-      [true, 'if [[ "$key" == plan.* && -n "$gate" ]] && ! _api_server_cap "$gate" && _api_server_cap \'\'; then'],
+      [true, 'if [[ -n "$gate" ]] && ! _api_server_cap "$gate" && _api_server_cap \'\'; then'],
       [true, 'if [[ "$key" == timer.* ]] && ! _api_server_cap timers-v1 && _api_server_cap \'\'; then'],
     ]);
   });

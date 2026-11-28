@@ -1676,8 +1676,13 @@ main() {
   # `plan.phase-ref`, `plan-inbound-v1` for `plan.take` and `plan.triage`, `plan-ticket-done-v1` for `plan.ticket-done`) says the
   # server is older than that door, so `capability-missing` is answered with the row's own text and nothing is sent; an absent,
   # stale, torn or future file sends. One table (row key, word, refusal text), one check that reads it.
+  # The Overlord's rows are rows of it too (Overlord W1, `overlord-v1`; slug client-word-gate-is-one-table): each row whose server
+  # door is an Overlord door carrying the word, held to the door table both ways by `ccrc-api-overlord-word.test.ts`.
   local gate='' gate_msg=''
   case "$key" in
+    overlord.inbox|overlord.messages|overlord.acknowledge|overlord.history|overlord.sequence|overlord.board|linking.confirm)
+      gate='overlord-v1'
+      gate_msg="the server this box talks to does not answer the Overlord's doors yet (it does not advertise $gate); nothing was sent" ;;
     plan.phase-ref)
       gate='plan-phases-v1'
       gate_msg="the server this box talks to does not answer this verb yet (it does not advertise $gate); nothing was changed" ;;
@@ -1688,7 +1693,7 @@ main() {
       gate='plan-ticket-done-v1'
       gate_msg="the server this box talks to does not record done evidence yet (it does not advertise $gate); no ticket was changed" ;;
   esac
-  if [[ "$key" == plan.* && -n "$gate" ]] && ! _api_server_cap "$gate" && _api_server_cap ''; then
+  if [[ -n "$gate" ]] && ! _api_server_cap "$gate" && _api_server_cap ''; then
     refuse 'capability-missing' "$gate_msg"
   fi
 

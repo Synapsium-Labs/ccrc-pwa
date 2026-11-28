@@ -1,6 +1,7 @@
 // The console's home, decided once (Overlord W1 home, Task 1): `overlordShown`, `designationStateOf` and `homePlace`, each
 // over the tables the module reads, so a designation kind or a rung class without a row is red here.
 import { describe, expect, it } from 'vitest';
+import { SERVER_CAPS } from '../../shared/api';
 import type { DesignationView } from '../../shared/overlord-designation';
 import {
   designationStateOf, HOME_TABLE, homePlace, NOT_ADVERTISED, OVERLORD_CAP, OVERLORD_DOOR, overlordShown, rungClassOf,
@@ -44,6 +45,9 @@ describe('overlordShown (plan question 9, ruled F4)', () => {
     expect(overlordShown(CAPS_UNMEASURED)).toBe(false);
     expect(overlordShown({ kind: 'caps', caps: [] })).toBe(false);
     expect(OVERLORD_CAP).toBe('overlord-v1');
+  });
+  it('the server advertises the word the console draws on (overlord-v1, Table 1 H15)', () => {
+    expect(SERVER_CAPS).toContain(OVERLORD_CAP);
   });
 });
 

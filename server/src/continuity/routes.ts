@@ -32,14 +32,14 @@ import { CARD_REFUSALS, NOTE_REFUSALS, PROBE_REFUSALS, START_LOADS_REFUSALS } fr
 import { laneArmRowViewOf } from '../coord/laneArm.js';
 import { anchorAnswer, anchorGeneration, renderAnchor, type AnchorGenRow, type AnchorStart } from './anchor.js';
 import { cardPages, renderCard, snapshotFactsJson, trimCard } from './card.js';
-import { gatherCardFacts, sessionRoleRead, type CardFactsDeps } from './cardFacts.js';
+import { gatherCardFacts, sessionRoleRead, type CardFactsDeps, type CardMessagesPort } from './cardFacts.js';
 import {
   RENEW_REQUESTS_CURSOR, effectiveGeneration, newestMintedStartOf, sessionLiveGeneration, startByNonce, type TimerRow,
 } from './continuityStore.js';
 import { renewDoorVerdict, renewalModeOf, type RenewDoorFacts } from './renewNow.js';
 import type { NoticeSink } from '../notice.js';
 import { designationReadOf, liveGenerationOf } from './liveGeneration.js';
-import { noteKeyReader, type NoteKeysMessages } from './noteKeys.js';
+import { noteKeyReader } from './noteKeys.js';
 import { LEDGER_SESSION_CALLERS, PROBE_ANSWER_MAX_CHARS, READ_LEDGER_WRITTEN, bookOf, gradeAnswers, ledgerFactsOf, maskedQuestion, probePages, type LastRead, type ReadLedgerCount } from './probeDoor.js';
 import { roundVerdict } from './probes.js';
 import { REPORT_ID_RE, startLoadsOf } from './startLoads.js';
@@ -142,9 +142,10 @@ export interface ContinuityRouteDeps {
   gate?: (req: FastifyRequest, reply: FastifyReply, key: string, claim: GateClaim) => Promise<GateRun>;
   /** The card's registry reads (`gatherCardFacts`' ports other than the store); the timer set door's role read reuses them. */
   cardRegistry: Omit<CardFactsDeps, 'coord'>;
-  /** The private store's text-free message read, for a `miss` note's key (`NoteKeysMessages`), resolved per request. Absent, or
-   *  null while the store is not open: a `message` key then reads `unmeasured` and the door refuses `unmeasured`. */
-  operatorModel?: () => (NoteKeysMessages & Partial<ReadLedgerCount>) | null | undefined;
+  /** The private store's text-free reads, resolved per request: a `miss` note's key, and the Overlord card's unsettled list (the
+   *  gatherer's port, `CardMessagesPort`, overlord-v1). Absent, or null while the store is not open: a `message` key then reads
+   *  `unmeasured` and the door refuses `unmeasured`, and the Overlord's list reads unmeasured. */
+  operatorModel?: () => (CardMessagesPort & Partial<ReadLedgerCount>) | null | undefined;
   /** The setter's stamp: `incarnationOf`'s two agreeing reads of `$REG/<id>.generation`. NOT `cardRegistry.incarnation`, its
    *  single read (slug setter-stamp-is-a-double-read): the stamp keys a timer whose mismatch later cancels it, irreversibly,
    *  so a file that changes between the reads answers `unmeasured` and the set refuses `timer-unmeasured`, where the card's
