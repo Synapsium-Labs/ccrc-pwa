@@ -215,12 +215,13 @@ const applyInput = (actor: RecordedActor, id: number, state: 'pending' | 'done')
   checks: [], journalHighest: null,
 });
 /** A journal double that runs `between` after its append and before the apply (a fact changed under the plan), then the apply,
- *  answering a throw from it as `journal-append`, as the act journal will. */
+ *  answering a throw from it as `journal-append`, as the act journal will. Its ok answer's `sequence` is the last record's
+ *  that this append wrote, counting every record from 1, as the port says (the writers do not read it). */
 const doubleWith = (between: () => void = () => undefined): ActJournalPort => {
   let sequence = 0;
   return {
-    appendInTx(_db, _records, apply) {
-      sequence += 1;
+    appendInTx(_db, records, apply) {
+      sequence += records.length;
       between();
       try { apply(); } catch (e) { return { ok: false, error: 'journal-append', detail: e instanceof Error ? e.message : String(e) }; }
       return { ok: true, sequence };
@@ -236,7 +237,8 @@ const sessionActor = async (): Promise<RecordedActor> => {
 const operatorActor = (): RecordedActor => IDENTITY.operator(gateActorOf('Fixture browser', 'abcdef0123456789'));
 
 /** The apply re-makes its plan and throws when a fact changed under it (F3), and a door settle's act line is its act's own
- *  actor's (F1): one case per actor kind the door can carry. */
+ *  actor's (F1): one case per actor kind the door can carry. A lane's or the boot pass's settle of such a row writes the server's
+ *  line (review 4218 F1): one case per actor kind and mover. */
 export function actApplyCases(m: ActsStoreModule): Record<string, SuiteCase> {
   const doorSettleLine = async (actor: RecordedActor): Promise<void> => {
     const db = storeDb();
@@ -248,19 +250,54 @@ export function actApplyCases(m: ActsStoreModule): Record<string, SuiteCase> {
         { state: 'pending', actor: actor.subject, actorKind: actor.kind }, { state: 'done', actor: actor.subject, actorKind: actor.kind }]);
     } finally { db.close(); }
   };
+  /** Review 4218 F1, the other side of the same line: a row a session or the operator wrote, settled by the lane or the boot pass
+   *  (`ACT_TRANSITIONS` lets both move `pending`), keeps its first line and writes the server's on the settle's. */
+  const serverSettleLine = async (actor: RecordedActor, by: 'lane' | 'boot'): Promise<void> => {
+    const db = storeDb();
+    try {
+      const j = doubleWith();
+      expect(tx(db, () => m.writeActInTx(db, j, applyInput(actor, 7, 'pending'), STORE_AT))).toMatchObject({ ok: true, act: { id: 1 } });
+      expect(tx(db, () => m.settleActInTx(db, j, 1, 'done', by, STORE_AT + 1))).toMatchObject({ ok: true, act: { state: 'done' } });
+      expect(actLines(db)).toEqual([
+        { state: 'pending', actor: actor.subject, actorKind: actor.kind }, { state: 'done', actor: 'server', actorKind: 'server' }]);
+    } finally { db.close(); }
+  };
   return {
     'a door settle\'s line carries a session actor\'s own subject and kind': async () => { await doorSettleLine(await sessionActor()); },
     'a door settle\'s line carries an operator actor\'s own subject and kind': async () => { await doorSettleLine(operatorActor()); },
+    'a lane settle of a session\'s row writes the server\'s line': async () => { await serverSettleLine(await sessionActor(), 'lane'); },
+    'a boot settle of a session\'s row writes the server\'s line': async () => { await serverSettleLine(await sessionActor(), 'boot'); },
+    'a lane settle of an operator\'s row writes the server\'s line': async () => { await serverSettleLine(operatorActor(), 'lane'); },
+    'a boot settle of an operator\'s row writes the server\'s line': async () => { await serverSettleLine(operatorActor(), 'boot'); },
     'the write\'s apply throws when the highest id moved between the append and the apply: journal-append, no row, no line': () => {
       const db = storeDb();
       try {
         const plain = doubleWith();
         for (const id of [7, 8]) expect(tx(db, () => m.writeActInTx(db, plain, applyInput(serverActorOf('lane-a'), id, 'done'), STORE_AT)).ok).toBe(true);
         // The plan reserves id 3; the double then drops row 2, so the re-made plan reserves 2 and the apply must not insert 3.
+        // This disagreement rests on the next id being the table's highest plus one (`nextActId`, the departure
+        // act-id-from-one-decider): were ids ever drawn from a counter that a delete does not lower, this case would need
+        // another way to move the plan, and would go red for that reason, not for the comparison it pins.
         const moved = doubleWith(() => { db.prepare('DELETE FROM overlord_acts WHERE id = 2').run(); });
         expect(tx(db, () => m.writeActInTx(db, moved, applyInput(serverActorOf('lane-a'), 9, 'done'), STORE_AT)))
           .toMatchObject({ ok: false, error: 'journal-append' });
         expect(m.actById(db, 3)).toEqual({ kind: 'measured', value: 'absent' });
+        expect(actLines(db)).toHaveLength(2);
+      } finally { db.close(); }
+    },
+    'the write\'s apply throws when its natural key was taken between the append and the apply: journal-append, no row, no line': () => {
+      const db = storeDb();
+      try {
+        const plain = doubleWith();
+        // Row 1 holds request 9's key, then is settled refused, which frees the key for a second write of the same target.
+        expect(tx(db, () => m.writeActInTx(db, plain, applyInput(serverActorOf('lane-a'), 9, 'pending'), STORE_AT)).ok).toBe(true);
+        expect(tx(db, () => m.settleActInTx(db, plain, 1, 'refused', 'lane', STORE_AT)).ok).toBe(true);
+        // The plan reserves id 2 with the key free; the double then makes row 1 hold the key again, the highest id unmoved, so the
+        // re-made plan refuses natural-key-taken and the apply must not insert row 2.
+        const taken = doubleWith(() => { db.prepare("UPDATE overlord_acts SET state = 'done' WHERE id = 1").run(); });
+        expect(tx(db, () => m.writeActInTx(db, taken, applyInput(serverActorOf('lane-a'), 9, 'done'), STORE_AT)))
+          .toMatchObject({ ok: false, error: 'journal-append' });
+        expect(m.actById(db, 2)).toEqual({ kind: 'measured', value: 'absent' });
         expect(actLines(db)).toHaveLength(2);
       } finally { db.close(); }
     },

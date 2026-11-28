@@ -8,8 +8,9 @@
 // journal's apply, the row and the `act` line. The apply re-reads the facts, re-asks the decider and THROWS if the answer
 // differs: inside the journal's call that is a failure after the append (the journal tells its guard `trailing`). The apply's
 // savepoint alone is undone (`undoable`), so neither the row nor its line is left; the writer answers `journal-append`; and the
-// caller's transaction is the door's to end (`ActJournalPort` says what a door does on that word). It is a programming error,
-// never a refusal: `DatabaseSync` is synchronous, so what the plan read is still true when the apply runs.
+// caller's transaction is the door's to end (`ActJournalPort` says what a door does on any answer that is not ok, and the
+// word's other arm). It is a programming error, never a refusal: `DatabaseSync` is synchronous, so what the plan read is still
+// true when the apply runs.
 //
 // NO PRODUCTION CALLER YET (the coordinator's item 3). `ActJournalPort` is declared here by its consumer and implemented by the
 // act journal (act journal A), which wires the writer. Until then the writers have no caller outside this file and the tests
@@ -43,10 +44,17 @@ import { stampSequenceInTx } from './overlordSequenceStore.js';
  *  `tx()`, then runs `apply` (the row and the act line), as `journalKernel.ts#appendThenApply` does. A throw from `apply` after the
  *  append is told to the journal's guard as `trailing` at once and answered `journal-append`. Never throws.
  *
- *  A DOOR ON `journal-append`. The writer has undone only its own savepoint: the row and its line are gone, but everything else the
- *  door wrote in its transaction still stands, and the journal's record is already appended. The door must end its transaction
- *  without committing (throw out of its `tx()`, so it rolls back) and refuse the call; it never commits an effect with no act
- *  row. The journal's guard, told `trailing`, then fences the doors (the act journal's to build). */
+ *  THE OK ANSWER. `sequence` is the sequence of the LAST record this append wrote. The writers do not read it.
+ *
+ *  A DOOR ON ANY ANSWER THAT IS NOT OK. Whatever the word (the journal's, the authority's or a refusal of the writer's own), the
+ *  door ends its transaction without committing what it wrote for this act: it throws out of its `tx()`, so the transaction
+ *  rolls back. It never commits an effect with no act row.
+ *
+ *  `journal-append` HAS TWO ARMS, and the door's duty is the same in both. (1) The apply threw: the writer has undone only the
+ *  apply's savepoint, so the row and its line are gone, while everything else the door wrote still stands and the journal's
+ *  record is already appended; the journal's guard was told `trailing`, and then fences the doors (the act journal's to build).
+ *  (2) Rarely, the append answered ok and the writer's read-back of the row then failed: the row and its line may stand, and the
+ *  guard was not told. */
 export interface ActJournalPort {
   appendInTx(db: DatabaseSync, records: readonly ActJournalRecord[], apply: () => void): ActJournalAppend;
 }
