@@ -48,8 +48,8 @@ export type ActHeal =
   | { readonly kind: 'no-tail' } | { readonly kind: 'healed'; readonly name: string } | { readonly kind: 'not-healable' }
   | { readonly kind: 'unmeasured' } | { readonly kind: 'cut-failed'; readonly error: ChainedCutError; readonly mayApply: boolean };
 
-/** The success answer, in one place: the store's port answers `{ ok: true }` today; a sequence number is one line here. */
-const appendedOk = (_last: ChainedJournalRecord<OverlordActRecord>): ActJournalAppend => ({ ok: true });
+/** The success answer, in one place: the sequence of the last record this call appended (the port's declaration, as the plan's). */
+const appendedOk = (last: ChainedJournalRecord<OverlordActRecord>): ActJournalAppend => ({ ok: true, sequence: last.sequence });
 
 const HEAD_READ = 'SELECT sequence, journalId, digest FROM overlord_act_journal_head WHERE id = 1';
 const HEX64 = /^[0-9a-f]{64}$/;

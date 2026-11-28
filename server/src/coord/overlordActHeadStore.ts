@@ -6,7 +6,7 @@
 // A signed head that comes back with a restored `coord.db` still verifies against the key, so the table needs no journal of its
 // own. Not pruned in W2. A read that cannot be made answers `unmeasured`, never an empty value.
 import type { DatabaseSync } from 'node:sqlite';
-import { isActHead, type ActHead } from '../../../shared/actJournalHead.js';
+import { isActHead, type ActHead, type ActHeadRecorded } from '../../../shared/actJournalHead.js';
 
 /** One day's head, as stored: signed (`signature`) or unsigned (`unsigned`, its word), exactly one of the two. */
 export interface ActHeadRow extends ActHead {
@@ -38,6 +38,11 @@ function readOne(db: DatabaseSync, sql: string, ...args: (string | number)[]): A
     return { kind: 'unmeasured', why: errText(e) };
   }
 }
+
+/** A stored row as the head read and the digest carry it: the head, and its signature or unsigned word (no `at`). */
+export const actHeadRecordedOf = (r: ActHeadRow): ActHeadRecorded => ({
+  day: r.day, sequence: r.sequence, journalId: r.journalId, digest: r.digest, signature: r.signature, unsigned: r.unsigned,
+});
 
 /** The head recorded for `day`, or `absent`. */
 export function actHeadForDay(db: DatabaseSync, day: string): ActHeadRead<ActHeadRow | 'absent'> {

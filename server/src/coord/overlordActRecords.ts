@@ -61,7 +61,7 @@ export interface ActJournalPort {
   appendInTx(db: DatabaseSync, records: readonly ActJournalRecord[], apply: () => void): ActJournalAppend;
 }
 export type ActJournalAppend =
-  | { readonly ok: true }
+  | { readonly ok: true; readonly sequence: number }
   | { readonly ok: false; readonly error: 'not-in-transaction' | 'authority-rolled-back' | 'authority-unmeasured' | 'journal-append'; readonly detail: string };
 // ── end INTERIM ────────────────────────────────────────────────────────────────────────────────────────────────────────
 

@@ -11,7 +11,7 @@ import type { IsolationRead } from '../../../shared/isolation.js';
 import type { ActHeadReadWire } from '../../../shared/actJournalHead.js';
 import type { ApprovalSigner } from './approvalsign.js';
 import { actHeadLanePlan, actHeadSignVerdict, digestAtSequence, type ActHeadLaneFile, type ActHeadLanePlan } from './overlordActHead.js';
-import { actHeadForDay, newestActHead, recordActHeadInTx } from './overlordActHeadStore.js';
+import { actHeadForDay, actHeadRecordedOf, newestActHead, recordActHeadInTx } from './overlordActHeadStore.js';
 import type { ActFileRead } from './overlordActJournal.js';
 
 /** What the head read gathers: the database, the journal, and the key's public half (null when the key could not be loaded). */
@@ -28,9 +28,7 @@ export function readActHeadAnswer(deps: ActHeadReadDeps, at: number | null): { r
   if (db === null) return { ok: false, why: 'this server has no coordination store' };
   const newest = newestActHead(db);
   if (newest.kind === 'unmeasured') return { ok: false, why: 'the recorded heads could not be read' };
-  const head = newest.value === 'absent' ? 'absent' as const
-    : { day: newest.value.day, sequence: newest.value.sequence, journalId: newest.value.journalId, digest: newest.value.digest,
-      signature: newest.value.signature, unsigned: newest.value.unsigned };
+  const head = newest.value === 'absent' ? 'absent' as const : actHeadRecordedOf(newest.value);
   return { ok: true, wire: { v: 1, head, publicKeyPem: deps.publicKeyPem(), at: at === null ? null : { sequence: at, digest: digestAtSequence(deps.journal.readVerified(), at) } } };
 }
 

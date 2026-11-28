@@ -107,7 +107,7 @@ describe('Table 2, row by row', () => {
 
   it('row 4: a file that cannot be read answers authority-unmeasured and tells the guard journal-unreadable, appending nothing', () => {
     const r = rig();
-    expect(r.write([settle(1, null)])).toEqual({ ok: true });
+    expect(r.write([settle(1, null)])).toMatchObject({ ok: true });
     r.fault.now = 'read';
     expect(r.write([settle(2, null)])).toMatchObject({ ok: false, error: 'authority-unmeasured' });
     expect(r.failures).toEqual([['journal-unreadable', 'acts']]);
@@ -117,7 +117,7 @@ describe('Table 2, row by row', () => {
 
   it('row 5: a head row behind the file reads trailing, refuses authority-rolled-back and fences, the act journal named', () => {
     const r = rig();
-    expect(r.write([settle(1, null)])).toEqual({ ok: true });
+    expect(r.write([settle(1, null)])).toMatchObject({ ok: true });
     r.db.exec('DELETE FROM overlord_act_journal_head');
     expect(r.write([settle(2, null)])).toMatchObject({ ok: false, error: 'authority-rolled-back' });
     expect(r.failures).toEqual([['trailing', 'acts']]);
@@ -127,7 +127,7 @@ describe('Table 2, row by row', () => {
 
   it('row 5: a stated from the fold contradicts refuses and tells the guard diverged', () => {
     const r = rig();
-    expect(r.write([intent(4)])).toEqual({ ok: true });
+    expect(r.write([intent(4)])).toMatchObject({ ok: true });
     expect(r.write([settle(4, 'unknown', 'done')])).toMatchObject({ ok: false, error: 'authority-rolled-back' });
     expect(r.failures).toEqual([['diverged', 'acts']]);
     expect(r.lines()).toHaveLength(1);
@@ -136,15 +136,15 @@ describe('Table 2, row by row', () => {
   it('row 5: a one-step settle (from null) of an act the journal already holds is diverged; an intent of one too', () => {
     for (const second of [settle(4, null), intent(4)]) {
       const r = rig();
-      expect(r.write([settle(4, null)])).toEqual({ ok: true });
+      expect(r.write([settle(4, null)])).toMatchObject({ ok: true });
       expect(r.write([second])).toMatchObject({ ok: false, error: 'authority-rolled-back' });
       expect(r.failures).toEqual([['diverged', 'acts']]);
     }
   });
 
-  it('row 6: coherent and agreeing: the record is appended, then the head row, then the apply, and the answer is ok', () => {
+  it('row 6: coherent and agreeing: the record is appended, then the head row, then the apply, and the answer is ok with its sequence', () => {
     const r = rig();
-    expect(r.write([settle(1, null)])).toEqual({ ok: true });
+    expect(r.write([settle(1, null)])).toStrictEqual({ ok: true, sequence: 1 });
     expect(r.order).toEqual(['apply after head 1']);
     const rec = JSON.parse(r.lines()[0]!) as { sequence: number; journalId: string; digest: string; entry: R };
     expect(r.head()).toEqual({ sequence: 1, journalId: rec.journalId, digest: rec.digest, at: Date.parse('2026-11-28T10:00:00.000Z'), requestFloor: 0 });
@@ -154,9 +154,9 @@ describe('Table 2, row by row', () => {
 });
 
 describe('records in a row', () => {
-  it('two records of one write chain, the head row is the second, and the open-request follows its settle', () => {
+  it('two records of one write chain, the head row is the second, the answer names the second, and the open-request follows its settle', () => {
     const r = rig();
-    expect(r.write([settle(1, null), { ...OPEN, actId: 1, requestId: 9 } as R])).toEqual({ ok: true });
+    expect(r.write([settle(1, null), { ...OPEN, actId: 1, requestId: 9 } as R])).toStrictEqual({ ok: true, sequence: 2 });
     const recs = r.lines().map((l) => JSON.parse(l) as { sequence: number; previousDigest: string | null; digest: string; entry: R });
     expect(recs.map((x) => [x.sequence, x.entry.kind])).toEqual([[1, 'act-settle'], [2, 'act-open-request']]);
     expect(recs[1]!.previousDigest).toBe(recs[0]!.digest);
@@ -166,16 +166,16 @@ describe('records in a row', () => {
 
   it('a second write re-reads the file: an intent, then its settle from pending, chain from the first write\'s head', () => {
     const r = rig();
-    expect(r.write([intent(2)])).toEqual({ ok: true });
-    expect(r.write([settle(2, 'pending', 'unknown')])).toEqual({ ok: true });
-    expect(r.write([settle(2, 'unknown', 'refused')])).toEqual({ ok: true });
+    expect(r.write([intent(2)])).toMatchObject({ ok: true });
+    expect(r.write([settle(2, 'pending', 'unknown')])).toMatchObject({ ok: true });
+    expect(r.write([settle(2, 'unknown', 'refused')])).toMatchObject({ ok: true });
     expect(r.head()?.sequence).toBe(3);
     expect(r.journal.readHighest()).toEqual({ kind: 'measured', act: 2, request: 0 });
   });
 
   it('the writer canonicalises: targets in another order are written in one order', () => {
     const r = rig();
-    expect(r.write([{ ...settle(1, null), targets: [...SETTLE.targets].reverse() } as R])).toEqual({ ok: true });
+    expect(r.write([{ ...settle(1, null), targets: [...SETTLE.targets].reverse() } as R])).toMatchObject({ ok: true });
     expect((JSON.parse(r.lines()[0]!) as { entry: R & { targets: unknown } }).entry.targets).toEqual(SETTLE.targets);
   });
 
@@ -225,7 +225,7 @@ describe('a failure at or after the append fences at once (F12)', () => {
 
   it('a returning apply runs after the head row is written', () => {
     const r = rig();
-    expect(r.write([settle(1, null)])).toEqual({ ok: true });
+    expect(r.write([settle(1, null)])).toMatchObject({ ok: true });
     expect(r.order).toEqual(['apply after head 1']);
   });
 });
@@ -233,7 +233,7 @@ describe('a failure at or after the append fences at once (F12)', () => {
 describe('the torn-tail heal', () => {
   it('cuts only a torn tail behind a sound prefix whose last record is the head row, into overlord-acts-torn', () => {
     const r = rig();
-    expect(r.write([settle(1, null)])).toEqual({ ok: true });
+    expect(r.write([settle(1, null)])).toMatchObject({ ok: true });
     appendFileSync(r.leaf, '{"v":1,"seq');
     const heal = r.journal.healTornTail(r.db);
     expect(heal.kind).toBe('healed');
@@ -245,7 +245,7 @@ describe('the torn-tail heal', () => {
   it('refuses a tail behind a head row that differs, and one over an unreadable head row; no tail is no-tail', () => {
     const r = rig();
     expect(r.journal.healTornTail(r.db)).toEqual({ kind: 'no-tail' });
-    expect(r.write([settle(1, null)])).toEqual({ ok: true });
+    expect(r.write([settle(1, null)])).toMatchObject({ ok: true });
     appendFileSync(r.leaf, '{"v"');
     r.db.exec('DELETE FROM overlord_act_journal_head');
     expect(r.journal.healTornTail(r.db)).toEqual({ kind: 'not-healable' });
