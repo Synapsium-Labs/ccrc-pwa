@@ -31,7 +31,7 @@ function fixture(): Fixture {
 afterEach(() => { for (const d of opened.splice(0)) if (d.isOpen) d.close(); });
 
 const record = (f: Fixture, over: Partial<Parameters<OperatorModelStore['recordMessage']>[0]> = {}): number => {
-  const r = f.store.recordMessage({ at: 1_000, sessionId: 'lane-a-project-a', term: 1, actor: ACTOR, text: TEXT, mark: false, composedKey: null, ...over });
+  const r = f.store.recordMessage({ at: 1_000, sessionId: 'lane-a-project-a', term: 1, actor: ACTOR, text: TEXT, mark: false, composedKey: null, offRecord: false, ...over });
   if (!r.ok) throw new Error(`${r.error}: ${r.detail}`);
   return r.value.id;
 };
@@ -57,6 +57,15 @@ describe('citedMessageFacts', () => {
     const id = record(f, { text: 'x'.repeat(20_000) });
     const r = f.store.citedMessageFacts(id, READER);
     expect(r).toMatchObject({ kind: 'measured', value: { hashMatches: true } });
+  });
+
+  it('a message sent off the record is cited like any other: its state, time and hash, its ledger line, and no field more', () => {
+    const f = fixture();
+    const id = record(f, { offRecord: true });
+    const r = f.store.citedMessageFacts(id, READER);
+    expect(r).toEqual({ kind: 'measured', value: { state: 'recorded', at: 1_000, sha256: sha(TEXT), hashMatches: true } });
+    expect(ledger(f)).toEqual([expect.objectContaining({ door: 'open-request', scope: `message:${id}`, count: 1 })]);
+    expect(JSON.stringify([r, ledger(f)])).not.toContain('operator wrote');
   });
 
   it('answers absent for an id with no row (there is no gone state)', () => {

@@ -147,7 +147,7 @@ export type CitationRead = {
 export function bootSpend(row: { readonly id: number; readonly state: MessageState | 'unknown' }, cites: CitationRead):
   'spend' | 'keep' | 'unjudged' {
   if (row.state === 'spent') return 'keep';
-  if (cites.kind !== 'measured') return 'unjudged';
+  if (cites.kind === 'not-applicable' || cites.kind === 'unmeasured') return 'unjudged';
   if (cites.rootCited?.has(row.id) === true) return 'spend';
   const floor = cites.restoreFloor;
   if (floor !== undefined && floor.kind === 'floor' && row.id <= floor.id) return 'spend';

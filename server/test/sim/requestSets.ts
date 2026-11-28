@@ -10,6 +10,7 @@ import {
   answeredSinceNeedsYouCases, citationVerdictCases, closeUnownedVerdictCases, followUpAfterMoveCases, nextRequestIdCases,
   nextRequestStateCases, openMoveVerdictCases, parentClockAfterChildMoveCases, type RequestsModule,
 } from '../requestCases.js';
+import { bootSpendCases, citedMessagesForBootCases, type BootSpendModule, type CitedReaderModule } from '../bootCitationCases.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');
 const MODULE = path.join(ROOT, 'server/src/coord/overlordRequests.ts');
@@ -179,6 +180,38 @@ const ID_SET = set(nextRequestIdCases, [
   { id: 'R7 the sum of the two', old: 'Math.max(storeHighest ?? 0, journalHighest ?? 0)', new: '((storeHighest ?? 0) + (journalHighest ?? 0))' },
 ]);
 
+// The boot pass's reader of cited messages (Task A4): its three answers kept apart, and the filter that reads roots only. It is an
+// L3 reader, not a decider, and has its set because its two sets decide what the boot pass spends (the first part's review).
+const STORE_MODULE = path.join(ROOT, 'server/src/coord/overlordRequestStore.ts');
+const STORE_KEY = 'server/src/coord/overlordRequestStore.ts';
+const BOOT_READ_SET: MutantSet<CitedReaderModule> = { modulePath: STORE_MODULE, suite: citedMessagesForBootCases, mutants: [
+  { id: 'B1 every citation is a root', old: '      if (num(r.root) === 1) rootCited.add(id);\n', new: '      rootCited.add(id);\n' },
+  { id: 'B2 a non-root is not cited', old: '      cited.add(id);\n      if (num(r.root) === 1) rootCited.add(id);\n',
+    new: '      if (num(r.root) === 1) { cited.add(id); rootCited.add(id); }\n' },
+  { id: 'B3 no table is measured and empty', old: "if (t === undefined) return { kind: 'absent' };",
+    new: "if (t === undefined) return { kind: 'measured', cited: new Set<number>(), rootCited: new Set<number>() };" },
+  { id: 'B4 a bad id is skipped', old: "if (id === null) return { kind: 'unmeasured', why: 'a citation row holds no integer message id' };",
+    new: 'if (id === null) continue;' },
+  { id: 'B5 a failed read is absent', old: "    return { kind: 'unmeasured', why: errText(e) };\n", new: "    return { kind: 'absent' };\n" },
+  { id: 'B6 any root value is a root', old: 'if (num(r.root) === 1) rootCited.add(id);', new: 'if (num(r.root) !== null) rootCited.add(id);' },
+] };
+
+// The spend arm's decider (Task A4, RQ11, F14), in the private store's messages file; its set lives here beside the reader's.
+const MESSAGES_MODULE = path.join(ROOT, 'server/src/operatorModel/messages.ts');
+const MESSAGES_KEY = 'server/src/operatorModel/messages.ts';
+const FLOOR = "if (floor !== undefined && floor.kind === 'floor' && row.id <= floor.id) return 'spend';";
+const SPEND_SET: MutantSet<BootSpendModule> = { modulePath: MESSAGES_MODULE, suite: bootSpendCases, mutants: [
+  { id: 'S1 a spent row is judged again', old: "  if (row.state === 'spent') return 'keep';\n", new: '' },
+  { id: 'S2 an unmeasured read is judged', old: "cites.kind === 'not-applicable' || cites.kind === 'unmeasured'", new: "cites.kind === 'not-applicable'" },
+  { id: 'S3 a not-applicable read is judged', old: "cites.kind === 'not-applicable' || cites.kind === 'unmeasured'", new: "cites.kind === 'unmeasured'" },
+  { id: 'S4 a root citation is not read', old: "  if (cites.rootCited?.has(row.id) === true) return 'spend';\n", new: '' },
+  { id: 'S5 any citation spends', old: 'cites.rootCited?.has(row.id) === true', new: 'cites.cited.has(row.id)' },
+  { id: 'S6 the floor itself is kept', old: 'row.id <= floor.id', new: 'row.id < floor.id' },
+  { id: 'S7 one above the floor spends', old: 'row.id <= floor.id', new: 'row.id <= floor.id + 1' },
+  { id: 'S8 any floor word spends', old: FLOOR, new: "if (floor !== undefined && (floor.kind !== 'floor' || row.id <= floor.id)) return 'spend';" },
+  { id: 'S9 the floor is not read', old: `  ${FLOOR}\n`, new: '' },
+] };
+
 /** One entry per decider, keyed `<path>#<function>`; `mutation-floors.test.ts` spreads it into `MUTANT_SETS`. */
 export const REQUEST_MUTANT_SETS: Record<string, MutantSet<never>> = {
   [`${KEY}#nextRequestState`]: NEXT_SET as MutantSet<never>,
@@ -189,4 +222,6 @@ export const REQUEST_MUTANT_SETS: Record<string, MutantSet<never>> = {
   [`${KEY}#closeUnownedVerdict`]: CLOSE_SET as MutantSet<never>,
   [`${KEY}#citationVerdict`]: CITE_SET as MutantSet<never>,
   [`${KEY}#nextRequestId`]: ID_SET as MutantSet<never>,
+  [`${STORE_KEY}#citedMessagesForBoot`]: BOOT_READ_SET as MutantSet<never>,
+  [`${MESSAGES_KEY}#bootSpend`]: SPEND_SET as MutantSet<never>,
 };
