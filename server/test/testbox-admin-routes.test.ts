@@ -348,18 +348,26 @@ describe('the answer is the re-read status, never the request (spec §2.1)', () 
     r.stub('status', { out: CONNECTED });
     // The user sent is not the status's login (`root`), so an echo of it is told apart from the status read.
     const sent = { address: '192.0.2.10', port: 2222, user: 'deploy' };
+    // The clock read on each side of the request: every event in the answer is this act's, written between the two reads.
+    const before = Date.now();
     const res = await post(r, 'key', { fields: sent }, cookie);
+    const after = Date.now();
     expect(res.statusCode, res.body).toBe(200);
     const j = res.json() as { status: unknown; events: { actor: unknown; at: unknown }[]; result: unknown };
     expect(Object.keys(j).sort()).toEqual(['events', 'ok', 'result', 'status']);
     expect(j.status).toEqual(CONNECTED);
     expect(j.result).toEqual({ line: 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIPUBLICKEYLINE ccrc-testbox' });
     // Nothing the caller sent comes back: not the port, not the address, not the user as sent. The search runs over KNOWN text, so
-    // it cannot collide (#3667). An event carries two values this test does not choose: its actor, which ends in eight hex
-    // characters of a random session's id hash, and its time, from the clock. Each is held to its grammar first (the session's own
-    // device label and eight hex characters; an integer), which can carry none of the three values sent, and is then replaced by a
-    // placeholder. What is left is the stubs' text, the ledger's vocabulary, the fixture's node id and a row id, none of which holds
-    // any of them, so an echo anywhere in the answer still shows and chance never does.
+    // it cannot collide (#3667). An event carries two values this test does not choose, and each is checked, then replaced by a
+    // placeholder before the search:
+    //  - its time, from the clock. It is held between the two clock reads around the request, so it is measured, not just typed:
+    //    a time that is the port (or anything else the caller sent) is outside that window and fails here (W2 carries, task 2).
+    //  - its actor: the session's own device label, then eight hex characters. The account gate in front of the route mints that
+    //    tail (`gateActorOf`) from the hash of the session id the server issued at sign-in, from nothing the caller sends to this
+    //    route, so it cannot echo the request. It is held to that grammar only, and this one field is NOT searched: a route that
+    //    wrote the port's digits as that tail would pass this case. That is a stated limit, not a check.
+    // What is left is the stubs' text, the ledger's vocabulary, the fixture's node id and a row id, none of which holds any of the
+    // three values sent, so an echo anywhere else in the answer still shows and chance never does.
     expect(j.events.length).toBeGreaterThan(0);
     const actor = new RegExp(`^${device ?? 'lightMyRequest'} [0-9a-f]{8}$`);
     const known = JSON.stringify({
@@ -367,6 +375,8 @@ describe('the answer is the re-read status, never the request (spec §2.1)', () 
       events: j.events.map((e) => {
         expect(e.actor).toMatch(actor);
         expect(Number.isSafeInteger(e.at), 'an event time is an integer').toBe(true);
+        expect(e.at as number, 'an event time is read between the clock reads around the request').toBeGreaterThanOrEqual(before);
+        expect(e.at as number, 'an event time is read between the clock reads around the request').toBeLessThanOrEqual(after);
         return { ...e, actor: '<actor>', at: '<at>' };
       }),
     });
