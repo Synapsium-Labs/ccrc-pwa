@@ -36,6 +36,16 @@ function overGroup(group: CeilingGroup, count: Extract<GroupCount, { kind: 'coun
   return null;
 }
 
+/** Whether a wired count is a count (act rows A, the coordinator's item 6b): every number a non-negative safe integer, and the
+ *  programme's count either one or `null`. The guard is not told whether a programme was named, so it accepts a `null` always
+ *  (and `overGroup` then skips the per-programme cap); the reader is what answers `unmeasured` for a named programme it could
+ *  not count (`overlordActsStore.ts#actCountReader`). Anything else could not be measured, and is never read as zero. */
+export function countReadable(c: Extract<GroupCount, { kind: 'counted' }>): boolean {
+  const isCount = (n: unknown): boolean => typeof n === 'number' && Number.isSafeInteger(n) && n >= 0;
+  return isCount(c.all) && (c.programme === null || isCount(c.programme));
+}
+export const UNREADABLE_COUNT = 'the count could not be measured: not a non-negative safe integer';
+
 /** §5's rule, first match. The counts the step needs: the act's group, unless its cell is `held-by` or `never` (rule 1),
  *  and the effect's group when its count was asked and the effect is a counted kind (question 10: a carrier counts against
  *  its effect too; an effect this build lacks, or whose ceiling is not counted, adds none: what an act may carry is the act's
@@ -63,6 +73,7 @@ export function actCeilingStep(
   const counted: { readonly group: CeilingGroup; readonly count: Extract<GroupCount, { kind: 'counted' }> }[] = [];
   for (const n of needed) {
     if (n.count.kind === 'unmeasured') return { pass: false, word: 'unavailable', group: n.group, why: n.count.why, latch: null };
+    if (!countReadable(n.count)) return { pass: false, word: 'unavailable', group: n.group, why: UNREADABLE_COUNT, latch: null };
     counted.push({ group: n.group, count: n.count });
   }
   for (const n of counted) {
