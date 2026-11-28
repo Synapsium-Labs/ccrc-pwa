@@ -111,10 +111,15 @@ describe('DOOR_TOOLS', () => {
   });
 
   it('the history row: a view, unfenced (slug history-and-board-reads-attributed-not-proven), a reader\'s door; its verbs are shared/overlordHistory.ts\'s', () => {
+    // `touched` (Overlord W2, request record B1) is asked only by the server's own shortlist reader over the agent link. The
+    // client's history grammar and this tool do not carry it yet: every other shared verb is the tool's, and nothing more.
+    const SERVER_ONLY: readonly string[] = ['touched'];
+    const TOOL_VERBS = HISTORY_VERBS.filter((v) => !SERVER_ONLY.includes(v));
     const r = ROWS.find((x) => x.name === 'history')!;
     expect([r.verb, r.class, r.fenced, r.reader]).toEqual(['overlord.history', 'view', false, true]);
-    expect([...PROGRAM_HISTORY_VERBS]).toEqual([...HISTORY_VERBS]);
-    expect(r.input).toMatchObject({ type: 'object', additionalProperties: false, required: ['verb'], properties: { verb: { enum: [...HISTORY_VERBS] } } });
+    expect(SERVER_ONLY.every((v) => (HISTORY_VERBS as readonly string[]).includes(v))).toBe(true);
+    expect([...PROGRAM_HISTORY_VERBS]).toEqual(TOOL_VERBS);
+    expect(r.input).toMatchObject({ type: 'object', additionalProperties: false, required: ['verb'], properties: { verb: { enum: TOOL_VERBS } } });
   });
 
   it('the sequence row: a view, unfenced (its door row is not a write), never a reader\'s door, its page bound shared/overlord-sequence.ts\'s', () => {

@@ -575,6 +575,9 @@ const GATE_FILES = [
   // coord/programmeLifecycleRoutes.ts (programme lifecycle W2): the start's coordinator, the hand-over's heir and a session read's id
   // are vetted by the predicate before any registry read; it composes no argv.
   'coord/programmeLifecycleRoutes.ts',
+  // coord/requestShortlist.ts (Overlord W2, request record B1): each session a history `touched` answer names is vetted by the
+  // predicate before the shortlist maps it to a programme (an answer from another box is data); it composes no argv.
+  'coord/requestShortlist.ts',
 ] as const;
 
 const IMPORTS_PREDICATE = /import\s*\{[^}]*\bisRegistryId\b[^}]*\}\s*from\s*'(?:\.\.\/)+shared\/api\.js'/;

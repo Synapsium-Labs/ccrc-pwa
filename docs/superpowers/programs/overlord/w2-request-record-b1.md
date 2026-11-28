@@ -104,6 +104,19 @@ Measured at `ac09ad60da` (2026-11-28). The brief's scout findings were checked, 
   generator (`fakeTime.ts#mulberry32`), 200 draws each, inside the shared cases, so the mutation floors run them too.
 - **`claims-census-admits-the-shortlist`.** The claims census admits the reader by name with a D12 argument (a claim's only
   effect is a programme's place on a list of at most six candidates the Overlord reads as a hint), pinned at one call.
+- **`shortlist-reads-the-binding`** (found by the pull request's fast run). The reader first told a session's runs apart by
+  comparing `sessionId` and `claimedBy` itself, which the run/session census (ARCH-62) refuses. It now asks the binding:
+  `runBinding.ts#boundRunsOf` with an unborn incarnation and no mint (the id-string rule: a history row names an id, never a
+  birth, and the multi-programme rule counts every programme the id worked on), and `runBinding.ts#runsClaimedBy`. The
+  census stays at zero sites.
+- **`id-census-admits-the-shortlist`** (found by the fast run). `requestShortlist.ts` vets each session id an answer names
+  with `isRegistryId`, so the id census's gate list names it, with its reason; it composes no argv.
+- **`touched-is-not-on-the-read-tool-yet`** (found by the fast run). The door process's history row (`ccd/door-process.mjs`)
+  and the client's history grammar (`ccd/ccrc-api`) still carry three verbs: the brief adds no client row, and the client
+  is another run's claim. `door-tools.test.ts` held the row's verbs equal to the shared list; it now names `touched` as the
+  server's own verb and holds the row's verbs equal to the rest. So RQ5's "serves `touched` to the Overlord too" holds at the
+  history door only: the client refuses `touched` before any request leaves the box, and the Overlord's read tool does not
+  offer it.
 - **Process.** The tests and the code were written in one pass rather than red first; each test's power is shown by its
   mutants instead (§5). One early edit to `requestShortlistRead.ts` was made with a script, against the brief's first sentence;
   the file was then rewritten whole with the Write tool, and every later edit used the Edit and Write tools.
@@ -139,7 +152,8 @@ expected paths first (RQ3, F12); the reader asks touched only for paths on the C
 verb from merge (RQ5), to the callers and under the gate it already has (its gate, routes and censuses are untouched, and its
 suites are green), with ids and times only, within the one-slot budget (the budget cases). An agent that predates the verb
 answers it refused with `bad-verb`: the door answers that as `bad-request`, and the shortlist reads it as `not-served` (the
-older-agent cases).
+older-agent cases). The client's history grammar and the Overlord's read tool do not carry `touched` yet
+(`touched-is-not-on-the-read-tool-yet`), so no caller on `main` asks it at merge.
 
 ## 7. Known limits
 

@@ -28,6 +28,7 @@ import {
   TOUCHED_OPEN_WAIT_MS, codeShortlist, touchedAnswerOf, touchedReadOf, touchedRequestOf,
   type ClaimByProgramme, type ClaimsRead, type LiveRead, type SessionRun, type SessionRunsRead, type Shortlist, type TouchedRead,
 } from './requestShortlist.js';
+import { boundRunsOf, runsClaimedBy, unbornIncarnation } from './runBinding.js';
 import type { CoordStore, RunRow } from './store.js';
 
 /** The store reads the shortlist takes. */
@@ -79,7 +80,10 @@ export function claimsByProgramme(coord: Pick<CoordStore, 'activeClaims' | 'run'
 }
 
 /** Each ccrc id's runs: one it works on gives the run's project, one it claims the coordinator's project, else the run's.
- *  Unmeasured when any read throws or answers unreadable (all or nothing: a partial map would drop a programme silently). */
+ *  Unmeasured when any read throws or answers unreadable (all or nothing: a partial map would drop a programme silently).
+ *  The binding decides which runs are the id's (`runBinding.ts`). A history row names an id, never a birth, and the
+ *  multi-programme rule counts every programme the id worked on, so the worker side asks the id-string rule (an unborn
+ *  incarnation with no mint binds every run naming the id), and the claimant side asks `runsClaimedBy`. */
 export function sessionRuns(coord: Pick<CoordStore, 'run' | 'bindingRunsOf'>, ids: readonly string[]): SessionRunsRead {
   try {
     const cache = new Map<number, RunRow | null>();
@@ -91,11 +95,13 @@ export function sessionRuns(coord: Pick<CoordStore, 'run' | 'bindingRunsOf'>, id
       const add = (run: SessionRun): void => {
         if (!list.some((r) => r.programme === run.programme && r.project === run.project)) list.push(run);
       };
+      const worked = new Set(boundRunsOf(bound.runs, unbornIncarnation(id, 'not-a-child'), 'any').map((r) => r.id));
+      const claimed = new Set(runsClaimedBy(bound.runs, id).map((r) => r.id));
       for (const b of bound.runs) {
         const run = runOf(coord, cache, b.id);
         if (run === null) continue;
-        if (b.sessionId === id) add({ programme: run.program, project: run.project });
-        if (b.claimedBy === id) add({ programme: run.program, project: run.coordProject ?? run.project });
+        if (worked.has(b.id)) add({ programme: run.program, project: run.project });
+        if (claimed.has(b.id)) add({ programme: run.program, project: run.coordProject ?? run.project });
       }
       if (list.length > 0) runs.set(id, list);
     }
