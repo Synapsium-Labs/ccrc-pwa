@@ -25,7 +25,7 @@ import { actCeilingStep, type CeilingVerdict, type GroupCount } from './overlord
 import { OVERLORD_ACT_KINDS, type CeilingGroup } from '../../../shared/overlord.js';
 import { designationFactFrom, designationFactOf } from '../roleOf.js';
 import type { DoorClass, EffectiveRung } from './overlordLadder.js';
-import type { AuthorityState } from './overlordAuthorityCoherence.js';
+import { journalNameOf, type AuthorityState } from './overlordAuthorityCoherence.js';
 import type { OverlordDoorRow } from './overlordDoors.js';
 import type { DesignationRead } from '../../../shared/overlord-designation.js';
 import type { GenerationState } from '../../../shared/continuity.js';
@@ -304,8 +304,8 @@ export function overlordGate(f: GateFacts): GateVerdict {
   const authority = f.authority;
   if (!start && authority === 'start-door') return refuse('authority-rolled-back', '3', 'the authority guard was not read');
   if (!start && authority !== 'start-door' && authority.kind !== 'coherent') {
-    return refuse('authority-rolled-back', '3', authority.kind === 'rolled-back' ? `the authority journal rolled back: ${authority.cause}`
-      : `the authority journal reads unmeasured: ${authority.why}`);
+    return refuse('authority-rolled-back', '3', authority.kind === 'rolled-back' ? `${journalNameOf(authority)} rolled back: ${authority.cause}`
+      : `${journalNameOf(authority)} reads unmeasured: ${authority.why}`);
   }
   // Step 4: the operator's rung (offStep).
   const ladder = f.ladder;

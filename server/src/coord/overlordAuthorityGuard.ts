@@ -14,7 +14,7 @@
 // again. The guard holds the rest in memory, and a restart clears them: a rollback only a witness found, until a witness answers
 // again (review F17); and a writer's `trailing` after an append that wrote no byte, or left a partial tail the boot's heal cuts,
 // where the file a restart reads is sound again (review F5). Each clears in the safe direction: nothing was appended.
-import type { AuthorityState, CoherenceVerdict } from './overlordAuthorityCoherence.js';
+import type { AuthorityState, CoherenceVerdict, OverlordJournalName } from './overlordAuthorityCoherence.js';
 import {
   AUTHORITY_UNREADABLE, type AuthorityGuardPort, type AuthorityHeal, type AuthorityUnreadable, type AuthorityWriterFailure,
 } from './overlordAuthorityJournal.js';
@@ -93,13 +93,15 @@ export class OverlordAuthorityGuard implements AuthorityGuardPort {
   /** Input 3: the writer's failure at or after the append, or a head mismatch it measured (F1). A read it could not make moves
    *  a coherent guard to `unmeasured`, keeping the word of what it could not read (`journal` or `rows`, review F6; X3b), and
    *  leaves any other state as it is; every other cause moves a coherent or unmeasured guard to `rolled-back` with that cause,
-   *  and leaves a rollback as it is. */
-  writerFailed(cause: AuthorityWriterFailure): void {
+   *  and leaves a rollback as it is. `journal` names the act journal's writer (Overlord W2, act journal plan question 12): the
+   *  state it moves to carries it, and a call without it moves to exactly the state it always did. */
+  writerFailed(cause: AuthorityWriterFailure, journal?: OverlordJournalName): void {
+    const named = journal === undefined ? {} : { journal };
     if (Object.hasOwn(AUTHORITY_UNREADABLE, cause)) {
-      if (this.st.kind === 'coherent') this.move({ kind: 'unmeasured', why: AUTHORITY_UNREADABLE[cause as AuthorityUnreadable] });
+      if (this.st.kind === 'coherent') this.move({ kind: 'unmeasured', why: AUTHORITY_UNREADABLE[cause as AuthorityUnreadable], ...named });
       return;
     }
-    if (this.st.kind !== 'rolled-back') this.move({ kind: 'rolled-back', cause: cause as Exclude<AuthorityWriterFailure, AuthorityUnreadable> });
+    if (this.st.kind !== 'rolled-back') this.move({ kind: 'rolled-back', cause: cause as Exclude<AuthorityWriterFailure, AuthorityUnreadable>, ...named });
   }
 
   /** Input 4 (PR C): after the Confirm transaction commits. It lowers nothing on the ladder: the `restore-detected` latch stands

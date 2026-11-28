@@ -3,7 +3,7 @@
 // `writerFailed(cause)` with one argument, from every state the guard can hold, as exact objects (an added key on today's path is
 // a red), and the restore latch's detail for each state. It was green on `main`'s code before the change, and stays green after.
 import { describe, expect, it } from 'vitest';
-import type { AuthorityState, CoherenceVerdict } from '../src/coord/overlordAuthorityCoherence.js';
+import { journalNameOf, type AuthorityState, type CoherenceVerdict } from '../src/coord/overlordAuthorityCoherence.js';
 import { OverlordAuthorityGuard } from '../src/coord/overlordAuthorityGuard.js';
 import type { AuthorityWriterFailure } from '../src/coord/overlordAuthorityJournal.js';
 import { restoreDetail } from '../src/coord/overlordRestoreLatch.js';
@@ -50,6 +50,36 @@ describe('characterisation: writerFailed(cause), one argument, from every state'
       });
     }
   }
+});
+
+describe('the second argument: the act journal names itself (question 12)', () => {
+  for (const from of STATES) {
+    for (const cause of CAUSES) {
+      it(`${JSON.stringify(from)} + ${cause}, 'acts'`, () => {
+        const g = guardAt(from);
+        g.writerFailed(cause, 'acts');
+        const was = expected(from, cause);
+        // the same move as with one argument, and the state it moves to carries the journal; a state it leaves alone stays as it was
+        expect(g.state()).toStrictEqual(was === from ? from : { ...was, journal: 'acts' });
+      });
+    }
+  }
+  it('a refusal of the act journal names it, in the restore latch\'s detail and through journalNameOf', () => {
+    expect(restoreDetail({ kind: 'rolled-back', cause: 'trailing', journal: 'acts' })).toBe('the act journal reads rolled-back: trailing');
+    expect(restoreDetail({ kind: 'unmeasured', why: 'journal', journal: 'acts' })).toBe('the act journal reads unmeasured: journal');
+    expect(journalNameOf({ kind: 'rolled-back', cause: 'diverged', journal: 'acts' })).toBe('the act journal');
+    expect(journalNameOf({ kind: 'rolled-back', cause: 'diverged' })).toBe('the authority journal');
+    expect(journalNameOf({ kind: 'coherent' })).toBe('the authority journal');
+  });
+  it('the act journal\'s failure fences a coherent guard, and onRefusing fires once', () => {
+    const g = guardAt({ kind: 'coherent' });
+    let n = 0;
+    g.onRefusing(() => { n += 1; });
+    g.writerFailed('trailing', 'acts');
+    g.writerFailed('behind');
+    expect(g.state()).toStrictEqual({ kind: 'rolled-back', cause: 'trailing', journal: 'acts' });
+    expect(n).toBe(1);
+  });
 });
 
 describe('characterisation: the restore latch\'s detail names the authority journal', () => {

@@ -14,7 +14,7 @@ import type { OverlordAuthorityGuard } from './overlordAuthorityGuard.js';
 import type { AuthorityAppender } from './overlordLadderStore.js';
 import { raiseLatch } from './overlordLadderRead.js';
 import { serverActorOf } from '../auth/attributionIdentity.js';
-import type { AuthorityState } from './overlordAuthorityCoherence.js';
+import { journalNameOf, type AuthorityState } from './overlordAuthorityCoherence.js';
 import type { CoordStore } from './store.js';
 import type { Clock, Entropy } from '../time/ports.js';
 
@@ -30,8 +30,8 @@ export interface RestoreLatchDeps {
 
 /** The latch's detail: the guard's state in plain words. */
 export const restoreDetail = (s: AuthorityState): string =>
-  s.kind === 'rolled-back' ? `the authority journal reads rolled-back: ${s.cause}`
-    : s.kind === 'unmeasured' ? `the authority journal reads unmeasured: ${s.why}`
+  s.kind === 'rolled-back' ? `${journalNameOf(s)} reads rolled-back: ${s.cause}`
+    : s.kind === 'unmeasured' ? `${journalNameOf(s)} reads unmeasured: ${s.why}`
       : 'the authority journal reads coherent';
 
 /** Register the raise on the guard. Call it BEFORE the boot step, so a non-coherent boot verdict raises too. */
