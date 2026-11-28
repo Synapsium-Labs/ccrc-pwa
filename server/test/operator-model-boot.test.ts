@@ -282,7 +282,7 @@ describe('runOperatorModelBootPass', () => {
     rec(w, { text: 'a secret sentence' });
     const r = pass(w);
     const line = bootPassSummary(r.counts);
-    expect(line).toBe('operator model boot pass: kept 0, unsettled 0, unjudged 0, linked 0, queued 1, waiting 0, delivered 0, errors 0');
+    expect(line).toBe('operator model boot pass: kept 0, unsettled 0, unjudged 0, linked 0, queued 1, waiting 0, delivered 0, errors 0, spent 0');
     expect(line + r.lines.join('\n')).not.toContain('secret');
   });
 });

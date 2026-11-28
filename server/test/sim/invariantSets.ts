@@ -20,6 +20,7 @@ type Verdict = ReturnType<M['invariantVerdict']>;
 type I2 = Parameters<M['i2Structural']>[1];
 type I5 = Parameters<M['i5Term']>[1];
 type I7 = Parameters<M['i7Authority']>[1];
+type I12 = Parameters<M['i12FollowUpClock']>[1];
 type I17 = Parameters<M['i17Timers']>[1];
 
 // ------------------------------------------------------------------------------------------------------------ fixtures
@@ -56,7 +57,8 @@ export function invariantVerdictCases(m: M): Record<string, SuiteCase> {
     lines: measured([]),
     facts: {
       I2: measured({ reached: [], bound: [] }), I5: measured({ baseline: null, current: { kind: 'none' } }),
-      I7: measured({ guard: coherent, rows: side(), journal: side() }), I17: measured({ timers: [], mails: new Map() }),
+      I7: measured({ guard: coherent, rows: side(), journal: side() }), I12: measured({ requests: [] }),
+      I17: measured({ timers: [], mails: new Map() }),
     },
   };
   return {
@@ -67,16 +69,16 @@ export function invariantVerdictCases(m: M): Record<string, SuiteCase> {
     'a row with no predicate answers not-applicable with its waitsOn; tables-absent and predicate-not-built are told apart': () => {
       expect(m.invariantVerdict('I1', EMPTY)).toEqual({ kind: 'not-applicable', waitsOn: 'W3, the holds', why: 'tables-absent' });
       expect(m.invariantVerdict('I18', EMPTY)).toEqual({ kind: 'not-applicable', waitsOn: 'ticket invariant-i18-seal-predicate', why: 'predicate-not-built' });
-      for (const n of ['I8', 'I12', 'I13'] as const) expect(m.invariantVerdict(n, EMPTY)).toMatchObject({ kind: 'not-applicable', why: 'predicate-not-built' });
+      for (const n of ['I8', 'I13'] as const) expect(m.invariantVerdict(n, EMPTY)).toMatchObject({ kind: 'not-applicable', why: 'predicate-not-built' });
       for (const n of ['I3', 'I4', 'I6', 'I10', 'I11', 'I14', 'I15', 'I16'] as const) {
         expect(m.invariantVerdict(n, EMPTY)).toMatchObject({ kind: 'not-applicable', why: 'tables-absent' });
       }
     },
-    'the four running rows answer holds over empty facts': () => {
-      for (const n of ['I2', 'I5', 'I7', 'I17'] as const) expect(m.invariantVerdict(n, EMPTY)).toEqual({ kind: 'holds' });
+    'the five running rows answer holds over empty facts': () => {
+      for (const n of ['I2', 'I5', 'I7', 'I12', 'I17'] as const) expect(m.invariantVerdict(n, EMPTY)).toEqual({ kind: 'holds' });
     },
     'an unmeasured facts arm answers unmeasured, never holds': () => {
-      for (const n of ['I2', 'I5', 'I7', 'I17'] as const) {
+      for (const n of ['I2', 'I5', 'I7', 'I12', 'I17'] as const) {
         expect(m.invariantVerdict(n, { ...EMPTY, facts: { ...EMPTY.facts, [n]: { kind: 'unmeasured', why: 'a fixture' } } }))
           .toEqual({ kind: 'unmeasured', why: 'a fixture' });
       }
@@ -300,6 +302,55 @@ export function i7Cases(m: M): Record<string, SuiteCase> {
   };
 }
 
+// ------------------------------------------------------------------------------------------------------------------ I12
+
+/** I12 (W2 request record A, plan w2-requests.md Table 9): written once here for the suite and the mutants. */
+export function i12Cases(m: M): Record<string, SuiteCase> {
+  type R = I12['requests'][number];
+  const r = (id: number, state: string, followUpAt: number | null = null, parentRequestId: number | null = null): R =>
+    ({ id, state, followUpAt, parentRequestId });
+  const run = (requests: R[]) => m.i12FollowUpClock([], { requests });
+  const found = (v: Verdict): string[] => (v.kind === 'violated' ? v.findings.map((f) => f.subject) : []);
+  return {
+    'no request holds': () => { expect(run([])).toEqual({ kind: 'holds' }); },
+    'the three unclocked states hold with no clock': () => {
+      for (const s of ['needs-you', 'done-unverified', 'blocked']) expect(run([r(1, s)]), s).toEqual({ kind: 'holds' });
+    },
+    'a clocked state holds with a clock and is a finding without one': () => {
+      for (const s of ['received', 'routed', 'in-progress', 'declined']) {
+        expect(run([r(1, s, 5)]), s).toEqual({ kind: 'holds' });
+        expect(found(run([r(1, s)])), s).toEqual(['request:1']);
+      }
+    },
+    'a terminal row is skipped, clock or none': () => {
+      for (const s of ['done', 'failed', 'dropped']) expect(run([r(1, s)]), s).toEqual({ kind: 'holds' });
+    },
+    'a state this build cannot name must carry a clock': () => {
+      expect(found(run([r(1, 'later-word')]))).toEqual(['request:1']);
+      expect(run([r(1, 'later-word', 5)])).toEqual({ kind: 'holds' });
+    },
+    'a parent with no clock holds through its open children that hold': () => {
+      expect(run([r(1, 'in-progress'), r(2, 'routed', 5, 1), r(3, 'needs-you', null, 1)])).toEqual({ kind: 'holds' });
+    },
+    'a parent whose one child fails is a finding beside the child': () => {
+      expect(found(run([r(1, 'in-progress'), r(2, 'routed', 5, 1), r(3, 'routed', null, 1)]))).toEqual(['request:1', 'request:3']);
+    },
+    'a parent whose children all ended has only its own clock': () => {
+      expect(found(run([r(1, 'received'), r(2, 'done', null, 1)]))).toEqual(['request:1']);
+      expect(run([r(1, 'received', 9), r(2, 'dropped', null, 1)])).toEqual({ kind: 'holds' });
+    },
+    'a planted cycle is a finding and returns': () => {
+      expect(found(run([r(1, 'received', null, 2), r(2, 'received', null, 1)]))).toEqual(['request:1', 'request:2']);
+    },
+    'monotone: a clocked open child under one request never removes another\'s finding': () => {
+      const base = found(run([r(1, 'received'), r(2, 'received')]));
+      const more = found(run([r(1, 'received'), r(2, 'received'), r(3, 'routed', 5, 1)]));
+      expect(base).toContain('request:2');
+      expect(more).toContain('request:2');
+    },
+  };
+}
+
 // ------------------------------------------------------------------------------------------------------------------ I17
 
 export function i17Cases(m: M): Record<string, SuiteCase> {
@@ -498,6 +549,16 @@ const I17_SET = set(i17Cases, [
   { id: 'D6 any recipient', old: 'else if (mail.toId !== t.setter)', new: 'else if (false)' },
 ]);
 
+const I12_SET = set(i12Cases, [
+  { id: 'I1 a terminal row is judged', old: '.filter((r) => !(isRequestState(r.state) && isTerminalRequestState(r.state)));', new: ';' },
+  { id: 'I2 the unclocked states need a clock', old: '    if (isRequestState(r.state) && UNCLOCKED_REQUEST_STATES.includes(r.state)) return true;\n', new: '' },
+  { id: 'I3 a clock is not enough', old: '    if (r.followUpAt !== null) return true;\n', new: '' },
+  { id: 'I4 any child will do', old: 'return kids.length > 0 && kids.every((k) => holds(k, next));', new: 'return kids.length > 0;' },
+  { id: 'I5 no child holds', old: 'return kids.length > 0 && kids.every((k) => holds(k, next));', new: 'return kids.every((k) => holds(k, next));' },
+  { id: 'I6 a cycle holds', old: 'if (r === undefined || seen.has(id)) return false;', new: 'if (r === undefined) return false;\n    if (seen.has(id)) return true;' },
+  { id: 'I7 an unknown state is unclocked', old: 'if (isRequestState(r.state) && UNCLOCKED_REQUEST_STATES.includes(r.state)) return true;', new: 'if (!isRequestState(r.state) || UNCLOCKED_REQUEST_STATES.includes(r.state)) return true;' },
+]);
+
 const MOVES_SET = set(findingMovesCases, [
   { id: 'E1 an open finding is recorded again', old: 'if (openKeys.has(key) || seen.has(key)) continue;', new: 'if (seen.has(key)) continue;' },
   { id: 'E2 one subject twice in a pass', old: 'if (openKeys.has(key) || seen.has(key)) continue;', new: 'if (openKeys.has(key)) continue;' },
@@ -532,6 +593,7 @@ export const INVARIANT_MUTANT_SETS: Record<string, MutantSet<never>> = {
   [`${KEY}#i2Structural`]: I2_SET as MutantSet<never>,
   [`${KEY}#i5Term`]: I5_SET as MutantSet<never>,
   [`${KEY}#i7Authority`]: I7_SET as MutantSet<never>,
+  [`${KEY}#i12FollowUpClock`]: I12_SET as MutantSet<never>,
   [`${KEY}#i17Timers`]: I17_SET as MutantSet<never>,
   [`${KEY}#findingMoves`]: MOVES_SET as MutantSet<never>,
   [`${KEY}#invariantPassDue`]: DUE_SET as MutantSet<never>,
