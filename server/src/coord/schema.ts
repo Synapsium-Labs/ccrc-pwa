@@ -4865,6 +4865,20 @@ export const MIGRATIONS: readonly string[] = [
   CREATE INDEX overlord_acts_by_kind ON overlord_acts (kind, at);
   CREATE INDEX overlord_acts_by_effect ON overlord_acts (effect, at);
   `,
+
+  // ── 137: user_version 136 -> 137 ──────────────────────────────────────────
+  // The box frames alarm (Desktop polish wave 198; plan docs/superpowers/plans/2026-11-28-box-frames-alarm.md section 4):
+  // one added column, `claude_build_frames.shape`, a frame's shape version and hash with the row's `at`, as JSON, never its
+  // tokens (the capture owner's change A, call 1963). ONE writer, `coord/claudeBuildFramesStore.ts#recordFrames`, the capture
+  // lane its one caller; read only when its `at` is the row's, so a part an older build re-records (its upsert does not name
+  // the column) reads unshaped. AN ADDED COLUMN only: an older build opening a file at this entry's version takes rule 3,
+  // never names the column, and boots. The slot is the first free one by position on `main` at this branch's last merge of
+  // it. RE-MEASURE the slot before merge (it must print 136 before this entry is counted):
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  ALTER TABLE claude_build_frames ADD COLUMN shape TEXT;
+  `,
 ];
 
 /** The version this build writes. `MIGRATIONS.length` and nothing else: a

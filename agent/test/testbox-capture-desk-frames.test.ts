@@ -1,6 +1,13 @@
 // The service's refusal of a frames submission when the desk does not frame (Desktop polish wave 187), the delivery file's
 // twin: refused at the frame, recording nothing, and a runner with the frames driver takes it to the desk.
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
+
+// The recipe's hold (wave 198): read through this toggle, true but in the held case.
+const hold = vi.hoisted(() => ({ complete: true }));
+vi.mock('../../shared/framesCapture.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../shared/framesCapture.js')>();
+  return { ...actual, get FRAMES_RECIPE_COMPLETE() { return hold.complete; } };
+});
 import type { CaptureAnswer, CaptureRecipe, CaptureSubmit } from '../../shared/claudeBuildCapture.js';
 import type { BuildCaptureResult } from '../../shared/claudeBuildTrust.js';
 import { readTestboxFrame } from '../../shared/testbox.js';
@@ -74,5 +81,27 @@ describe('a box whose runner has no frames driver refuses the submission at the 
     expect(wire.refusals).toEqual([]);
     await svc.idle();
     expect(runner.asked).toEqual(['frames']);
+  });
+  // Wave 198, the box's hold (the capture owner's call 1968): the box reads its OWN tree's constant, where the job meets
+  // the runner, so a box whose tree holds the recipe runs nothing even when the server's lane sends the job.
+  it('a box at a held tree refuses the submission at the frame with the not-run word, and runs nothing', async () => {
+    hold.complete = false;
+    try {
+      const runner = new Runner(() => ({ result: null, detail: 'x' }));
+      const d = desk(runner);
+      expect(d.frames()).toBe(false);
+      expect(d.frames(true)).toBe(true);
+      const svc = service(d);
+      const wire = new Wire();
+      svc.capture(submit(32, 'frames'), wire as unknown as Conn);
+      expect(wire.refusals).toEqual(['frames is not a recipe this box runs']);
+      expect(wire.frames).toEqual([]);
+      await svc.idle();
+      expect(runner.asked).toEqual([]);
+      // A trust capture on the same held tree still runs: the hold is the frames recipe's only.
+      svc.capture(submit(33), wire as unknown as Conn);
+      await svc.idle();
+      expect(runner.asked).toEqual([undefined]); // the trust recipe, asked with no recipe word
+    } finally { hold.complete = true; }
   });
 });

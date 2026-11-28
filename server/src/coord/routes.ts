@@ -167,6 +167,7 @@ import {
 } from '../../../shared/api.js';
 import { deliveryStandingAnswerOf, deliveryViewsOf } from '../../../shared/deliveryLane.js';
 import type { DeliveryStandingAnswer } from '../../../shared/deliveryResult.js';
+import { framesStandingReadOf, type FramesStandingAnswer } from '../../../shared/framesStanding.js';
 import { CLAUDE_ROLL_TARGETS, CLAUDE_ROLL_TARGETS_DEFAULT, isClaudeRollTargets, isClaudeVersion, type ClaudeRollTargets } from '../../../shared/claudeVersion.js';
 import { rollTargetsOf } from './rollTarget.js';
 import { plainAutoMemoryOf } from '../continuity/profileFor.js';
@@ -2462,14 +2463,29 @@ export function registerCoordRoutes(
       return { kind: 'unreadable' };
     }
   };
+  /** Desktop polish wave 198, the new-form alarm (the capture owner's yes to packet 3, call 1963): the newest trusted build's
+   *  frames standing, decided by `framesStanding.ts#framesStandingAnswerOf` over the text-free rows of the builds
+   *  `framesStandingBuilds` bounds the read to (change B). Only fixed words, build names and frame ids. A held recipe
+   *  (packet 4, call 1966) is answered `held` by the decider before it asks either read. */
+  const framesStandingRead = (coord: NonNullable<typeof deps.coord>): FramesStandingAnswer => {
+    try {
+      return framesStandingReadOf({ records: () => coord.claudeBuilds(), rows: (builds) => coord.claudeBuildFrameShapes(builds) });
+    } catch (err) {
+      console.warn(`ccrc-server: GET /api/testbox: the frames standing could not be read (${err instanceof Error ? err.message : String(err)})`);
+      return { kind: 'unreadable' };
+    }
+  };
   app.get('/api/testbox', async (req, reply) => {
     if (deps.cfg.authEnabled && sessionAuth(req).reason !== 'session'
       && checkMailToken(deps.mailToken ?? null, req.headers[MAIL_TOKEN_HEADER], 'GET /api/testbox') !== 'ok') return reply.code(401).send(TESTBOX_UNAUTHENTICATED);
     // Wave 184 (option A, the capture owner's calls 1446 and 37541): `delivery`, the newest trusted build's delivery standing,
     // decided by `deliveryLane.ts#deliveryStandingAnswerOf`. A store read that throws answers `unreadable` and leaves the block
-    // answered; with no coordination store the key is absent, which a reader takes as unknown.
+    // answered; with no coordination store the key is absent, which a reader takes as unknown. Wave 198: `frames` beside it,
+    // by the same rules (`framesStanding.ts#readFramesStandingAnswer` reads it).
     const coord = deps.coord;
-    return reply.code(200).send({ ok: true, testbox: watcher?.testboxLane.block() ?? null, ...(coord ? { delivery: deliveryStandingRead(coord) } : {}) });
+    return reply.code(200).send({
+      ok: true, testbox: watcher?.testboxLane.block() ?? null, ...(coord ? { delivery: deliveryStandingRead(coord), frames: framesStandingRead(coord) } : {}),
+    });
   });
   // Desktop polish wave 187: the box frames recipe's one read (`testboxFramesRoutes.ts`), a session or the box token exactly as
   // the status read above takes them (sign-in dark lets every caller through, as the gate's own property holds), its query

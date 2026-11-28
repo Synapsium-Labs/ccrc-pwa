@@ -499,7 +499,8 @@ describe('GET /api/testbox carries the delivery standing (wave 184)', () => {
     const { get } = await route((c) => over(c, { claudeBuildDeliveries: () => { throw new Error('disk I/O error'); } }));
     const res = await get();
     expect(res.statusCode).toBe(200);
-    expect(res.json()).toEqual({ ok: true, testbox: null, delivery: { kind: 'unreadable' } });
+    // Wave 198: the frames standing rides beside it, read from other tables, and is answered either way.
+    expect(res.json()).toEqual({ ok: true, testbox: null, delivery: { kind: 'unreadable' }, frames: expect.objectContaining({ kind: 'standing' }) });
     expect(res.body).not.toContain('disk I/O');
     // The server's own lines only: the fixture's roster notice at setup is not the route's.
     expect(warn.mock.calls.map((c) => String(c[0])).filter((l) => l.startsWith('ccrc-server:'))).toEqual(['ccrc-server: GET /api/testbox: the delivery standing could not be read (disk I/O error)']);

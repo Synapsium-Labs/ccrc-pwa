@@ -54,6 +54,7 @@ import type { DeliveryRow } from '../../../shared/deliveryLane.js';
 import type { DeliveryCaptureResult, DeliveryNotSent } from '../../../shared/deliveryResult.js';
 import type { FramesRow } from '../../../shared/framesLane.js';
 import type { FramesCaptureResult, FramesRefusal } from '../../../shared/framesResult.js';
+import type { FramesShapeRow, FramesStoredShape } from '../../../shared/framesStanding.js';
 import type { LinkingWriteBody, ProjectLinkingWire } from '../../../shared/linking.js';
 import { openPracticeCase, practiceCaseNewest, type PracticeCaseNewestRead, type PracticeCaseOpen } from './practiceCasesStore.js';
 import type { CaseDue } from './practiceCases.js';
@@ -6709,8 +6710,13 @@ export class CoordStore {
   claudeBuildFrames(): FramesRow[] { return framesStore.claudeBuildFrames(this.db); }
   /** The capture lane tried one frames part: a job went out, or why none could. */
   markFramesAttempt(build: string, part: number, now: number, tried: 'sent' | DeliveryNotSent): boolean { return framesStore.markFramesAttempt(this.db, build, part, now, tried); }
-  /** One part's current result with the receiver's word, and the texts of `drop` set aside, in one savepoint. */
-  recordFrames(r: FramesCaptureResult, checked: 'clear' | FramesRefusal, now: number, drop: readonly string[]): boolean { return framesStore.recordFrames(this.db, r, checked, now, drop); }
+  /** One part's current result with the receiver's word and its shape (wave 198), and the texts of `drop` set aside, in one
+   *  savepoint. */
+  recordFrames(r: FramesCaptureResult, checked: 'clear' | FramesRefusal, now: number, drop: readonly string[], shape: FramesStoredShape | null): boolean {
+    return framesStore.recordFrames(this.db, r, checked, now, drop, shape);
+  }
+  /** The status read's text-free rows of `builds` only, with their shapes (wave 198). Throws when the table cannot be read. */
+  claudeBuildFrameShapes(builds: readonly string[]): FramesShapeRow[] { return framesStore.claudeBuildFrameShapes(this.db, builds); }
 
   // ── stall watch settings (design 2026-10-05 §8, §11) ───────────────────────
 

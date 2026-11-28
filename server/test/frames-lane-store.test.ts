@@ -89,7 +89,7 @@ describe('the frames writers', () => {
   it('recordFrames upserts the current result for (build, part) and reads it back whole: the record without its text, the text apart', () => {
     const c = store();
     const r = resultFor('2.1.320', 1);
-    expect(c.recordFrames(r, 'clear', 50, [])).toBe(true);
+    expect(c.recordFrames(r, 'clear', 50, [], null)).toBe(true);
     expect(c.claudeBuildFrames()).toEqual([{
       build: '2.1.320', part: 1, version: r.version, word: 'framed', record: recordOf(r), text: TEXT, checked: 'clear', at: 50,
       attempts: 0, lastAttemptAt: null, notSent: null,
@@ -98,7 +98,7 @@ describe('the frames writers', () => {
     expect((JSON.parse(raw(c, 'record', '2.1.320', 1) as string) as FramesCaptureResult).frame.text).toBeNull();
     expect(raw(c, 'text', '2.1.320', 1)).toBe(TEXT);
     const again = resultFor('2.1.320', 1, null);
-    c.recordFrames(again, 'clear', 60, []);
+    c.recordFrames(again, 'clear', 60, [], null);
     expect(c.claudeBuildFrames()).toHaveLength(1);
     expect(c.claudeBuildFrames()[0]).toMatchObject({ word: 'gaps', at: 60, text: null, checked: 'clear' });
     expect(raw(c, 'text', '2.1.320', 1), 'the older text is replaced, not kept').toBeNull();
@@ -107,7 +107,7 @@ describe('the frames writers', () => {
   it('the text is stored only when the receiver\'s word is clear: a refusal word stores no text and reads text null with the word', () => {
     const c = store();
     const words = Object.keys(FRAMES_REFUSAL_MAP) as FramesRefusal[];
-    words.forEach((w, i) => c.recordFrames(resultFor('2.1.320', i), w, 10 + i, []));
+    words.forEach((w, i) => c.recordFrames(resultFor('2.1.320', i), w, 10 + i, [], null));
     const rows = c.claudeBuildFrames();
     expect(rows).toHaveLength(words.length);
     for (const [i, w] of words.entries()) {
@@ -122,9 +122,9 @@ describe('the frames writers', () => {
 
   it('a refused word replaces a clear row\'s text with none: the text a clear row held does not survive its own re-check', () => {
     const c = store();
-    c.recordFrames(resultFor('2.1.320', 0), 'clear', 10, []);
+    c.recordFrames(resultFor('2.1.320', 0), 'clear', 10, [], null);
     expect(raw(c, 'text', '2.1.320')).toBe(TEXT);
-    c.recordFrames(resultFor('2.1.320', 0), 'masked', 20, []);
+    c.recordFrames(resultFor('2.1.320', 0), 'masked', 20, [], null);
     expect(raw(c, 'text', '2.1.320')).toBeNull();
     expect(c.claudeBuildFrames()[0]).toMatchObject({ checked: 'masked', text: null });
   });
@@ -147,7 +147,7 @@ describe('the frames writers', () => {
     const c = store();
     c.markFramesAttempt('2.1.320', 2, 10, 'sent');
     const r = resultFor('2.1.320', 2);
-    c.recordFrames(r, 'clear', 11, []);
+    c.recordFrames(r, 'clear', 11, [], null);
     expect(c.claudeBuildFrames()[0]).toMatchObject({ attempts: 1, lastAttemptAt: 10, record: recordOf(r), text: TEXT });
     c.markFramesAttempt('2.1.320', 2, 20, 'sent');
     expect(c.claudeBuildFrames()[0]).toMatchObject({ attempts: 2, lastAttemptAt: 20, record: recordOf(r), text: TEXT, word: 'framed', checked: 'clear', at: 11 });
@@ -159,32 +159,32 @@ describe('the frames writers', () => {
     const c = store();
     c.markFramesAttempt('2.1.320', 1, 10, 'recipe-not-run');
     expect(c.claudeBuildFrames()[0]).toMatchObject({ notSent: 'recipe-not-run' });
-    c.recordFrames(resultFor('2.1.320', 1), 'clear', 11, []);
+    c.recordFrames(resultFor('2.1.320', 1), 'clear', 11, [], null);
     expect(c.claudeBuildFrames()[0]).toMatchObject({ notSent: null, word: 'framed', lastAttemptAt: 10 });
   });
 
   it('a result of the newer recipe replaces an older version\'s row', () => {
     const c = store();
-    c.recordFrames(resultFor('2.1.320', 0, TEXT, '0123456789abcdef'), 'clear', 10, []);
+    c.recordFrames(resultFor('2.1.320', 0, TEXT, '0123456789abcdef'), 'clear', 10, [], null);
     expect(c.claudeBuildFrames()[0]).toMatchObject({ version: '0123456789abcdef', word: 'framed' });
-    c.recordFrames(resultFor('2.1.320', 0, null), 'clear', 20, []);
+    c.recordFrames(resultFor('2.1.320', 0, null), 'clear', 20, [], null);
     expect(c.claudeBuildFrames()).toHaveLength(1);
     expect(c.claudeBuildFrames()[0]).toMatchObject({ version: FRAMES_RECIPE_VERSION, word: 'gaps', at: 20, text: null });
   });
 
   it('rows read newest build first, numerically, then by part', () => {
     const c = store();
-    c.recordFrames(resultFor('2.1.310', 1), 'clear', 1, []);
-    c.recordFrames(resultFor('2.1.1000', 3), 'clear', 1, []);
-    c.recordFrames(resultFor('2.1.320', 1), 'clear', 1, []);
-    c.recordFrames(resultFor('2.1.320', 0), 'clear', 1, []);
+    c.recordFrames(resultFor('2.1.310', 1), 'clear', 1, [], null);
+    c.recordFrames(resultFor('2.1.1000', 3), 'clear', 1, [], null);
+    c.recordFrames(resultFor('2.1.320', 1), 'clear', 1, [], null);
+    c.recordFrames(resultFor('2.1.320', 0), 'clear', 1, [], null);
     c.markFramesAttempt('2.1.9', 0, 1, 'sent');
     expect(c.claudeBuildFrames().map((r) => `${r.build}:${r.part}`)).toEqual(['2.1.1000:3', '2.1.320:0', '2.1.320:1', '2.1.310:1', '2.1.9:0']);
   });
 
   it('a row of a build off the grammar is left out of the read', () => {
     const c = store();
-    c.recordFrames(resultFor('2.1.320', 0), 'clear', 1, []);
+    c.recordFrames(resultFor('2.1.320', 0), 'clear', 1, [], null);
     c.db.prepare("INSERT INTO claude_build_frames (build, part, attempts) VALUES ('not-a-build', 0, 1)").run();
     expect(c.claudeBuildFrames().map((r) => r.build)).toEqual(['2.1.320']);
   });
@@ -195,7 +195,7 @@ describe('a row is read whole or not at all', () => {
 
   it('a version or a word column at odds with its stored record, or a record the reader refuses, reads as a part with none', () => {
     const c = store();
-    for (let p = 0; p < 5; p++) c.recordFrames(resultFor('2.1.320', p), 'clear', 1, []);
+    for (let p = 0; p < 5; p++) c.recordFrames(resultFor('2.1.320', p), 'clear', 1, [], null);
     c.db.prepare("UPDATE claude_build_frames SET version = '0123456789abcdef' WHERE part = 0").run();
     c.db.prepare("UPDATE claude_build_frames SET word = 'gaps' WHERE part = 1").run();
     c.db.prepare("UPDATE claude_build_frames SET record = '{\"nope\":1}' WHERE part = 2").run();
@@ -207,8 +207,8 @@ describe('a row is read whole or not at all', () => {
 
   it('a record that is a result of another part or another build reads as none', () => {
     const c = store();
-    c.recordFrames(resultFor('2.1.320', 0), 'clear', 1, []);
-    c.recordFrames(resultFor('2.1.320', 1), 'clear', 1, []);
+    c.recordFrames(resultFor('2.1.320', 0), 'clear', 1, [], null);
+    c.recordFrames(resultFor('2.1.320', 1), 'clear', 1, [], null);
     c.db.prepare('UPDATE claude_build_frames SET record = (SELECT record FROM claude_build_frames WHERE part = 1) WHERE part = 0').run();
     c.db.prepare("UPDATE claude_build_frames SET build = '2.1.321' WHERE part = 1").run();
     for (const r of c.claudeBuildFrames()) expect(r, `${r.build}:${r.part}`).toMatchObject(NONE);
@@ -227,7 +227,7 @@ describe('a row is read whole or not at all', () => {
 
   it('an unknown receiver word, a toString or a constructor, reads as none and carries no text; the row itself stays whole', () => {
     const c = store();
-    for (let p = 0; p < 3; p++) c.recordFrames(resultFor('2.1.320', p), 'clear', 1, []);
+    for (let p = 0; p < 3; p++) c.recordFrames(resultFor('2.1.320', p), 'clear', 1, [], null);
     c.db.prepare("UPDATE claude_build_frames SET checked = 'gone-fishing' WHERE part = 0").run();
     c.db.prepare("UPDATE claude_build_frames SET checked = 'toString' WHERE part = 1").run();
     c.db.prepare("UPDATE claude_build_frames SET checked = 'constructor' WHERE part = 2").run();
@@ -240,7 +240,7 @@ describe('a row is read whole or not at all', () => {
 
   it('a refusal word on a row hides a text that is stored beside it: the text is read only under the word clear', () => {
     const c = store();
-    c.recordFrames(resultFor('2.1.320', 0), 'clear', 1, []);
+    c.recordFrames(resultFor('2.1.320', 0), 'clear', 1, [], null);
     c.db.prepare("UPDATE claude_build_frames SET checked = 'private-shape'").run();
     expect(c.claudeBuildFrames()[0]).toMatchObject({ checked: 'private-shape', text: null, word: 'framed' });
   });
@@ -253,7 +253,7 @@ describe('a row is read whole or not at all', () => {
       `${'x\n'.repeat(51)}`, // 51 rows over a 50-row pane
       'y'.repeat(221) + '\n', // 221 columns over a 220-column pane
     ];
-    bad.forEach((_t, p) => c.recordFrames(resultFor('2.1.320', p), 'clear', 7, []));
+    bad.forEach((_t, p) => c.recordFrames(resultFor('2.1.320', p), 'clear', 7, [], null));
     bad.forEach((t, p) => c.db.prepare('UPDATE claude_build_frames SET text = ? WHERE part = ?').run(t, p));
     const rows = c.claudeBuildFrames();
     expect(rows).toHaveLength(bad.length);
@@ -265,7 +265,7 @@ describe('a row is read whole or not at all', () => {
 
   it('a stored text of the wrong type for a part with no carried frame: a record that holds no text reads null text', () => {
     const c = store();
-    c.recordFrames(resultFor('2.1.320', 0, null), 'clear', 1, []);
+    c.recordFrames(resultFor('2.1.320', 0, null), 'clear', 1, [], null);
     c.db.prepare("UPDATE claude_build_frames SET text = 'planted\n'").run();
     // the record is a refused frame (no text carried), so a text beside it makes no whole result: it is never read.
     expect(c.claudeBuildFrames()[0]).toMatchObject({ word: 'gaps', checked: 'clear', text: null });
@@ -276,10 +276,10 @@ describe('a row is read whole or not at all', () => {
 describe('drop: the texts of the named builds are set aside in the same savepoint, their records stay', () => {
   it('names a build, and every part of it, and no other: the text goes, the record, the word and the time stay', () => {
     const c = store();
-    c.recordFrames(resultFor('2.1.300', 0), 'clear', 1, []);
-    c.recordFrames(resultFor('2.1.300', 1), 'clear', 2, []);
-    c.recordFrames(resultFor('2.1.301', 0), 'clear', 3, []);
-    c.recordFrames(resultFor('2.1.302', 0), 'clear', 4, ['2.1.300', '2.1.999']);
+    c.recordFrames(resultFor('2.1.300', 0), 'clear', 1, [], null);
+    c.recordFrames(resultFor('2.1.300', 1), 'clear', 2, [], null);
+    c.recordFrames(resultFor('2.1.301', 0), 'clear', 3, [], null);
+    c.recordFrames(resultFor('2.1.302', 0), 'clear', 4, ['2.1.300', '2.1.999'], null);
     const rows = c.claudeBuildFrames();
     const by = (b: string, p: number) => rows.find((r) => r.build === b && r.part === p)!;
     expect(by('2.1.300', 0)).toMatchObject({ text: null, word: 'framed', checked: 'clear', at: 1, record: recordOf(resultFor('2.1.300', 0)) });
@@ -292,39 +292,39 @@ describe('drop: the texts of the named builds are set aside in the same savepoin
 
   it('an empty drop sets nothing aside', () => {
     const c = store();
-    c.recordFrames(resultFor('2.1.300', 0), 'clear', 1, []);
-    c.recordFrames(resultFor('2.1.301', 0), 'clear', 2, []);
+    c.recordFrames(resultFor('2.1.300', 0), 'clear', 1, [], null);
+    c.recordFrames(resultFor('2.1.301', 0), 'clear', 2, [], null);
     expect(c.claudeBuildFrames().map((r) => r.text)).toEqual([TEXT, TEXT]);
   });
 
   it('a build named in the drop that is the incoming one loses its own text too: the caller decides, the store only does', () => {
     const c = store();
-    c.recordFrames(resultFor('2.1.300', 0), 'clear', 1, ['2.1.300']);
+    c.recordFrames(resultFor('2.1.300', 0), 'clear', 1, ['2.1.300'], null);
     expect(c.claudeBuildFrames()[0]).toMatchObject({ word: 'framed', text: null });
   });
 
   it('a drop that fails part-way undoes the whole savepoint: the record is not stored and an earlier named text is kept, and the store still works', () => {
     const c = store();
-    c.recordFrames(resultFor('2.1.300', 0), 'clear', 1, []);
-    c.recordFrames(resultFor('2.1.301', 0), 'clear', 2, []);
+    c.recordFrames(resultFor('2.1.300', 0), 'clear', 1, [], null);
+    c.recordFrames(resultFor('2.1.301', 0), 'clear', 2, [], null);
     // A trigger on the fixture db only: setting the text of 2.1.300 aside aborts, after 2.1.301's has been.
     c.db.exec("CREATE TRIGGER frames_no_drop BEFORE UPDATE ON claude_build_frames WHEN NEW.build = '2.1.300' AND NEW.text IS NULL AND OLD.text IS NOT NULL BEGIN SELECT RAISE(ABORT, 'no'); END");
-    expect(() => c.recordFrames(resultFor('2.1.302', 0), 'clear', 3, ['2.1.301', '2.1.300'])).toThrow();
+    expect(() => c.recordFrames(resultFor('2.1.302', 0), 'clear', 3, ['2.1.301', '2.1.300'], null)).toThrow();
     expect(raw(c, 'text', '2.1.301'), 'the earlier drop is undone').toBe(TEXT);
     expect(raw(c, 'text', '2.1.300')).toBe(TEXT);
     expect(c.claudeBuildFrames().map((r) => r.build).sort()).toEqual(['2.1.300', '2.1.301']);
     c.db.exec('DROP TRIGGER frames_no_drop');
-    expect(c.recordFrames(resultFor('2.1.302', 0), 'clear', 4, ['2.1.301', '2.1.300'])).toBe(true);
+    expect(c.recordFrames(resultFor('2.1.302', 0), 'clear', 4, ['2.1.301', '2.1.300'], null)).toBe(true);
     expect(c.claudeBuildFrames().map((r) => [r.build, r.text === null])).toEqual([['2.1.302', false], ['2.1.301', true], ['2.1.300', true]]);
   });
 
   it('a record that cannot be stored throws and drops nothing', () => {
     const c = store();
-    c.recordFrames(resultFor('2.1.300', 0), 'clear', 1, []);
+    c.recordFrames(resultFor('2.1.300', 0), 'clear', 1, [], null);
     const bad = { ...resultFor('2.1.302', 0), part: -1 };
-    expect(() => c.recordFrames(bad, 'clear', 2, ['2.1.300'])).toThrow();
+    expect(() => c.recordFrames(bad, 'clear', 2, ['2.1.300'], null)).toThrow();
     expect(raw(c, 'text', '2.1.300')).toBe(TEXT);
-    expect(c.recordFrames(resultFor('2.1.302', 0), 'clear', 3, [])).toBe(true);
+    expect(c.recordFrames(resultFor('2.1.302', 0), 'clear', 3, [], null)).toBe(true);
   });
 });
 
@@ -333,7 +333,7 @@ describe('the table is the frames recipe\'s own', () => {
     const c = store();
     const before = JSON.stringify(c.claudeBuilds());
     c.markFramesAttempt('2.1.302', 0, 10, 'sent');
-    c.recordFrames(resultFor('2.1.302', 0), 'private-name', 11, ['2.1.301']);
+    c.recordFrames(resultFor('2.1.302', 0), 'private-name', 11, ['2.1.301'], null);
     expect(JSON.stringify(c.claudeBuilds())).toBe(before);
     expect(buildTrustOf(c.claudeBuilds(), '2.1.302')).toEqual({ kind: 'trusted', cwd: true });
   });
@@ -342,8 +342,113 @@ describe('the table is the frames recipe\'s own', () => {
     const c = store();
     const before = JSON.stringify(c.claudeBuildDeliveries());
     c.markFramesAttempt('2.1.302', 0, 10, 'sent');
-    c.recordFrames(resultFor('2.1.302', 0), 'clear', 11, []);
+    c.recordFrames(resultFor('2.1.302', 0), 'clear', 11, [], null);
     expect(JSON.stringify(c.claudeBuildDeliveries())).toBe(before);
     expect(c.claudeBuildDeliveries()).toEqual([]);
+  });
+});
+
+// ── wave 198, the new-form alarm (plan docs/superpowers/plans/2026-11-28-box-frames-alarm.md section 4; the capture owner's
+// yes to packet 1 with its changes A and B, call 1963) ─────────────────────────────────────────────────────────────────────
+const SHAPE_ENTRY = /ALTER TABLE claude_build_frames ADD COLUMN shape TEXT/;
+const SHAPE_SLOT = MIGRATIONS.findIndex((m) => SHAPE_ENTRY.test(m)) + 1;
+const SHAPE = { version: '0123456789abcdef', hash: 'fedcba9876543210' };
+
+describe('the shape column is one new entry (wave 198)', () => {
+  it('an entry after the table\'s that adds the one column and nothing else; an older file migrates to it and keeps its rows', () => {
+    expect(SHAPE_SLOT).toBeGreaterThan(SLOT);
+    expect(SHAPE_SLOT).toBeLessThanOrEqual(COORD_SCHEMA_VERSION);
+    expect(MIGRATIONS.filter((m) => SHAPE_ENTRY.test(m)).length).toBe(1);
+    expect(MIGRATIONS[SHAPE_SLOT - 1]!.replace(/--.*$/gm, '').trim()).toBe('ALTER TABLE claude_build_frames ADD COLUMN shape TEXT;');
+    const p = path.join(mkTmp('ccrc-mig-frames-shape-'), '.ccrc', 'coord.db');
+    mkdirSync(path.dirname(p), { recursive: true });
+    const raws = new DatabaseSync(p);
+    tx(raws, () => { for (let v = 0; v < SHAPE_SLOT - 1; v++) raws.exec(MIGRATIONS[v]!); raws.exec(`PRAGMA user_version = ${SHAPE_SLOT - 1}`); });
+    raws.prepare("INSERT INTO claude_build_frames (build, part, attempts) VALUES ('2.1.400', 3, 2)").run();
+    const cols = (): string[] => (raws.prepare('PRAGMA table_info(claude_build_frames)').all() as unknown as { name: string }[]).map((r) => r.name);
+    const had = cols();
+    raws.exec(MIGRATIONS[SHAPE_SLOT - 1]!);
+    expect(cols().filter((n) => !had.includes(n))).toEqual(['shape']);
+    expect(raws.prepare('SELECT build, part, attempts, shape FROM claude_build_frames').all()).toEqual([{ build: '2.1.400', part: 3, attempts: 2, shape: null }]);
+    raws.close();
+  });
+});
+
+describe('the stored shape: its version, its hash and the row\'s time, never its tokens (change A)', () => {
+  it('recordFrames stores exactly those three, and the shapes read gives the version and the hash back', () => {
+    const c = store();
+    c.recordFrames(resultFor('2.1.320', 1), 'clear', 50, [], SHAPE);
+    expect(JSON.parse(raw(c, 'shape', '2.1.320', 1) as string)).toEqual({ ...SHAPE, at: 50 });
+    expect(c.claudeBuildFrameShapes(['2.1.320'])).toEqual([{
+      build: '2.1.320', part: 1, version: FRAMES_RECIPE_VERSION, word: 'framed', record: recordOf(resultFor('2.1.320', 1)), checked: 'clear', at: 50, shape: SHAPE,
+    }]);
+  });
+  it('a marker in the frame\'s rule label is in no stored shape: the column holds hex and a time only', () => {
+    const c = store();
+    const marked = [`${RULE} QMARKQ 12`, '❯ frames row 001 of 003 abcdefghij', RULE, '  ccrc capture'].join('\n') + '\n';
+    c.recordFrames(resultFor('2.1.320', 0, marked), 'clear', 5, [], SHAPE);
+    expect(raw(c, 'shape', '2.1.320', 0)).not.toContain('QMARKQ');
+    expect(Object.keys(JSON.parse(raw(c, 'shape', '2.1.320', 0) as string)).sort()).toEqual(['at', 'hash', 'version']);
+  });
+  it('a record with no shape stores none, and a re-record with none clears the old one', () => {
+    const c = store();
+    c.recordFrames(resultFor('2.1.320', 0), 'clear', 5, [], SHAPE);
+    c.recordFrames(resultFor('2.1.320', 0, null), 'clear', 6, [], null);
+    expect(raw(c, 'shape', '2.1.320', 0)).toBeNull();
+    expect(c.claudeBuildFrameShapes(['2.1.320'])[0]!.shape).toBeNull();
+  });
+  it('an attempt stamp leaves the shape as it is', () => {
+    const c = store();
+    c.recordFrames(resultFor('2.1.320', 0), 'clear', 5, [], SHAPE);
+    c.markFramesAttempt('2.1.320', 0, 9, 'sent');
+    expect(c.claudeBuildFrameShapes(['2.1.320'])[0]!.shape).toEqual(SHAPE);
+  });
+});
+
+describe('the shape is bound to the row\'s time: a part an older build re-records reads unshaped', () => {
+  it('an upsert that does not name the column (an older build\'s) leaves the shape unbound, and it reads as none', () => {
+    const c = store();
+    c.recordFrames(resultFor('2.1.320', 0), 'clear', 5, [], SHAPE);
+    // The older build's own upsert, which names no shape column.
+    c.db.prepare(`INSERT INTO claude_build_frames (build, part, version, word, record, text, checked, at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(build, part) DO UPDATE SET version = excluded.version, word = excluded.word, record = excluded.record, text = excluded.text,
+        checked = excluded.checked, at = excluded.at, notSent = NULL`)
+      .run('2.1.320', 0, FRAMES_RECIPE_VERSION, 'framed', JSON.stringify(recordOf(resultFor('2.1.320', 0))), TEXT, 'clear', 6);
+    expect(JSON.parse(raw(c, 'shape', '2.1.320', 0) as string)).toEqual({ ...SHAPE, at: 5 });
+    expect(c.claudeBuildFrameShapes(['2.1.320'])[0]).toMatchObject({ at: 6, shape: null });
+  });
+  it('a shape that does not read whole is none, never an error', () => {
+    const c = store();
+    c.recordFrames(resultFor('2.1.320', 0), 'clear', 5, [], SHAPE);
+    for (const bad of ['{', 'null', '[]', '"x"', JSON.stringify({ version: 'XYZ', hash: SHAPE.hash, at: 5 }), JSON.stringify({ ...SHAPE, at: 5, tokens: [] }),
+      JSON.stringify({ version: SHAPE.version, at: 5 }), JSON.stringify({ ...SHAPE, at: '5' })]) {
+      c.db.prepare('UPDATE claude_build_frames SET shape = ? WHERE build = ? AND part = 0').run(bad, '2.1.320');
+      expect(c.claudeBuildFrameShapes(['2.1.320'])[0]!.shape, bad).toBeNull();
+    }
+  });
+  it('a row the reader does not accept has no shape either', () => {
+    const c = store();
+    c.recordFrames(resultFor('2.1.320', 0), 'clear', 5, [], SHAPE);
+    c.db.prepare("UPDATE claude_build_frames SET word = 'gaps' WHERE build = '2.1.320'").run();
+    expect(c.claudeBuildFrameShapes(['2.1.320'])[0]).toMatchObject({ record: null, version: null, shape: null });
+  });
+});
+
+describe('the shapes read is text-free and bounded by builds (change B)', () => {
+  it('only the named builds\' rows, newest first by part; none named, none; a name off the grammar is not asked', () => {
+    const c = store();
+    for (const b of ['2.1.318', '2.1.319', '2.1.320', '2.1.321']) for (const p of [1, 0]) c.recordFrames(resultFor(b, p), 'clear', 5, [], SHAPE);
+    expect(c.claudeBuildFrameShapes(['2.1.319', '2.1.321']).map((r) => `${r.build}/${r.part}`)).toEqual(['2.1.321/0', '2.1.321/1', '2.1.319/0', '2.1.319/1']);
+    expect(c.claudeBuildFrameShapes([])).toEqual([]);
+    expect(c.claudeBuildFrameShapes(["2.1.320' OR '1'='1", 'nope'])).toEqual([]);
+  });
+  it('never carries a text: a marker in a stored text is in no returned row, and no row has a text key', () => {
+    const c = store();
+    const marked = [RULE, '❯ frames row 001 QTEXTQ of 003 abcdefghij', RULE, '  ccrc capture'].join('\n') + '\n';
+    c.recordFrames(resultFor('2.1.320', 0, marked), 'clear', 5, [], SHAPE);
+    expect(raw(c, 'text', '2.1.320', 0)).toContain('QTEXTQ');
+    const rows = c.claudeBuildFrameShapes(['2.1.320']);
+    expect(JSON.stringify(rows)).not.toContain('QTEXTQ');
+    for (const r of rows) expect(Object.keys(r)).not.toContain('text');
   });
 });

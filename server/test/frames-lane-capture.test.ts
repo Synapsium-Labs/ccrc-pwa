@@ -16,8 +16,17 @@ import { FRAMES_RECIPE_VERSION } from '../../shared/framesCapture.js';
 import { FRAMES_STATUS_TEXT } from '../../shared/framesReduce.js';
 import { FRAMES_KEEP_BUILDS } from '../../shared/framesLane.js';
 import { FRAMES_PARTS, frameSize, type FramesCaptureResult } from '../../shared/framesResult.js';
+import { framesShapeToStore } from '../../shared/framesStanding.js';
 import { deliveryResultFor } from './deliveryLaneHelpers.js';
 import { mkTmp, removeTmpFixturesEachTest } from './tmpHelpers.js';
+
+// Wave 198, the recipe's hold (packet 4, the capture owner's call 1966): the constant is read through this toggle, true for
+// every case but the hold's own, so the lane is driven with the hold up and down in one file.
+const hold = vi.hoisted(() => ({ complete: true }));
+vi.mock('../../shared/framesCapture.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../shared/framesCapture.js')>();
+  return { ...actual, get FRAMES_RECIPE_COMPLETE() { return hold.complete; } };
+});
 
 // ONE migrated coord.db for the file (the delivery capture test's way): each case copies a template migrated once, a fresh warn
 // spy per case, and every pass a case started is settled before the case ends.
@@ -125,9 +134,9 @@ describe('the lane sends one frames job, after the trust part and the delivery p
     deliveriesDone(s, RIG);
     await s.pass();
     expect(t.jobs).toEqual([{ build: RIG, recipe: 'frames', part: 0 }]);
-    s.coord.recordFrames(resultFor(RIG, 0), 'clear', 1, []);
+    s.coord.recordFrames(resultFor(RIG, 0), 'clear', 1, [], null);
     s.coord.markFramesAttempt(RIG, 1, 1, 'sent');
-    s.coord.recordFrames(resultFor(RIG, 1), 'clear', 1, []);
+    s.coord.recordFrames(resultFor(RIG, 1), 'clear', 1, [], null);
     await s.pass();
     expect(t.jobs.at(-1), 'the first part with no current row').toEqual({ build: RIG, recipe: 'frames', part: 2 });
   });
@@ -262,16 +271,72 @@ describe('the receiver\'s check: what is stored with the text', () => {
   });
 });
 
+describe('the recipe\'s hold reaches the frames recipe only (packet 4, the capture owner\'s condition 2)', () => {
+  afterEach(() => { hold.complete = true; });
+  /** Every job a run of passes sends, for a rig in a given state, with the hold up or down; and the trust record and the
+   *  delivery rows after it. */
+  async function run(complete: boolean, state: (s: Rig) => void, passes = 4) {
+    hold.complete = complete;
+    const t = fake(answering());
+    const s = await setup(t);
+    state(s);
+    for (let i = 0; i < passes; i++) { await s.pass(); s.tick(BUILD_CAPTURE_RETRY_MS); }
+    return { jobs: t.jobs.map((j) => `${j.recipe ?? 'trust'}:${j.build}:${j.part ?? '-'}`), trust: JSON.stringify(s.coord.claudeBuilds().map((r) => ({ ...r, seenAt: 0, lastAttemptAt: 0, verdictAt: 0 }))), deliveries: s.coord.claudeBuildDeliveries().map((r) => `${r.build}:${r.part}:${r.word}`) };
+  }
+  const states: Record<string, (s: Rig) => void> = {
+    'a fresh rig (trust and delivery to send)': () => {},
+    'delivery done (frames would send)': (s) => deliveriesDone(s, RIG),
+    'a queued build (trust would send)': (s) => { s.coord.noteClaudeBuildsSeen(['2.1.400'], 1); },
+  };
+  for (const [name, state] of Object.entries(states)) {
+    it(`${name}: every trust and delivery job goes out as with the hold up, and no frames job does`, async () => {
+      const up = await run(true, state);
+      const down = await run(false, state);
+      expect(down.jobs).toEqual(up.jobs.filter((j) => !j.startsWith('frames:')));
+      expect(down.jobs.some((j) => j.startsWith('frames:'))).toBe(false);
+      expect(down.trust).toBe(up.trust);
+      expect(down.deliveries).toEqual(up.deliveries);
+    });
+  }
+  it('with the hold up, the same rig sends frames jobs: the case above compares something', async () => {
+    expect((await run(true, (s) => deliveriesDone(s, RIG))).jobs.some((j) => j.startsWith('frames:'))).toBe(true);
+  });
+});
+
+describe('the shape is stored with the row, by the standing\'s one rule (wave 198)', () => {
+  const shapeOfRow = (s: Rig, part = 0) => s.coord.claudeBuildFrameShapes([RIG]).find((r) => r.part === part)?.shape ?? null;
+  it('a drawn frame the check cleared is stored with the shape framesShapeToStore gives it', async () => {
+    const s = await setup(fake(answering()));
+    deliveriesDone(s, RIG);
+    await s.pass();
+    expect(shapeOfRow(s)).toEqual(framesShapeToStore(resultFor(RIG, 0), 'clear'));
+    expect(shapeOfRow(s)).not.toBeNull();
+  });
+  it('a frame the server\'s check refused, and one the box\'s reducer refused, are stored with no shape', async () => {
+    const s = await setup(fake(answering([RULE, '  cwd /work/project-a/src/main', RULE, STATUS, '  ? for shortcuts'].join('\n') + '\n')));
+    deliveriesDone(s, RIG);
+    await s.pass();
+    expect(s.coord.claudeBuildFrames()[0]).toMatchObject({ checked: 'private-shape' });
+    expect(shapeOfRow(s)).toBeNull();
+    const b = await setup(fake(answering(null)));
+    deliveriesDone(b, RIG);
+    await b.pass();
+    expect(b.coord.claudeBuildFrames()[0]).toMatchObject({ word: 'gaps', checked: 'clear' });
+    expect(shapeOfRow(b)).toBeNull();
+  });
+});
+
 describe('recording sets aside the texts beyond the newest four framed builds', () => {
   const OLD = ['2.1.290', '2.1.291', '2.1.292', '2.1.293', '2.1.294'];
   it('the incoming build counts as one of the four: the two oldest texts go, their records stay', async () => {
     const s = await setup(fake(answering()));
     deliveriesDone(s, RIG);
-    for (const b of OLD) s.coord.recordFrames(resultFor(b, 0), 'clear', 1, []);
+    for (const b of OLD) s.coord.recordFrames(resultFor(b, 0), 'clear', 1, [], null);
     const record = vi.spyOn(s.coord, 'recordFrames');
     expect(FRAMES_KEEP_BUILDS).toBe(4);
     await s.pass();
-    expect(record).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ build: RIG, part: 0 }), 'clear', expect.any(Number), ['2.1.291', '2.1.290']);
+    expect(record).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ build: RIG, part: 0 }), 'clear', expect.any(Number), ['2.1.291', '2.1.290'],
+      framesShapeToStore(resultFor(RIG, 0), 'clear'));
     const rows = s.coord.claudeBuildFrames();
     const textOf = (b: string) => rows.find((r) => r.build === b)!.text;
     expect([RIG, '2.1.294', '2.1.293', '2.1.292'].map(textOf)).toEqual([TEXT, TEXT, TEXT, TEXT]);
@@ -283,7 +348,7 @@ describe('recording sets aside the texts beyond the newest four framed builds', 
   it('a refused frame names the drops too, and keeps none of its own text', async () => {
     const s = await setup(fake(answering()), { maskText: (t) => t.replace('shortcuts', '*********') });
     deliveriesDone(s, RIG);
-    for (const b of OLD) s.coord.recordFrames(resultFor(b, 0), 'clear', 1, []);
+    for (const b of OLD) s.coord.recordFrames(resultFor(b, 0), 'clear', 1, [], null);
     await s.pass();
     const rows = s.coord.claudeBuildFrames();
     expect(rows.find((r) => r.build === RIG)).toMatchObject({ checked: 'masked', text: null });
@@ -293,7 +358,7 @@ describe('recording sets aside the texts beyond the newest four framed builds', 
   it('with four framed builds already holding text and the incoming a fifth, only the oldest goes', async () => {
     const s = await setup(fake(answering()));
     deliveriesDone(s, RIG);
-    for (const b of OLD.slice(1)) s.coord.recordFrames(resultFor(b, 0), 'clear', 1, []);
+    for (const b of OLD.slice(1)) s.coord.recordFrames(resultFor(b, 0), 'clear', 1, [], null);
     await s.pass();
     const withText = s.coord.claudeBuildFrames().filter((r) => r.text !== null).map((r) => r.build).sort();
     expect(withText).toEqual(['2.1.292', '2.1.293', '2.1.294', RIG]);
@@ -365,6 +430,22 @@ describe('what each other answer comes to', () => {
     await s.pass();
     expect(t.jobs).toHaveLength(2);
     expect(t.jobs[1]).toMatchObject({ part: 0 });
+  });
+
+  // Wave 198, carried from #3487's reviews: the mismatch is no longer silent. One line per attempt, and no louder.
+  it('another recipe\'s version is one warn line naming the build, the part and both versions, and nothing else is logged', async () => {
+    const t = fake((job) => ({ kind: 'answered', result: resultFor(job.build, job.part!, TEXT, '0123456789abcdef') }));
+    const s = await setup(t);
+    deliveriesDone(s, RIG);
+    await s.pass();
+    expect(warned()).toEqual([
+      `ccrc-server: frames capture: ${RIG} part 0: the test box ran frames recipe version 0123456789abcdef, this server's is ${FRAMES_RECIPE_VERSION}; no row is stored, asked again after the spacing`,
+    ]);
+    await s.pass();
+    expect(warned(), 'within the spacing: no job, no line').toHaveLength(1);
+    s.tick(BUILD_CAPTURE_RETRY_MS);
+    await s.pass();
+    expect(warned(), 'one line per attempt').toHaveLength(2);
   });
 
   it('an answer off the result\'s shape, and a trust-shaped one: one line, the attempt counted, no row', async () => {
