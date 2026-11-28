@@ -122,9 +122,11 @@ function privateAcross(a: string, b: string, privates: readonly string[]): boole
   return false;
 }
 
-/** The first run of a row's content (after its leading decoration), and whether it reads as the tail of a path: it
- *  holds a `/`. */
-const pathTail = (row: string): boolean => (/^\S+/u.exec(spans(row).content)?.[0] ?? '').includes('/');
+/** The first run of a row's content (after its leading decoration and any further leading whitespace), and whether it
+ *  reads as the tail of a path: it holds a `/`. The whitespace skip is review 4168's F1: a content that begins with a
+ *  Unicode space off the decoration list (U+3000, U+2000 to U+200A, U+202F, U+205F, U+1680) read as no run at all, so a
+ *  path after it was kept. Those spaces stay off the decoration list, so the straddle test still sees U+3000 first. */
+const pathTail = (row: string): boolean => (/^\s*(\S+)/u.exec(spans(row).content)?.[1] ?? '').includes('/');
 
 /** THE ONE-CELL TABLE (review 4109's R1, the coordinator's rulings 1 and 2 on wave 195, and on review 4133's F2): every
  *  code point the Unicode Character Database file EastAsianWidth-17.0.0.txt lists as N (neutral), Na (narrow), H
@@ -285,7 +287,10 @@ const KEYCAP_MARK = String.fromCodePoint(0x20e3);
  *  emoji class (the coordinator's ruling on review 4161's F1): it only ever makes the first character of a next row count
  *  two cells, which only refuses. Two hosts whose engines disagree on a mark therefore lose a frame (one of them refuses
  *  it) and never keep a tail. The emoji selector and the keycap mark are named beside it, so those two hold with no
- *  engine asked. */
+ *  engine asked. A LIMIT (review 4168): the class is only as new as the engine. Two hosts whose engines are BOTH older
+ *  than the table's Unicode version count a mark newer than their engine one cell, so a next row that begins with such a
+ *  mark keeps its tail on both (42 marks on a 16.0 engine, none on 17.0 or newer, by the reviewer's emulation). The cure,
+ *  a generated mark table beside the width table, is the alarm wave's, by the coordinator's ruling. */
 const LEADING_MARK = /^\p{M}/u;
 /** How many cells the FIRST character of `content` takes, with what follows it (review 4133's F1, review 4161's F1): two
  *  when content begins with a code point that cannot begin a character by itself (the emoji selector, the keycap mark, or
@@ -329,7 +334,7 @@ function pathOffTheEdge(a: string, b: string, pane: FramesPane): boolean {
   if (!runsToTheEdge(a, b, pane)) return false;
   // The head is read where the edge was measured: after the trailing spaces a straddle's blank cell may leave.
   const head = /\S+$/u.exec(a.replace(/\s+$/u, ''))?.[0] ?? '';
-  const tail = /^\S+/u.exec(nextRowContent(b))?.[0] ?? '';
+  const tail = /^\s*(\S+)/u.exec(nextRowContent(b))?.[1] ?? ''; // whitespace skipped first, as in `pathTail` (review 4168, F1)
   return tail !== '' && (head + tail).includes('/');
 }
 
@@ -524,6 +529,8 @@ export function reducerFingerprint(): string {
     // Review 4161's F1: a straddle whose next row is the turn marker then the emoji selector, so the selector is left first
     // once the decoration is stripped. It asks the engine for nothing either.
     'x'.repeat(35) + ' /pr\n' + String.fromCodePoint(0x23FA) + String.fromCodePoint(0xFE0F) + 'ject rest',
+    // Review 4168's F1: a full row, then a next row that begins with the ideographic space, then the path's tail.
+    'x'.repeat(36) + ' /pr\n' + String.fromCodePoint(0x3000) + 'ject rest',
   ];
   // Each probe drawn as a box draws it: between two rules, the capture's status row under the lower one (rule 8). And the
   // status rule's own probes: no rule, another status text, the text twice.

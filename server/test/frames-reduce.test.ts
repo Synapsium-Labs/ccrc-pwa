@@ -391,6 +391,11 @@ describe('the capture owner\'s condition: a row truly at the edge is at the edge
     `${TURN}${SEL}ject rest`, `  ${TURN}${SEL}ject rest`, `│${SEL}ject rest`, `${TURN}${KEYCAP}ject rest`, `  ${TURN}${KEYCAP}ject rest`,
   ];
   const LEADING_MARK = [`${TURN}${ACUTE}${WIDE}ject rest`, `  ${TURN}${ACUTE}${WIDE}ject rest`, `${TURN}${ACUTE}ject rest`, `│${ACUTE}ject rest`];
+  // Review 4168's F1: the Unicode spaces off the decoration list. The ideographic space is two cells; the rest are one.
+  const IDEO = String.fromCodePoint(0x3000);
+  const EMSP = String.fromCodePoint(0x2003);
+  const OFF_LIST_SPACES = [0x3000, 0x2000, 0x2001, 0x2002, 0x2003, 0x2004, 0x2005, 0x2006, 0x2007, 0x2008, 0x2009, 0x200a, 0x202f, 0x205f, 0x1680]
+    .map((cp) => String.fromCodePoint(cp));
   for (const cols of [20, 220]) {
     const W = { cols, rows: 8 };
     const at = (...rows: string[]): string => raw(...rows, '─'.repeat(cols), STATUS);
@@ -410,8 +415,32 @@ describe('the capture owner\'s condition: a row truly at the edge is at the edge
     it(`at ${cols} columns: a straddle whose next row is a decoration base, then a combining mark, refuses on both hosts, before a wide character and, an accepted over-refusal, before a narrow one`, () => {
       for (const next of LEADING_MARK) expect(on(at(short, next)), JSON.stringify(next)).toEqual(REFUSED);
     });
+    const full = `ab/${'x'.repeat(cols - 3)}`; // the pane's whole width
+    const kept = (f: string): unknown[] => [{ kind: 'reduced', text: f, replaced: { cwd: 0, path: 0, model: 0, account: 0 } }, { ok: true }];
+    it(`at ${cols} columns: a full row, then a next row that begins with a Unicode space off the decoration list, then the path's tail, refuses on both hosts (review 4168, F1)`, () => {
+      for (const sp of OFF_LIST_SPACES) {
+        for (const next of [`${sp}ject rest`, `  ${sp}ject rest`, `${TURN}${sp}ject rest`]) expect(on(at(full, next)), JSON.stringify(next)).toEqual(REFUSED);
+      }
+    });
+    it(`at ${cols} columns: a row one cell short, then the ideographic space (the wide character that wrapped), then the tail, refuses on both hosts, bare and after the turn marker; a one-cell space there is no edge, and is kept`, () => {
+      for (const next of [`${IDEO}ject rest`, `${TURN}${IDEO}ject rest`]) expect(on(at(short, next)), JSON.stringify(next)).toEqual(REFUSED);
+      // The row did not reach the edge: a one-cell space does not wrap, so keeping it is the correct answer.
+      for (const next of [`${EMSP}ject rest`, `${TURN}${EMSP}ject rest`]) expect(on(at(short, next)), JSON.stringify(next)).toEqual(kept(at(short, next)));
+    });
+    it(`at ${cols} columns: a token row, then the ideographic space or the em space, then a path, refuses on both hosts; an ASCII indent then a word that is not a path is kept`, () => {
+      for (const t of Object.values(FRAMES_REPLACED).filter((t) => Array.from(t).length + 2 <= cols)) {
+        for (const next of [`${IDEO}ject/rest`, `${EMSP}ject/rest`, `  ${IDEO}ject/rest`]) expect(on(at(`  ${t}`, next)), `${t} ${JSON.stringify(next)}`).toEqual(REFUSED);
+        // Kept: the same text back and the server's ok (the account token is counted once as replaced, so counts are not pinned).
+        const f = at(`  ${t}`, '  ject rest');
+        expect(on(f), t).toMatchObject([{ kind: 'reduced', text: f }, { ok: true }]);
+      }
+      // A full row that holds no path, then such a space and a word: nothing to continue, so it is kept.
+      const plainFull = 'x'.repeat(cols);
+      for (const next of [`${IDEO}ject rest`, `${EMSP}ject rest`]) expect(on(at(plainFull, next)), JSON.stringify(next)).toEqual(kept(at(plainFull, next)));
+    });
     it(`at ${cols} columns: decoration then a narrow character is still not a straddle, and is kept`, () => {
-      for (const next of ['  tail rest', '│ tail rest', '❯ tail rest', `${NBSP}tail rest`, `${TURN}tail rest`, `  ${TURN} tail rest`]) {
+      // The last two have a mark LATER in the row, not first (review 4168: the mark test is anchored to the first code point).
+      for (const next of ['  tail rest', '│ tail rest', '❯ tail rest', `${NBSP}tail rest`, `${TURN}tail rest`, `  ${TURN} tail rest`, `t${ACUTE}ail rest`, `${TURN}tail${ACUTE} rest`]) {
         expect(on(at(short, next)), JSON.stringify(next)).toEqual([{ kind: 'reduced', text: at(short, next), replaced: { cwd: 0, path: 0, model: 0, account: 0 } }, { ok: true }]);
       }
     });
@@ -722,14 +751,14 @@ describe('rule 10, and the receiver\'s check', () => {
   it('the version folds in the reducer\'s probe answers', () => {
     expect(FRAMES_RECIPE_VERSION).toMatch(FRAMES_VERSION_SHAPE);
   });
-  it('the probe table answers for a bare quote, a wide character at the edge, a row at the probe\'s width, a straddle, the stated addition at the edge, a table-only wide character at the edge, a trailing-space straddle and a leading selector (review 4109, F9; review 4133, D1; review 4161, F1)', () => {
-    // The eight probes after the eighteen of round 2, each drawn in its box: a change in what the reducer does with any of
-    // them moves the version. None asks the engine for anything (review 4133, D1; review 4161, F1).
+  it('the probe table answers for a bare quote, a wide character at the edge, a row at the probe\'s width, a straddle, the stated addition at the edge, a table-only wide character at the edge, a trailing-space straddle, a leading selector and a leading ideographic space (review 4109, F9; review 4133, D1; review 4161, F1; review 4168, F1)', () => {
+    // The nine probes after the eighteen of round 2, each drawn in its box: a change in what the reducer does with any of
+    // them moves the version. None asks the engine for anything (review 4133, D1; review 4161, F1; review 4168, F1).
     const answers = JSON.parse(reducerFingerprint()) as { kind: string; refusal?: string; text?: string }[];
-    expect(answers).toHaveLength(29);
+    expect(answers).toHaveLength(30);
     expect(answers[18]).toMatchObject({ kind: 'reduced' });
     expect(answers[18]!.text).toContain('› stashed');
-    for (const i of [19, 20, 21, 22, 23, 24, 25]) expect(answers[i], String(i)).toEqual({ kind: 'refused', refusal: 'private-shape' });
+    for (const i of [19, 20, 21, 22, 23, 24, 25, 26]) expect(answers[i], String(i)).toEqual({ kind: 'refused', refusal: 'private-shape' });
   });
 });
 
