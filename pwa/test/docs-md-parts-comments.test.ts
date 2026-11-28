@@ -902,16 +902,24 @@ describe('P1\'s own paths, measured against the rule (wave 64, item 2)', { timeo
   it('md parts P1 paths: a tail comment whose closer line is exactly what fits beside the reopen line is cut, not the line cutter\'s (review 4221 A4)', () => {
     // The bound is `cutComment`'s: the reopen line and the closer's line, its terminator counted, at most a part. At 120 bytes a
     // closer line of 115 bytes fits, with an LF end (`-->`, 111 spaces, LF) and with no terminator at the text's end (112 spaces).
-    for (const [name, closer] of [['an LF end', '-->' + ' '.repeat(111) + '\n'], ['no terminator', '-->' + ' '.repeat(112)]] as const) {
-      const text = 'Intro.\n\n<!--\n' + lines('', 40) + closer;
-      const parts = splitMarkdownPartsAt(text, 120, [{ start: 0, end: 6, kind: 'other' }], 8).parts;
+    // With a CRLF end (110 spaces, the terminator's two bytes counted) and a lone CR end (111 spaces), the text's lines in the same
+    // terminator (review 4228 A2).
+    const head = 'Intro.\n\n<!--\n' + lines('', 40);
+    for (const [name, text] of [
+      ['an LF end', head + '-->' + ' '.repeat(111) + '\n'],
+      ['no terminator', head + '-->' + ' '.repeat(112)],
+      ['a CRLF end', head.replace(/\n/g, '\r\n') + '-->' + ' '.repeat(110) + '\r\n'],
+      ['a lone CR end', head.replace(/\n/g, '\r') + '-->' + ' '.repeat(111) + '\r'],
+    ] as const) {
+      const at = text.indexOf('<!--');
+      const parts = splitMarkdownPartsAt(text, 120, [{ start: 0, end: 6, kind: 'other' }], at).parts;
       checkCover(text, parts, 120);
       expect(parts.some((p) => p.reopen === '<!--\n'), `${name}: closed and reopened`).toBe(true);
       const per = parts.map((p) => shown(partText(text, p), HIDDEN));
       expect(per.every((n) => n === 0), `${name}: no part shows the comment (per part: ${per.join(',')})`).toBe(true);
       // One byte more and the closer line does not fit: the tail is the line cutter's, as before (not closed and reopened).
       const over = text.replace('-->', '--> ');
-      const po = splitMarkdownPartsAt(over, 120, [{ start: 0, end: 6, kind: 'other' }], 8).parts;
+      const po = splitMarkdownPartsAt(over, 120, [{ start: 0, end: 6, kind: 'other' }], at).parts;
       checkCover(over, po, 120);
       expect(po.some((p) => p.reopen === '<!--\n'), `${name}, one byte over: not closed and reopened`).toBe(false);
     }
@@ -1006,7 +1014,9 @@ describe('a comment opened in a footnote definition (wave 64, fix round 1, revie
     const body = '\n\n' + '## Private heading\n\nSECRETW one\n\n'.repeat(40) + '-->\n\nPublic end.\n';
     const sum = (text: string, blocks: readonly TextBlock[], tf: number | null, max: number): number =>
       splitMarkdownPartsAt(text, max, blocks, tf).parts.reduce((n, p) => n + shown(partText(text, p), 'SECRETW'), 0);
-    const forms = ['See[^1].\n\n[^1]:\n    para\n\n    <!--', 'See[^1].\n\n[^1]:\n    - a\n\n      <!--', 'See[^1].\n\n[^1]:\n    - a\n    - <!--', 'See[^1].\n\n[^1]:\n\tpara\n\n\t<!--', 'See[^1].\n\n[^1]:\n    - <!--', 'See[^1].\n\n[^1]: <!-- a -->\n\n    para\n\n    <!--', 'See[^1].\n\n[^1]: [a]: /u\n\n    para\n\n    <!--', 'See[^1].\n\n[^1]:\n    > q\n\n    <!--'];
+    const forms = ['See[^1].\n\n[^1]:\n    para\n\n    <!--', 'See[^1].\n\n[^1]:\n    - a\n\n      <!--', 'See[^1].\n\n[^1]:\n    - a\n    - <!--', 'See[^1].\n\n[^1]:\n\tpara\n\n\t<!--', 'See[^1].\n\n[^1]:\n    - <!--', 'See[^1].\n\n[^1]: <!-- a -->\n\n    para\n\n    <!--', 'See[^1].\n\n[^1]: [a]: /u\n\n    para\n\n    <!--', 'See[^1].\n\n[^1]:\n    > q\n\n    <!--',
+      // First lines the render draws no block for (review 4228 A1): a `<details>`, `</details>` or `<summary>` line.
+      'See[^1].\n\n[^1]: <details>\n    para\n\n    <!--', 'See[^1].\n\n[^1]: </details>\n    para\n\n    <!--', 'See[^1].\n\n[^1]: <summary>x</summary>\n    para\n\n    <!--'];
     for (const open of forms) {
       const text = lead + open + body + 'after the comment.\n\n'.repeat(60);
       expect(shown(text, 'SECRETW'), `${JSON.stringify(open)}: the library hides it in the whole`).toBe(0);
@@ -1019,6 +1029,29 @@ describe('a comment opened in a footnote definition (wave 64, fix round 1, revie
     const control = lead + 'See[^1].\n\n[^1]: note\n\n    para\n\n    <!--' + body + 'after the comment.\n\n'.repeat(60);
     const cw = await blocksOf(control, READER_BLOCKS_MAX_BYTES);
     expect(sum(control, cw.blocks, cw.tailFrom, 700), 'CONTROL: a first line that draws a block shows none').toBe(0);
+  });
+
+  it('md parts footnote: adjacent definitions, today\'s window bound (the start of the block before the opener), told from the end of it (review 4228 F1)', async () => {
+    // This records the bound the tip uses, not a claim that it is the better one: on adjacent definitions the end of the block
+    // before the opener matches the whole read where the start does not, and neither shows hidden text (review 4228: 308 of 2 640
+    // runs differ); whether the end is the better bound is weighed in the wave of ticket x2-fu-footnote-item-block-start.
+    const body = '\n\n' + '## Private heading\n\nSECRETW one\n\n'.repeat(40) + '-->\n\nPublic end.\n';
+    const a = 'x\n\nSee[^1][^2].\n\n[^1]: a\n[^2]:\n    <!--' + body;
+    const wa = await blocksOf(a, READER_BLOCKS_MAX_BYTES);
+    expect(splitMarkdownPartsAt(a, 300, wa.blocks, wa.tailFrom).parts.map((p) => p.start).slice(0, 3), 'the whole read: a part starts at [^1]').toEqual([0, 17, 1366]);
+    const b = 'x\n\nSee[^1][^2].\n\n[^1]:\n    x\n[^2]:\n    <!--' + body;
+    const wb = await blocksOf(b, READER_BLOCKS_MAX_BYTES);
+    expect(wb.blocks.find((k) => k.start === 23)?.kind, 'the whole read: [^1]\'s block is not code').toBe('other');
+    for (const w of [256, 1024]) {
+      const sa = await blocksOf(a, w);
+      const pa = splitMarkdownPartsAt(a, 300, sa.blocks, sa.tailFrom).parts;
+      expect(sa.blocks.some((k) => k.start === 17), `window ${w}: today's bound drops [^1]'s block (the next window lacks its reference)`).toBe(false);
+      expect(pa.map((p) => p.start).slice(0, 3), `window ${w}: today's cut`).toEqual([0, 3, 1366]);
+      expect(pa.reduce((n, p) => n + shown(partText(a, p), 'SECRETW'), 0), `window ${w}: no hidden text shown`).toBe(0);
+      const sb = await blocksOf(b, w);
+      expect(sb.blocks.find((k) => k.start === 23)?.kind, `window ${w}: today's bound reads [^1]'s indented line as code`).toBe('code');
+      expect(splitMarkdownPartsAt(b, 300, sb.blocks, sb.tailFrom).parts.reduce((n, p) => n + shown(partText(b, p), 'SECRETW'), 0), `window ${w}: no hidden text shown`).toBe(0);
+    }
   });
 
   it('md parts footnote: measured, the shapes whose opener the library confines to its own line or container need no cure', () => {

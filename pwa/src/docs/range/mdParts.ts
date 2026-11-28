@@ -122,7 +122,9 @@
 //     a quote, a table cell, a link reference definition, a definition-list shape and a heading to that container or line
 //     (measured: it shows what follows), so they need none. It REMAINS on the block cutter for one footnote shape, older than wave 64
 //     and pinned as a known leak (ticket `x2-fu-footnote-item-block-start`): a named definition whose first line draws no block
-//     (empty, a closed comment or a link reference definition), then any block indented under it (a paragraph, a list, a quote),
+//     (such as an empty one, a closed comment, a link reference definition, a `<details>`, `</details>` or `<summary>` line, or an
+//     unreferenced nested definition, review 4228 A1; named in a window, a reference inside the hidden text included, review 4228
+//     L1, and then not with the whole text in one window), then any block indented under it (a paragraph, a list, a quote),
 //     then the opener (`[^1]:` then `    para`, `    - a`, `    > q` or a tab, then `    <!--`; or `    - <!--`). The whole render
 //     hides the region; every part size measured (400, 700, 2 000 bytes and the gate) shows all of it, with the whole text read in
 //     one window too. The render's tree takes a footnote item's block from its inner blocks, so the definition's block starts at
