@@ -13,9 +13,9 @@ should learn.
   focus's unreachable head-action answer is deleted (F2); row XRF2-3e is corrected (F3).
 - **A re-entry while an exit's own step back is still landing is refused** (`x6-fu-reentry-flag`): decided in
   `readerModeOffered`, from a fact the hook keeps itself, bounded by `READER_EXIT_LANDING_MS` (1 s).
-- **The comment record** (review 4131 A1 to A3): the `<!-->` or `<!--->` opener at the start of its line is dropped from class 10
-  (it hides nothing there); the
-  visit's `rangeOpened` comment says Export reads its bytes; row F3-C1 counts 14 of 20. Class 10 names what is measured to show
+- **The comment record** (review 4131 A1 to A3): the `<!-->` or `<!--->` opener at the start of its line, with only white space
+  after it there, is dropped from class 10 (it hides nothing there; with text after it on its line it is the shape "text after
+  the first `-->` on its line", which class 10 keeps; scoped by review 4192 F1); the visit's `rangeOpened` comment says Export reads its bytes; row F3-C1 counts 14 of 20. Class 10 names what is measured to show
   hidden text today, with its sizes, and claims no cure.
 
 ## Commits, in order
@@ -24,7 +24,9 @@ should learn.
 |---|---|
 | `2300bf6f53` | item 4, `x6-fu-block-focus` |
 | `b245fceb1b` | item 5, `x6-fu-reentry-flag` |
-| (next) | item 3, `x2-fu-p6-1-record-wording`, and the records of items 4 and 5 |
+| `98ad41bbb9` | item 3, `x2-fu-p6-1-record-wording`, and the records of items 4 and 5 |
+| `95eb927451` | item 5's fact renamed `stepping` (the rings' one-owner scan refused `landing`) |
+| (next) | fix round 1, review 4192: F6 to F10 in code and tests, F1 to F5 in the records |
 
 ## Carried to a wave of its own
 

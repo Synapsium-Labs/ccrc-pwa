@@ -26,14 +26,18 @@ import type { ReaderRenderOutcome } from '../src/lib/readerRenderJob';
 import { parseMarkdown } from '../src/lib/markdownParse';
 import { DocsScreen } from '../src/screens/DocsScreen';
 import { navigate } from '../src/lib/router';
+import { readPlaces, resetPopstateForTests } from '../src/lib/popstate';
 import { READER_MODE_TEXT } from '../src/docs/reader/readerModeWords';
 import { fakeLoaders, fileResponse, treeOk } from './docsFixtures';
 
 // The visit's places are the history half's (reader-places.test.ts); here only what `ReaderFrame` hands them is read.
 const placesFake = vi.hoisted(() => ({ onPlace: vi.fn(), onHash: vi.fn(), host: vi.fn(), end: vi.fn() }));
+/** Set by a case that needs the real visit (the real record and dispatcher, a real Back and Forward): the body's places are then the
+ *  real `startPlaces`'. */
+const realPlaces = vi.hoisted(() => ({ on: false }));
 vi.mock('../src/docs/reader/places', async (importOriginal) => {
   const orig = await importOriginal<typeof import('../src/docs/reader/places')>();
-  return { ...orig, startPlaces: () => placesFake };
+  return { ...orig, startPlaces: (o: Parameters<typeof orig.startPlaces>[0]) => (realPlaces.on ? orig.startPlaces(o) : placesFake) };
 });
 
 afterEach(() => {
@@ -1009,5 +1013,70 @@ describe('reader mode: focus after a fall back that follows an entry, the real D
     expect(document.activeElement, 'after the commit, focus is on the main region, not left on the body by an unmounted action')
       .toBe(main);
     expect(main?.isConnected).toBe(true);
+  });
+});
+
+// ─── focus on the head's Reader mode action while a dead reader entry is left (wave 62 fix round 1, review 4192 F6) ──────
+//
+// The real Docs screen and head over the real visit, record and dispatcher: reader mode is entered by the head's action, a Back
+// ends it, and a Forward lands on the dead reader entry, which the dispatcher hands the hook's `leaveDead`. Its step back stands
+// until its landing, and reader mode is refused meanwhile; the action stays drawn, so a focus it holds stays on it.
+
+describe('reader mode: focus on the head\'s action while a dead reader entry is left, the real Docs head drawn (review 4192 F6)', () => {
+  const sleep = (ms: number): Promise<void> => new Promise((r) => { setTimeout(r, ms); });
+  const lastIdx = (): number => readPlaces().lastIdx;
+  beforeEach(() => {
+    for (const f of Object.values(placesFake)) f.mockClear();
+    realPlaces.on = true;
+    resetPopstateForTests();
+  });
+  afterEach(async () => {
+    cleanup();
+    await sleep(20);
+    realPlaces.on = false;
+    resetPopstateForTests();
+    window.localStorage.clear();
+    while (restorers.length > 0) restorers.pop()?.();
+    navigate('/');
+  });
+
+  it('dead entry: with focus on the head\'s Reader mode action, a Forward onto the dead reader entry leaves the focus on it', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    installWakeLock();
+    const rig = bodyRig();
+    history.replaceState(null, '', '/before');
+    navigate('/docs/demo/specs/a.md');
+    render(
+      <main id="content" tabIndex={-1}>
+        <DocsScreen path={location.pathname} search={location.search} loaders={fakeLoaders().loaders} parser={parser} reader={rig.reader} />
+      </main>,
+    );
+    await flush();
+    await waitFor(() => expect(rig.inputs.length, 'CONTROL: the body mounted its frame').toBe(1));
+    await frameReady(rig, 0);
+    const doc = lastIdx();
+    act(() => { screen.getByRole('button', { name: READER_MODE_TEXT.enter }).click(); });
+    expect(readerModeHandle()?.on(), 'CONTROL: the head\'s action entered reader mode').toBe(true);
+    expect(lastIdx(), 'CONTROL: the reader place was pushed').toBe(doc + 1);
+    await act(async () => { history.back(); });
+    await act(async () => { await vi.waitFor(() => { expect(readerModeHandle()?.on()).toBe(false); }, { timeout: 4000, interval: 10 }); });
+    expect(lastIdx(), 'CONTROL: the Back landed on the document\'s entry').toBe(doc);
+    const action = screen.getByRole('button', { name: READER_MODE_TEXT.enter });
+    act(() => { action.focus(); });
+    expect(document.activeElement, 'CONTROL: the head\'s action holds focus').toBe(action);
+    // The hook's step is held, so its landing comes only when the case lets it: the wait stands while the focus is read.
+    const go = vi.spyOn(history, 'go').mockImplementation(() => undefined);
+    await act(async () => { history.forward(); });
+    await act(async () => { await vi.waitFor(() => { expect(go).toHaveBeenCalledTimes(1); }, { timeout: 4000, interval: 10 }); });
+    expect(go, 'CONTROL: the hook stepped below the dead entry').toHaveBeenCalledWith(-1);
+    expect(readerModeHandle()?.offered(), 'CONTROL: reader mode is refused while the step lands').toBe(false);
+    expect(action.isConnected, 'the head unmounted its Reader mode action while the step lands').toBe(true);
+    expect(document.activeElement, 'focus fell from the head\'s action to the page body').toBe(action);
+    // The step is made now, and lands.
+    go.mockRestore();
+    await act(async () => { history.go(-1); });
+    await act(async () => { await vi.waitFor(() => { expect(lastIdx()).toBe(doc); }, { timeout: 4000, interval: 10 }); await sleep(30); });
+    expect(readerModeHandle()?.offered(), 'CONTROL: offered again once the step landed').toBe(true);
+    expect(document.activeElement, 'after the landing, focus is still on the head\'s action').toBe(action);
   });
 });

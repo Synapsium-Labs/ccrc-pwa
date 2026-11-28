@@ -255,7 +255,17 @@ export function readerModeStep(state: ReaderModeState, event: ReaderModeEvent): 
 export function readerModeOffered(
   input: { frameReady: boolean; plainView: boolean; modalMounted: boolean; figureOpen: boolean; exitLanding: boolean },
 ): boolean {
-  return input.frameReady && !input.plainView && !input.modalMounted && !input.figureOpen && !input.exitLanding;
+  return readerModeDrawn(input) && !input.modalMounted && !input.exitLanding;
+}
+
+/** Whether the entry is drawn (the head's Reader mode action, the one bar's control): the offer less its two press-time facts, a
+ *  modal layer mounted and an exit's own step back still landing. Both are read at each press, which `readerModeOffered` refuses,
+ *  and neither takes the action away. A modal layer mounts and leaves between renders. The step's wait (wave 62 fix round 1,
+ *  review 4192 F6) is set by a Forward onto a dead reader entry, with focus possibly on the action: unmounting it then dropped
+ *  that focus to the page's body, and the wait is at most `READER_EXIT_LANDING_MS`, so the action stays drawn and a press is
+ *  refused meanwhile. */
+export function readerModeDrawn(input: { frameReady: boolean; plainView: boolean; figureOpen: boolean }): boolean {
+  return input.frameReady && !input.plainView && !input.figureOpen;
 }
 
 /** Whether ccrc draws its own Exit with no frame to give an overlay (X6 XR fix round 1): reader mode is on and no frame stands.

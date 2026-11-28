@@ -36,7 +36,7 @@ import {
   stepBelowReaderPlace,
 } from './reader/places';
 import {
-  READER_EXIT_LANDING_MS, READER_EXIT_SETTLE_MS, READER_MODE_OFF, READER_WAKE_IDLE_MS, readerModeExitFocus, readerModeOffered, readerModeStep, readerTurnOf,
+  READER_EXIT_LANDING_MS, READER_EXIT_SETTLE_MS, READER_MODE_OFF, READER_WAKE_IDLE_MS, readerModeDrawn, readerModeExitFocus, readerModeOffered, readerModeStep, readerTurnOf,
   wakeLockWanted,
   type ReaderModeAct, type ReaderModeEvent, type ReaderModeHow, type ReaderModeState, type ReaderReading, type ReaderTurn,
 } from './reader/readerMode';
@@ -100,7 +100,9 @@ export const READER_PLACES: ReaderModePlaces = Object.freeze({
 /** What the head, the frame's mount and the overlay see of reader mode. */
 export interface ReaderModeContextValue {
   readonly state: ReaderModeState;
-  /** Whether the entry is drawn: a ready frame outside the plain view. The modal-layer test is read at each `enter`. */
+  /** Whether the entry is drawn (`readerModeDrawn`): a ready frame outside the plain view, no figure open. The modal-layer test
+   *  and an exit's own step back still landing are read at each `enter` (wave 62 fix round 1, review 4192 F6: the action stays
+   *  drawn while the step lands, so a focus it holds is not dropped, and a press is refused). */
   readonly offered: boolean;
   /** How the reader turns the page, kept per device (`READER_TURN_STORAGE_KEY`); `screens` until a device chooses. */
   readonly turn: ReaderTurn;
@@ -152,8 +154,8 @@ export interface ReaderModeContainer {
 /** The outside door's face of the same hook (`readerModeHandle.ts`): read at the moment of the act, never a render's copy. */
 export interface ReaderModeControls {
   offered(): boolean;
-  /** `offered()` without the modal-layer clause (the context's render-time offer, read now): what a listing asks, since the
-   *  listing may itself be a layer. */
+  /** `offered()` without the modal-layer clause, read now: what a listing asks, since the listing may itself be a layer. It keeps
+   *  the step's wait, which the context's drawn answer (`readerModeDrawn`) does not read (review 4192 F6). */
   available(): boolean;
   on(): boolean;
   toggle(): void;
@@ -175,7 +177,6 @@ interface Sink {
   frame(f: ReaderModeFrame | null): void;
   turn(t: ReaderTurn): void;
   figure(open: boolean): void;
-  stepping(on: boolean): void;
 }
 
 /** The mutable half of the hook: refs and handles, in closures. One per mount of the hook, never rebuilt by a render.
@@ -267,17 +268,19 @@ function createController(sink: Sink, initialTurn: ReaderTurn) {
   /** Marks the exit's landing as expected, then steps below the reader place; the mark is cleared again when nothing was
    *  stepped (no landing is coming). The one path of `step-back` and of `leaveDead`. */
   const stepBelow = (): void => {
+    // A torn-down hook steps nothing (review 4192 F7): the teardown is a layout cleanup and the host's unregister a passive one, so
+    // the dispatcher can hand `leaveDead` a pop between them. The same guard as the sink's.
+    if (!alive) return;
     input.places.markExitPending(true);
     if (input.places.stepBack() === 0) input.places.markExitPending(false);
     else setStepping(true);
   };
-  /** The one writer of `stepping`: React hears of it (the head's offer), and an armed wait is bounded by `READER_EXIT_LANDING_MS`. */
+  /** The one writer of `stepping`: an armed wait is bounded by `READER_EXIT_LANDING_MS`. React is not told: what it draws does not
+   *  read the wait (`readerModeDrawn`, review 4192 F6), and every press reads it now (`offered`, `available`). */
   function setStepping(on: boolean): void {
     if (steppingTimer !== null) clearTimeout(steppingTimer);
     steppingTimer = on ? setTimeout(() => { steppingTimer = null; setStepping(false); }, READER_EXIT_LANDING_MS) : null;
-    if (stepping === on) return;
     stepping = on;
-    if (alive) sink.stepping(on);
   }
   const requestFullScreen = (): void => {
     const c = container;
@@ -406,8 +409,8 @@ function createController(sink: Sink, initialTurn: ReaderTurn) {
     figureOpen: figure,
     exitLanding: stepping,
   });
-  /** The offer less the modal-layer clause, the context's render-time answer read now: a listing (the shortcut sheet is a
-   *  dialog itself) asks this, never `offered`. */
+  /** The offer less the modal-layer clause, read now: a listing (the shortcut sheet is a dialog itself) asks this, never
+   *  `offered`. It keeps the step's wait, so the palette lists no Reader mode while the step lands (review 4192 F8). */
   const available = (): boolean => readerModeOffered({
     frameReady: frame?.ready === true, plainView: input.plainView, modalMounted: false, figureOpen: figure, exitLanding: stepping,
   });
@@ -564,9 +567,8 @@ export function useReaderMode(o: { doc: string | null; plainView: boolean; place
   // The turn is the device's remembered one, read from storage once, as the hook starts (`screens` when none is kept).
   const [turn, setTurnState] = useState<ReaderTurn>(readStoredTurn);
   const [figure, setFigureState] = useState(false);
-  const [stepping, setSteppingState] = useState(false);
   const [ctl] = useState(() => createController(
-    { state: setState, live: setLive, frame: setFrameState, turn: setTurnState, figure: setFigureState, stepping: setSteppingState }, turn,
+    { state: setState, live: setLive, frame: setFrameState, turn: setTurnState, figure: setFigureState }, turn,
   ));
   const { doc, plainView } = o;
   const places = o.places ?? READER_PLACES;
@@ -600,14 +602,15 @@ export function useReaderMode(o: { doc: string | null; plainView: boolean; place
   }, [ctl]);
 
   const value = useMemo<ReaderModeContextValue>(() => ({
-    // `readerModeOffered` owns the rule. The modal-layer test is read at each `enter` and in the handle, not at render.
+    // `readerModeDrawn` owns the rule. The modal-layer test and the step's wait are read at each `enter` and in the handle, not at
+    // render (`readerModeOffered`).
     state, turn, setTurn: ctl.setTurn,
-    offered: readerModeOffered({ frameReady: frame?.ready === true, plainView, modalMounted: false, figureOpen: figure, exitLanding: stepping }),
+    offered: readerModeDrawn({ frameReady: frame?.ready === true, plainView, figureOpen: figure }),
     enter: ctl.enter, exit: ctl.exit, menu: ctl.menu, escOverlay: ctl.escOverlay, activity: ctl.activity, dismiss: ctl.dismiss,
     aa: ctl.aa, frame,
     setFrame: ctl.setFrame, dropFrame: ctl.dropFrame, setFigure: ctl.setFigure, setFallback: ctl.setFallback, readingFor: ctl.readingFor,
     frameExit: ctl.frameExit, frameToggle: ctl.frameToggle,
-  }), [ctl, state, frame, plainView, turn, figure, stepping]);
+  }), [ctl, state, frame, plainView, turn, figure]);
   const container = useMemo<ReaderModeContainer>(() => ({
     setContainer: ctl.setContainer, on: state.on, how: state.on ? state.how : undefined, live, focusFrame: ctl.focusFrame,
   }), [ctl, state, live]);

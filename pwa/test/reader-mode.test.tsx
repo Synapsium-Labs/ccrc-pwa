@@ -182,6 +182,8 @@ function fakeFrame(ready = true): FakeFrame {
 // ─── the harness ───────────────────────────────────────────────────────────────────────────────────────────────────────
 
 let latest: ReaderModeContextValue;
+/** The outside door's controls of the last render (`offered`, `available`: the palette and `r`). */
+let latestControls: ReturnType<typeof useReaderMode>['controls'];
 const reading = (): HTMLElement => document.querySelector('.docs-reading') as HTMLElement;
 const attr = (): string | null => reading().getAttribute('data-reader-mode');
 
@@ -189,8 +191,9 @@ const attr = (): string | null => reading().getAttribute('data-reader-mode');
 function Harness(p: {
   doc?: string | null; plainView?: boolean; places?: ReaderModePlaces; frame?: ReaderModeFrame | null; sheet?: boolean; closedDialog?: boolean;
 }): ReactNode {
-  const { value, container } = useReaderMode({ doc: p.doc === undefined ? 'doc-a' : p.doc, plainView: p.plainView ?? false, places: p.places });
+  const { value, container, controls } = useReaderMode({ doc: p.doc === undefined ? 'doc-a' : p.doc, plainView: p.plainView ?? false, places: p.places });
   latest = value;
+  latestControls = controls;
   const frame = p.frame === undefined ? null : p.frame;
   const setFrame = value.setFrame;
   useEffect(() => { setFrame(frame); }, [setFrame, frame]);
@@ -1439,13 +1442,18 @@ describe('reader mode: a re-entry while its exit is still landing (wave 62, tick
     expect(latest.state.on, 'CONTROL: entered').toBe(true);
     act(() => { latest.exit('exit-tap'); });
     expect(places.stepBack, 'CONTROL: the exit stepped back').toHaveBeenCalledTimes(1);
-    expect(latest.offered, 'reader mode is offered while the exit\'s step back is on its way').toBe(false);
+    expect(latestControls.offered(), 'reader mode is offered while the exit\'s step back is on its way').toBe(false);
+    // The outside door's listing (the palette's row) reads the wait too (fix round 1, review 4192 F8).
+    expect(latestControls.available(), 'the palette lists Reader mode while the exit\'s step back is on its way').toBe(false);
+    // The head keeps its action drawn meanwhile, so a focus it holds is not dropped (F6); a press is refused.
+    expect(latest.offered, 'the head took its Reader mode action away while the step lands').toBe(true);
     act(() => { latest.enter('button'); });
     expect(latest.state.on, 'a re-entry before the landing was taken').toBe(false);
     expect(places.push, 'a re-entry before the landing pushed a reader place').toHaveBeenCalledTimes(1);
     // The dispatcher reports the step's landing: a crossing landing while reader mode is off.
     act(() => { places.land(); });
-    expect(latest.offered, 'the landing did not end the wait').toBe(true);
+    expect(latestControls.offered(), 'the landing did not end the wait').toBe(true);
+    expect(latestControls.available(), 'the landing did not end the listing\'s wait').toBe(true);
     act(() => { latest.enter('button'); });
     expect(latest.state.on, 'the re-entry after the landing was refused').toBe(true);
     expect(places.push).toHaveBeenCalledTimes(2);
@@ -1457,11 +1465,11 @@ describe('reader mode: a re-entry while its exit is still landing (wave 62, tick
     setup({ places });
     act(() => { latest.enter('button'); });
     act(() => { latest.exit('exit-tap'); });
-    expect(latest.offered, 'CONTROL: the wait stands').toBe(false);
+    expect(latestControls.offered(), 'CONTROL: the wait stands').toBe(false);
     await act(async () => { await vi.advanceTimersByTimeAsync(READER_EXIT_LANDING_MS - 1); });
-    expect(latest.offered, 'the wait ended before its bound').toBe(false);
+    expect(latestControls.offered(), 'the wait ended before its bound').toBe(false);
     await act(async () => { await vi.advanceTimersByTimeAsync(1); });
-    expect(latest.offered, 'the wait outlived its bound').toBe(true);
+    expect(latestControls.offered(), 'the wait outlived its bound').toBe(true);
     act(() => { latest.enter('key'); });
     expect(latest.state.on, 'an entry after the bound was refused').toBe(true);
   });
@@ -1471,13 +1479,16 @@ describe('reader mode: a re-entry while its exit is still landing (wave 62, tick
     installFullScreen();
     const places = landingPlaces();
     let dead = true;
-    places.standingOnDead = () => { const d = dead; dead = false; return d; };
+    const standingOnDead = vi.fn(() => { const d = dead; dead = false; return d; });
+    places.standingOnDead = standingOnDead;
     render(<StrictMode><Harness frame={fakeFrame()} places={places} /></StrictMode>);
     await flush();
+    // Review 4192 F10: the simulated remount ran (the host registered twice, each time asked once), so the re-arm is what is read.
+    expect(standingOnDead, 'CONTROL: StrictMode remounted the hook').toHaveBeenCalledTimes(2);
     expect(places.stepBack, 'CONTROL: the reload check stepped below the dead entry').toHaveBeenCalledTimes(1);
-    expect(latest.offered, 'CONTROL: the wait stands').toBe(false);
+    expect(latestControls.offered(), 'CONTROL: the wait stands').toBe(false);
     await act(async () => { await vi.advanceTimersByTimeAsync(READER_EXIT_LANDING_MS); });
-    expect(latest.offered, 'the remount left the wait with no bound').toBe(true);
+    expect(latestControls.offered(), 'the remount left the wait with no bound').toBe(true);
   });
 
   it('reader mode: an exit that stepped over nothing (an unplaced entry, or a step of no entries) holds no re-entry', () => {
@@ -1485,7 +1496,7 @@ describe('reader mode: a re-entry while its exit is still landing (wave 62, tick
     setup({ places });
     act(() => { latest.enter('button'); });
     act(() => { latest.exit('exit-tap'); });
-    expect(latest.offered, 'a step of no entries held the entry').toBe(true);
+    expect(latestControls.offered(), 'a step of no entries held the entry').toBe(true);
     act(() => { latest.enter('button'); });
     expect(latest.state.on).toBe(true);
   });
@@ -1514,6 +1525,24 @@ describe('reader mode: a re-entry while its exit is still landing (wave 62, tick
     expect(vi.getTimerCount(), 'CONTROL: the second wait\'s bound is armed').toBe(base + 1);
     view.unmount();
     expect(vi.getTimerCount(), 'the wait\'s bound outlived the screen').toBe(base);
+  });
+
+  it('reader mode: a pop the dispatcher hands the host between the teardown and the unregister steps nothing and arms no timer (review 4192 F7)', () => {
+    vi.useFakeTimers();
+    // The teardown is a layout cleanup and the unregister a passive one, so a pop can reach the host between them. The port keeps
+    // the host past its unregister, as a dispatcher whose unregister has not run yet does, and the case hands it that pop.
+    let kept: Parameters<ReaderModePlaces['register']>[0] | null = null;
+    const places = landingPlaces();
+    places.register = (h) => { kept = h; return () => undefined; };
+    const { view } = setup({ places });
+    expect(kept, 'CONTROL: the hook registered its host').not.toBeNull();
+    const base = vi.getTimerCount();
+    view.unmount();
+    expect(vi.getTimerCount(), 'CONTROL: the screen left with no timer of its own').toBe(base);
+    act(() => { kept!.leaveDead(); });
+    expect(places.markExitPending, 'a torn-down hook marked an exit pending').not.toHaveBeenCalled();
+    expect(places.stepBack, 'a torn-down hook stepped the page').not.toHaveBeenCalled();
+    expect(vi.getTimerCount(), 'a torn-down hook armed the wait\'s bound').toBe(base);
   });
 });
 

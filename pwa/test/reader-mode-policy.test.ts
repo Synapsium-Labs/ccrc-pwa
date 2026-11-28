@@ -3,11 +3,13 @@
 // `timeLeftMinutes` and the words file: no DOM, no timer. Each case title is the name the mutation table (X6.n) cites.
 import { describe, expect, it } from 'vitest';
 import {
+  READER_EXIT_LANDING_MS,
   READER_EXIT_SETTLE_MS,
   READER_MODE_OFF,
   READER_WAKE_IDLE_MS,
   readerModeDocKey,
   readerModeDocKeyOf,
+  readerModeDrawn,
   readerModeExitFocus,
   readerModeExitShown,
   readerModeGuardTarget,
@@ -67,6 +69,8 @@ describe('reader mode: the constants', () => {
   it('holds the measured values', () => {
     expect(READER_WAKE_IDLE_MS).toBe(300000);
     expect(READER_EXIT_SETTLE_MS).toBe(100);
+    // The re-entry wait's bound (wave 62, x6-fu-reentry-flag; fix round 1, review 4192 F9): reader mode is refused no longer.
+    expect(READER_EXIT_LANDING_MS).toBe(1000);
     expect(READER_MODE_OFF).toEqual({ on: false });
     expect(Object.isFrozen(READER_MODE_OFF)).toBe(true);
   });
@@ -364,6 +368,24 @@ describe('reader mode: what is offered, and the wake lock', () => {
     expect(readerModeOffered({ ...base, modalMounted: true })).toBe(false);
     expect(readerModeOffered({ ...base, figureOpen: true }), 'a figure is open (X6 XR fix round 1)').toBe(false);
     expect(readerModeOffered({ ...base, exitLanding: true }), 'an exit\'s own step back is still landing (wave 62)').toBe(false);
+  });
+
+  it('drawn: the entry is drawn where it is offered, and stays drawn while only the step\'s landing or a modal layer refuses it (fix round 1, F6)', () => {
+    const base = { frameReady: true, plainView: false, figureOpen: false };
+    expect(readerModeDrawn(base)).toBe(true);
+    expect(readerModeDrawn({ ...base, frameReady: false })).toBe(false);
+    expect(readerModeDrawn({ ...base, plainView: true })).toBe(false);
+    expect(readerModeDrawn({ ...base, figureOpen: true })).toBe(false);
+    // Every fact the drawn answer reads refuses the offer the same way; the two it does not read refuse only the offer.
+    for (const [frameReady, plainView, figureOpen] of [[true, false, false], [false, false, false], [true, true, false], [true, false, true]] as const) {
+      const facts = { frameReady, plainView, figureOpen };
+      const offered = readerModeOffered({ ...facts, modalMounted: false, exitLanding: false });
+      expect(readerModeDrawn(facts), `drawn and offered agree at ${JSON.stringify(facts)}`).toBe(offered);
+    }
+    // The drawn answer takes no wait or modal fact, so the press refuses while the action stays drawn (the hook's and the mount's
+    // cases hold that delivery draws from it).
+    expect(readerModeOffered({ ...base, modalMounted: false, exitLanding: true }), 'the landing does not refuse the offer').toBe(false);
+    expect(readerModeOffered({ ...base, modalMounted: true, exitLanding: false }), 'a modal layer does not refuse the offer').toBe(false);
   });
 
   it('wake: wanted at 299999 ms idle, not at 300000', () => {

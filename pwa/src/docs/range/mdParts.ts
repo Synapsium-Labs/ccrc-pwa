@@ -85,16 +85,20 @@
 //     hidden lines shown; at the gate, a 576 051-byte paragraph shows all 36 000); a quote whose comment lines are lazy, carrying no
 //     `>` (wrong at 91 of 91 sizes from 30 to 120 bytes; at the gate, a 544 034-byte quote shows all 34 000); a list item whose
 //     content column is past its marker and one space, `-   x` or `10.  x` (wrong at 111 of 111 sizes from 60 to 170; at the gate,
-//     all 24 000 lines of a 528 043-byte item); a part beginning at a `<!--->` or `<!-->` opener inside a paragraph (wrong at 111
-//     of 111 sizes from 40 to 150); and lines of dashes after
-//     a top-level comment whose closer line is longer than a part, where a part may begin at the dashes and be read as front matter
-//     (P1's fallback: the shown lines lost at 52 of 171 sizes, measured by wave 62's review; the same input's hidden lines shown at
-//     105 of 177 sizes from 24 to 200 bytes); the inputs are in the plan's class 10 note of that day. Beside them, by structure:
+//     all 24 000 lines of a 528 043-byte item); and lines of dashes after a top-level comment whose closer line, with the 5-byte
+//     `<!--` reopen line before it, does not fit a part (the fallback above), where a part may begin at the dashes and be read as
+//     front matter (the shown lines lost at 52 of 171 sizes, measured by wave 62's review; the same input's hidden lines shown at
+//     105 of 177 sizes from 24 to 200 bytes, which is that fallback's own shape). The shape "text before `<!--` on its line" above
+//     was measured that day too, with a `<!--->` or `<!-->` opener after text on its line: wrong at 111 of 111 sizes from 40 to 150
+//     (review 4192 F2: once named here "a part beginning at the opener", a cut P1 does not make there). The inputs are in the plan's
+//     class 10 note of that day. Beside them, by structure:
 //     any unit the block cutter hands to P1 whole, since P1 reads no comment. The cure for these is carried to its own wave
-//     (`x2-fu-comment-in-container`, `x2-fu-comment-paragraph-shapes`). (2026-11-28, review 4131 A2: a `<!-->` or `<!--->` opener at
-//     the start of its line with a later closer, once recorded here as a third paragraph shape, hides nothing: the library reads it
-//     as a block comment that closes on that line, so the lines after it are shown. Inside a paragraph, after text on its line, it
-//     hides up to the later `-->` like any opener: that is the shape "text before `<!--` on its line".)
+//     (`x2-fu-comment-in-container`, `x2-fu-comment-paragraph-shapes`). (2026-11-28, review 4131 A2, scoped by review 4192 F1: a
+//     `<!-->` or `<!--->` opener at the start of its line with only white space after it on that line, once recorded here as a
+//     third paragraph shape, hides nothing: the library reads it as a block comment that closes on that line, so the lines after it
+//     are shown. With text after it on its line, it is no block comment, and the paragraph's inline rule hides that text and the
+//     lines after it up to the later `-->`: that is the shape "text after the first `-->` on its line". After text on its line, it
+//     hides up to the later `-->` like any opener: the shape "text before `<!--` on its line".)
 // The line cutter's own description follows.
 //
 // THE LINE CUTTER (P1). The cut, in this order of preference, taking the latest cut of the best kind that keeps the part within `maxBytes`:
