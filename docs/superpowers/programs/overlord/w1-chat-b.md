@@ -162,6 +162,22 @@ Median of five runs at a main `Stop`, load 8 to 11, the script in the run's temp
 A slow or dead door costs at most `REPORT_TIMEOUT_S` (3 s), one deadline over the read, the jq, every resend and the send, and a send
 that runs out its bound stops every later send of the invocation; the arm prints nothing and never changes how a `Stop` ends.
 
+## The first CI run's reds, and the fix
+
+The pull request's first run on its first push ran in full, and four guard suites that scan the whole tree went red; none of them had
+been run locally. All four were this change's own, and one commit fixed them:
+
+- `run-session-census`: `replyTargetVerdict`'s designation check is a run/session equality site. It is named in `NOT_BINDING_SITES`,
+  as `promptTargetVerdict`'s is: the designation read, no run is read.
+- `token-shared`: `REPLY_WINDOW_MS` spelled seven days a second time. It now reads `WAITING_WINDOW_MS`, the same length by design, so it
+  is no new holder.
+- `ccd-workspaces`' containment scan: the turn-reply test's three bash spawns now go through `ghContainedEnv`, systemd and tmux included.
+- `growth-check`: `session-hook.sh` measured +60 against the 40 limit. Its counter reads the child deny arm's jq string `"<<_"` as a
+  heredoc that never closes, so every comment line after it counts (slug `growth-counter-false-heredoc`, the reason
+  `_hook_mail_hold` sits where it does). The reply report's two functions and their comment now sit beside the door's sender, above that
+  line, and only the call stays after the loads arm: 39 net code lines. Locally the check skips unless armed, and it measures the
+  committed head, which is why the first measure (39, by hand) missed it.
+
 ## Known limits
 
 - `reply-lost-past-the-arm-deadline`: a turn whose newest prompt is a pasted text of about 3.5 MB takes about 5.4 s in jq (the
