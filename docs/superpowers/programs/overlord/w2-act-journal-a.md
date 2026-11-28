@@ -165,6 +165,12 @@ the migration and its pins (request ids A's), the coordination handle list and t
 the root and the floors (chat B's), the lane schedule, the watcher, the deps, `gate.ts` and the gate, box-token, mask and lane
 censuses (label queue A's), and `CLAUDE.md` (overlord-v1's).
 
+What the holders measured for whoever lands second: the migration's slot, its pins and the limit store's undo count meet request
+ids A's (also at 136, with its three columns and an index), act rows A's and the label queue's; the gate's counts with the label
+queue's two doors and one lane read 348 scanned, 345 HTTP, 225 gated, 120 exempt and 68 monotonic; the coordination handle list
+keeps act rows A's entries and comment beside these, closed once; the root keeps chat B's reply boot block after
+`deps.responseStamp`, with the act head block before that line. Each lander keeps every side's added lines and removes none.
+
 ## 7. What PR B and the request doors read
 
 - **Act journal B:** `OverlordActJournal.measure` (Table 7.6a over the head row) for its boot arm; `readVerified` and
