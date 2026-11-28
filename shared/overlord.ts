@@ -247,3 +247,44 @@ export function effectiveClasses(act: string, effect: string | null, lookup: Act
   if (e === null) return [...out, { member: 'unknown', from: 'effect' }];
   return [...out, ...e.classes.map((member) => ({ member, from: 'effect' as const }))];
 }
+
+// ------------------------------------------------------------------------------------ what `overlordMayAct` answers (PR B)
+
+/** `overlordMayAct`'s answer words (H24, plan Task B1): the plan's nine, and `unmeasured`, a fact the decider needed and could
+ *  not read (the coordinator's item 5), which is never an allow and never another refusal's word. `allows` marks the three
+ *  that mint an allow. The ceiling's `act-ceiling` and `unavailable` are the ceiling verdict's own words, passed through. */
+const MAY_ACT_ANSWER_MAP = {
+  allow: { allows: true, what: 'allowed: by class none, a command, an operator request or a stated entry' },
+  'allow-by-grant': { allows: true, what: 'allowed by a live grant in scope' },
+  staged: { allows: true, what: 'staged: a proposal for one tap, or an O3 effect under attribution kept for its veto window' },
+  defer: { allows: false, what: 'the blind check is not a clear yes, so the matter goes to the operator' },
+  'ask-is-cheaper': { allows: false, what: 'askOrAct says asking costs less than a wrong act' },
+  'evidence-too-weak': { allows: false, what: 'the evidence is not enough' },
+  'identity-too-weak': { allows: false, what: "the caller's strength is under the act's, the effect's or the grant's least" },
+  'server-not-isolated': { allows: false, what: 'a grant or a command on a shared-user server' },
+  'operator-only': { allows: false, what: 'a member of the effective class is not covered, or the act may not carry the effect' },
+  unmeasured: { allows: false, what: 'a fact the decider needed could not be read' },
+} as const satisfies Readonly<Record<string, { readonly allows: boolean; readonly what: string }>>;
+export type MayActWord = keyof typeof MAY_ACT_ANSWER_MAP;
+export const MAY_ACT_WORDS = Object.keys(MAY_ACT_ANSWER_MAP) as MayActWord[];
+/** The words that mint an allow. */
+export type MayActAllowWord = { [W in MayActWord]: (typeof MAY_ACT_ANSWER_MAP)[W]['allows'] extends true ? W : never }[MayActWord];
+export const MAY_ACT_ALLOW_WORDS = MAY_ACT_WORDS.filter((w) => MAY_ACT_ANSWER_MAP[w].allows) as MayActAllowWord[];
+
+/** What an allow rests on (plan question 11): class none, the operator's command, an operator request, a stated entry or a
+ *  grant. An act row stores it, and I4 checks each arm against its store. */
+const ACT_AUTHORITY_MAP = { none: true, command: true, request: true, entry: true, grant: true } as const;
+export type ActAuthorityKind = keyof typeof ACT_AUTHORITY_MAP;
+export const ACT_AUTHORITY_KINDS = Object.keys(ACT_AUTHORITY_MAP) as ActAuthorityKind[];
+/** An allow's authority: `none` names no row, every other kind names the row it rests on. */
+export type ActAuthority =
+  | { readonly kind: 'none'; readonly id: null }
+  | { readonly kind: Exclude<ActAuthorityKind, 'none'>; readonly id: number };
+
+/** How a writer uses an allow (F4): act on the effect, write a proposal row, or record a live or shadow answer. */
+const ALLOW_MODE_MAP = {
+  act: 'act on the effect', proposal: 'write a proposal row for one tap, never the effect',
+  live: 'an armed kind, armed: act', shadow: 'an armed kind, not armed: record the answer only',
+} as const;
+export type AllowMode = keyof typeof ALLOW_MODE_MAP;
+export const ALLOW_MODES = Object.keys(ALLOW_MODE_MAP) as AllowMode[];

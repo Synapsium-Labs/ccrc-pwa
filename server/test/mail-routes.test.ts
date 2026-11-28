@@ -79,6 +79,7 @@ import { isOverlordGateKebab } from '../src/coord/overlordGate.js';
 import { isOverlordInboxKebab } from '../src/coord/overlordInbox.js';
 import { isOverlordHistoryKebab } from '../src/coord/overlordHistory.js';
 import { isLadderKebab } from '../src/coord/overlordLadder.js';
+import { isMayActKebab } from '../src/coord/overlordMayAct.js';
 import { isInvariantKebab } from '../src/coord/invariants.js';
 import { isSequenceDoorKebab } from '../src/coord/overlordSequenceDoor.js';
 import { isBoardKebab } from '../src/coord/overlordBoard.js';
@@ -1412,6 +1413,10 @@ describe('the rejection table is total, in both directions', () => {
         // Each rides a 200's part, never a refusal. Admitted through the module's guard, derived from the wire's and the
         // switchboard's lists, never NOT_CODES.
         || isBoardKebab(tok)
+        // THE MAY-ACT DECIDER (Overlord W2, the act catalogue B): `coord/overlordMayAct.ts` names its answer words, steps, covers,
+        // cell and isolation words, grant condition kinds and an answer's verdicts as literals. An answer word or a step rides an
+        // answer's evidence, never a mail or run code; admitted through the module's guard, derived from its lists and L0's.
+        || isMayActKebab(tok)
         // THE CHAT (Overlord W1 chat A): `coord/overlordChat.ts` names an earlier page's refusal reasons and a thread entry's kinds
         // as literals, and `coord/overlordChatDoor.ts` its doors' ledger outcomes. The earlier door words a reason as `bad-request`'s
         // detail or a thread's `earlier` mark, an entry kind rides a 200's `kind`, and an outcome is a ledger line's; none is a mail

@@ -13,6 +13,14 @@
 export const CALLER_STRENGTH_MAP = { attributed: true, workload: true, operator: true } as const;
 export type CallerStrength = keyof typeof CALLER_STRENGTH_MAP;
 export const CALLER_STRENGTHS = Object.keys(CALLER_STRENGTH_MAP) as CallerStrength[];
+/** The strengths' order, weakest first (the act catalogue B, Task B1): each strength's place in `CALLER_STRENGTHS`, the one
+ *  list, so the map's key order above IS the order and no number is written by hand. */
+export const CALLER_STRENGTH_RANK: Readonly<Record<CallerStrength, number>> =
+  Object.fromEntries(CALLER_STRENGTHS.map((s, i) => [s, i])) as Record<CallerStrength, number>;
+/** Whether a caller of strength `have` meets a least strength `need` (§7.4). */
+export function strengthAtLeast(have: CallerStrength, need: CallerStrength): boolean {
+  return CALLER_STRENGTH_RANK[have] >= CALLER_STRENGTH_RANK[need];
+}
 
 /** Who the actor is: the operator at a console, a session, or the server's own lane. */
 export const ACTOR_KIND_MAP = { operator: true, session: true, server: true } as const;
