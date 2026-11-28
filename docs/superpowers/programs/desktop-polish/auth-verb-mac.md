@@ -643,6 +643,45 @@ killed again, on the rows section 4.1 names, plus F1's three for O1 and O2.
 The ledger guard passes on the head commit's two trailers. The probe against main (`f542bd9c8c`) exits 0; main's only
 change to this wave's files since the merge base is a README hunk elsewhere, so nothing is absorbed.
 
+### 4.9 After fix round 3: the harness census's helper list
+
+The PR's fast run on `bf8869cb3e` (46091552104, server 7/12) and the fourth full run (46091620933, server 1/12) were
+red on one case each, the same one: `ccd-harness-integrity.test.ts`, "no override names a function nothing ships",
+which received `ccrc-install-landing.test.ts:799 _gate`. Fix round 3's simulated Mac twin of install's gate line wraps
+the gate block it cuts out of `cmd_install` in a function, `_gate`, because the block uses `local`. No shipped script
+defines that name, so the census read it as a stub of nothing. It is a helper the test defines for itself, and the
+census has a table for exactly that: `TEST_LOCAL_HELPERS` now lists `_gate` under the install landing file, with a
+comment. Nothing in `ccd/ccrc` and nothing in the install test changed. Renaming the wrapper, or spelling it so the
+census does not see it, would hide it from the guard, and the coordinator refused both (mail 40702).
+
+Red first: the file alone, without the entry, gives this exact red (1 failed, 12 passed); with it, 13 passed, the
+stale-entry case beside it included.
+
+**The class this round missed.** A round that adds a shell function to a test, a stub or a helper alike, also runs
+every guard suite that reads the test files as text. This round's list held the suites that read `ccd` and the
+shipped sources, but not those. They are: the harness census (`ccd-harness-integrity`), the raw-spawn census,
+`ccd-workspaces` (its scan of the `ccd*` test files), `child-reclaim-generation`, `git-env-strip`, `history-touched`,
+`skill-size-ratchet`, `topology-clean`, `closeout-claims`, `typecheck-tests`, anchors and citations, and the verb's own
+suite, whose stub and bound guards read the test files. Run each alone on this tree, with the install landing suite
+and the 22 census files. All are green but one:
+- the harness census: 13 passed;
+- `ccd-workspaces`: 125 passed;
+- `child-reclaim-generation`: 24 passed;
+- `git-env-strip`: 7 passed;
+- `history-touched`: 79 passed and 1 skipped;
+- `skill-size-ratchet`: 32 passed;
+- `topology-clean`: 62 passed;
+- `closeout-claims`: 8 passed;
+- anchors: 9 passed;
+- citations: 4 passed;
+- the verb's suite: 300 passed and 15 skipped;
+- install landing: 44 passed and 1 skipped;
+- the 22 census files, the raw-spawn census among them: all passed.
+
+`typecheck-tests` did not run here, so the PR's fast run on the new head is its evidence. The test box's checkout has
+no `typescript` under `pwa/`, so the suite stopped at its import, and a direct `tsc` over the server's test project was
+killed by the test slice's memory cap while other heavy runs held it.
+
 ## 5. Notes
 
 - `ccd/ccrc` is held by claim 7531 for #3478. Its holder said yes (mail 39670) to this exact change of the file
