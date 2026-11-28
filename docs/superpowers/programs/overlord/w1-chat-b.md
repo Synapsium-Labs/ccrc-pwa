@@ -235,6 +235,17 @@ been run locally. All four were this change's own, and one commit fixed them:
   #3647, a draft in CI) and `server/src/continuity/routes.ts` overlord-v1's (claim 7672, #3629); each hunk was packeted and approved
   before the edit. #3647 most likely lands first: its import line sits beside this PR's first `store.ts` hunk and its new interface
   near the second, and the second lander keeps both. `routes.ts`'s one line is inside this PR's own reply arm.
+- **The round's fast run was red on one guard** (`continued-in-parity`, D-4940): `ccd/lib/transcript.jq` uses no builtin that jq
+  1.6 builds on label/break, and the moved grammar kept the hook's `all(...)`. Its digit test is now a `select` over the exploded
+  string compared with `[]` (the idiom `tr_isuuid` uses), and it answers as before. The local run had covered every file that reads
+  the module but this one; all fifteen have run since.
+- **A browser case brought in line with F11**: the receipt case waited on the newest reply, which its fixture gives no response row,
+  so it went red on the round's first full run once F11 stopped watching such a reply. It now waits on the reply with a row, and
+  holds that the reply without one posts nothing (a mutant watching every reply turns it red).
+- **A second merge of main** (7c3b28b669, call 2009), after the request record's second part (#3647) landed first, as foreseen:
+  `server/src/index.ts` takes main's citations import and keeps the reply boot import beside it; `store.ts` keeps both insertions
+  whole. No migration, count line or `shared/api.ts` change came with it; the hook still measures 40 of 40, and nothing may add to
+  its counted body this round or the next.
 
 ## Known limits
 
