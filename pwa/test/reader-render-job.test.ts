@@ -96,7 +96,12 @@ describe('answerRenderJob', () => {
     expect(posts({ id: 'a', kind: 'render', src: 'x' })).toEqual([]);
   });
 
-  it('render job: blocks answers the library\'s top-level blocks, highlight off, under its own caps', () => {
+  // Its own timeout (issue #3645): the case reads the blocks of a source past the render gate, renders a table of 6 000 rows, and
+  // renders about 2 MiB of one-character paragraphs up to the blocks read's html cap, the inputs that prove the caps, so it is the
+  // slowest case of the file. Measured 2026-11-28: 1 192 to 1 369 ms alone on the fleet box (five runs, load 6.5 to 7.4 on 16 cores);
+  // on the hosted runner the whole file took 3 968 to 4 639 ms in four merge-queue runs that passed, and 6 374 and 6 448 ms in two
+  // where this case ran past vitest's default 5 000 ms and failed. 30 s is more than six times the whole file's slowest pass.
+  it('render job: blocks answers the library\'s top-level blocks, highlight off, under its own caps', { timeout: 30000 }, () => {
     const src = '# T\n\nlead\n\n- a\n- b\n  ```ts\n  x\n  ```\n\n```js\ny\n```\n';
     renderCalls.length = 0;
     const out = posts({ id: 20, kind: 'render', src, blocks: true });
@@ -133,7 +138,7 @@ describe('answerRenderJob', () => {
     expect(read.kind).toBe('blocks');
     expect(posts({ id: 24, kind: 'render', src: 'a'.repeat(READER_BLOCKS_MAX_BYTES + 1), blocks: true }))
       .toEqual([{ id: 24, outcome: { kind: 'not-rendered', why: 'over-limit' } }]);
-    // Its own html cap (8 MiB; asserted above in the options): html past it is output-over-limit, and the html is never parsed.
+    // Its own html cap (10 MiB; asserted above in the options): html past it is output-over-limit, and the html is never parsed.
     // (One-character paragraphs are the shape; measured on the dev box, the parser took 8 to 22 s on the html of 130 000 of them,
     // 4.4 MB, which the runner's budget answers `timeout`, so this case stops at the cap instead of reading a window under it.)
     const denser = 'a\n\n'.repeat(Math.floor(READER_BLOCKS_MAX_BYTES / 3));
