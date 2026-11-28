@@ -16,12 +16,12 @@
 // needed that was not gathered (an answer's verdicts, the grant facts), answers `unmeasured`, naming the fact: never an allow,
 // and never another refusal's word. Every answer carries its evidence, by its type.
 import {
-  CLASS_COVERS, actRow, effectiveClasses,
+  CLASS_COVERS, COVER_KINDS, MAY_ACT_WORDS, actRow, effectiveClasses, isRungCellWord,
   type ActAuthority, type ActRowLookup, type AllowMode, type ClassMember, type CoverKind, type MayActAllowWord, type MayActWord,
   type OverlordActKind, type OverlordActRow, type RungCellWord,
 } from '../../../shared/overlord.js';
 import { strengthAtLeast, type CallerStrength } from '../../../shared/overlord-identity.js';
-import type { IsolationRead } from '../../../shared/isolation.js';
+import { ISOLATION_WORDS, type IsolationRead } from '../../../shared/isolation.js';
 import type { CeilingVerdict } from './overlordActCeiling.js';
 
 /** What the act targets (C26's scope): the programme's row and incarnation, and who started it; or no programme. */
@@ -33,6 +33,15 @@ export interface ActTarget {
 
 /** A grant's states (§7.2). Only `live` covers; a suspended grant reads as absent. */
 export type GrantState = 'shadow' | 'live' | 'suspended' | 'revoked' | 'expired';
+/** A grant condition's kinds (§7.2), each with what it holds the act to. */
+const GRANT_CONDITION_KIND_MAP = {
+  'operator-started-only': 'the programme was started by the operator',
+  'max-per-day': 'the grant was used fewer than its n times today',
+  'model-class': "the act runs on the model class the grant names",
+  'only-when-recommended-by-coordinator': "the programme's coordinator recommended the act",
+} as const;
+export type GrantConditionKind = keyof typeof GRANT_CONDITION_KIND_MAP;
+export const GRANT_CONDITION_KINDS = Object.keys(GRANT_CONDITION_KIND_MAP) as GrantConditionKind[];
 export type GrantCondition =
   | { readonly kind: 'operator-started-only' } | { readonly kind: 'max-per-day'; readonly n: number }
   | { readonly kind: 'model-class'; readonly modelClass: string } | { readonly kind: 'only-when-recommended-by-coordinator' };
@@ -47,6 +56,20 @@ export interface CommandFact {
   readonly id: number; readonly live: boolean; readonly forThisProposal: boolean; readonly targetsMoved: boolean | 'unmeasured';
 }
 
+/** An answer's evidence verdict (step 10) and its blind check (step 13), each with what it says. */
+const ANSWER_EVIDENCE_MAP = {
+  enough: 'the evidence is enough for the answer', 'too-weak': 'the evidence is too weak for the answer',
+  unmeasured: 'the evidence was not read',
+} as const;
+const BLIND_CHECK_MAP = {
+  'not-armed': 'the blind check is not armed', 'clear-yes': 'the blind check agrees', 'not-clear': 'the blind check does not agree',
+  shadow: 'the blind check runs in shadow',
+} as const;
+/** The effect's ceiling verdict when the door did not ask the ceiling step. */
+const CEILING_NOT_ASKED = 'not-asked';
+/** The one may-carry word that is not a list of effects (`OverlordActRow['mayCarry']`, `shared/overlord.ts`). */
+const QUESTION_EFFECT: Extract<OverlordActRow['mayCarry'], string> = 'question-effect';
+
 /** Everything the door gathered before its transaction (H24: the decider makes no call). */
 export interface MayActFacts {
   readonly caller: CallerStrength;
@@ -59,14 +82,14 @@ export interface MayActFacts {
     readonly confirmedOrWhole: boolean; readonly subjectMatches: boolean };
   /** An answer's verdicts; `not-an-answer` when none were gathered. */
   readonly answer: { readonly kind: 'not-an-answer' } | { readonly kind: 'answer';
-    readonly evidence: 'enough' | 'too-weak' | 'unmeasured'; readonly askOrAct: 'act' | 'ask' | 'unmeasured';
-    readonly blindCheck: 'not-armed' | 'clear-yes' | 'not-clear' | 'shadow' };
+    readonly evidence: keyof typeof ANSWER_EVIDENCE_MAP; readonly askOrAct: 'act' | 'ask' | 'unmeasured';
+    readonly blindCheck: keyof typeof BLIND_CHECK_MAP };
   /** The facts a grant's conditions read; `null` when none were gathered. */
   readonly grantFacts: { readonly modelClass: string | 'unmeasured';
     readonly usesToday: Readonly<Record<number, number | 'unmeasured'>>;
     readonly recommendedByCoordinator: boolean | 'unmeasured'; readonly suspendedNow: readonly number[] } | null;
   /** The effect's ceiling verdict, gathered by `actCeilingStep` with both counts read (F9; call 1874). */
-  readonly effectCeiling: CeilingVerdict | 'not-asked';
+  readonly effectCeiling: CeilingVerdict | typeof CEILING_NOT_ASKED;
   /** Step 10's cell for the act (F4). */
   readonly cell: Exclude<RungCellWord, 'refuse'>;
   /** Whether an `armed` kind is live (W3's arming), read only under `armed`. */
@@ -83,6 +106,17 @@ const MAY_ACT_STEP_MAP = {
 } as const;
 export type MayActStep = keyof typeof MAY_ACT_STEP_MAP;
 export const MAY_ACT_STEPS = Object.keys(MAY_ACT_STEP_MAP) as MayActStep[];
+
+/** Every word the decider names as a literal, each from its one declared list: L0's answer words, covers, cell words and
+ *  isolation words, and this module's steps, grant condition kinds, answer verdicts, the ceiling not asked and the one
+ *  may-carry word. Derived from those lists, so the coordination directory's kebab-token census
+ *  (`server/test/mail-routes.test.ts`) admits a word only from its home. */
+export const isMayActKebab = (word: string): boolean =>
+  (MAY_ACT_WORDS as readonly string[]).includes(word) || (COVER_KINDS as readonly string[]).includes(word)
+  || isRungCellWord(word) || (ISOLATION_WORDS as readonly string[]).includes(word)
+  || Object.hasOwn(MAY_ACT_STEP_MAP, word) || Object.hasOwn(GRANT_CONDITION_KIND_MAP, word)
+  || Object.hasOwn(ANSWER_EVIDENCE_MAP, word) || Object.hasOwn(BLIND_CHECK_MAP, word)
+  || word === CEILING_NOT_ASKED || word === QUESTION_EFFECT;
 
 /** A path the decider ran: class none, or the cover it rests on. */
 export type MayActPath = { readonly cover: 'none' } | { readonly cover: Exclude<CoverKind, 'grant'>; readonly id: number }
@@ -144,7 +178,7 @@ const strongest = (a: CallerStrength, b: CallerStrength): CallerStrength => (str
 /** Step 1: why the act may not carry this effect, or `null` when it may (F1). */
 function mayCarryRefusal(row: OverlordActRow | null, effect: string | null, lookup: ActRowLookup): string | null {
   if (row === null) return 'the act kind is not in the catalogue';
-  if (row.mayCarry === 'question-effect') {
+  if (row.mayCarry === QUESTION_EFFECT) {
     if (effect === null) return "a carrier carries its question's effect, and none was given";
     const e = lookup(effect);
     if (e === null) return `the effect ${effect} is not in the catalogue`;
@@ -343,7 +377,7 @@ export function overlordMayAct(act: OverlordActKind, effect: string | null, targ
   const effRow = effect === null ? null : lookup(effect);
   // 2. The effect's ceiling (F9).
   const ec = facts.effectCeiling;
-  if (ec === 'not-asked') {
+  if (ec === CEILING_NOT_ASKED) {
     if (effRow !== null && effRow.ceiling.kind === 'counted') {
       return { kind: 'ceiling', verdict: { pass: false, word: 'unavailable', group: effRow.ceiling.group, why: "the effect's ceiling was not asked", latch: null },
         evidence: ev('effect-ceiling', null, "the effect's ceiling was not asked") };
