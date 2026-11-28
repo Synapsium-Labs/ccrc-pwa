@@ -2492,8 +2492,8 @@ describe('X2 P2.3 review round 1: the Remove gate, the refusal filter and the tr
 import { DOCS_LANE_PREPARE_MAX_WAIT_MS } from '../src/docs/policy.js';
 
 describe('the console prepare\'s lane wait (X5-FU, D-9146\'s residual)', () => {
-  it('is 30 s, its own integer literal, never an alias of a neighbour', () => {
+  // Its value only: a pin of the source line would be a new literal source pin over policy.ts, which ARCH-06's ratchet refuses.
+  it('is 30 s', () => {
     expect(DOCS_LANE_PREPARE_MAX_WAIT_MS).toBe(30000);
-    expect(T4_POLICY_SRC.split('\n')).toContain('export const DOCS_LANE_PREPARE_MAX_WAIT_MS = 30000;');
   });
 });
