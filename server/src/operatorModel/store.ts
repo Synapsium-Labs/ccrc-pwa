@@ -20,7 +20,7 @@ import {
   isReadTurnState, isSettledBy,
   type MessageActor, type MessageEvent, type MessageState, type OperatorMessageRow, type ReadCaller, type ReadDoor, type ReadLine,
 } from '../../../shared/operatorMessages.js';
-import { capMessageText, messageMove, nextMessageId } from './messages.js';
+import { capMessageText, messageMove, nextMessageId, sha256Of } from './messages.js';
 import { READ_CEILING_OUTCOME, READ_SERVED_OUTCOME } from '../../../shared/overlordInbox.js';
 import type { CeilingCount, MessageFacts } from '../coord/overlordInbox.js';
 import { isNameListMode, type NameListMode } from '../../../shared/privateNames.js';
@@ -112,6 +112,13 @@ const revive = (r: RawRow): OperatorMessageRow => ({
   settledBy: r.settledBy === null ? null : isSettledBy(r.settledBy) ? r.settledBy : 'unknown', spentAt: r.spentAt,
   offRecord: r.offRecord === 1,
 });
+
+/** What the citing door learns of one message (RQ19): never a field that carries text. */
+export interface CitedMessageFacts {
+  readonly state: MessageState | 'unknown'; readonly at: number; readonly sha256: string; readonly hashMatches: boolean;
+}
+/** Who read, for the read-ledger line `citedMessageFacts` writes: the door, scope, count and outcome are the reader's own. */
+export type CitedReadCaller = Pick<ReadLine, 'at' | 'caller' | 'generation' | 'generationRead' | 'turnState'>;
 
 /** The facts readers' columns: the ones the inbox needs, never `text` or `sha256` (the inbox plan, question 20). */
 const FACT_COLUMNS = 'id, at, term, state, cut';
@@ -417,6 +424,43 @@ export class OperatorModelStore {
 
   highestMessageId(): StoreRead<number | 'none'> {
     return this.read(() => (this.db.prepare('SELECT max(id) AS m FROM operator_messages').get() as { m: number | null }).m ?? 'none');
+  }
+
+  /** The citing door's read (W2 request record A, RQ19, F11): one row's state, time and stored hash, and whether its stored text
+   *  still hashes to it, never the text itself. The rehash is the store's. Every call leaves exactly one read-ledger line under
+   *  the door `open-request` (§9.4 rule 3), in the read's own transaction: a line that cannot be written makes the read
+   *  `unmeasured`, never served. A row with no id is `absent`. */
+  citedMessageFacts(id: number, reader: CitedReadCaller): StoreRead<CitedMessageFacts | 'absent'> {
+    if (!this.db.isOpen) return { kind: 'unmeasured', why: 'the private store is not open' };
+    try {
+      return tx(this.db, () => {
+        const r = this.db.prepare('SELECT state, at, sha256, text FROM operator_messages WHERE id = ?').get(id) as
+          { state: string; at: number; sha256: string; text: string } | undefined;
+        const value: CitedMessageFacts | 'absent' = r === undefined ? 'absent' : {
+          state: isMessageState(r.state) ? r.state : 'unknown', at: r.at, sha256: r.sha256, hashMatches: sha256Of(r.text) === r.sha256,
+        };
+        const wrote = this.recordRead({ ...reader, door: 'open-request', scope: `message:${id}`, count: r === undefined ? 0 : 1,
+          outcome: r === undefined ? 'absent' : READ_SERVED_OUTCOME });
+        if (!wrote.ok) throw new StoreStop({ error: wrote.error, detail: wrote.detail });
+        return { kind: 'measured', value } as const;
+      });
+    } catch (err) {
+      return { kind: 'unmeasured', why: err instanceof StoreStop ? `the read ledger refused its line: ${err.answer.detail}` : message(err) };
+    }
+  }
+
+  /** The rows among `ids` whose state is not `spent`: the boot pass's spend arm, for the root-cited ids (W2 request record A). */
+  unspentAmong(ids: readonly number[]): StoreRead<readonly { readonly id: number; readonly state: MessageState | 'unknown' }[]> {
+    return this.read(() => (this.db.prepare("SELECT id, state FROM operator_messages WHERE id IN (SELECT value FROM json_each(?)) "
+      + "AND state <> 'spent' ORDER BY id").all(JSON.stringify(ids)) as { id: number; state: string }[])
+      .map((r) => ({ id: r.id, state: isMessageState(r.state) ? r.state : 'unknown' as const })));
+  }
+
+  /** The rows at or below `floor` whose state is not `spent`: the boot pass's restore-floor arm (W2 request record A, F14). */
+  unspentThrough(floor: number): StoreRead<readonly { readonly id: number; readonly state: MessageState | 'unknown' }[]> {
+    return this.read(() => (this.db.prepare("SELECT id, state FROM operator_messages WHERE id <= ? AND state <> 'spent' ORDER BY id")
+      .all(floor) as { id: number; state: string }[])
+      .map((r) => ({ id: r.id, state: isMessageState(r.state) ? r.state : 'unknown' as const })));
   }
 
   /** Every `settled` row, for the boot pass's re-derivation (I8). */

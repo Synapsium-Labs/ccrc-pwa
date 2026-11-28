@@ -89,6 +89,9 @@ export const READ_CEILING_WINDOW_MS = 3_600_000;
 export const READ_CEILINGS: Readonly<Record<ReadDoor, { readonly perHour: number }>> = {
   inbox: { perHour: 240 }, messages: { perHour: 120 }, board: { perHour: 120 }, history: { perHour: 60 }, sequence: { perHour: 120 },
   chat: { perHour: 720 }, 'chat-history': { perHour: 240 },
+  // W2 request record A: the open door's citation reads, one per cited message: the `request` act group's 30 an hour, at most
+  // 8 cites each (plan w2-requests.md RQ13, RQ16).
+  'open-request': { perHour: 240 },
 };
 
 /** A path id: a positive safe integer, no sign, no leading zero. A refusal's detail never echoes the input. */

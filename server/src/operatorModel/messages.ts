@@ -119,7 +119,8 @@ export function capMessageText(text: string, maxBytes: number = MESSAGE_TEXT_MAX
   return { text: stored, cut: true, sha256: sha256Of(stored) };
 }
 
-const sha256Of = (s: string): string => createHash('sha256').update(s, 'utf8').digest('hex');
+/** The one hash of a stored text: `capMessageText`'s, and the citing reader's rehash (W2 request record A, RQ19). */
+export const sha256Of = (s: string): string => createHash('sha256').update(s, 'utf8').digest('hex');
 
 /** The next message id: one above the larger of the store's highest and the privacy journal's highest, so neither a
  *  store restored alone nor a crash between the journal's append and the row's commit reissues an id (H27). */
@@ -127,10 +128,31 @@ export function nextMessageId(storeHighest: number | null, journalHighest: numbe
   return Math.max(storeHighest ?? 0, journalHighest ?? 0) + 1;
 }
 
+/** The restore floor (W2 request record A, F14): after a confirmed restore every message up to this id is spent (§5.1). `none`
+ *  until act journal B supplies one; `unreadable` when it could not be read, which spends nothing by the floor. */
+export type RestoreFloorRead = { readonly kind: 'floor'; readonly id: number } | { readonly kind: 'none' }
+  | { readonly kind: 'unreadable'; readonly why: string };
+
 /** What the boot pass could read of the rows that cite a message: the ids cited, a read this build has no table for, or a
- *  read that failed. */
-export type CitationRead = { readonly kind: 'measured'; readonly cited: ReadonlySet<number> }
-  | { readonly kind: 'not-applicable' } | { readonly kind: 'unmeasured'; readonly why: string };
+ *  read that failed. W2's measured arm adds (additively) the root-cited ids and the restore floor; a measured read without
+ *  them names no root citation and no floor, so the spend arm spends nothing on it. */
+export type CitationRead = {
+  readonly kind: 'measured'; readonly cited: ReadonlySet<number>;
+  readonly rootCited?: ReadonlySet<number>; readonly restoreFloor?: RestoreFloorRead;
+} | { readonly kind: 'not-applicable' } | { readonly kind: 'unmeasured'; readonly why: string };
+
+/** The spend arm (W2 request record A, RQ11), per row, first match: a `spent` row keeps its mark (the arm never takes one away);
+ *  citations not measured leave it `unjudged`; a root-cited row, or one at or below a read restore floor, is spent; any other
+ *  row keeps its state. */
+export function bootSpend(row: { readonly id: number; readonly state: MessageState | 'unknown' }, cites: CitationRead):
+  'spend' | 'keep' | 'unjudged' {
+  if (row.state === 'spent') return 'keep';
+  if (cites.kind !== 'measured') return 'unjudged';
+  if (cites.rootCited?.has(row.id) === true) return 'spend';
+  const floor = cites.restoreFloor;
+  if (floor !== undefined && floor.kind === 'floor' && row.id <= floor.id) return 'spend';
+  return 'keep';
+}
 
 /** I8, per row: `keep`, or `unsettle` (the move back to its delivery stage), or `unjudged` (citations this build cannot
  *  read, counted). Only a `cite` settlement is judged by the citations; `acknowledge` and `mark` are recorded on the row.

@@ -42,7 +42,8 @@ import { fileBothRoleWriter, fileTokenStore, tokenPaths } from './token/files.js
 import { gateRowsOver, generationReaderOver, tokenSyncLinkOver } from './token/link.js';
 import { coordinationRestoreRefusal, openCoordDb } from './coord/db.js';
 import { openOperatorModelStore, operatorModelBootLines, type WitnessedMessageIds } from './operatorModel/store.js';
-import { bootPassSummary, runOperatorModelBootPass, w1Citations } from './operatorModel/bootPass.js';
+import { bootPassSummary, requestCitations, runOperatorModelBootPass } from './operatorModel/bootPass.js';
+import { citedMessagesForBoot } from './coord/overlordRequestStore.js';
 import { readPrivateNameList } from './operatorModel/nameListRead.js';
 import { COORDINATION_RESTORE_MARKER_FILE } from './coord/delegation-checkpoint.js';
 import { CoordStore } from './coord/store.js';
@@ -178,7 +179,10 @@ const operatorModel = openOperatorModelStore(cfg.operatorModelDbPath, cfg.ccrcDi
   { witnessHighestIds: () => readWitnessedMessageIds() });
 for (const line of operatorModelBootLines(operatorModel, cfg.home)) console.warn(`ccrc-server: ${line}`);
 // I8, once, with both stores open and before the watcher: re-derive what a crash left (counts only, never a text).
-{ const bp = runOperatorModelBootPass({ operatorModel: operatorModel.store, coord, citations: w1Citations, now: () => time.clock.wall() });
+// The citations port is W2's measured adapter (request record A): the request record's cited messages, with no restore floor
+// until act journal B's Confirm the restore supplies one.
+{ const bp = runOperatorModelBootPass({ operatorModel: operatorModel.store, coord,
+    citations: () => requestCitations(citedMessagesForBoot(coordDb), { kind: 'none' }), now: () => time.clock.wall() });
   console.warn(`ccrc-server: ${bootPassSummary(bp.counts)}`); for (const line of bp.lines) console.warn(`ccrc-server: ${line}`); }
 // The push outbox's boot pass (Overlord W1, `pushSender.ts#bootPushOutbox`): synchronously, before the fleet link
 // connects, the server listens or the watcher starts, so nothing can push before it and every `sending` row it finds
