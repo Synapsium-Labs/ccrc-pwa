@@ -360,6 +360,23 @@ describe('ccrc doctor: artifacts (X5-FU)', () => {
     expect(remedyFor(r.stdout, 'artifacts')).toMatch(/^ {2}remedy: rewrite the line naming CCRC_PORT in .*\/\.ccrc\/ccrc\.env, .*, then restart: /);
   }, SLOW);
 
+  it('doctor: a CCRC_PORT the exposure file names FAILs, and the remedy sends the line to ccrc.env (review 4202 F4)', () => {
+    // Every ccrc expose write drops that line, so doctor judges as the arm does and never names the exposure file as its home.
+    const home = artifactBox('ccrc-doctor-art-expport-', names());
+    const exp = join(home, '.ccrc', 'exposure.env');
+    writeFileSync(exp, readFileSync(exp, 'utf8') + 'CCRC_PORT=07789\n');
+    const r = runDoctor(home);
+    expect(artifactLine(r.stdout), r.stdout).toMatch(/^FAIL artifacts: .*\/\.ccrc\/exposure\.env names CCRC_PORT, and every ccrc expose write rewrites that file without it/);
+    const remedy = remedyFor(r.stdout, 'artifacts');
+    expect(remedy).toMatch(/^ {2}remedy: move the CCRC_PORT line to .*\/\.ccrc\/ccrc\.env, then restart: /);
+    expect(remedy).not.toContain('exposure.env');
+    // A line there in a shape the reader does not decide: the remedy is still to move it, never to rewrite it in place.
+    writeFileSync(exp, readFileSync(exp, 'utf8').replace('CCRC_PORT=07789\n', 'CCRC_PORT =7789\n'));
+    const u = runDoctor(home);
+    expect(artifactLine(u.stdout), u.stdout).toMatch(/^FAIL artifacts: .*\/\.ccrc\/exposure\.env names CCRC_PORT in a shape this reader does not decide/);
+    expect(remedyFor(u.stdout, 'artifacts')).toMatch(/^ {2}remedy: remove the CCRC_PORT line from .*\/\.ccrc\/exposure\.env and write it in .*\/\.ccrc\/ccrc\.env as KEY=value, digits only, then restart: /);
+  }, 2 * SLOW);
+
   it('doctor: with no artifact keys, a CCRC_PORT line with a space before its = is still a skip', () => {
     // The port is read only for keys that stand: a box with no tier is not failed for a line the tier would refuse.
     const home = healthy('ccrc-doctor-art-unset-spaced-');

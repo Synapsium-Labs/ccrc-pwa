@@ -34,4 +34,5 @@ The task note for native Docs reader wave 61 (X5-FU, run 4170). It is what the l
 - `config.ts`'s CCRC_PORT boot warning quotes up to 40 characters of the value, unmasked.
 - The bash half of items 3 and 4 is one commit with one review, since they share hunks.
 - A capability revoked from the list before its mint answer arrives is noted by the late answer (item 5's review).
-- The shellcheck ratchet over `ccd/ccrc` was not measured locally (the test slice's memory cap); the hosted run measures it.
+- The shellcheck ratchet over `ccd/ccrc` and the server tests' typecheck were not measured locally (the test slice's memory cap); the hosted run measured both, green.
+- Fix round 1 (review 4202): each shape the bash mirror covers is pinned to the server's matcher exactly, with fixed near misses in the differential (F1); every reader of the tier's console port, doctor included, refuses a CCRC_PORT the exposure file names, and every remedy names ccrc.env (F4).

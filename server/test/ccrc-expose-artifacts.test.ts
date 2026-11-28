@@ -826,7 +826,7 @@ describe('ccrc expose artifacts: the arm', () => {
 import { randomInt } from 'node:crypto';
 import { CREDENTIAL_MASKS } from '../../shared/api.js';
 import { isExactHttpsOrigin } from '../../shared/httpsOrigin.js';
-import { matchesShape, shapeMatchers } from '../src/accounts/shapes.js';
+import { matchesShape, SHAPES, shapeMatchers } from '../src/accounts/shapes.js';
 
 const hex = (n: number): string => randomBytes(Math.ceil(n / 2)).toString('hex').slice(0, n);
 /** A text of each shape, built per run: what a label could hold, or what no accepted origin can. */
@@ -885,18 +885,54 @@ describe('ccrc expose artifacts: a name the answer mask would alter (X5-FU item 
         expect(isExactHttpsOrigin(origin), `${id}: never an origin the grammar accepts`).toBe(false);
       }
     }
-    // Why each is never in an accepted origin, as a property of its source, so a widened source reds here: `jwt` begins with
-    // `eyJ`, an upper-case letter, and the token field needs a double quote; the grammar holds neither.
+    // Why each is never in an accepted origin, as a property of its source, so a never id's source widened past it reds here:
+    // `jwt` begins with `eyJ`, an upper-case letter, and the token field needs a double quote; the grammar holds neither.
     const source = (id: string): string => CREDENTIAL_MASKS.find((m) => m.id === id)!.source;
     expect(bashList('_ART_MASK_NEVER').sort()).toEqual(['codexTokenField', 'jwt']);
     expect(source('jwt').startsWith('eyJ')).toBe(true);
     expect(source('codexTokenField')).toMatch(/^\(\?<="/);
   });
 
+  it('mask: each shape the bash mirror covers is the server\'s matcher exactly, source and flags, by id (review 4202 F1)', () => {
+    // `_art_masked` mirrors these four by hand, so any change to one of them (widened, narrowed or its boundary moved) reds
+    // here, and the mirror is looked at again. The boundary is the one every shape without its own lookbehind carries.
+    const boundary = String.raw`(?:(?<![A-Za-z0-9])|(?<=\\[nrt])|(?<=\\u[0-9A-Fa-f]{4})|(?<=\\x[0-9A-Fa-f]{2})|(?<=%[0-9A-Fa-f]{2}))`;
+    const mirrored: Record<string, string> = {
+      genericSk: String.raw`sk-[A-Za-z0-9_-]{8,}`,
+      anthropic: String.raw`sk-ant-[a-z]{3}[0-9]{2}-[A-Za-z0-9_-]{8,}`,
+      openrouter: String.raw`sk-or-v1-[A-Za-z0-9]{8,}`,
+      codexGateway: String.raw`sk-[0-9a-f]{48}`,
+    };
+    expect(bashList('_ART_MASK_SHAPES').sort()).toEqual(Object.keys(mirrored).sort());
+    for (const [id, source] of Object.entries(mirrored)) {
+      const m = ownMatcher(id);
+      expect({ source: m.source, flags: m.flags }, id).toEqual({ source: `${boundary}(?:${source})`, flags: 'g' });
+    }
+    // And what matchesShape asks is those matchers, built from CREDENTIAL_MASKS, nothing else.
+    const pair = (r: RegExp): [string, string] => [r.source, r.flags];
+    expect(SHAPES.map(pair)).toEqual(shapeMatchers(CREDENTIAL_MASKS).map(pair));
+  });
+
+  it('mask: near-miss prefixes answer as matchesShape answers them, none a shape (review 4202 F1)', () => {
+    // Fixed, not sampled: a source widened to take one of these reds on every run. `pk-` and `rk-` reach `_art_masked` in
+    // an accepted origin; `sk_` and `SK-` are no origin the grammar accepts, so only a refusal's quoting sees them, and
+    // they are asked of `_art_hidden`, which decides that, as well.
+    const values = ['pk-', 'rk-', 'sk_', 'SK-'].flatMap((p: string): string[] => {
+      const label = `${p}${hex(10)}`;
+      return [`https://${label}.art.invalid`, `https://art.${label}.invalid`, label];
+    });
+    const want = values.map((v: string): boolean => matchesShape(v));
+    expect(want, 'the server answers no shape for any of them').toEqual(values.map(() => false));
+    expect(bashMasked(values)).toEqual(want);
+    expect(bashMasked(values, '_art_hidden'), 'and none is withheld from a refusal').toEqual(want);
+  });
+
   it('mask: over origins the grammar accepts, the bash answer is matchesShape\'s', () => {
     const labels: string[] = [
       'art', 'content', 'sk', 'sk-', `sk-${hex(7)}`, `sk-${hex(8)}`, `a-sk-${hex(8)}`, `ask-${hex(8)}`, `${hex(3)}sk-${hex(9)}`,
       `x-sk-${hex(7)}`, 'sk-ant', `sk-or-v1-${hex(7)}`, `sk-${hex(8)}-x`, `t${hex(12)}`,
+      // The near-miss prefixes (review 4202 F1), each with eight or more token characters, where the grammar accepts them.
+      `pk-${hex(10)}`, `rk-${hex(10)}`, `x-pk-${hex(9)}`, `a-rk-${hex(9)}`,
     ];
     // Generated labels over the grammar's alphabet: `sk-` and a run of 6 to 11 token characters at a random spot (where a
     // letter or digit before it means no shape), the same after a `-` (a boundary, so mostly a shape), a bare `sk-`, and none.
@@ -1129,8 +1165,8 @@ describe('ccrc expose artifacts: the console port (X5-FU item 4)', () => {
     writeFileSync(join(home, '.ccrc', 'ccrc.env'), 'CCRC_PORT=7790\n');
     const r = runPiped(home, flags);
     expect(r.code, r.stderr).toBe(1);
-    expect(r.stderr).toContain('names CCRC_PORT, and ccrc expose rewrites that file without it, so the console\'s port after this run is not that one: '
-      + 'move the CCRC_PORT line to ');
+    expect(r.stderr).toContain('names CCRC_PORT, and every ccrc expose write rewrites that file without it, so the console\'s port after the next '
+      + 'write is not that one: move the CCRC_PORT line to ');
     expect(r.stderr).toContain('. Nothing was written.');
     expect(bytesAt(exposurePath(home))).toBe(base);
   });

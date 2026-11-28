@@ -2520,12 +2520,12 @@ _check_artifacts() {
     *)
       local fix="re-run: ccrc expose artifacts — it writes all three keys together and checks them as the server does"
       case "$ART_DETAIL" in
-        CCRC_PORT=*) fix="write CCRC_PORT in ${EXP_CPORT_SRC:-$BOX_ENV_FILE} as digits only (1 to 65535, no leading zero), or remove the line for 7788, then restart: $(_svc_restart_hint ccrc.service)" ;;
+        CCRC_PORT=*) fix="write CCRC_PORT in $BOX_ENV_FILE as digits only (1 to 65535, no leading zero), or remove the line for 7788, then restart: $(_svc_restart_hint ccrc.service)" ;;
         CCRC_ARTIFACT_PORT=*)
           fix="ccrc expose artifacts --off, then ccrc expose artifacts — a bare re-run keeps the stored port"
           # Unless the console itself listens on the port the arm writes: --off and a re-run would clash again (X5-FU item 4).
           [ "$cport" != "$_ART_PORT_DEFAULT" ] \
-            || fix="the console itself listens on $_ART_PORT_DEFAULT, the port ccrc expose artifacts writes for the tier: move the console (CCRC_PORT in ${EXP_CPORT_SRC:-$BOX_ENV_FILE}) and restart: $(_svc_restart_hint ccrc.service), then ccrc expose artifacts --off and ccrc expose artifacts" ;;
+            || fix="the console itself listens on $_ART_PORT_DEFAULT, the port ccrc expose artifacts writes for the tier: move the console (CCRC_PORT in $BOX_ENV_FILE) and restart: $(_svc_restart_hint ccrc.service), then ccrc expose artifacts --off and ccrc expose artifacts" ;;
       esac
       _dr_fail artifacts "$ART_DETAIL" "$fix"
       return 1 ;;
