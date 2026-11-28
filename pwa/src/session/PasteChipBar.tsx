@@ -6,9 +6,17 @@
 // brought back an old label), the row says so, with Undo last edit (one step of the browser's own, whatever the newest
 // edit is) and Dismiss (the leftover markers go); the composer holds the send meanwhile. Ring L4: it renders what
 // `liveChips` (pasteChips.ts, L1) listed and what the composer decided, and calls back, deciding nothing.
+//
+// A send saves each pasted text as a file first (desktop-polish wave 194, `usePasteSave.ts`): while it does, the row
+// says so; a chip whose save failed gets a notice of its own, its reason (already composed, `longPasteWords.ts`) with
+// Retry, where saving again could change it, and "Send as typed text". The chip itself keeps its look.
 import type { ReactNode } from 'react';
 import { Button } from '@ccrc/ui';
 import { BROKEN_NOTICE, linesWord, type LiveChip } from './pasteChips';
+import {
+  PASTE_RETRY_WORD, PASTE_SAVING_TEXT, PASTE_TYPED_LABEL, PASTE_TYPED_WORD, pasteRetryLabel,
+} from './longPasteWords';
+import type { PasteFailure } from './usePasteSave';
 import './pasteChips.css';
 
 export interface PasteChipBarProps {
@@ -21,6 +29,15 @@ export interface PasteChipBarProps {
   broken?: boolean;
   onUndo?: () => void;
   onDismiss?: () => void;
+  /** The pasted texts are being saved and the send is held. */
+  saving?: boolean;
+  /** Why a chip's save failed, by chip number. A failure shows only while its chip stands in the field, and offers
+   *  Retry only where saving again could change it. */
+  failures?: ReadonlyMap<number, PasteFailure>;
+  /** Save again what is still unsaved, then send. */
+  onRetry?: () => void;
+  /** Send the message as today, every pasted text typed in full. */
+  onSendTyped?: () => void;
 }
 
 /** One worded act of the row (expand, undo, dismiss): the design system's ghost Button, at its 44px floor at every
@@ -38,10 +55,26 @@ function ChipAct({ label, disabled, onClick, children }: {
 
 export function PasteChipBar({
   chips, onExpand, onRemove, disabled = false, broken = false, onUndo, onDismiss,
+  saving = false, failures, onRetry, onSendTyped,
 }: PasteChipBarProps): ReactNode {
   if (chips.length === 0 && !broken) return null;
+  // One notice per failed chip number that stands in the field, in field order.
+  const failed = [...new Set(chips.map((c) => c.n))].flatMap((n) => {
+    const why = failures?.get(n);
+    return why === undefined ? [] : [{ n, why }];
+  });
   return (
     <>
+      {saving && <p className="paste-notice paste-saving" role="status">{PASTE_SAVING_TEXT}</p>}
+      {!saving && failed.map(({ n, why }) => (
+        <div key={n} className="paste-notice paste-failed" role="alert">
+          <p className="paste-notice-text">{why.text}</p>
+          {why.retry && (
+            <ChipAct label={pasteRetryLabel(n)} disabled={disabled} onClick={onRetry}>{PASTE_RETRY_WORD}</ChipAct>
+          )}
+          <ChipAct label={PASTE_TYPED_LABEL} disabled={disabled} onClick={onSendTyped}>{PASTE_TYPED_WORD}</ChipAct>
+        </div>
+      ))}
       {broken && (
         <div className="paste-broken" role="status">
           <p className="paste-broken-text">{BROKEN_NOTICE}</p>
