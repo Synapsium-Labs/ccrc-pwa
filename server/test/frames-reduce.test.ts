@@ -199,7 +199,7 @@ describe('the width table is the Unicode East Asian Width data file (review 4109
   };
   /** The fixture's one-cell lines (N, Na, H, A), merged: what the shared table must be. */
   const oneCellFromFixture = (): [number, number][] => merge(dataLines().filter((l) => ONE.includes(l.p)).map((l) => [l.a, l.b]));
-  /** What the data file says of every code point, with no engine asked: 0 not listed (unassigned in 17.0), 1 one cell, 2 W or F. */
+  /** What the data file says of every code point, with no engine asked: 0 not listed (so unassigned in 17.0; not every unassigned one, since the file lists 56,166 of them as W), 1 one cell, 2 W or F. */
   const BY_FILE = ((): Uint8Array => {
     const by = new Uint8Array(0x110000);
     for (const l of dataLines()) for (let cp = l.a; cp <= l.b; cp++) by[cp] = ONE.includes(l.p) ? 1 : 2;
@@ -384,6 +384,13 @@ describe('the capture owner\'s condition: a row truly at the edge is at the edge
     `${String.fromCodePoint(0x2764)}${SEL}tail rest`, `${String.fromCodePoint(0x263a)}${SEL}tail rest`, `${String.fromCodePoint(0x270c)}${SEL}tail rest`,
     `1${SEL}${KEYCAP}tail rest`, `1${KEYCAP}tail rest`, `  ${String.fromCodePoint(0x2764)}${SEL}tail rest`,
   ];
+  // The turn marker is a decoration, so the one reader strips it and leaves the selector, the keycap or the mark first.
+  const TURN = String.fromCodePoint(0x23fa);
+  const ACUTE = String.fromCodePoint(0x0301); // a combining mark, A in the data file, so one cell by the table
+  const LEADING_SELECTOR = [
+    `${TURN}${SEL}ject rest`, `  ${TURN}${SEL}ject rest`, `│${SEL}ject rest`, `${TURN}${KEYCAP}ject rest`, `  ${TURN}${KEYCAP}ject rest`,
+  ];
+  const LEADING_MARK = [`${TURN}${ACUTE}${WIDE}ject rest`, `  ${TURN}${ACUTE}${WIDE}ject rest`, `${TURN}${ACUTE}ject rest`, `│${ACUTE}ject rest`];
   for (const cols of [20, 220]) {
     const W = { cols, rows: 8 };
     const at = (...rows: string[]): string => raw(...rows, '─'.repeat(cols), STATUS);
@@ -395,8 +402,16 @@ describe('the capture owner\'s condition: a row truly at the edge is at the edge
     it(`at ${cols} columns: a straddle whose next row begins with a base character and the emoji selector or the keycap mark refuses on both hosts`, () => {
       for (const next of SELECTED) expect(on(at(short, next)), JSON.stringify(next)).toEqual(REFUSED);
     });
+    // Review 4161's F1, the coordinator's ruling on the class: when the decoration-stripped content begins with a code
+    // point that cannot begin a character by itself, the first character counts two cells.
+    it(`at ${cols} columns: a straddle whose next row is a decoration base, then the emoji selector or the keycap mark, refuses on both hosts (review 4161, F1)`, () => {
+      for (const next of LEADING_SELECTOR) expect(on(at(short, next)), JSON.stringify(next)).toEqual(REFUSED);
+    });
+    it(`at ${cols} columns: a straddle whose next row is a decoration base, then a combining mark, refuses on both hosts, before a wide character and, an accepted over-refusal, before a narrow one`, () => {
+      for (const next of LEADING_MARK) expect(on(at(short, next)), JSON.stringify(next)).toEqual(REFUSED);
+    });
     it(`at ${cols} columns: decoration then a narrow character is still not a straddle, and is kept`, () => {
-      for (const next of ['  tail rest', '│ tail rest', '❯ tail rest', `${NBSP}tail rest`]) {
+      for (const next of ['  tail rest', '│ tail rest', '❯ tail rest', `${NBSP}tail rest`, `${TURN}tail rest`, `  ${TURN} tail rest`]) {
         expect(on(at(short, next)), JSON.stringify(next)).toEqual([{ kind: 'reduced', text: at(short, next), replaced: { cwd: 0, path: 0, model: 0, account: 0 } }, { ok: true }]);
       }
     });
@@ -434,8 +449,10 @@ describe('what the box answers as reduced passes the server\'s check, by constru
       reduced++;
       expect(checkReducedFrame(r.text, pane, [], NONE), f).toEqual({ ok: true });
     }
-    expect(checked).toBeGreaterThanOrEqual(90);
-    expect(reduced).toBeGreaterThanOrEqual(90);
+    // Pinned exactly (review 4161, A6): the panes the recipe meets, and those it reduces. While the box checks its own
+    // result this case holds by construction; the note names the mutant that makes it red.
+    expect(checked).toBe(132);
+    expect(reduced).toBe(128);
     // The capture owner's frames (review 4109, R1): each is refused, so none reaches the store.
     const P = { cols: 20, rows: 8 };
     for (const cp of [0x2329, 0xfe10, 0xa960, 0x16fe0, 0x17000, 0x1b000, 0x1f200]) {
@@ -705,14 +722,14 @@ describe('rule 10, and the receiver\'s check', () => {
   it('the version folds in the reducer\'s probe answers', () => {
     expect(FRAMES_RECIPE_VERSION).toMatch(FRAMES_VERSION_SHAPE);
   });
-  it('the probe table answers for a bare quote, a wide character at the edge, a row at the probe\'s width, a straddle, the stated addition at the edge, a table-only wide character at the edge and a trailing-space straddle (review 4109, F9; review 4133, D1)', () => {
-    // The seven probes after the eighteen of round 2, each drawn in its box: a change in what the reducer does with any of
-    // them moves the version. None asks the engine for anything (review 4133, D1).
+  it('the probe table answers for a bare quote, a wide character at the edge, a row at the probe\'s width, a straddle, the stated addition at the edge, a table-only wide character at the edge, a trailing-space straddle and a leading selector (review 4109, F9; review 4133, D1; review 4161, F1)', () => {
+    // The eight probes after the eighteen of round 2, each drawn in its box: a change in what the reducer does with any of
+    // them moves the version. None asks the engine for anything (review 4133, D1; review 4161, F1).
     const answers = JSON.parse(reducerFingerprint()) as { kind: string; refusal?: string; text?: string }[];
-    expect(answers).toHaveLength(28);
+    expect(answers).toHaveLength(29);
     expect(answers[18]).toMatchObject({ kind: 'reduced' });
     expect(answers[18]!.text).toContain('› stashed');
-    for (const i of [19, 20, 21, 22, 23, 24]) expect(answers[i], String(i)).toEqual({ kind: 'refused', refusal: 'private-shape' });
+    for (const i of [19, 20, 21, 22, 23, 24, 25]) expect(answers[i], String(i)).toEqual({ kind: 'refused', refusal: 'private-shape' });
   });
 });
 

@@ -129,8 +129,10 @@ const pathTail = (row: string): boolean => (/^\S+/u.exec(spans(row).content)?.[0
 /** THE ONE-CELL TABLE (review 4109's R1, the coordinator's rulings 1 and 2 on wave 195, and on review 4133's F2): every
  *  code point the Unicode Character Database file EastAsianWidth-17.0.0.txt lists as N (neutral), Na (narrow), H
  *  (halfwidth) or A (ambiguous), adjacent ranges merged, as inclusive `[first, last]` pairs in code point order. Every
- *  other code point counts two cells: what the file lists as W (wide) or F (fullwidth), and what it does not list at all,
- *  which is every code point unassigned in Unicode 17.0 (the file lists every assigned one). So UNKNOWN IS RELATIVE TO
+ *  other code point counts two cells: what the file lists as W (wide) or F (fullwidth), and what it does not list at all.
+ *  Every unlisted code point is unassigned in Unicode 17.0 (the file lists every assigned one), but not every unassigned
+ *  one is unlisted: the file also lists 56,166 unassigned code points, all as W (reserved ranges of the CJK blocks and
+ *  planes 2 and 3), so they count two cells as well. So UNKNOWN IS RELATIVE TO
  *  THE TABLE, NEVER TO THE ENGINE: the answer for a code point is the same on every engine version, and a code point
  *  assigned after 17.0 counts two cells until a newer data file says otherwise.
  *
@@ -250,7 +252,7 @@ export const FRAMES_WIDE_KEPT: readonly (readonly [number, number])[] = Object.f
  *  cell (the data file gives it A). */
 const WIDE_CLASS = /\p{Emoji_Presentation}/u;
 /** How many screen cells one character (one code point) takes: two when it is the stated addition, an emoji drawn as
- *  one, or not in the one-cell table (wide, fullwidth or unassigned in 17.0); one otherwise. A row read with these widths
+ *  one, or not in the one-cell table (wide, fullwidth, or not listed in the 17.0 file); one otherwise. A row read with these widths
  *  is never narrower than a terminal that follows the 17.0 data draws it, with one exception: a terminal in an East Asian
  *  locale draws an ambiguous-width character (A) in two cells, and the table counts the A characters one cell, as main
  *  did, less the eight of the stated addition. The frames driver runs under `LANG=C.UTF-8` (read in
@@ -278,13 +280,26 @@ const cellsOf = (cps: readonly string[]): number => cps.reduce((n, c) => n + fra
 /** The emoji selector and the keycap mark: a base character before either is drawn as an emoji, two cells wide. */
 const EMOJI_SELECTOR = String.fromCodePoint(0xfe0f);
 const KEYCAP_MARK = String.fromCodePoint(0x20e3);
-/** How many cells the FIRST character of `content` takes, with what follows it (review 4133's F1): two when its code point
- *  is two cells, or when the emoji selector or the keycap mark follows it (the keycap after a selector too), since a
- *  terminal may draw such a base in two cells though the base alone counts one; zero for an empty content. */
+/** A code point that cannot begin a character by itself: a combining mark, the engine's mark class (`\p{M}`). The
+ *  engine's second class beside the table, and a WIDENER only, under F2's same exception and for the same reason as the
+ *  emoji class (the coordinator's ruling on review 4161's F1): it only ever makes the first character of a next row count
+ *  two cells, which only refuses. Two hosts whose engines disagree on a mark therefore lose a frame (one of them refuses
+ *  it) and never keep a tail. The emoji selector and the keycap mark are named beside it, so those two hold with no
+ *  engine asked. */
+const LEADING_MARK = /^\p{M}/u;
+/** How many cells the FIRST character of `content` takes, with what follows it (review 4133's F1, review 4161's F1): two
+ *  when content begins with a code point that cannot begin a character by itself (the emoji selector, the keycap mark, or
+ *  any combining mark: what is left when the leading decoration was a base the mark belonged to, as in the turn marker
+ *  followed by the selector); two when its code point is two cells; two when the emoji selector or the keycap mark follows
+ *  it, since a terminal may draw such a base in two cells though the base alone counts one; zero for an empty content.
+ *  A mark before a narrow character also counts two, so such a next row refuses a row one cell short of the edge: an
+ *  accepted over-refusal. */
 function firstCells(content: string): number {
   const cps = Array.from(content);
   if (cps[0] === undefined) return 0;
-  if (cps[1] === EMOJI_SELECTOR || cps[1] === KEYCAP_MARK || cps[2] === KEYCAP_MARK) return 2;
+  if (cps[0] === EMOJI_SELECTOR || cps[0] === KEYCAP_MARK) return 2;
+  if (LEADING_MARK.test(cps[0])) return 2;
+  if (cps[1] === EMOJI_SELECTOR || cps[1] === KEYCAP_MARK) return 2;
   return frameCellWidth(cps[0]);
 }
 
@@ -386,8 +401,10 @@ export type ReduceAnswer =
  *  masker would change a text: its shapes on the box (the default), the live masker on the server.
  *
  *  WHAT IT RETURNS AS REDUCED PASSES THE SERVER'S CHECK, BY CONSTRUCTION (the coordinator's ruling on review 4133's F3):
- *  it runs that check on its own result, with the same `ours`, `scan` and `mask`, and refuses the frame with the check's
- *  word when the check would refuse it. A replaced row is padded in screen cells, so a row of characters that count two
+ *  it runs that check on its own result, with its own `ours`, `scan` and `mask`, and refuses the frame with the check's
+ *  word when the check would refuse it. The masks are not the same on the two hosts: the box reduces with the default
+ *  (the masker's shapes) and the server checks with its live masker, so the server may still refuse (`masked`) a frame
+ *  the box reduced. That loses a frame and leaks nothing (review 4161, A5). A replaced row is padded in screen cells, so a row of characters that count two
  *  cells but take one code point can come out longer in code points than the shape gate allows: the box refuses it
  *  (`not-a-frame`) rather than send what the server would drop. */
 export function reduceFrame(
@@ -504,6 +521,9 @@ export function reducerFingerprint(): string {
     // Review 4133's D1: a table-only wide character (U+2329, W in the data file, not an emoji) reaching the edge, and a
     // straddle whose row keeps its blank last cell as a trailing space. No probe asks the engine for anything.
     'x'.repeat(35) + ' /a' + String.fromCodePoint(0x2329) + '\nb rest', 'x'.repeat(35) + ' /pr \n' + String.fromCodePoint(0x6F22) + 'ject rest',
+    // Review 4161's F1: a straddle whose next row is the turn marker then the emoji selector, so the selector is left first
+    // once the decoration is stripped. It asks the engine for nothing either.
+    'x'.repeat(35) + ' /pr\n' + String.fromCodePoint(0x23FA) + String.fromCodePoint(0xFE0F) + 'ject rest',
   ];
   // Each probe drawn as a box draws it: between two rules, the capture's status row under the lower one (rule 8). And the
   // status rule's own probes: no rule, another status text, the text twice.
