@@ -192,7 +192,8 @@ export interface DocsVisit {
   rangeDropped(): void;
   /** What the range read of the page now open gave, once it finished; `null` has one meaning: no finished read stands for these
    *  bytes (nothing read yet, one in progress, cancelled or failed; another page; or other bytes), or the file slot is neither
-   *  `stat-pinned` nor `too-large`. Export and the truth line's "as read at" read it; they ask for no bytes. */
+   *  `stat-pinned` nor `too-large`. Export and the truth line's "as read at" read it: Export reads its bytes too (a class with a
+   *  text view hands them, `rangeHasTextView`), and the truth line asks for no bytes. */
   readonly rangeOpened: RangeOpened | null;
   /** Read it after a spent re-list: re-lists again and waits for it as `rangeFailed` does, taking no one-shot. */
   rangeRetry(): void;
