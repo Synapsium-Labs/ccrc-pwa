@@ -327,7 +327,8 @@ describe('the rows card: the console follows the door', () => {
     await waitFor(() => expect(rowEl(m.id).querySelector('[data-step-up]')).not.toBeNull());
     expect(document.querySelectorAll('[data-step-up]')).toHaveLength(1);
     for (const other of DECISION_ROW_IDS.filter((i) => i !== m.id)) expect(rowEl(other)?.querySelector('[data-step-up]') ?? null, other).toBeNull();
-    expect(within(rowEl(m.id)).getByLabelText('Passphrase')).toBeTruthy();
+    // The step draws its field once its methods load (`data-step-up="loading"` first), so the case waits for the field.
+    expect(await within(rowEl(m.id)).findByLabelText('Passphrase')).toBeTruthy();
     expect(card('decision-host').querySelector('[data-step-up]')).toBeNull();
     expect(spy).toHaveBeenCalledTimes(1);
     await confirmStep();

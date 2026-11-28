@@ -300,6 +300,11 @@ kills M19. Then the branch took one merge of main, on the coordinator's go once 
   - The console's whole suite passed 677 of 682 files. The other five were killed by the test slice's shared memory cap (nine
     kills): `fonts-built`, `reader-built` and `review-built` (each a production build) and `mockup-policy` and
     `wrap-screen-golden`. Each passes alone: 8, 9, 12, 153 and 1185 cases.
+- **The full run on the pushed tip `c5f3e03f2d` was red in one case of this branch's own (ruled call 1918):** case 4's raised
+  ceiling, in `pwa/test/settings-decision-model.test.tsx`, asked for the step's Passphrase field at once, while the step was
+  still drawn loading (`data-step-up="loading"`). The race was in the case from the first build. The case now waits for the
+  field (`findByLabelText`), a one-line commit; the file passes 68 of 68 alone, three runs in a row. Every other job of that
+  run was green, the four browser shards among them.
 
 ## What a merge arms
 
