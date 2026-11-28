@@ -516,6 +516,8 @@ export const positionWords = (place: ItemPlace | null, title: string): string =>
  *  A coordinator's own write counts as ratified (the operator's ruling of 2026-11-16, question 1). Total over both lists. */
 const RATIFIED_WORDS: Readonly<Record<RatifiedBy['kind'], string>> = {
   operator: 'Ratified by you', coordinator: 'Ratified by the coordinator', item: 'Ratified by the answer to the item it cites',
+  // Never drawn on this build: a request-sourced version is not ratified until you open the request (`not-opened` below).
+  request: 'Ratified by the request it was made for',
 };
 const NOT_RATIFIED_WORDS: Readonly<Record<RatificationWhy, (itemId: number | null) => string>> = {
   'source-does-not-ratify': () => 'Not ratified: written by the coordinator',
@@ -524,6 +526,7 @@ const NOT_RATIFIED_WORDS: Readonly<Record<RatificationWhy, (itemId: number | nul
   unreadable: () => 'Not ratified: what it rests on could not be read',
   unrecorded: () => 'Not recorded',
   absent: () => 'Not recorded',
+  'not-opened': () => 'Not ratified: rests on a request you have not opened yet',
 };
 /** The one word for a verdict this build cannot name: a reason or a source kind a newer server sent (review 2240 F5). */
 export const RATIFICATION_UNREADABLE_WORDS = 'Could not read whether this is ratified';

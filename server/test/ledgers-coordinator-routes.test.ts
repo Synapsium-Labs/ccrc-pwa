@@ -815,6 +815,89 @@ describe('modifications (plan PL3)', () => {
   });
 });
 
+describe('a modification made for a request (Overlord W2, request ids A)', () => {
+  const MODS = '/api/programmes/prog-a/modifications';
+  const addRequest = (r: Rig, id: number, owner: string | null): void => {
+    r.coord.db.prepare("INSERT INTO overlord_requests (id, origin, summary, owner, state, openedAt) VALUES (?, 'operator', 'a request', ?, 'open', 1)").run(id, owner);
+  };
+  const mods = (r: Rig): number => (r.coord.db.prepare('SELECT count(*) AS n FROM programme_modifications').get() as { n: number }).n;
+
+  it('the programme\'s own request is stored with its requestId and reads not-opened, source request', async () => {
+    const r = await rig();
+    addRequest(r, 7, 'prog-a');
+    const res = await post(r, MODS, { ...as(), text: 'Changed.', requestId: 7 });
+    expect(res.statusCode, res.body).toBe(200);
+    expect(r.coord.db.prepare("SELECT ratifiedBy, requestId FROM programme_modifications WHERE program = 'prog-a'").get())
+      .toEqual({ ratifiedBy: 'request', requestId: 7 });
+    expect(r.coord.goalsFor('prog-a').modifications[0]!.ratification)
+      .toEqual({ ratified: false, why: 'not-opened', source: { kind: 'request', requestId: 7 } });
+  });
+
+  it('a new doneWhen with a requestId and no ruling is accepted and changes the definition of done', async () => {
+    const r = await rig();
+    addRequest(r, 7, 'prog-a');
+    const res = await post(r, MODS, { ...as(), text: 'Changed.', requestId: 7, doneWhen: ['z'] });
+    expect(res.statusCode, res.body).toBe(200);
+    expect(r.coord.goalsFor('prog-a').doneWhen).toEqual(['z']);
+  });
+
+  it('another programme\'s request, an unowned one and an unknown id each answer request-not-yours, one body, and store nothing', async () => {
+    const r = await rig();
+    const bodies: string[] = [];
+    // One id, three states of it: owned by another programme, owned by none, then not there at all.
+    addRequest(r, 7, 'prog-b');
+    for (const step of [() => undefined, () => r.coord.db.prepare('UPDATE overlord_requests SET owner = NULL WHERE id = 7').run(),
+      () => r.coord.db.prepare('DELETE FROM overlord_requests WHERE id = 7').run()]) {
+      step();
+      const res = await post(r, MODS, { ...as(), text: 'Changed.', requestId: 7 });
+      expect(res.statusCode).toBe(403);
+      expect(res.json()).toMatchObject({ error: 'request-not-yours', detail: "request 7 is not this programme's" });
+      bodies.push(JSON.stringify(res.json()));
+    }
+    expect(bodies[1]).toBe(bodies[0]);
+    expect(bodies[2]).toBe(bodies[0]);
+    expect(mods(r)).toBe(0);
+    expect(r.waiting()).toBe(0);
+  });
+
+  it('a request table that cannot be read answers unmeasured (502), never request-not-yours, and stores nothing', async () => {
+    const r = await rig();
+    r.coord.db.exec('DROP TABLE overlord_requests');
+    const res = await post(r, MODS, { ...as(), text: 'Changed.', requestId: 7 });
+    expect(res.statusCode).toBe(502);
+    expect(res.json()).toMatchObject({ error: 'unmeasured', detail: 'the request record could not be read' });
+    expect(mods(r)).toBe(0);
+  });
+
+  it('an itemId with a requestId is bad-request before any read: neither unknown-item nor request-not-yours', async () => {
+    const r = await rig();
+    const res = await post(r, MODS, { ...as(), text: 'Changed.', itemId: 998, requestId: 999 });
+    expect(res.statusCode).toBe(400);
+    expect(res.json()).toMatchObject({ error: 'bad-request' });
+    expect(mods(r)).toBe(0);
+  });
+
+  it.each([['zero', 0], ['negative', -1], ['a string', '7'], ['a fraction', 1.5]])('a requestId that is %s is bad-request', async (_n, requestId) => {
+    const r = await rig();
+    addRequest(r, 7, 'prog-a');
+    const res = await post(r, MODS, { ...as(), text: 'Changed.', requestId });
+    expect(res.statusCode).toBe(400);
+    expect(res.json()).toMatchObject({ error: 'bad-request' });
+    expect(mods(r)).toBe(0);
+  });
+
+  it('characterization: neither id reads source coordinator, an itemId reads item', async () => {
+    const r = await rig();
+    const mine = await raise(r);
+    await post(r, MODS, { ...as(), text: 'One.' });
+    await post(r, MODS, { ...as(), text: 'Two.', itemId: mine });
+    const g = r.coord.goalsFor('prog-a');
+    const sourceOf = (text: string) => g.modifications.find((m) => m.text === text)!.ratification.source;
+    expect([sourceOf('One.'), sourceOf('Two.')]).toEqual([{ kind: 'coordinator' }, { kind: 'item' }]);
+    expect(r.coord.db.prepare('SELECT requestId FROM programme_modifications').all()).toEqual([{ requestId: null }, { requestId: null }]);
+  });
+});
+
 describe('parseRaise still refuses an action (D-8076, spec 10)', () => {
   it('a body that carries action and heldUntil raises an ordinary item: neither column is written', async () => {
     const r = await rig();

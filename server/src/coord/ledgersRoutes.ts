@@ -46,6 +46,8 @@ import { TERMINAL_RUN_STATES } from '../../../shared/api.js';
 import { endRequestEndedMail, itemMailSubject, tickMail } from './ledgersMail.js';
 import { callViewOf, clearedCallViewOf } from './coordCalls.js';
 import { insertSystemMailTx } from './rundefsTx.js';
+import { requestOwnerOf } from './overlordRequestStore.js';
+import { programmeRequestVerdict } from './requestMail.js';
 import type { PlanStorePort } from './planStore.js';
 import type { PlanEndOutcome } from '../../../shared/plan.js';
 import { parseRankWrite, type PortfolioView } from '../../../shared/portfolio.js';
@@ -576,12 +578,20 @@ export function registerLedgerCoordinatorRoutes(app: FastifyInstance, deps: Ledg
       pr = posInt(b['pr']);
       if (pr === null) return bad(reply, 'pr is a positive integer when given');
     }
+    // Overlord W2, request ids A (F4, RI9): the request the change is made for. One source, never both, refused before any
+    // read so neither arm can answer differently for a foreign id.
+    let requestId: number | null = null;
+    if (b['requestId'] !== undefined && b['requestId'] !== null) {
+      requestId = posInt(b['requestId']);
+      if (requestId === null) return bad(reply, 'requestId is a positive integer when given');
+    }
+    if (itemId !== null && requestId !== null) return bad(reply, 'a goals change names an itemId or a requestId, never both');
     let doneWhen: string[] | null = null;
     if (b['doneWhen'] !== undefined && b['doneWhen'] !== null) {
       const dw = doneWhenOf(b['doneWhen']);
       if (!dw.ok) return refuseRoute(reply, LEDGER_ROUTE_REFUSALS.badDoneWhen, { detail: dw.detail });
-      if (ruling === null && itemId === null) {
-        return refuseRoute(reply, LEDGER_ROUTE_REFUSALS.doneWhenNeedsRuling, { detail: 'a new definition of done needs a ruling or an itemId to stand on' });
+      if (ruling === null && itemId === null && requestId === null) {
+        return refuseRoute(reply, LEDGER_ROUTE_REFUSALS.doneWhenNeedsRuling, { detail: 'a new definition of done needs a ruling, an itemId or a requestId to stand on' });
       }
       doneWhen = dw.doneWhen;
     }
@@ -592,8 +602,17 @@ export function registerLedgerCoordinatorRoutes(app: FastifyInstance, deps: Ledg
       if (item === null) return refuseRoute(reply, 'unknown-item', { detail: `no item ${itemId}` });
       if (item.program !== slug) return refuseRoute(reply, LEDGER_ROUTE_REFUSALS.notYourProgramme, { detail: `item ${itemId} belongs to another programme` });
     }
-    // What the row rests on is the store's to derive from its own itemId (Overlord W1, portfolio B; review 2240 F6).
-    const id = coord.addModification(slug, { text: modText, ruling, itemId, pr, doneWhen }, deps.now());
+    // An unknown, unowned or foreign request is the one word of the three doors (F12, H23); a record that could not be read
+    // is its own retryable answer, never that word.
+    if (requestId !== null) {
+      let read;
+      try { read = requestOwnerOf(coord.db, requestId); } catch { return refuseRoute(reply, 'unmeasured', { detail: 'the request record could not be read' }); }
+      const v = programmeRequestVerdict(read, requestId, slug);
+      if (!v.ok) return refuseRoute(reply, v.refuse, { detail: v.detail });
+    }
+    // What the row rests on is the store's to derive from its own requestId and itemId (Overlord W1, portfolio B; review 2240
+    // F6; request ids A).
+    const id = coord.addModification(slug, { text: modText, ruling, itemId, pr, doneWhen, requestId }, deps.now());
     changed();
     return reply.code(200).send({ ok: true, id });
   });

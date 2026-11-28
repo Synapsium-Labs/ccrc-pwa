@@ -7,8 +7,8 @@ import type * as Ledgers from '../../shared/ledgers.js';
 import type { RatifiedBy } from '../../shared/ledgers.js';
 
 export type RatificationModule = Pick<typeof Ledgers,
-  'COORDINATOR_SOURCE_RATIFIES' | 'goalRatification' | 'itemAnswered' | 'modificationSource' | 'parseRatifiedBy' | 'pinSource'
-  | 'ratificationOf' | 'ratifiedByText'>;
+  'COORDINATOR_SOURCE_RATIFIES' | 'goalRatification' | 'isRatificationWhy' | 'isRatifiedByKind' | 'itemAnswered' | 'modificationSource'
+  | 'parseRatifiedBy' | 'pinSource' | 'ratificationOf' | 'ratifiedByText'>;
 export interface RatificationCase { name: string; run: (m: RatificationModule) => void }
 
 const NOW = 1_800_000_000_000;
@@ -21,6 +21,23 @@ export const PARSE_CASES: RatificationCase[] = [
     for (const r of [COORD, ITEM, OPERATOR]) expect(m.parseRatifiedBy(m.ratifiedByText(r))).toEqual(r);
     expect(m.parseRatifiedBy(null)).toBe('unrecorded');
     for (const bad of ['item:3', 'request', 'Operator', '', 'toString', '__proto__']) expect(m.parseRatifiedBy(bad), bad).toBe('unreadable');
+  } },
+  // Request ids A (Overlord W2): the request kind takes its id from the row's own column, never from the text.
+  { name: 'parseRatifiedBy: request takes its id from the row, reads unreadable without one, and other kinds ignore the id', run: (m) => {
+    expect(m.parseRatifiedBy('request', 7)).toEqual({ kind: 'request', requestId: 7 });
+    expect(m.parseRatifiedBy('request', null)).toBe('unreadable');
+    expect(m.parseRatifiedBy('request')).toBe('unreadable');
+    expect(m.parseRatifiedBy('coordinator', 7)).toEqual({ kind: 'coordinator' });
+    expect(m.parseRatifiedBy('item', 7)).toEqual({ kind: 'item' });
+    expect(m.parseRatifiedBy('operator', 7)).toEqual({ kind: 'operator' });
+    expect(m.parseRatifiedBy('nonsense', 7)).toBe('unreadable');
+    expect(m.parseRatifiedBy(null, 7)).toBe('unrecorded');
+    expect(m.parseRatifiedBy(null)).toBe('unrecorded');
+  } },
+  { name: 'the vocabulary names request and not-opened', run: (m) => {
+    expect(m.isRatifiedByKind('request')).toBe(true);
+    expect(m.isRatificationWhy('not-opened')).toBe(true);
+    expect(m.isRatificationWhy('not-opened-yet')).toBe(false);
   } },
 ];
 
@@ -59,6 +76,12 @@ export const DECIDER_CASES: RatificationCase[] = [
       expect(m.goalRatification(ITEM, answered, 'prog-a', of)).toEqual({ ratified: false, why: 'effect-unmeasured', source: ITEM });
       expect(m.goalRatification(OPERATOR, null, 'prog-a', of)).toEqual({ ratified: true, source: OPERATOR });
       expect(m.goalRatification('unrecorded', null, 'prog-a', of)).toEqual({ ratified: false, why: 'unrecorded', source: null });
+    }
+  } },
+  { name: 'the request arm (request ids A): not ratified, not-opened, for a pin and for a modification', run: (m) => {
+    const source = { kind: 'request' as const, requestId: 7 };
+    for (const of of ['modification', 'pin'] as const) {
+      expect(m.goalRatification(source, null, 'prog-a', of)).toEqual({ ratified: false, why: 'not-opened', source });
     }
   } },
   { name: 'the item arm: a missing item or another programme\'s is unreadable', run: (m) => {
@@ -101,6 +124,12 @@ export const SOURCE_CASES: RatificationCase[] = [
   { name: 'modificationSource: an uncited row is the coordinator\'s, a cited one the item\'s', run: (m) => {
     expect(m.modificationSource(null)).toEqual(COORD);
     expect(m.modificationSource(12)).toEqual(ITEM);
+  } },
+  { name: 'modificationSource (request ids A): a request first, then an item, then the coordinator', run: (m) => {
+    expect(m.modificationSource(null, 7)).toEqual({ kind: 'request', requestId: 7 });
+    expect(m.modificationSource(3, 7)).toEqual({ kind: 'request', requestId: 7 });
+    expect(m.modificationSource(3, null)).toEqual(ITEM);
+    expect(m.modificationSource(null, null)).toEqual(COORD);
   } },
 ];
 

@@ -8608,8 +8608,12 @@ export class FleetWatcher {
       woke = true;
     }
 
-    // A row the ceiling rejected above may still sit in `dueBefore`: re-read.
-    const due = unacked.length === 0 && !woke && !ceilinged ? dueBefore : store.dueDeliveries(now, MAIL_REPLAY_MS);
+    // A row the ceiling rejected above may still sit in `dueBefore`: re-read. A delivery the fixed-line table holds until acked
+    // (a report to the Overlord, request ids A) is left out HERE, before the ladder: it is no refusal, so it names no gate, and it
+    // gets no gate stamp, no attempt, no wake, no park, nothing typed, and is read again next sweep (ruling call 1937). Its row
+    // is never `designatedOnly` (the table's census), so no designation is read for it.
+    const due = (unacked.length === 0 && !woke && !ceilinged ? dueBefore : store.dueDeliveries(now, MAIL_REPLAY_MS))
+      .filter((d) => !heldUntilAcked(d.toId, store.mailOrigin(d.mailId), { kind: 'not-designated' }));
     if (due.length === 0) return;
     // WHO IS COORDINATING SOMETHING LIVE — one read for the whole sweep, for
     // every row in it. The same bargain `hsCache` strikes one field over
@@ -8643,9 +8647,6 @@ export class FleetWatcher {
     };
     const seen = new Set<string>();          // one message per session per sweep
     for (const d of due) {
-      // A row of the fixed-line table that holds until acked (a report to the Overlord, request ids A) is held HERE, before
-      // every gate: no gate stamp, no attempt, no wake, no park, nothing typed, read again next sweep (ruling call 1937).
-      if (heldUntilAcked(d.toId, store.mailOrigin(d.mailId), sweepDesignationOf(designation))) continue;
       if (seen.has(d.toId)) { gated(d, 'same-sweep'); continue; }
       if (this.mailInFlight.has(d.toId)) { gated(d, 'in-flight'); continue; }   // CHECK — review findings 1/5, see this method's docstring
       // CLAIM — immediately after the check, with NO await in between, so the

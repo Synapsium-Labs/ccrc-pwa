@@ -468,11 +468,26 @@ describe('ratificationWords', () => {
       unreadable: 'Not ratified: what it rests on could not be read',
       unrecorded: 'Not recorded',
       absent: 'Not recorded',
+      'not-opened': 'Not ratified: rests on a request you have not opened yet',
     };
     for (const [why, text] of Object.entries(words)) {
       const r: Ratification = { ratified: false, why: why as RatificationWhy, source: null };
       expect(ratificationWords(r, 9), why).toBe(text);
     }
+  });
+  // Overlord W2, request ids A: a version made for a request reads `not-opened` on this build (the server's request arm never
+  // answers ratified), and offers Ratify as every other readable unratified version does: the operator's own act on it.
+  it('a request-sourced version, as this build draws it: not opened yet, with Ratify offered', () => {
+    const r: Ratification = { ratified: false, why: 'not-opened', source: { kind: 'request', requestId: 7 } };
+    expect(ratificationWords(r, null)).toBe('Not ratified: rests on a request you have not opened yet');
+    expect(ratifyOffered(r)).toBe(true);
+  });
+  // An older console meeting the new source: its kind guard lacks `request`. The guard is the same code path for any kind its
+  // map lacks, so a kind absent from this build's map stands in for the older build (whose map is this one less `request`).
+  it('a source kind this build cannot name (the older console meeting a request source) reads the unreadable words, no Ratify', () => {
+    const r = { ratified: false, why: 'not-opened', source: { kind: 'not-in-this-build', requestId: 7 } } as unknown as Ratification;
+    expect(ratificationWords(r, null)).toBe(RATIFICATION_UNREADABLE_WORDS);
+    expect(ratifyOffered(r)).toBe(false);
   });
 });
 

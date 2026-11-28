@@ -5,15 +5,10 @@
 // `overlord-timer-line-lane.test.ts` and `overlord-prompt-record.test.ts` drive theirs. The designation is spied except in the
 // rebind and retire endings, which go through the real designation writers (a fake authority appender). Fixture HOMEs only.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { writeFileSync } from 'node:fs';
 import path from 'node:path';
-import type { Deps } from '../src/server.js';
-import type { Runner } from '../src/exec.js';
-import { Bus } from '../src/bus.js';
 import { NotifyLog } from '../src/notifylog.js';
-import { openCoordDb } from '../src/coord/db.js';
-import { CoordStore } from '../src/coord/store.js';
-import { FleetWatcher } from '../src/watch.js';
+import type { CoordStore } from '../src/coord/store.js';
 import { renderMailNudge, FIXED_LINE_MAIL, fixedLinePushOf, heldUntilAcked } from '../src/coord/envelope.js';
 import { mailHoldsSleep } from '../src/sleep.js';
 import { stallMailStuckVerdicts } from '../src/coord/stall.js';
@@ -28,95 +23,19 @@ import { operatorMessageSubject } from '../../shared/operatorMessages.js';
 import { providerRetrySubject } from '../../shared/provider-retry.js';
 import { INBOX_WAKE_SUBJECT, renderInboxWakeBody } from '../../shared/overlordInbox.js';
 import { SPOT_PROBE_SUBJECT } from '../src/continuity/renewalFeed.js';
-import type { DesignationRead } from '../../shared/overlord-designation.js';
-import { testDeps, withFakeClock } from './helpers.js';
 import { mkTmp, removeTmpFixtures } from './tmpHelpers.js';
-import { quietAtTestEnd } from './laneQuiet.js';
+import { ID, PEER, NOW, emptyBox, echoedBox, seedRegistry, literalSends, keyPresses, sendCalls, primed, designate, queueMail, rowOf,
+  sweepFar, sweepMany, expectUntouched } from './helpers/reportHoldSweep.js';
 
-const ID = 'lane-a-project-a';
-const PEER = 'lane-b-project-a';
-const UUID = 'a'.repeat(36);
-const PID = 4242;
-const NOW = 1_800_000_000_000;
-const MAIL_QUIET_MS = 60_000;
-const MAIL_REPLAY_MS = 600_000;
-const MAIL_SWEEP_MS = 10_000;
-const emptyBox = '❯ \n';
-const echoedBox = (text: string): string => `❯ ${text}\n`;
 const SUBJECT = 'report: request 7 is done';
 
 afterEach(() => { vi.restoreAllMocks(); vi.useRealTimers(); removeTmpFixtures(); });
 beforeEach(() => { vi.useFakeTimers({ toFake: ['Date'] }); vi.setSystemTime(NOW); });
 
-const seedRegistry = (home: string, id = ID, pid = PID, uuid = UUID): void => {
-  const reg = path.join(home, '.cc-sessions');
-  mkdirSync(reg, { recursive: true });
-  for (const [k, v] of Object.entries({ wrapper: 'claude', project: 'demo', workdir: '/w/demo', uuid, started: '1' })) writeFileSync(path.join(reg, `${id}.${k}`), v);
-  writeFileSync(path.join(reg, `${id}.hookstate.json`), JSON.stringify({ v: 1, state: 'done', sessionId: uuid, pid, event: null, updatedAt: NOW - 61_000, ask: null, subagents: [] }));
-  const dir = path.join(home, '.claude', 'sessions');
-  mkdirSync(dir, { recursive: true });
-  writeFileSync(path.join(dir, `${pid}.json`), JSON.stringify({ pid, sessionId: uuid, cwd: '/w/demo', name: null, nameSource: null, status: 'idle', statusUpdatedAt: NOW - MAIL_QUIET_MS - 1_000, version: '2.1.220' }));
-};
-
-/** A tmux double: every call recorded, the pane answers the scripted boxes in order (the last one repeats). `dead`: no tmux session. */
-const lane = (panes: string[], dead = false) => {
-  const home = mkTmp('ccrc-report-hold-');
-  mkdirSync(path.join(home, '.cc-sessions'), { recursive: true });
-  const calls: string[][] = [];
-  let capIdx = 0;
-  const run: Runner = async (_cmd, args) => {
-    calls.push([...args]);
-    if (args[0] === 'has-session') return { ran: true, code: dead ? 1 : 0, stdout: '', stderr: '' };
-    if (args[0] === 'list-panes') return { ran: true, code: dead ? 1 : 0, stdout: dead ? '' : `${PID}\n`, stderr: '' };
-    if (args[0] === 'capture-pane') { const pane = panes[Math.min(capIdx, panes.length - 1)] ?? ''; capIdx++; return { ran: true, code: 0, stdout: pane, stderr: '' }; }
-    return { ran: true, code: 0, stdout: '', stderr: '' };
-  };
-  return { home, calls, run };
-};
-const literalSends = (calls: string[][]): string[] => calls.filter((a) => a[0] === 'send-keys' && a[3] === '-l').map((a) => a[5]!);
-const keyPresses = (calls: string[][]): string[] => calls.filter((a) => a[0] === 'send-keys' && a[3] !== '-l').map((a) => a[3]!);
-const sendCalls = (calls: string[][]): string[][] => calls.filter((a) => a[0] === 'send-keys' || a[0] === 'paste-buffer' || a[0] === 'load-buffer');
-
-const primed = async (panes: string[], o: { seed?: boolean; dead?: boolean; over?: Partial<Deps> } = {}) => {
-  const h = lane(panes, o.dead === true);
-  const coord = new CoordStore(openCoordDb(path.join(h.home, '.ccrc', 'coord.db')));
-  const deps = { ...testDeps(h.home, h.run), coord, ...(o.over ?? {}) } as Deps;
-  const w = quietAtTestEnd(new FleetWatcher(withFakeClock(deps), new Bus(), 2000));
-  await w.tick();
-  if (o.seed !== false) seedRegistry(h.home);
-  return { h, coord, w };
-};
-
-const designate = (coord: CoordStore, id: string): void => {
-  coord.designationRead = () => ({ kind: 'designated', sessionId: id, term: 1,
-    row: { bound: { sessionId: id, generation: 'inc-1' }, pending: null, term: 1, designatedTerm: 1 } }) as unknown as DesignationRead;
-};
-
 /** A report: mail from a session to the role, one delivery queued to `session`. */
 const queueReport = (coord: CoordStore, session: string = ID, fromId = PEER): { mailId: number; id: number } => {
   const mail = coord.insertMail({ fromId, fromUuid: 'u-peer', toId: 'overlord', runId: null, kind: 'status', subject: SUBJECT, body: 'the work is done', artifacts: [] });
   return { mailId: mail.id, id: coord.queueDelivery(mail.id, session, 'ccrc-mail test payload').id };
-};
-const queueMail = (coord: CoordStore, fromId: string, toId: string, session: string, subject: string): { mailId: number; id: number } => {
-  const mail = coord.insertMail({ fromId, fromUuid: fromId, toId, runId: null, kind: 'status', subject, body: 'b', artifacts: [] });
-  return { mailId: mail.id, id: coord.queueDelivery(mail.id, session, 'ccrc-mail test payload').id };
-};
-const rowOf = (coord: CoordStore, id: number): Record<string, unknown> =>
-  coord.db.prepare('SELECT * FROM mail_deliveries WHERE id = ?').get(id) as Record<string, unknown>;
-
-/** The next sweep: the clock past every back-off, the replay window and the lane's cadence. */
-const sweepFar = async (w: FleetWatcher): Promise<void> => { vi.setSystemTime(Date.now() + MAIL_REPLAY_MS + MAIL_SWEEP_MS + 1); await w.sweepMail(); };
-const sweepMany = async (w: FleetWatcher, n: number): Promise<void> => { for (let i = 0; i < n; i++) await sweepFar(w); };
-
-/** The delivery is as untouched as a never-swept one: the whole row equal, every column (gate stamp, attempts, times, park). */
-const expectUntouched = (coord: CoordStore, id: number, before: Record<string, unknown>): void => {
-  const now = rowOf(coord, id);
-  expect(now).toEqual(before);
-  expect(now.state).toBe('queued');
-  expect(now.attempts).toBe(0);
-  expect(now.lastGate).toBeNull();
-  expect(now.deliveredAt).toBeNull();
-  expect(now.parkedAt ?? null).toBeNull();
 };
 
 describe('a report to the Overlord is held by the mail sweep', () => {
