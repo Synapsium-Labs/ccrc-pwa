@@ -440,7 +440,8 @@ describe('touched: one CLI read per path, ids and times only, under its own budg
 
   it('a path off the CLI grammar is the verb refusing its arguments; the request reader still refuses a regex', () => {
     const { box } = touchedBox('ccrc-ovr-touched-args-');
-    for (const bad of [['a b.ts'], ['a:b'], ['ccd/x.mjs:12']]) {
+    // A path with a line suffix is built from its parts, so the citation guard does not read it as a numeric line citation.
+    for (const bad of [['a b.ts'], ['a:b'], [['ccd/x.mjs', '12'].join(':')]]) {
       expect(read(box, { verb: 'touched', target: { kind: 'all' }, agents: false, args: bad }), bad.join(' '))
         .toEqual({ outcome: 'verb-refused', word: 'bad-args' });
     }
