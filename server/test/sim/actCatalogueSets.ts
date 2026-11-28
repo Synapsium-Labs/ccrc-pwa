@@ -7,6 +7,8 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { expect } from 'vitest';
 import type { MutantSet, SuiteCase } from './mutate.js';
+import { GRANT_COVERS_SET, MAY_ACT_SET } from './mayActSets.js';
+import { ASK_POLICY_SET, MAY_ACT_W2_SET, STRENGTH_SET } from './mayActW2Sets.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');
 const CATALOGUE_TS = path.join(ROOT, 'shared/overlord.ts');
@@ -278,4 +280,10 @@ export const ACT_CATALOGUE_MUTANT_SETS: Record<string, MutantSet<never>> = {
   [`${KEY}#effectiveClasses`]: EFFECTIVE_CLASSES_SET as MutantSet<never>,
   [`${CEILING_KEY}#actCeilingStep`]: CEILING_SET as MutantSet<never>,
   [`${CEILING_KEY}#ceilingLatchDue`]: LATCH_DUE_SET as MutantSet<never>,
+  // PR B: the decider and its door, beside their cases (slug mutant-sets-beside-their-cases).
+  'server/src/coord/overlordMayAct.ts#overlordMayAct': MAY_ACT_SET as MutantSet<never>,
+  'server/src/coord/overlordMayAct.ts#grantCovers': GRANT_COVERS_SET as MutantSet<never>,
+  'server/src/coord/overlordMayActW2.ts#mayActW2': MAY_ACT_W2_SET as MutantSet<never>,
+  'server/src/coord/overlordPolicyAsk.ts#askPolicy': ASK_POLICY_SET as MutantSet<never>,
+  'shared/overlord-identity.ts#strengthAtLeast': STRENGTH_SET as MutantSet<never>,
 };
