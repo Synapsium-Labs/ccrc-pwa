@@ -74,6 +74,9 @@ export const REQUEST_TRANSITIONS = {
   'resume-parent': { actor: 'server', from: ['needs-you'], to: 'in-progress' },
   unblock: { actor: 'server', from: ['blocked'], to: 'in-progress' },
   'needs-you': { actor: 'server', from: ['received', 'routed', 'in-progress', 'blocked', 'declined'], to: 'needs-you' },
+  // Relay A (RL5): the server sends a relay to the operator instead of routing it. Never from `routed` (F5): a re-relay is never
+  // held. It enters `needs-you` even from `needs-you`, so an answer given before the hold never counts after it.
+  'relay-held': { actor: 'server', from: ['received', 'declined', 'needs-you'], to: 'needs-you' },
   answer: { actor: 'operator', from: ['needs-you'], to: 'in-progress' },
   'answer-recorded': { actor: 'operator', from: ['needs-you'], to: 'needs-you' },
   take: { actor: 'operator', from: ['routed', 'in-progress', 'blocked'], to: 'needs-you' },
@@ -128,8 +131,8 @@ export const REQUEST_MOVE_FIELDS: Readonly<Record<RequestMove, readonly RequestC
   open: [], route: RELAY_FIELDS, 're-relay': RELAY_FIELDS, 'route-elsewhere': RELAY_FIELDS, drop: CLOSE_FIELDS, escalate: [],
   acknowledge: [], counter: ['counters'], decline: [], block: ['dependsOn'], fail: CLOSE_FIELDS, close: CLOSE_FIELDS,
   'close-unowned': CLOSE_FIELDS, 'close-unverified': [], 'start-parent': [], 'close-parent': CLOSE_FIELDS, 'resume-parent': [],
-  unblock: [], 'needs-you': [], answer: [], 'answer-recorded': [], take: [], 'hand-back-routed': [], 'hand-back-in-progress': [],
-  'hand-back-blocked': [], confirm: CLOSE_FIELDS, withdraw: CLOSE_FIELDS,
+  unblock: [], 'needs-you': [], 'relay-held': [], answer: [], 'answer-recorded': [], take: [], 'hand-back-routed': [],
+  'hand-back-in-progress': [], 'hand-back-blocked': [], confirm: CLOSE_FIELDS, withdraw: CLOSE_FIELDS,
 };
 /** The moves whose move requires a field: `drop` carries the dropper's reason (Table 5.1a, RQ17). */
 export const REQUEST_MOVE_REQUIRED_FIELDS: Readonly<Partial<Record<RequestMove, readonly RequestColumn[]>>> = { drop: ['closeNote'] };
@@ -140,7 +143,7 @@ export const REQUEST_MOVE_REQUIRED_FIELDS: Readonly<Partial<Record<RequestMove, 
 export const REQUEST_MOVE_REASON_MAP = {
   'needs-start': { moves: ['escalate'], says: 'it needs a programme started (Q28)' },
   'needs-proposal': { moves: ['escalate'], says: 'it needs a proposal (Q28)' },
-  'unnamed-widening': { moves: ['escalate'], says: 'it widens past what the operator named' },
+  'unnamed-widening': { moves: ['escalate', 'relay-held'], says: 'it widens past what the operator named' },
   dropped: { moves: ['drop'], says: 'the Overlord dropped it, with its reason in the close note (RQ17)' },
   'outside-goals': { moves: ['decline'], says: "outside its owner's goals (coordinator doors RD9)" },
   'goal-conflict': { moves: ['decline'], says: "in conflict with one of its owner's goals (RD9)" },
@@ -155,6 +158,9 @@ export const REQUEST_MOVE_REASON_MAP = {
   'child-ended': { moves: ['needs-you'], says: 'a child of this parent ended (done tests)' },
   'dependency-ended': { moves: ['needs-you'], says: 'the dependency it waited on ended (done tests)' },
   'operator-took-it': { moves: ['take'], says: 'the operator took it (the operator request doors)' },
+  'widening-unclear': { moves: ['relay-held'], says: 'the scope-widening gate did not clear the widening it carries (relay, RL5)' },
+  'quote-private-name': { moves: ['relay-held'], says: 'the quote the server renders names a private name (relay, RL5)' },
+  'quote-unchecked': { moves: ['relay-held'], says: 'a cited message the server cannot render, or could not read (relay, F1)' },
 } as const satisfies Readonly<Record<string, { readonly moves: readonly RequestMove[]; readonly says: string }>>;
 export type RequestMoveReason = keyof typeof REQUEST_MOVE_REASON_MAP;
 export const REQUEST_MOVE_REASONS = Object.keys(REQUEST_MOVE_REASON_MAP) as RequestMoveReason[];
@@ -167,6 +173,22 @@ export const reasonsOfMove = (move: RequestMove): readonly RequestMoveReason[] =
 /** The escalate door's three reasons (index question 7, ruling F6), derived from the reason rows. */
 export type EscalateReason = Extract<RequestMoveReason, 'needs-start' | 'needs-proposal' | 'unnamed-widening'>;
 export const ESCALATE_REASONS = reasonsOfMove('escalate') as readonly EscalateReason[];
+/** The relay's four hold reasons (RL5), derived from the reason rows: `unnamed-widening` is shared with the escalate door. */
+export type RelayHoldReason =
+  Extract<RequestMoveReason, 'unnamed-widening' | 'widening-unclear' | 'quote-private-name' | 'quote-unchecked'>;
+export const RELAY_HOLD_REASONS = reasonsOfMove('relay-held') as readonly RelayHoldReason[];
+
+/** The relay door's three moves (relay A, Table 4): each body word names the request record's move of the same name, so the
+ *  door never spells a move twice. */
+export const RELAY_MOVE_MAP = {
+  route: 'route', 're-relay': 're-relay', 'route-elsewhere': 'route-elsewhere',
+} as const satisfies Readonly<Record<string, RequestMove>>;
+export type RelayMove = keyof typeof RELAY_MOVE_MAP;
+export const RELAY_MOVES = Object.keys(RELAY_MOVE_MAP) as RelayMove[];
+export const isRelayMove = (v: unknown): v is RelayMove => typeof v === 'string' && Object.hasOwn(RELAY_MOVE_MAP, v);
+/** The relay's own bounds (Table 11.5b, RL15): the part, the act row's why and the cited entries. Its expected paths are
+ *  `REQUEST_BOUNDS`' (RQ16) and its done test `DONE_TEST_BOUNDS`'; neither is restated. */
+export const RELAY_BOUNDS = { partChars: 1_500, whyChars: 600, entries: 16 } as const;
 
 /** One expected path (RQ3): the project it is in and a path, normalised by `normalizeClaimPath`, never a glob. */
 export interface ExpectedPath { readonly project: string; readonly path: string }

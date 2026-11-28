@@ -81,6 +81,7 @@ import { ISOLATION_MUTANT_SETS } from './isolationSets.js';
 import { CHAT_MUTANT_SETS } from './chatSets.js';
 import { REQUEST_MUTANT_SETS } from './requestSets.js';
 import { ACT_ROWS_MUTANT_SETS } from './overlordActsSets.js';
+import { RELAY_MUTANT_SETS } from './relaySets.js';
 import { simulate } from './run.js';
 import {
   CARD_BLOCK_KEY, CARD_BLOCK_SET, CARD_NEVER_EMPTY_KEY, CARD_NEVER_EMPTY_SET, CARD_ONE_LINE_KEY, CARD_ONE_LINE_SET, CARD_TRIM_KEY,
@@ -327,6 +328,7 @@ const MUTANT_SETS: Record<string, MutantSet<never>> = {
   ...ACCOUNT_LOAD_MUTANT_SETS,
   ...REQUEST_MUTANT_SETS,
   ...ACT_ROWS_MUTANT_SETS,
+  ...RELAY_MUTANT_SETS,
 };
 
 it('rewriteRelativeImports makes ./ and ../ absolute and leaves bare specifiers', () => {

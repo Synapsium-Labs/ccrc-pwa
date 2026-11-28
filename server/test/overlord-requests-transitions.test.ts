@@ -8,6 +8,7 @@ import {
   REQUEST_ORIGINS, REQUEST_STATES, REQUEST_TRANSITIONS, ROOT_FOUND_WINDOW_MS, SHORTLIST_MAX, TERMINAL_REQUEST_STATES,
   UNCLOCKED_REQUEST_STATES, isRequestMove, isRequestMoveReason, isRequestState, isTerminalRequestState, reasonsOfMove,
   requestMoveEntersNeedsYou, requestTransition, transitionEntersNeedsYou,
+  RELAY_BOUNDS, RELAY_HOLD_REASONS, RELAY_MOVES, RELAY_MOVE_MAP, isRelayMove,
   type RequestActor, type RequestColumn, type RequestMove, type RequestMoveReason, type RequestState,
 } from '../../shared/overlordRequests.js';
 import { ACTOR_KINDS } from '../../shared/overlord-identity.js';
@@ -35,6 +36,7 @@ const EXPECTED: Record<RequestMove, Row> = {
   'resume-parent': { actor: 'server', from: ['needs-you'], to: 'in-progress' },
   unblock: { actor: 'server', from: ['blocked'], to: 'in-progress' },
   'needs-you': { actor: 'server', from: ['received', 'routed', 'in-progress', 'blocked', 'declined'], to: 'needs-you' },
+  'relay-held': { actor: 'server', from: ['received', 'declined', 'needs-you'], to: 'needs-you' },
   answer: { actor: 'operator', from: ['needs-you'], to: 'in-progress' },
   'answer-recorded': { actor: 'operator', from: ['needs-you'], to: 'needs-you' },
   take: { actor: 'operator', from: ['routed', 'in-progress', 'blocked'], to: 'needs-you' },
@@ -54,11 +56,12 @@ const EXPECTED_MOVES = Object.keys(EXPECTED) as RequestMove[];
 
 // The reason words, spelled out independently of the map (each with its moves, in the map's order).
 const EXPECTED_REASONS: Record<RequestMoveReason, readonly RequestMove[]> = {
-  'needs-start': ['escalate'], 'needs-proposal': ['escalate'], 'unnamed-widening': ['escalate'], dropped: ['drop'],
+  'needs-start': ['escalate'], 'needs-proposal': ['escalate'], 'unnamed-widening': ['escalate', 'relay-held'], dropped: ['drop'],
   'outside-goals': ['decline'], 'goal-conflict': ['decline'], impossible: ['decline'], duplicate: ['decline'],
   'two-counters': ['needs-you'], 'two-silent-nudges': ['needs-you'], 'due-unarmed': ['needs-you'], 'off-before-ack': ['needs-you'],
   'off-after-decline': ['needs-you'], restore: ['needs-you'], 'child-ended': ['needs-you'], 'dependency-ended': ['needs-you'],
-  'operator-took-it': ['take'],
+  'operator-took-it': ['take'], 'widening-unclear': ['relay-held'], 'quote-private-name': ['relay-held'],
+  'quote-unchecked': ['relay-held'],
 };
 
 describe('vocabulary', () => {
@@ -157,7 +160,7 @@ describe('Table 4, REQUEST_TRANSITIONS', () => {
 
 describe('what a move enters', () => {
   it('a move enters needs-you when it reaches it from another state, and answer-recorded does not', () => {
-    const entering: RequestMove[] = ['escalate', 'needs-you', 'take'];
+    const entering: RequestMove[] = ['escalate', 'needs-you', 'relay-held', 'take'];
     expect(REQUEST_MOVES.filter((m) => requestMoveEntersNeedsYou(m))).toEqual(entering);
     expect(requestMoveEntersNeedsYou('answer-recorded')).toBe(false);
     // by the rule, not by a list: every row that reaches needs-you from a state other than needs-you
@@ -205,6 +208,7 @@ describe('fields', () => {
       open: [], route: relay, 're-relay': relay, 'route-elsewhere': relay, drop: closeNote, escalate: [], acknowledge: [],
       counter: ['counters'], decline: [], block: ['dependsOn'], fail: closeNote, close: closeNote, 'close-unowned': closeNote,
       'close-unverified': [], 'start-parent': [], 'close-parent': closeNote, 'resume-parent': [], unblock: [], 'needs-you': [],
+      'relay-held': [],
       answer: [], 'answer-recorded': [], take: [], 'hand-back-routed': [], 'hand-back-in-progress': [], 'hand-back-blocked': [],
       confirm: closeNote, withdraw: closeNote,
     };
@@ -263,5 +267,44 @@ describe('the citation details (plan Table 6)', () => {
     for (const bad of ['', 'too-large', 'said-not-operator', 'constructor', 'toString', '__proto__', null, undefined, 1]) {
       expect(isRequestCitationDetail(bad), String(bad)).toBe(false);
     }
+  });
+});
+
+describe('the relay\'s vocabulary (W2 relay plan, Task A1)', () => {
+  it('relay-held is a server move from received, declined and needs-you to needs-you, and never from routed (F5)', () => {
+    expect(REQUEST_TRANSITIONS['relay-held']).toEqual({ actor: 'server', from: ['received', 'declined', 'needs-you'], to: 'needs-you' });
+    expect(REQUEST_TRANSITIONS['relay-held'].from).not.toContain('routed');
+    // it enters needs-you even from needs-you, so an answer given before the hold never counts after it
+    expect(requestMoveEntersNeedsYou('relay-held')).toBe(true);
+    expect(REQUEST_MOVE_FIELDS['relay-held']).toEqual([]);
+  });
+
+  it('every move to needs-you from another state carries a reason word, relay-held its four', () => {
+    for (const m of REQUEST_MOVES.filter((x) => requestMoveEntersNeedsYou(x))) expect(reasonsOfMove(m).length, m).toBeGreaterThan(0);
+    expect([...RELAY_HOLD_REASONS]).toEqual(['unnamed-widening', 'widening-unclear', 'quote-private-name', 'quote-unchecked']);
+    expect([...reasonsOfMove('relay-held')]).toEqual([...RELAY_HOLD_REASONS]);
+    // the escalate door keeps its three; unnamed-widening is shared, the three new words are relay-held's alone
+    expect([...ESCALATE_REASONS]).toEqual(['needs-start', 'needs-proposal', 'unnamed-widening']);
+    for (const r of ['widening-unclear', 'quote-private-name', 'quote-unchecked'] as const) {
+      expect(REQUEST_MOVE_REASON_MAP[r].moves, r).toEqual(['relay-held']);
+    }
+  });
+
+  it('RELAY_MOVES names only Overlord moves of the table, each the move of its own name', () => {
+    expect([...RELAY_MOVES]).toEqual(['route', 're-relay', 'route-elsewhere']);
+    for (const m of RELAY_MOVES) {
+      expect(RELAY_MOVE_MAP[m], m).toBe(m);
+      expect(isRequestMove(m), m).toBe(true);
+      expect(REQUEST_TRANSITIONS[RELAY_MOVE_MAP[m]].actor, m).toBe('overlord');
+      expect(REQUEST_TRANSITIONS[RELAY_MOVE_MAP[m]].to, m).toBe('routed');
+    }
+    for (const v of ['open', 'drop', 'relay-held', '', 'Route', '__proto__', 'constructor', null, 1]) {
+      expect(isRelayMove(v), String(v)).toBe(false);
+    }
+  });
+
+  it('the relay\'s own bounds are the plan\'s values (RL15); the paths and the done test keep their owners\' bounds', () => {
+    expect(RELAY_BOUNDS).toEqual({ partChars: 1_500, whyChars: 600, entries: 16 });
+    expect(Object.keys(RELAY_BOUNDS)).not.toContain('expectedPaths');
   });
 });

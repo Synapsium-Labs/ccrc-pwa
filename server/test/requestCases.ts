@@ -44,6 +44,7 @@ const ROWS: Record<RequestMove, { actor: RequestActor; from: readonly RequestSta
   'resume-parent': { actor: 'server', from: ['needs-you'], to: 'in-progress' },
   unblock: { actor: 'server', from: ['blocked'], to: 'in-progress' },
   'needs-you': { actor: 'server', from: ROUTED_NEEDS, to: 'needs-you' },
+  'relay-held': { actor: 'server', from: ['received', 'declined', 'needs-you'], to: 'needs-you' },
   answer: { actor: 'operator', from: ['needs-you'], to: 'in-progress' },
   'answer-recorded': { actor: 'operator', from: ['needs-you'], to: 'needs-you' },
   take: { actor: 'operator', from: ['routed', 'in-progress', 'blocked'], to: 'needs-you' },
@@ -63,16 +64,17 @@ const FIELDS: Record<RequestMove, readonly RequestColumn[]> = {
   open: [], route: ['owner', 'doneTest', 'expectedPaths'], 're-relay': ['owner', 'doneTest', 'expectedPaths'],
   'route-elsewhere': ['owner', 'doneTest', 'expectedPaths'], drop: ['closeNote'], escalate: [], acknowledge: [], counter: ['counters'],
   decline: [], block: ['dependsOn'], fail: ['closeNote'], close: ['closeNote'], 'close-unowned': ['closeNote'], 'close-unverified': [],
-  'start-parent': [], 'close-parent': ['closeNote'], 'resume-parent': [], unblock: [], 'needs-you': [], answer: [],
+  'start-parent': [], 'close-parent': ['closeNote'], 'resume-parent': [], unblock: [], 'needs-you': [], 'relay-held': [], answer: [],
   'answer-recorded': [], take: [], 'hand-back-routed': [], 'hand-back-in-progress': [], 'hand-back-blocked': [],
   confirm: ['closeNote'], withdraw: ['closeNote'],
 };
 const REASONS: Record<RequestMoveReason, readonly RequestMove[]> = {
-  'needs-start': ['escalate'], 'needs-proposal': ['escalate'], 'unnamed-widening': ['escalate'], dropped: ['drop'],
+  'needs-start': ['escalate'], 'needs-proposal': ['escalate'], 'unnamed-widening': ['escalate', 'relay-held'], dropped: ['drop'],
   'outside-goals': ['decline'], 'goal-conflict': ['decline'], impossible: ['decline'], duplicate: ['decline'],
   'two-counters': ['needs-you'], 'two-silent-nudges': ['needs-you'], 'due-unarmed': ['needs-you'], 'off-before-ack': ['needs-you'],
   'off-after-decline': ['needs-you'], restore: ['needs-you'], 'child-ended': ['needs-you'], 'dependency-ended': ['needs-you'],
-  'operator-took-it': ['take'],
+  'operator-took-it': ['take'], 'widening-unclear': ['relay-held'], 'quote-private-name': ['relay-held'],
+  'quote-unchecked': ['relay-held'],
 };
 const REASON_WORDS = Object.keys(REASONS) as RequestMoveReason[];
 const reasonsOf = (m: RequestMove): RequestMoveReason[] => REASON_WORDS.filter((r) => REASONS[r].includes(m));
