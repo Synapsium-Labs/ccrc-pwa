@@ -5,7 +5,7 @@ import { describe, expect, it } from 'vitest';
 import { DECISION_QUESTIONS as Q } from '../../shared/decisionModel.js';
 import { cardFieldsOf, type CardRefText } from '../src/coord/labelCards.js';
 import {
-  cardHoldsSlot, cardRefNeeds, labelsNeeded, nextCandidate, pickRowFactsOf, stateDrawability, type RefFound,
+  cardHoldsSlot, cardRefNeeds, labelBudget, labelsNeeded, nextCandidate, openSlotsHeld, pickRowFactsOf, stateDrawability, type RefFound,
 } from '../src/coord/labelQueue.js';
 
 const found = (entries: Record<string, RefFound>): ReadonlyMap<string, RefFound> => new Map(Object.entries(entries));
@@ -65,6 +65,28 @@ describe('cardHoldsSlot: what counts as open for the budget (point a)', () => {
     expect(cardHoldsSlot('shown', 'absent')).toBe(false);
     expect(cardHoldsSlot('shown', 'no-reader')).toBe(false);
     expect(cardHoldsSlot('hidden', 'drawable')).toBe(false);
+  });
+});
+
+describe('labelBudget and openSlotsHeld', () => {
+  it('the budget is ten less the larger of picked and open, never below 0', () => {
+    expect(labelBudget(0, 0)).toBe(10);
+    expect(labelBudget(3, 5)).toBe(5);
+    expect(labelBudget(7, 1)).toBe(3);
+    expect(labelBudget(10, 0)).toBe(0);
+    expect(labelBudget(12, 0)).toBe(0);
+  });
+  it('only shown cards whose state can still be drawn hold a slot; an unreadable row\'s card holds one', () => {
+    const card = { row: 'relay.method' as const, revision: 'r1' };
+    expect(openSlotsHeld([
+      { card, mode: 'shadow', revision: 'r1', drawability: 'drawable' },
+      { card, mode: 'armed', revision: 'r1', drawability: 'unmeasured' },
+      { card, mode: 'shadow', revision: 'r1', drawability: 'absent' },
+      { card, mode: 'shadow', revision: 'r1', drawability: 'no-reader' },
+      { card, mode: 'off', revision: 'r1', drawability: 'drawable' },
+      { card, mode: 'shadow', revision: 'r2', drawability: 'drawable' },
+      { card, mode: 'unreadable', revision: 'r1', drawability: 'absent' },
+    ])).toBe(3);
   });
 });
 

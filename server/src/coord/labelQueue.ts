@@ -83,6 +83,12 @@ export interface PickRowFacts {
 
 type Waiting = PickRowFacts['waiting'][number];
 
+/** Table 3 step 1 (LQ2): ten less the cards picked this week, and ten less the open cards that hold a slot, never below 0.
+ *  The pick and the lane's re-read inside the pick's transaction both ask this, so the rule is written once. */
+export function labelBudget(pickedThisWeek: number, open: number): number {
+  return Math.max(0, Math.min(LABEL_CARDS_PER_WEEK - pickedThisWeek, LABEL_CARDS_PER_WEEK - open));
+}
+
 /** How many cards a row may take in the pass's second share, from its `needed`. */
 const shareOf = (needed: PickRowFacts['needed']): number => (needed === 'none' ? 0 : needed === 'far' ? LABELS_NEEDED_CAP : needed);
 /** A number before `far` before `none`. */
@@ -109,7 +115,7 @@ const caseOrder = (a: Waiting, b: Waiting): number =>
 export function pickLabelCards(f: {
   week: { key: string; start: number }; pickedThisWeek: number; open: number; rows: readonly PickRowFacts[];
 }): readonly { row: DecisionRowId; stateHash: string; recordId: number }[] {
-  const budget = Math.max(0, Math.min(LABEL_CARDS_PER_WEEK - f.pickedThisWeek, LABEL_CARDS_PER_WEEK - f.open));
+  const budget = labelBudget(f.pickedThisWeek, f.open);
   if (budget === 0) return [];
   const gapMs = LABEL_ROW_MAX_GAP_WEEKS * 7 * DAY_MS;
   const entries = f.rows
@@ -233,6 +239,17 @@ export function stateDrawability(needs: CardRefNeeds, found: ReadonlyMap<string,
  *  absent or has no reader, which can never be drawn. An unmeasured one still holds its slot until a read measures it. */
 export function cardHoldsSlot(shown: 'shown' | 'hidden', drawability: 'drawable' | LabelSkipWord): boolean {
   return shown === 'shown' && drawability !== 'absent' && drawability !== 'no-reader';
+}
+
+/** The open cards that hold a slot, for the budget: each through `cardShown` and `cardHoldsSlot`. A card whose row this build
+ *  cannot read holds its slot (doubt keeps the cap, never widens it). */
+export function openSlotsHeld(cards: readonly { card: { row: DecisionRowId; revision: string }; mode: DecisionRowMode | 'unreadable';
+  revision: string; drawability: 'drawable' | LabelSkipWord }[]): number {
+  let n = 0;
+  for (const c of cards) {
+    if (c.mode === 'unreadable' || cardHoldsSlot(cardShown(c.card, { mode: c.mode, revision: c.revision }), c.drawability)) n++;
+  }
+  return n;
 }
 
 /** One card row's facts for `pickLabelCards`: its need at the next candidate, and the waiting states that can be drawn, each

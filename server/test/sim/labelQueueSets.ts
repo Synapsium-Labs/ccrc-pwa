@@ -118,7 +118,7 @@ const PICK_SET: MutantSet<Queue> = {
     // Due at more than the gap, not at it.
     { id: 'PK4', old: 'f.week.start - r.lastCardWeekStart >= gapMs', new: 'f.week.start - r.lastCardWeekStart > gapMs' },
     // The open cap left out of the budget.
-    { id: 'PK5', old: ', LABEL_CARDS_PER_WEEK - f.open)', new: ')' },
+    { id: 'PK5', old: ', LABEL_CARDS_PER_WEEK - open)', new: ')' },
     // A row with nothing needed still takes a card in the second share.
     { id: 'PK6', old: "needed === 'none' ? 0 :", new: "needed === 'none' ? 1 :" },
   ],
@@ -444,9 +444,22 @@ const HOLDS_SLOT_SET: MutantSet<Queue> = {
     { id: 'HS2', old: "&& drawability !== 'absent' && drawability !== 'no-reader';", new: "&& drawability !== 'absent';" },
     { id: 'HS3', old: "return shown === 'shown' && drawability", new: 'return true && drawability' },
     { id: 'HS4', old: "drawability !== 'absent' && drawability !== 'no-reader'", new: "drawability !== 'no-reader' && drawability !== 'unmeasured'" },
+    // openSlotsHeld, the loop over the open cards that asks the two above.
+    { id: 'HS5', old: "if (c.mode === 'unreadable' || cardHoldsSlot(", new: 'if (cardHoldsSlot(' },
+    { id: 'HS6', old: '{ mode: c.mode, revision: c.revision }), c.drawability)) n++;', new: "{ mode: c.mode, revision: c.card.revision }), c.drawability)) n++;" },
   ],
   suite(m): Record<string, SuiteCase> {
+    const card = { row: 'relay.method' as DecisionRowId, revision: 'r1' };
     return {
+      'openSlotsHeld counts shown holding cards, an unreadable row\'s card included': () => {
+        expect(m.openSlotsHeld([
+          { card, mode: 'shadow', revision: 'r1', drawability: 'drawable' },
+          { card, mode: 'unreadable', revision: 'r1', drawability: 'absent' },
+          { card, mode: 'shadow', revision: 'r2', drawability: 'drawable' },
+          { card, mode: 'off', revision: 'r1', drawability: 'drawable' },
+          { card, mode: 'armed', revision: 'r1', drawability: 'no-reader' },
+        ])).toBe(2);
+      },
       'a shown drawable or unmeasured card holds a slot': () => {
         expect(m.cardHoldsSlot('shown', 'drawable')).toBe(true);
         expect(m.cardHoldsSlot('shown', 'unmeasured')).toBe(true);

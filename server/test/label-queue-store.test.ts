@@ -8,7 +8,7 @@ import { DECISION_QUESTIONS, type DecisionRowId } from '../../shared/decisionMod
 import { openCoordDb } from '../src/coord/db.js';
 import { recordDecision } from '../src/coord/decisionModelStore.js';
 import {
-  closeLabelCardInTx, labelCardById, labelCardCounts, labelLaneReadsOf, labelledAnswersOf, labelledCasesOf, openLabelCards,
+  closeLabelCardInTx, labelCardById, labelCardCounts, labelLaneReadsOf, labelledAnswersOf, labelledCasesOf, labelRefFactsOf, openLabelCards,
   pickLabelCardsInTx, waitingStates,
 } from '../src/coord/labelQueueStore.js';
 import type { MeasuredLabels } from '../src/coord/labelQueuePorts.js';
@@ -224,6 +224,19 @@ describe('the lane reads', () => {
     record(db, 's1');
     const broken: MeasuredLabels = { labelsFor: () => { throw new Error('unreadable'); } };
     expect(() => labelLaneReadsOf(db, broken).waiting(ROW, REV)).toThrow(/unreadable/);
+  });
+});
+
+describe('labelRefFactsOf: present, absent or unmeasured, never folded', () => {
+  const measured = (value: unknown) => ({ kind: 'measured' as const, value });
+  it('a message by its facts read, a mail by its row', () => {
+    const f = labelRefFactsOf({ messageFactsById: (id) => measured(id === 1 ? { id: 1 } : 'absent') }, { mailOrigin: (id) => (id === 5 ? { body: 'x' } : null) });
+    expect([f.found('message', 1), f.found('message', 2), f.found('mail', 5), f.found('mail', 6)]).toEqual(['present', 'absent', 'present', 'absent']);
+  });
+  it('no private store, an unmeasured read and a throw are unmeasured', () => {
+    expect(labelRefFactsOf(undefined, { mailOrigin: () => null }).found('message', 1)).toBe('unmeasured');
+    expect(labelRefFactsOf({ messageFactsById: () => ({ kind: 'unmeasured' }) }, { mailOrigin: () => null }).found('message', 1)).toBe('unmeasured');
+    expect(labelRefFactsOf(undefined, { mailOrigin: () => { throw new Error('locked'); } }).found('mail', 1)).toBe('unmeasured');
   });
 });
 

@@ -4,7 +4,7 @@
 // The doors' own port, `LabelCardStore`, is declared in their file (`labelCardRoutes.ts`, C6), never here.
 import type { DecisionRowId, DecisionRowMode } from '../../../shared/decisionModel.js';
 import type { LabelledAnswer } from './decisionLines.js';
-import type { LabelCardRow, LabelSource } from './labelQueue.js';
+import type { CardRefKind, LabelCardRow, LabelSource, RefFound } from './labelQueue.js';
 
 /** The labels measured rows already hold (LQ8), read at each call and never copied: the overlaps ruling, the owner that
  *  accepted a request, an outcome. PR A wires an empty source; PR B adds `operator-answer` and `routed-to`. A read that fails
@@ -23,6 +23,15 @@ export interface LabelStateRecord {
   /** The record's verdict, or null for a word this build cannot read (such a record is never marked). */
   readonly verdict: LabelledAnswer['verdict'] | null;
   readonly p: number;
+  /** The record's refs, or null when this build cannot read them (the state is then never drawn). */
+  readonly refs: Readonly<Record<string, string | readonly string[]>> | null;
+}
+
+/** Whether a ref an open card or a waiting state names still exists, through an owner's read that returns facts and never text
+ *  (the private store's message facts, the coordination store's mail row): the lane never picks a state proven absent, and a
+ *  card proven absent holds no slot (the coordinator's ruling on the gap, point a). Never throws. */
+export interface LabelRefFacts {
+  found(refKind: CardRefKind, id: number): RefFound;
 }
 
 /** What the weekly lane reads. Each read either answers or throws; a row whose read throws is left out of that pass. */
@@ -35,6 +44,8 @@ export interface LabelLaneReads {
   labelledAnswers(row: DecisionRowId, revision: string): readonly LabelledAnswer[];
   /** Every open card, unfiltered (`cardShown` is the one filter, F12). */
   openCards(): readonly LabelCardRow[];
+  /** A card's record's refs: `absent` when no record holds the id, `unreadable` when its refs cannot be read. */
+  recordRefs(recordId: number): Readonly<Record<string, string | readonly string[]>> | 'absent' | 'unreadable';
   /** Cards picked in `week`, and each row's newest card's week start. */
   counts(week: string): { pickedThisWeek: number; lastCardWeekStart: ReadonlyMap<DecisionRowId, number> };
   /** `pickLabelCardsInTx`, with the budget re-read inside its transaction through `budget`. */

@@ -20,7 +20,7 @@ import type { LabelledAnswer } from './decisionLines.js';
 import type { LabelledCases } from './decisionModelPort.js';
 import { decisionRowRead, verdictOf } from './decisionModelStore.js';
 import { labelFor, type LabelCardRow, type LabelSource } from './labelQueue.js';
-import type { LabelLaneReads, LabelStateRecord, MeasuredLabels } from './labelQueuePorts.js';
+import type { LabelLaneReads, LabelRefFacts, LabelStateRecord, MeasuredLabels } from './labelQueuePorts.js';
 import { tx } from './tx.js';
 
 type Label = LabelledAnswer['label'];
@@ -183,7 +183,18 @@ export function waitingStates(db: DatabaseSync, measured: MeasuredLabels, row: D
     { stateHash: string }[]).map((c) => c.stateHash));
   return newestRecords(db, row, revision)
     .filter((r) => !labelled.has(r.stateHash) && !carded.has(r.stateHash))
-    .map((r) => ({ stateHash: r.stateHash, recordId: r.id, at: r.at, verdict: verdictOf(r.verdict), p: r.p }));
+    .map((r) => ({ stateHash: r.stateHash, recordId: r.id, at: r.at, verdict: verdictOf(r.verdict), p: r.p, refs: parseRefs(r.refs) }));
+}
+
+/** One record's refs and inline fields, for a card's rebuild: `absent` when no record holds the id, `unreadable` when this
+ *  build cannot read them. */
+export function labelRecordOf(db: DatabaseSync, recordId: number):
+  { refs: Record<string, string | readonly string[]>; inline: Record<string, string> | null } | 'absent' | 'unreadable' {
+  const r = db.prepare('SELECT refs, inline FROM decision_records WHERE id = ?').get(recordId) as { refs: string; inline: string | null } | undefined;
+  if (r === undefined) return 'absent';
+  const refs = parseRefs(r.refs);
+  const inline = parseInline(r.inline);
+  return refs === null || inline === 'bad' ? 'unreadable' : { refs, inline };
 }
 
 /** The labelled states at a revision with their newest record's answer: what `labelsNeeded` counts. A labelled state with no
@@ -219,6 +230,27 @@ export function labelledCasesOf(db: DatabaseSync, measured: MeasuredLabels): Lab
   };
 }
 
+/** The ref facts adapter (`LabelRefFacts`): a message through the private store's facts read (`messageFactsById`, ids and stamps,
+ *  never text), a mail through the coordination store's one-row read. An absent private store, an unmeasured read and a read that
+ *  throws are each `unmeasured`, never `absent`. Typed by what it calls, so this file imports nothing from the private store. */
+export function labelRefFactsOf(
+  messages: { messageFactsById(id: number): { kind: 'measured'; value: unknown } | { kind: 'unmeasured' } } | undefined,
+  mail: { mailOrigin(id: number): unknown },
+): LabelRefFacts {
+  return {
+    found(refKind, id) {
+      try {
+        if (refKind === 'mail') return mail.mailOrigin(id) === null ? 'absent' : 'present';
+        if (messages === undefined) return 'unmeasured';
+        const r = messages.messageFactsById(id);
+        return r.kind === 'unmeasured' ? 'unmeasured' : r.value === 'absent' ? 'absent' : 'present';
+      } catch {
+        return 'unmeasured';
+      }
+    },
+  };
+}
+
 /** The lane's reads over one handle (`LabelLaneReads`, declared by `labelQueueLane.ts`'s port file). */
 export function labelLaneReadsOf(db: DatabaseSync, measured: MeasuredLabels): LabelLaneReads {
   return {
@@ -226,6 +258,7 @@ export function labelLaneReadsOf(db: DatabaseSync, measured: MeasuredLabels): La
     waiting: (row, revision) => waitingStates(db, measured, row, revision),
     labelledAnswers: (row, revision) => labelledAnswersOf(db, measured, row, revision),
     openCards: () => openLabelCards(db),
+    recordRefs: (recordId) => { const r = labelRecordOf(db, recordId); return typeof r === 'string' ? r : r.refs; },
     counts: (week) => labelCardCounts(db, week),
     pick: (week, picks, at, budget) => pickLabelCardsInTx(db, week, picks, at, budget),
   };
