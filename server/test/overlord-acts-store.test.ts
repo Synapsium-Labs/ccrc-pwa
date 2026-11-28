@@ -52,7 +52,8 @@ const journal = (db: DatabaseSync): Double => {
       d.events.push(`append rows=${count(db)}`);
       try { apply(); } catch (e) { d.events.push('apply threw'); return { ok: false, error: 'journal-append', detail: e instanceof Error ? e.message : String(e) }; }
       d.events.push(`applied rows=${count(db)}`);
-      return { ok: true, sequence: d.calls.length };
+      // The last record's sequence this append wrote, counting every record from 1, as the port says (the writers do not read it).
+      return { ok: true, sequence: d.calls.reduce((n, r) => n + r.length, 0) };
     },
   };
   return d;

@@ -113,6 +113,8 @@ const APPLY_SETTLE_SET: MutantSet<ActsStoreModule> = {
     { id: 'A2 the settle\'s apply does not compare its from', old: ' || again.plan.record.from !== plan.record.from) {', new: ') {' },
     { id: 'A3 every door settle\'s line is the server\'s', old: "const own = plan.by === 'door' && (a.kind === 'session' || a.kind === 'operator');", new: 'const own = false;' },
     { id: 'A4 an operator\'s door settle\'s line is the server\'s', old: "(a.kind === 'session' || a.kind === 'operator')", new: "a.kind === 'session'" },
+    // Review 4218 F1: the other side of the same line, a lane's or the boot pass's settle of a session's or an operator's row.
+    { id: 'A5 every settle\'s line is the act\'s own actor\'s', old: "plan.by === 'door' && ", new: '' },
   ],
 };
 const WIRING_KEY = 'server/src/coord/overlordCeilingWiring.ts';
