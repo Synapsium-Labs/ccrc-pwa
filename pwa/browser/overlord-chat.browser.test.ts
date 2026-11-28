@@ -16,7 +16,7 @@
 //   row; the newest page holds the Overlord's recorded replies, one with its "I handled this elsewhere" control, one off the
 //   record and cut, one with no response row (no control); each stays inside the part's column, and pressing "Show older" reads
 //   the second page by its cursor and draws it above, with no sideways scroll, and the control gone;
-// - (PR B) pressing "I handled this elsewhere" says it was handled; a reply on screen for a second posts its one `opened` receipt.
+// - (PR B) pressing "I handled this elsewhere" says it was handled; a reply on screen for a second posts its one `opened` receipt, and a reply with no response row posts none.
 //
 // Run: `( cd pwa && CCRC_CHROME=<a Chrome or Chromium binary> ./node_modules/.bin/vitest run --config vitest.browser.config.ts browser/overlord-chat.browser.test.ts )`.
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -302,22 +302,26 @@ describe.each(SKINS)('the Overlord chat in %s', (skin) => {
 });
 
 describe('a reply on screen posts its opened receipt', () => {
-  it('a reply seen for a second posts one receipt for { kind: reply, id }, once, and no reply that is not on screen', async () => {
+  it('a reply seen for a second posts one receipt for { kind: reply, id }, once; none for a reply with no response row, nor one not on screen', async () => {
     const { ctx, page, errors, posts } = await open('refined', 'light', 1280);
     try {
       const receipts = (): string[] => posts.filter((p) => p.url.endsWith('/api/responses/receipts')).map((p) => p.body);
       // The part sits below the fold of the Overlord's place: nothing is on screen, so nothing is posted, until it is scrolled to.
       await page.waitForTimeout(1_500);
       expect(receipts(), 'a reply below the fold is not seen: nothing posted').toEqual([]);
-      await page.locator('.oc-chat .oc-reply').last().scrollIntoViewIfNeeded();
+      // Reply 101 has a response row; reply 102, at the foot, has none, so the server could attach its receipt to nothing and the
+      // console never watches it (review 4173 F11).
+      await page.locator('.oc-chat .oc-reply').first().scrollIntoViewIfNeeded();
       const deadline = Date.now() + 20_000;
-      while (!receipts().some((b) => b.includes('"id":102')) && Date.now() < deadline) await page.waitForTimeout(250);
-      expect(receipts().some((b) => b.includes('"id":102')), 'the newest reply, at the foot, was seen for a second').toBe(true);
+      while (!receipts().some((b) => b.includes('"id":101')) && Date.now() < deadline) await page.waitForTimeout(250);
+      expect(receipts().some((b) => b.includes('"id":101')), 'the reply with a response row was seen for a second').toBe(true);
+      await page.locator('.oc-chat .oc-reply').last().scrollIntoViewIfNeeded();
       await page.waitForTimeout(2_500);
       const bodies = receipts();
       const refs = bodies.flatMap((b) => (JSON.parse(b) as { receipts: { ref: { kind: string; id: number }; receipt: string; from: { source: string } }[] }).receipts);
       expect(refs.every((r) => r.ref.kind === 'reply' && r.receipt === 'opened' && r.from.source === 'console'), JSON.stringify(refs)).toBe(true);
-      expect(refs.filter((r) => r.ref.id === 102), 'once').toHaveLength(1);
+      expect(refs.filter((r) => r.ref.id === 101), 'once').toHaveLength(1);
+      expect(refs.some((r) => r.ref.id === 102), 'the reply with no response row, seen for over two seconds: none').toBe(false);
       expect(refs.some((r) => r.ref.id === 80), 'the older page is not drawn, so none for its reply').toBe(false);
       expect(errors).toEqual([]);
     } finally {
