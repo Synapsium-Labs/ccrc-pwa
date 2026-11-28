@@ -53,6 +53,7 @@ import { isDelegationCorrelationKebab } from '../src/coord/delegation-correlatio
 import { isDelegationCensusKebab } from '../src/coord/gitref.js';
 import { isReceiptDrop } from '../../shared/responses.js';
 import { isDecisionModelWord } from '../src/coord/decisionModel.js';
+import { isLabelQueueKebab } from '../src/coord/labelQueue.js';
 import {
   EDGE_KINDS, isEdgePredicate, isEdgeState, isProgrammeHealthWord, isRemainingRefusal, isRunSpendState, isUnforecastableReason,
 } from '../../shared/programmeFacts.js';
@@ -1308,6 +1309,10 @@ describe('the rejection table is total, in both directions', () => {
         // and egress words as literals. A word rides a check or a record, never a `refused` or `reject.code`. Admitted
         // through `coord/decisionModel.ts#isDecisionModelWord`, derived from L0's lists and that file's, never NOT_CODES.
         || isDecisionModelWord(tok)
+        // THE LABEL QUEUE (Overlord W2): `coord/labelQueue.ts` and `coord/labelCards.ts` name an answer word, a card's outcome, a
+        // door refusal and a label source as literals. A word rides a card or its door, never a mail rejection or a run refusal.
+        // Admitted through `coord/labelQueue.ts#isLabelQueueKebab`, derived from L0's lists, never NOT_CODES.
+        || isLabelQueueKebab(tok)
         // THE DESIGNATION (Overlord W1 designation A): `coord/overlordDesignation.ts` names its refusals by their wire words,
         // declared once in L0's `OVERLORD_REFUSALS` and answered by the designate door. Admitted through L0's guard, never NOT_CODES.
         || isOverlordRefusal(tok)

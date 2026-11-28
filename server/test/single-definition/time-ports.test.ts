@@ -69,6 +69,10 @@ const TIME_PORT_FILES: readonly string[] = [
   // PR B: the anchor-set lane reads the wall clock and chance only through the time ports it is handed; the anchors are data.
   'server/src/coord/decisionAnchors.ts',
   'server/src/coord/decisionModelLane.ts',
+  // Overlord W2, the label queue (plan w2-label-queue.md Task 2): the pick, the label rule and the card deciders take the week
+  // and the instants as arguments and read no clock.
+  'server/src/coord/labelQueue.ts',
+  'server/src/coord/labelCards.ts',
   // Overlord W2, remaining work: the vocabulary, the body's rules and the store take `now` as an argument.
   'server/src/coord/programmeRemaining.ts',
   'server/src/coord/programmeFactsStore.ts',
