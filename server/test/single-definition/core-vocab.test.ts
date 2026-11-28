@@ -902,7 +902,10 @@ describe('Build 7 nouns', () => {
       'overlordReadinessStore.ts', 'overlordReadinessLane.ts',
       // The label queue (Overlord W2, plan w2-label-queue.md Task 3): `labelQueueStore.ts` is `label_cards`' and
       // `decision_labels`' SQL, in `decisionModelStore.ts`' idiom; the lane and the doors reach it through their own ports.
-      'labelQueueStore.ts']);
+      'labelQueueStore.ts',
+      // The Overlord's request record (W2 request record A, §5.1): the three tables' SQL takes the caller's handle inside its
+      // transaction, and names it by `import type`.
+      'overlordRequestStore.ts']);
     const coordFiles = sources(coordDir);
 
     it('visits the whole directory — a moved directory must turn this red, not disarm it', () => {

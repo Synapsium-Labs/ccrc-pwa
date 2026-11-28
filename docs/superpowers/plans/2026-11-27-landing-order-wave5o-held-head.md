@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking. This plan dispatches nothing itself: the wave is built by a worker the coordinator dispatches.
 
-**Status:** drafted on 2026-11-27 for run 4081 (programme `landing-order`, the run's wave 35) from the brief's seven decisions. Revised the same day after the coordinator's addendum (call 1758): the conflict send-back covers this run's own pinned entry wherever it stands in the order, and the plan says how such an entry is measured, what the send-back costs, and what the radar already knows. Revised again after review run 4083 (fix round 1, the coordinator's rulings): the notice covers the measured conflict only, and `head-mismatch` gets none; the identity is the brief's; the early send-back is not for a line the operator holds; the cost sentence names three costs; the draft condition names its order; and the decider arm and its transaction are one commit. Revised a third time after review run 4094 (fix round 2): behind the head the send-back is licensed only on a `ready` binding; the pull request's state is read once, with the boundary reference's queue query and `isDraft`, before any change to it; the third case has one name, an entry whose PR was never queued; and the store's refusals are listed as measured. One build wave and one pull request; section 3 says why it is not split and where the seam would be.
+**Status:** drafted on 2026-11-27 for run 4081 (programme `landing-order`, the run's wave 35) from the brief's seven decisions. Revised the same day after the coordinator's addendum (call 1758): the conflict send-back covers this run's own pinned entry wherever it stands in the order, and the plan says how such an entry is measured, what the send-back costs, and what the radar already knows. Revised again after review run 4083 (fix round 1, the coordinator's rulings): the notice covers the measured conflict only, and `head-mismatch` gets none; the identity is the brief's; the early send-back is not for a line the operator holds; the cost sentence names three costs; the draft condition names its order; and the decider arm and its transaction are one commit. Revised a third time after review run 4094 (fix round 2): behind the head the send-back is licensed only on a `ready` binding; the pull request's state is read once, with the boundary reference's queue query and `isDraft`, before any change to it; the third case has one name, an entry whose PR was never queued; and the store's refusals are listed as measured. One build wave and one pull request; section 3 says why it is not split and where the seam would be. Built as two pull requests along that seam (the coordinator's call 1811): #3610, the server half and the README, and #3614, the text. Section 12 is the coordinator's record of the wave as built and wins over the sections before it.
 
 **Goal:** When the head of a project's landing line is held because the radar measured its pinned head conflicting with the base, which only that entry's own coordinator can clear, that coordinator is told once, by the next-to-land cue's own decider and transaction. The coordinator's text gives it the one move the line's vocabulary already has for a pinned entry that conflicts before it is queued: the ejection of kind `conflict`, for its own entry at the head or behind it. The worker's skill knows that mail's first line.
 
@@ -757,7 +757,7 @@ No other existing case of the file, or of `landing-control`, `landing-terminal-d
 - a hand-built doc listing #7 twice (the parser refuses one; the function still answers null) answers null.
 
 **The one rule, held by text (review 4094, M-3).** Two cases, each in a test file that already imports the source it reads, so that the pull request's fast run selects it when that source changes:
-- in `landing-control.test.ts` (it imports `landingLine.ts`), `the probe's heads are searched for a PR only inside probedHeadOf (D-9159)`: it reads `server/src/coord/landingLine.ts` as text and asserts that `/\.heads\b/g` matches exactly once (the `\b` leaves `headsCut` out), and that the match lies between `export function probedHeadOf(` and the next line that is `}`. On `main` the one match is the binding's inline `probe.doc.heads.filter(…)`, so the case is red until Task 1's move;
+- in `landing-control.test.ts` (it imports `landingLine.ts`), `the probe's heads are searched for a PR only inside probedHeadOf (D-9159)`: it reads `server/src/coord/landingLine.ts` as text and asserts that `/\.heads\b/g` matches exactly once (the `\b` leaves `headsCut` out), and that it matches exactly once in the text of the symbol `probedHeadOf`, read with `sourceOfSymbol` from `server/test/scan/symbols.ts` (as built, D-9171; this plan first found the span with two `indexOf` pins, which the literal source pin ratchet refuses, section 12, C1). On `main` the file has no `probedHeadOf`, so `sourceOfSymbol` throws and the case is red until Task 1's move;
 - in `landing-next-mail.test.ts` (it imports `landingNext.ts`), `the held-head notice reads the probe's heads only through probedHeadOf (D-9159)`: it reads `server/src/coord/landingNext.ts` as text and asserts that `/\.heads\b/g` matches nothing and that `probedHeadOf(` occurs once (inside `heldOf`).
 
 **Text (Task 3):** the pins of section 7.4.
@@ -784,7 +784,7 @@ No other existing case of the file, or of `landing-control`, `landing-terminal-d
   - Read your own claims before the push: a claim has a hard expiry.
 - **Commits** go on the workspace's own branch. Push once, when the wave is complete. The pull request stays a draft.
 - **Task notes** go under `docs/superpowers/programs/landing-order/` as `wave5o-task-<n>.md`. Never edit an existing plan or the programme ledger.
-- **Deviation numbers are issued, never chosen.** This plan defines D-9159 and D-9160. A departure found while building is named by slug (`D-TBD-<slug>`) in the wave-done mail, never in a tracked file.
+- **Deviation numbers are issued, never chosen.** This plan defines D-9159 and D-9160; D-9171 came in with the build (section 12). A departure found while building is named by slug (`D-TBD-<slug>`) in the wave-done mail, never in a tracked file.
 
 ## Review Focus
 
@@ -918,10 +918,10 @@ Each row is one change to the built code, measured red by the named case, then r
 | M1 | `heldOf`'s composition arm answers null | H1; S1; the changed existing case |
 | M2 | `heldOf`'s `probed.base.state === 'conflict'` dropped (any non-clean answer sends) | H2 |
 | M3 | `probedHeadOf` answers the first match of many | Task 1's case (the twice-listed doc) |
-| M4 | `landingBindingOf` keeps its own inline lookup beside `probedHeadOf` (two searches of the probe's heads) | the `landingLine.ts` text case (two matches of `.heads`) |
+| M4 | `landingBindingOf` keeps its own inline lookup beside `probedHeadOf` (two searches of the probe's heads) | the `landingLine.ts` text case (two matches of `.heads` in the file, one inside the symbol) |
 | M5 | `heldOf` searches `control.probe.doc.heads` itself in place of calling `probedHeadOf` | the `landingNext.ts` text case |
 | M6 | `heldOf`'s `reason !== 'composition-not-clean'` test dropped (every held reason reads the probe) | H3 (a `head-mismatch` listed at another head with a conflict now sends); H5 |
-| M7 | the identity drops `held.baseSha` | H9; S3 |
+| M7 | the identity drops `held.baseSha` | H1; H9; S3 |
 | M8 | the identity carries two extra members, the binding's reason and the probe's head | H1 (the identity's exact members); H9 |
 | M9 | the run arm's detail carries the time (`landing:head-held:v1:${digest}:${nowMs}`), so the dedupe never matches | S2 (on its later clock; measured: green under the fixed clock, red under `CONTROL_NOW + 60_000`) |
 | M10 | `episodeOf` drops `run.id !== entry.runId` (another run's claimant is named) | H6; the cue's existing recipient case |
@@ -952,7 +952,7 @@ Each row is one change to the built code, measured red by the named case, then r
 | M35 | section 7.2's "Behind the head every other read …" sentence loses "a `held` binding whatever its `reason`," | the line pin; the new case |
 | M36 | section 7.2's closing sentence loses "behind the head only a `ready` binding naming another entry;" | the line pin; the new case |
 | M37 | section 7.2's head sentence loses "`state` is `OPEN` and" | the line pin; the new case |
-| M38 | step 6 loses "A run that received `dequeued:#<pr>` for this PR in this episode takes the dequeue form." | `REPORT_LESS`; the 5f whole pin; the new case |
+| M38 | step 6 loses "A run that received `dequeued:#<pr>` for this PR in this episode takes the dequeue form." | `REPORT_LESS`; the 5f whole pin; the new case; "no report-less sentence holds a double quote" (four cases, section 12, C4) |
 | M39 | section 7.2's head sentence loses ", on route Q" (a ready PR on route G or U licenses on the first read) | the line pin; the new case |
 | M40 | section 7.2's head sentence loses "this is the first read after this advance to `merging`, " (a ready PR on any later read licenses) | the line pin; the new case |
 | M41 | section 7.2's head sentence loses "step 6's disarm (§5) is for a PR that query answers armed, with a non-null `autoMergeRequest`, " (the disarm is run on a PR that is not armed; it was measured to exit 1 on a draft) | the line pin; the new case |
@@ -972,9 +972,45 @@ All six were ruled on 2026-11-27 with fix round 1 (review 4083). The rulings, as
 
 No question is open.
 
+## 12. As built (the coordinator's record, 2026-11-27)
+
+Made by the coordinator after both halves merged: the server half and the README as #3610 (run 4111, review run 4137), and the text as #3614 (run 4117, review run 4127). Where this section and another section or a task disagree, this section wins. A point that changes this plan's text is also edited in place, unless the point says it is not.
+
+- **C0, two pull requests, not one (call 1811).** The wave was built along section 3's seam as two runs and two pull requests, so that the rules files and their pins travel alone. Not edited in place: section 3, decision 5, the wave's heading above Task 1 and the tasks' commit steps still speak of one pull request.
+- **C1, the `landingLine.ts` text case is keyed on the symbol (D-9171; call 1860).**
+  - The fault was this plan's. Section 9 found `probedHeadOf`'s span with two `indexOf` pins on the source read as text. `single-definition/advance-switches` counts such a pin, and `landingLine.ts` had none, so the two new pins turn its case "literal source pins over every other server/src file may only shrink" red. The pull request's first run was red in that one case.
+  - As built, the case counts `.heads` once in the whole file and once in `sourceOfSymbol(file, 'probedHeadOf')`. The rule it holds is the same: the file's one search of the probe's heads lies inside `probedHeadOf`. Review 4137 measured row M4 red on it and on nothing else.
+  - Edited in place: section 9's first text case and row M4's predicted red.
+- **C2, five commits of the server half are red on that ratchet (D-9171; call 1885; review 4137, F1).**
+  - "Each commit is green on its own" (Global Constraints) did not hold for the five commits before the new key. The review measured three of them red in that one case (the two moves and the behaviour commit); the other two change no source or test and carry the same tree state. The landing files were green at each commit it ran. Task 2's "No commit between them is red" holds for those files and not for that suite.
+  - Accepted as it stands. The pull request landed as one squash commit, so `main` holds no red commit, and a rewrite of the branch needs a force-push. The branch's own history cannot be bisected through that suite.
+- **C3, the `landingNext.ts` text case is built as planned, and it guards less than its title says (review 4137, A1 and A2).**
+  - It reads the whole file with `matchAll` and `split`, which the ratchet's counting rule does not count, and it does not say that the one call sits in `heldOf`.
+  - The review's A1 says the `landingLine.ts` case guards the literal `.heads` spelling only: a search through a destructured name would pass. The same holds of this case.
+  - Carried on issue #3581, with the review's other minor points: the comment on `LandingHeldNoticeReason` (section 5.2's own words) says every other reason is the operator's or time's, while section 2's table gives a moved `head-mismatch` to the entry's run; and `queueNotice` chooses its subject by a two-way test with no exhaustive check. Not edited here, because the built text equals this plan's.
+- **C4, the rows as measured.**
+  - M7 turns H1, H9 and S3 red (review 4137). The builder's note lists H9 and S3; the exact-tuple case H1 goes red too. Edited in place.
+  - M38 turns four cases red, not three (the builder, and review 4127). The fourth is "no report-less sentence holds a double quote", whose list of openers section 7.4 itself extends. Edited in place.
+  - M1, M13 and M25 turn more cases red than their rows name, each of them a held case or a cue case (review 4137's table: 13, 31 and 9). The rows name the cases that must go red, not every one that does.
+  - Two mutants outside the table (review 4137). The run arm's detail without its digest is caught by six cases. The identity without `pinnedAt` alone is caught by the exact-tuple cases H1, H7 and H9 and not by S4, because the episode member already moves on a new pin.
+  - The server half's rows, with each command and restore, are in its notes: `docs/superpowers/programs/landing-order/wave5o-task-1.md`, `wave5o-task-2.md`, `wave5o-task-4.md` and `wave5o-task-5.md`.
+- **C5, the text half has no note file**, by the coordinator's brief (review 4127, F1), as wave 5n's had none: its pull request holds the three rules files and their two pin files only. Not edited in place: Task 3's file list, section 4 and Global Constraints still name a note for it. From the pull request's body and the wave-done report:
+  - Sizes: `wave-steps.md` 21328 to 21832 bytes (+504), `wave-lifecycle-5b-landing.md` 46964 to 50875, the worker's `SKILL.md` 35535 to 35522 (-13), as "What was measured" says. The coordinator applied sections 7.1 to 7.3's blocks to the base and compared: the three files are equal byte for byte.
+  - Red first: 9 of 291 cases in `coordinator-skill.test.ts` and 2 of 84 in `worker-skill.test.ts`, with the pins and the new case in and the text not yet applied; both files green after it.
+  - Rows M14 to M19, M21 to M24 and M30 to M41, each by hand, the file restored and its sha256 compared: the eighteen rows of section 7.2 turn the line pin and the new case red; M17 one coordinator case and the worker's two pins; M18 two; M19 one, on a scratch copy of the shared file; M38 four (C4).
+  - Review 4127 ran M17, M19 and M38 to M41 again, and four mutants of its own. One of them, "once on that read" changed to "twice", is caught by the whole-paragraph pin alone.
+  - The test typecheck over the whole tree could not finish on either builder's box (a memory cap). The hosted run on each tip covers it.
+- **C6, what the review left for the text (review 4127; issue #3601).**
+  - The third case's disarm clause gives a draft's reason for a rule that also covers a ready pull request on route Q.
+  - Step 6's own disarm sentence, and the boundary reference's, still read unconditional.
+  - The head licence's draft branch does not exclude a queue entry.
+  - The head sentence is one sentence of 24 lines, and its "once on that read" is held by the whole-paragraph pin alone.
+  - One line of `server/test/worker-skill.test.ts` lost its indent.
+  - Each changes rules text or its pins, so they take a pull request of their own.
+
 ## Deviations found
 
-Two numbers are defined below, both issued on 2026-11-27 for this plan.
+Three numbers are defined below: two issued on 2026-11-27 for this plan, and one issued on 2026-11-27 for its build.
 
 - **D-9159 (2026-11-27)** — `held-head-notice`: the next-to-land cue's decider (`landingNext.ts#nextLandingNoticeOf`) answers `held`, and its transaction (`landingControlTx.ts#applyLandingControlTx`) queues it, when a project's binding is held on its head entry for `composition-not-clean` and the probe's answer for the pinned head is `conflict`.
   - Every other held reason sends nothing, `head-mismatch` included (the coordinator's ruling after review 4083: a probe stamped after the pin may have listed the heads before it, and the text's only answer there is a report).
@@ -995,3 +1031,8 @@ Two numbers are defined below, both issued on 2026-11-27 for this plan.
   - The worker's skill reads the third first line, within its size.
   - Why: the text named two ejections, so the coordinator of #3577's entry had to read the code's vocabulary to send its own run back, and its worker had no form for the mail.
   - No numbered clause of either `SKILL.md` changes, and no spec line is needed: §5.5's step 5 already sends a conflict back with its base.
+- **D-9171 (2026-11-27)** — `text-case-keyed-on-symbol`: the server half's `landingLine.ts` text case is keyed on the symbol reader (`sourceOfSymbol`), not on the two `indexOf` pins that section 9 first prescribed, and the five commits before that change are red in one case of `single-definition/advance-switches`.
+  - Why: the plan's form is a literal pin over a `server/src` file read as text, which that ratchet refuses. The builder met it on the pull request's first run.
+  - The coordinator allowed one commit that changes the case and its note (call 1860), and accepted the red commits before it (call 1885): the queue lands one squash commit, and a rewrite of the branch needs a force-push.
+  - The rule the case holds is unchanged: the file's one search of the probe's heads lies inside `probedHeadOf`, and row M4 turns it red.
+  - Section 12 (C1 and C2) has the detail.

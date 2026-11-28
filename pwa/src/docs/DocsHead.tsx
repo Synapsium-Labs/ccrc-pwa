@@ -33,6 +33,7 @@ import { useFollowLink } from '../lib/useTabLink';
 import { DESK_QUERY, useMediaQuery } from '../lib/useMediaQuery';
 import { Button, Icon, useNow, type IconName } from '@ccrc/ui';
 import { docsLocation } from './docsLinks';
+import { ArtifactList } from './artifact/ArtifactList';
 import { ROW_STAGES, fullHeadFormFor, headLayoutFor, type FullHeadForm, type RowStage } from './docsHeadWords';
 import {
   DOCS_FOLDER_TEXT, DOCS_HEAD_TEXT, DOCS_TOOL_TEXT, ENTRY_BADGE_TEXT, EXPORT_WAIT_TEXT, GITHUB_REFUSAL_TEXT, VIA_SENTENCE,
@@ -1439,6 +1440,7 @@ function PhoneHead(p: CompactProps & { readonly tree: DocsTreeOk; readonly bar: 
               exportAssets={p.exportAssets} onPlainView={p.onPlainView} rangeOpened={visit.rangeOpened} form="stacked" head={head}
             />
           )}
+        <ArtifactList scope={{ project: page.project, section: page.section, path: page.path }} />
       </div>
       {bar === null && p.plainView && <PlainViewNote />}
       <PrintNote />

@@ -71,7 +71,7 @@ export const INVARIANT_MAP = {
     says: 'authority widens only by the operator',
     tables: ['overlord_sequence', 'overlord_ladder'], waitsOn: 'the rung arm: the ladder row\'s actor columns', w1: 'tables-absent',
   },
-  I12: { says: 'every open request has a follow-up time or an open child that does', tables: ['requests'], waitsOn: 'W2, the requests', w1: 'tables-absent' },
+  I12: { says: 'every open request has a follow-up time or an open child that does', tables: ['requests'], waitsOn: 'W2 request record A, its second part: the predicate and its gatherer', w1: 'predicate-not-built' },
   I13: {
     says: 'after a restore, the store serves nothing retired, replaced or wiped, and no id twice',
     tables: ["the private store's messages", 'the privacy journal'], waitsOn: 'ticket invariant-message-predicates; the entries: W2', w1: 'predicate-not-built',

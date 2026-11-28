@@ -127,6 +127,151 @@ export async function waitForHit(o: Origins, from: number, pred: (h: OriginHit) 
   }
 }
 
+// ---- The artifact tier's golden replay (native Docs HTML artifacts X5, plan Task A5.3) --------------------------------------
+// `server/test/artifacts-golden.test.ts` records the REAL artifact instance's status, headers and body for each request of a
+// fixture page into `fixtures/artifact-answers.json`, with the two artifact origins as placeholders. `startArtifactReplay`
+// serves those answers from two `127.0.0.1` listeners it binds itself (port 0 each: the system picks a free port, no neighbour
+// is assumed free), over plain `node:http` (pwa has no fastify), and from a third listener on `http://localhost:<p>` it serves a
+// tiny console page that sets one localStorage key and holds the one `<a target="_blank" rel="noopener noreferrer">` the case
+// clicks. Every request is recorded with its origin, method, path, `Referer` and the fetch-metadata headers Chromium sent, so a
+// case states what the browser sent, never what the fixture assumes.
+
+/** The key the console page sets in its own origin's localStorage; the fixture page reads it from the content origin. */
+export const ARTIFACT_CONSOLE_KEY = 'ccrc-console-fixture-key';
+
+/** The `rel` of the console page's link to the wrapper: the Open link's own value (plan Task A5.2). */
+export const ARTIFACT_LINK_REL = 'noopener noreferrer';
+
+/** One golden entry: the request as Chromium sends it, and the instance's answer. `host` is a host placeholder. */
+export interface ArtifactGoldenEntry {
+  readonly name: string;
+  readonly request: {
+    readonly method: string;
+    readonly host: string;
+    readonly path: string;
+    readonly headers: Readonly<Record<string, string>>;
+  };
+  readonly response: {
+    readonly status: number;
+    readonly headers: Readonly<Record<string, string>>;
+    readonly body: string;
+    readonly encoding: 'utf8' | 'base64';
+  };
+}
+
+export interface ArtifactGolden {
+  readonly format: 1;
+  readonly token: string;
+  readonly entries: readonly ArtifactGoldenEntry[];
+}
+
+export type ArtifactSide = 'artifact' | 'content' | 'console';
+
+/** One request a replay listener received. `entry` is the golden entry's name that answered it, null when none matched (the
+ *  request answered 404). Absent headers are null. */
+export interface ArtifactHit {
+  readonly side: ArtifactSide;
+  readonly method: string;
+  readonly path: string;
+  readonly referer: string | null;
+  readonly dest: string | null;
+  readonly mode: string | null;
+  readonly site: string | null;
+  readonly serviceWorker: string | null;
+  readonly entry: string | null;
+}
+
+export interface ArtifactReplay {
+  readonly artifactOrigin: string;
+  readonly contentOrigin: string;
+  readonly consoleOrigin: string;
+  /** The wrapper's URL, as the console page's link names it. */
+  readonly wrapperUrl: string;
+  readonly hits: readonly ArtifactHit[];
+  /** The golden entry a hit matched, by name, or undefined. */
+  entryOf(hit: ArtifactHit): ArtifactGoldenEntry | undefined;
+  close(): Promise<void>;
+}
+
+const ARTIFACT_NOT_FOUND = 'no such golden answer';
+
+/** Bind the two replay listeners and the console page's listener. */
+export async function startArtifactReplay(golden: ArtifactGolden): Promise<ArtifactReplay> {
+  const hits: ArtifactHit[] = [];
+  const ports: Record<ArtifactSide, number> = { artifact: 0, content: 0, console: 0 };
+  const origins = (): Record<'ARTIFACT_ORIGIN' | 'CONTENT_ORIGIN' | 'ARTIFACT_HOST' | 'CONTENT_HOST', string> => ({
+    ARTIFACT_ORIGIN: `http://127.0.0.1:${ports.artifact}`,
+    CONTENT_ORIGIN: `http://127.0.0.1:${ports.content}`,
+    ARTIFACT_HOST: `127.0.0.1:${ports.artifact}`,
+    CONTENT_HOST: `127.0.0.1:${ports.content}`,
+  });
+  const fill = (s: string): string => Object.entries(origins()).reduce((acc, [k, v]) => acc.split(`{{${k}}}`).join(v), s);
+  const sideOfHost = (host: string): ArtifactSide | null =>
+    host === '{{ARTIFACT_HOST}}' ? 'artifact' : host === '{{CONTENT_HOST}}' ? 'content' : null;
+  const wrapperUrl = (): string => `${fill('{{ARTIFACT_ORIGIN}}')}/a/${golden.token}`;
+  const header = (req: IncomingMessage, name: string): string | null => headerText(req.headers[name]);
+
+  const consolePage = (): string => '<!doctype html><html lang="en"><head><meta charset="utf-8"><title>console fixture</title></head><body>'
+    + `<script>localStorage.setItem(${JSON.stringify(ARTIFACT_CONSOLE_KEY)}, 'console-secret');</script>`
+    + `<a id="open" href="${wrapperUrl()}" target="_blank" rel="${ARTIFACT_LINK_REL}">Open</a></body></html>`;
+
+  const handler = (side: ArtifactSide) => (req: IncomingMessage, res: ServerResponse): void => {
+    const url = new URL(req.url ?? '/', 'http://fixture.invalid');
+    const method = req.method ?? '';
+    const dest = header(req, 'sec-fetch-dest');
+    const base = {
+      side, method, path: url.pathname + url.search, referer: header(req, 'referer'), dest,
+      mode: header(req, 'sec-fetch-mode'), site: header(req, 'sec-fetch-site'), serviceWorker: header(req, 'service-worker'),
+    };
+    if (side === 'console') {
+      hits.push({ ...base, entry: null });
+      if (url.pathname === '/') {
+        res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+        res.end(consolePage());
+      } else {
+        res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8' });
+        res.end(ARTIFACT_NOT_FOUND);
+      }
+      return;
+    }
+    const found = golden.entries.find((e) => e.request.method === method && sideOfHost(e.request.host) === side
+      && e.request.path === url.pathname && (e.request.headers['sec-fetch-dest'] ?? null) === dest);
+    hits.push({ ...base, entry: found?.name ?? null });
+    if (found === undefined) {
+      res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8' });
+      res.end(ARTIFACT_NOT_FOUND);
+      return;
+    }
+    const headers: Record<string, string> = {};
+    for (const [k, v] of Object.entries(found.response.headers)) headers[k] = fill(v);
+    const body = found.response.encoding === 'base64' ? Buffer.from(found.response.body, 'base64') : Buffer.from(fill(found.response.body), 'utf8');
+    // A body that held a placeholder changed length when it was filled: the length is the filled body's.
+    if ('content-length' in headers) headers['content-length'] = String(body.length);
+    res.writeHead(found.response.status, headers);
+    res.end(body);
+  };
+
+  const listen = (side: ArtifactSide): Promise<Server> => new Promise((resolve, reject) => {
+    const server = createServer(handler(side));
+    server.once('error', reject);
+    server.listen(0, '127.0.0.1', () => { ports[side] = (server.address() as AddressInfo).port; resolve(server); });
+  });
+  const [sa, sc, sk] = await Promise.all([listen('artifact'), listen('content'), listen('console')]);
+  const stop = (s: Server): Promise<void> => new Promise((resolve) => {
+    s.closeAllConnections();
+    s.close(() => resolve());
+  });
+  return {
+    artifactOrigin: `http://127.0.0.1:${ports.artifact}`,
+    contentOrigin: `http://127.0.0.1:${ports.content}`,
+    consoleOrigin: `http://localhost:${ports.console}`,
+    wrapperUrl: wrapperUrl(),
+    hits,
+    entryOf: (hit) => golden.entries.find((e) => e.name === hit.entry),
+    close: async () => { await Promise.all([stop(sa), stop(sc), stop(sk)]); },
+  };
+}
+
 function pngChunk(type: string, data: Uint8Array): Buffer {
   const head = Buffer.alloc(4);
   head.writeUInt32BE(data.length);

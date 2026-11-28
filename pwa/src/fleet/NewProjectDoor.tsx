@@ -5,7 +5,9 @@
 // IT COSTS NO HEIGHT WHERE THE RUNS LINE IS DRAWN (`inline`): it rides that line, beside the class chooser, for the
 // chooser's own reason (the line is full-width and nearly empty). A row of its own pushed the first session row past
 // the phone's budget (`refined-phone.browser.test.ts`, 440 px at 390×844). Where no runs line is drawn (Instrument's
-// desk column) it is a row of its own, at the row's end.
+// desk column) it rides the list's own head row, at the end of the Status / Project toggle's line (`FleetTable`, desktop
+// polish wave 182; before, a 44 px row of its own above the toggle, lining up with nothing). A screen with no runs line
+// and no list that heads itself keeps the row of its own (`inline` false), at the row's end.
 import type { ReactNode } from 'react';
 import { Button, Icon } from '@ccrc/ui';
 import { PROJECT_ADD_TEXT } from './projectAddWords';

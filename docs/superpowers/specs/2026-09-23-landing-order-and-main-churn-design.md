@@ -492,6 +492,8 @@ An applying/committing failure preserves the established landing fence even afte
 passes cannot retry until successful established durable replay or required restart recovery clears it.
 No automatic replay/fence-clearing timer is added.
 
+(Amended 2026-11-27, wave 5o, D-9159: when the selected head is held for `composition-not-clean` on a probe whose answer for its pinned head is `conflict`, the same transaction mails the cue's recipient one held-head notice per identity `['landing-head-held', 1, project, entryId, pr, pinnedSha, handoffCommit, pinnedAt, episode.kind, runIdOrNull, episodeOrCreationSeq, baseSha, toId]`, subject `head-held:#<pr>:<digest>`, deduplicated as the cue is. It is a cue to read the line: the server ejects nothing and chooses no successor, and every other held reason, `head-mismatch` included, sends nothing.)
+
 The additive landing read reports inert/held/ready binding. On positive opt-in, the coordinator lands only its
 own pinned ready head at the full bound SHA, after fresh line, unchanged canonical verdict and required-check
 reads; missing binding or unavailable evidence holds. Inert keeps the pre-5i checks, and 404 keeps the

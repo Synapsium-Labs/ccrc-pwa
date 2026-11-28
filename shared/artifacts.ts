@@ -1,7 +1,39 @@
 // The artifact tier's L0 vocabulary (native Docs HTML artifacts X5; spec docs/superpowers/specs/2026-11-19-native-docs-html-artifacts-design.md,
-// plan Task A1.1). L0: imports only `./docs.js`, no `node:*`, no package, so the PWA bundles it and the server compiles it.
+// plan Task A1.1). L0: imports only `./docs.js` and `./httpsOrigin.js`, no `node:*`, no package, so the PWA bundles it and the server compiles it.
 // Nothing here is shared with the walls tier (the mockup viewer): no `MOCKUP_` name, and the mockup policy never imports this.
 import { DOCS_RASTER_EXT, DOCS_RASTER_TYPES, type DocListPin, type DocSectionSlug } from './docs.js';
+import { isExactHttpsOrigin } from './httpsOrigin.js';
+
+// ---- The origin rule (spec sections 3.2 and 6.2): ONE owner, asked by the mint and by the launch sheet ------------------
+
+/** The host part of an origin or of a `Host` value (`host`, `host:port`, `scheme://host:port/...`), lower-cased with one trailing dot
+ *  dropped; `''` for text with none. */
+export function hostnameOfOrigin(origin: string): string {
+  const rest = origin.replace(/^[a-z][a-z0-9+.-]*:\/\//i, '');
+  const end = rest.search(/[:/?#]/);
+  const host = (end < 0 ? rest : rest.slice(0, end)).toLowerCase();
+  return host.endsWith('.') ? host.slice(0, -1) : host;
+}
+
+/** Whether a browser would read `hostname` as an IPv4 address (the URL standard's "ends in a number": the last label is all
+ *  digits, or `0x` and hex). Such a host is rewritten before use, so it is never compared as a name. */
+export function looksNumericHost(hostname: string): boolean {
+  const last = hostname.slice(hostname.lastIndexOf('.') + 1);
+  return /^\d+$/.test(last) || /^0x[0-9a-f]*$/i.test(last);
+}
+
+/** Whether `origin` may be a capability's confirmed external origin: an exact https origin (`isExactHttpsOrigin`) whose HOSTNAME
+ *  is none of `ours` (the console, the artifact and the content hosts, each as an origin or a `Host` value), on any port, since a
+ *  page allowed to call one of those hosts would void the path scoping of spec 4.3. A host a browser reads as an IPv4 address
+ *  (`127.0.0.2`, `10.1`, `0x7f.0.0.1`) is rewritten before use, so it could name one of ours under a spelling the string compare
+ *  never sees: refused. Refuses too much, never too little. The mint (`originAdmission`) and the launch sheet (`sheetOrigins`)
+ *  both ask this one function. */
+export function originAdmitted(origin: string, ours: readonly string[]): boolean {
+  if (!isExactHttpsOrigin(origin)) return false;
+  const host = hostnameOfOrigin(origin);
+  if (looksNumericHost(host)) return false;
+  return !ours.some((o) => hostnameOfOrigin(o) === host);
+}
 
 // ---- Limits (spec section 4, plan Global Constraints "Capability") ----------------------------------------------------
 
@@ -106,8 +138,12 @@ export interface ArtifactMintAsk { pin: DocListPin; project: string; origins: st
  *  capabilities as rows (never a token or a URL). */
 export interface ArtifactListOk { ok: true; available: boolean; why?: ArtifactOffWhy; live: ArtifactRow[] }
 
-/** The scope answer: what a mint would carry (spec section 6). */
-export interface ArtifactScopeOk { ok: true; files: number; uncommitted: number; unsized: number; bytes: number }
+/** The scope answer: what a mint would carry (spec section 6), and the tier's two hosts as a `Host` header names them (the
+ *  hostname, plus `:<port>` when the origin states one), so the launch sheet names the artifact host in its "What runs" line and
+ *  never offers an outside origin on either host (X5 A5, D-9162). */
+export interface ArtifactScopeOk {
+  ok: true; files: number; uncommitted: number; unsized: number; bytes: number; artifactHost: string; contentHost: string;
+}
 
 /** The mint answer (spec section 6). */
 export interface ArtifactMintOk { ok: true; id: string; url: string; expiresAt: number; files: number; uncommitted: number; unsized: number }

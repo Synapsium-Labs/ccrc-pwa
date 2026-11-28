@@ -22,6 +22,26 @@
 }
 .wl-route { display: grid; gap: var(--sp-1); min-width: 0; background: var(--bg-page); color: var(--ink-primary); }
 .wl-head { display: flex; align-items: center; gap: var(--sp-2); }
+/* ONE INSET (desktop polish wave 182, the coordinator's rulings 6 and 1): every ledgers root (Waiting on you, a programme,
+   an epic, upkeep, the item route's wrappers) and the item view's body pad their sides with the skin's `--gutter`, the one
+   every page scaffold reads, at every width, so they start where Accounts, Settings and Mail do, on a phone too, and the
+   item route's wrappers and its body share one edge. The item's step strip takes the same inset in its own rule below. */
+.wl,
+.wi { padding-inline: var(--gutter); }
+/* At a desk the list and the item take the page column's rules too (wave 182): the head is a `--head-h` row with the title
+   centred in it, as the scaffold's is, so every detail screen's title sits on one line; the column starts at the gutter or
+   centres as the skin's `--page-margin-inline` says; the title is `--sp-2` above the first line and the groups are `--sp-3`
+   apart, the scaffold's head-to-body and body gaps. The head row and the rhythm are the list's alone (the `.wl` that holds a
+   `.wl-head`); the screens that share its root (a programme, an epic, upkeep, the item route's notes and side list) take
+   the column rule only, and keep their own heads. The item view and its strip take the column rule. A column with an auto
+   margin is given its full width, as the scaffold's `w-full` is: an auto margin on a grid or flex child would otherwise
+   shrink it to its content (the item view did, in Refined). */
+@media (min-width: 900px) {
+  .wl { width: 100%; margin-inline: var(--page-margin-inline); }
+  .wl:has(> .wl-head) { padding-block-start: 0; row-gap: var(--sp-3); }
+  .wl > .wl-head { min-height: var(--head-h); margin-block-end: calc(var(--sp-2) - var(--sp-3)); }
+  .wi { width: 100%; margin-inline: var(--page-margin-inline); }
+}
 .wl .wl-title { font: var(--weight-medium) var(--fs-base) / var(--lh-tight) var(--family-mono); color: var(--ink-primary); }
 .wl .wl-note { font-size: var(--fs-meta); color: var(--ink-secondary); overflow-wrap: anywhere; }
 
@@ -271,18 +291,32 @@
    item does. */
 .wi-nav {
   display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-1) var(--sp-2); min-width: 0; max-width: var(--wl-measure);
-  padding: var(--sp-2) var(--sp-2) 0; background: var(--bg-page); color: var(--ink-primary);
+  padding: var(--sp-2) var(--gutter) 0; background: var(--bg-page); color: var(--ink-primary);
 }
 /* On a phone the strip stays in view while the operator reads a long item, so stepping through the decisions never needs a
    scroll back up (desktop-polish PL10, D-7952; D25). The page scrolls the document there, so the strip sticks to the viewport's
    top on its own ground; at a desk the item scrolls in its pane beside the list, where the strip has always been in reach. In
    reach is below the status bar: an installed app draws under it, so the strip's own opaque ground covers the top inset and its
    controls sit under it, at rest and stuck (review 1466 F2). */
+/* The strip's sides are the item's `--gutter` at every width (wave 182, rulings 6 and 1, in its pad above); at a desk it takes
+   the item's column rule too. */
+@media (min-width: 900px) {
+  .wi-nav { width: 100%; margin-inline: var(--page-margin-inline); }
+}
 @media (max-width: 899.98px) {
   .wi-nav {
     position: sticky; top: 0; z-index: var(--z-header);
     padding-top: calc(var(--sp-2) + var(--safe-top)); padding-bottom: var(--sp-2);
   }
+  /* The strip's edges sit on the inset, so at 390, the commonest phone width, its controls win the room back inside it: their
+     side padding is `--sp-2` in place of the button's own 12 (`px-3`), and the strip stays one line in both skins (fix round 2's
+     ruling on review 4029 F1; at the inset with the button's own padding it wrapped to two lines, 60 to 108 tall). Their
+     height keeps the 44 tap floor, and no word moves. At 360 the strip is two lines, as it was on main before this wave.
+     The item strip's alone: the run pages' Back strip shares the class (`.wi-nav.rd-strip`) and keeps the button's own
+     padding, as on main (fix round 3, review 4044 F1). From position 10 of a list Refined's strip wraps at 390 again, as
+     main's does there (the coordinator's ruling on F2: carried). */
+  .wi-nav:not(.rd-strip) .wi-back,
+  .wi-nav:not(.rd-strip) .wi-step { padding-inline: var(--sp-2); }
 }
 /* The buttons are flex boxes, which drop a space beside the glyph: the gap is that space. */
 .wi-nav .wi-back,
@@ -298,6 +332,12 @@
    list's own, stacked for the column's width; the open item's row is marked current by an accent ring (a non-text edge, and
    `aria-current` says it too). */
 .wl-beside { max-width: none; }
+/* One pane, one inset: the list beside an item sits in the fleet list column's place, so it takes that column's side gutter
+   (`.fleet`'s `--sp-4`, fleet.css), not the detail screens' `--gutter`; in Refined opening an item no longer moves the pane's
+   text from 16 to 24 (fix round 2's ruling on review 4029 F2). In Instrument the list column reads `--gutter`, which is
+   `--sp-4` at a desk by Instrument's role, so the two are equal today by the role, not by one source; the R2 case
+   (console-spacing) reds if they part. Two classes, so it wins over `.wl`'s inset in any sheet order. */
+.wl.wl-beside { padding-inline: var(--sp-4); }
 /* The fleet's banner stack above the list beside an item, in a skin that draws it in its left column (Instrument; follow-up
    F1): the fleet column's own top space, side gutters and gap (`.fleet`, fleet.css: the same tokens), so a banner sits where
    it sits on the list. The stack's slots are `display: contents`, so their banners are this box's own items. Some slots stay
