@@ -9,9 +9,12 @@
 // no answer verdicts, no grant facts, an arming that is unmeasured and no row lookup (six arguments, so the catalogue's rows
 // answer): every field is named here, never spread from the input, so a caller cannot pass a grant through. On the catalogue's
 // real rows W2 can then answer `allow` (class none, and a relay carrying a widening an operator request names), `staged` with
-// mode `proposal` (the same, under a `proposal` cell), `operator-only`, `unmeasured` (an answer kind, or a request whose naming
-// is unread) and, from a refusing verdict it was given, the ceiling's two words; never `identity-too-weak`, because every row a
-// door performs needs `attributed`, the weakest strength.
+// mode `proposal` (the same, under a `proposal` cell), `operator-only`, `unmeasured` (an answer kind, a request whose naming is
+// unread, and any act under an `armed` cell, because the arming it passes is unread), and the ceiling's words: a refusing
+// verdict's own (`act-ceiling` or `unavailable`), or `unavailable` when the door did not ask a counted effect's ceiling
+// (`not-asked`). Never `identity-too-weak`, because every row a door performs needs `attributed`, the weakest strength. "It
+// re-exports nothing" covers every form, a re-export from the decider's file and a local export of a binding imported from it,
+// both held by the census.
 import { overlordMayAct, type ActTarget, type MayActAnswer, type MayActFacts } from './overlordMayAct.js';
 import type { OverlordActKind } from '../../../shared/overlord.js';
 

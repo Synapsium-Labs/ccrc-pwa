@@ -2,8 +2,9 @@
 // `docs/superpowers/plans/2026-11-16-overlord-w2/w2-act-catalogue.md` Tasks B3 and B4, F5, F9; the coordinator's items 3 and 4).
 //
 // - The importer census: no `server/src` file but `overlordMayActW2.ts` imports the decider, `grantCovers`, `GrantFact` or
-//   `CommandFact`, or re-exports the module whole; no file, the wrapper included, re-exports anything of it; the decider's file is imported by exactly the files `MAY_ACT_IMPORTERS` names,
-//   each for the names its row allows; and `overlordMayActW2.ts` is imported by exactly `W2_IMPORTERS` (none yet: its callers
+//   `CommandFact`, or re-exports the module whole; no file, the wrapper included, re-exports anything of it, whether from the
+//   decider's file (`export … from`) or as a local export of a binding it imported from there (review 4224 F1); the decider's
+//   file is imported by exactly the files `MAY_ACT_IMPORTERS` names, each for the names its row allows; and `overlordMayActW2.ts` is imported by exactly `W2_IMPORTERS` (none yet: its callers
 //   come with later pieces, each adding its row in its own pull request). W3 lifts the census when it replaces the wrapper.
 // - The allow's census: a `MayActAllow` is made only by `mintMayActAllow` in the decider's file. Outside that function no
 //   `server/src` file casts to it, asserts it, `satisfies` it, writes a literal annotated with it, spreads an allow, copies one
@@ -57,6 +58,71 @@ export function importerProblems(file: string, imports: readonly ImportEdge[]): 
     }
   }
   return { problems, decider, w2 };
+}
+
+/** Every local re-export, in one file, of a binding it imported from the decider (review 4224 F1): a named export of the
+ *  binding (under its name or another), a default export of it, an exported constant whose value is it (through parentheses,
+ *  a cast or a namespace member), a local alias of it exported later, and an exported type that is it. A function that calls
+ *  the decider, or a type built from its facts, is not one. Read from the syntax tree here, so the shared parser is unchanged. */
+export function localReexportProblems(file: string, text: string): string[] {
+  const sf = ts.createSourceFile(file, text, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
+  const bound = new Set<string>();
+  const spaces = new Set<string>();
+  for (const st of sf.statements) {
+    if (!ts.isImportDeclaration(st) || !ts.isStringLiteral(st.moduleSpecifier) || target(file, st.moduleSpecifier.text) !== DECIDER) continue;
+    const c = st.importClause;
+    if (c === undefined) continue;
+    if (c.name !== undefined) bound.add(c.name.text);
+    const nb = c.namedBindings;
+    if (nb !== undefined && ts.isNamespaceImport(nb)) spaces.add(nb.name.text);
+    else if (nb !== undefined) for (const el of nb.elements) bound.add(el.name.text);
+  }
+  if (bound.size === 0 && spaces.size === 0) return [];
+  const unwrap = (e: ts.Expression): ts.Expression => {
+    let x = e;
+    while (ts.isParenthesizedExpression(x) || ts.isAsExpression(x) || ts.isSatisfiesExpression(x) || ts.isNonNullExpression(x)
+      || ts.isTypeAssertionExpression(x)) x = x.expression;
+    return x;
+  };
+  /** The decider's binding an expression is, or `null`. */
+  const named = (e: ts.Expression): string | null => {
+    const x = unwrap(e);
+    if (ts.isIdentifier(x) && (bound.has(x.text) || spaces.has(x.text))) return x.text;
+    if (ts.isPropertyAccessExpression(x) && ts.isIdentifier(x.expression) && spaces.has(x.expression.text)) return x.getText(sf);
+    return null;
+  };
+  const isExported = (n: ts.Node): boolean =>
+    ts.canHaveModifiers(n) && (ts.getModifiers(n) ?? []).some((mod) => mod.kind === ts.SyntaxKind.ExportKeyword);
+  // A local alias (`const d = overlordMayAct`) is a binding of the decider too.
+  for (const st of sf.statements) {
+    if (!ts.isVariableStatement(st)) continue;
+    for (const d of st.declarationList.declarations) {
+      if (ts.isIdentifier(d.name) && d.initializer !== undefined && named(d.initializer) !== null) bound.add(d.name.text);
+    }
+  }
+  const problems: string[] = [];
+  const at = (n: ts.Node): string => `${file}:${sf.getLineAndCharacterOfPosition(n.getStart(sf)).line + 1}`;
+  const say = (n: ts.Node, what: string): void => { problems.push(`${at(n)}: exports ${what} from the decider; no file may`); };
+  for (const st of sf.statements) {
+    if (ts.isExportDeclaration(st) && st.moduleSpecifier === undefined && st.exportClause !== undefined && ts.isNamedExports(st.exportClause)) {
+      for (const el of st.exportClause.elements) {
+        const local = (el.propertyName ?? el.name).getText(sf);
+        if (bound.has(local) || spaces.has(local)) say(el, local);
+      }
+    } else if (ts.isExportAssignment(st) && named(st.expression) !== null) {
+      say(st, named(st.expression)!);
+    } else if (ts.isVariableStatement(st) && isExported(st)) {
+      for (const d of st.declarationList.declarations) {
+        const n = d.initializer === undefined ? null : named(d.initializer);
+        if (n !== null) say(d, n);
+      }
+    } else if (ts.isTypeAliasDeclaration(st) && isExported(st) && ts.isTypeReferenceNode(st.type)) {
+      const t = st.type.typeName;
+      const name = ts.isIdentifier(t) ? t.text : ts.isIdentifier(t.left) && spaces.has(t.left.text) ? t.getText(sf) : null;
+      if (name !== null && (bound.has(name) || name.includes('.'))) say(st, name);
+    }
+  }
+  return problems;
 }
 
 const ALLOWISH = /(?:^|\.)\w*[aA]llow$/;
@@ -134,6 +200,32 @@ describe('overlordMayAct has one door (the coordinator\'s items 3 and 4)', () =>
       const { problems } = importerProblems(W2, parseSource(src, 'overlordMayActW2.ts').imports);
       expect(problems.some((p) => /re-exports .* from the decider/.test(p)), `${src}\n${problems.join('\n')}`).toBe(true);
     }
+  });
+  const IMPORT = "import { overlordMayAct } from './overlordMayAct.js';\n";
+  const LOCAL_REEXPORTS: readonly [string, string][] = [
+    ['a named export of the imported binding', `${IMPORT}export { overlordMayAct };`],
+    ['the binding exported under another name', `${IMPORT}export { overlordMayAct as decide };`],
+    ['a constant assigned from it', `${IMPORT}export const decide = overlordMayAct;`],
+    ['a constant assigned from it through a cast', `${IMPORT}export const decide = (overlordMayAct as typeof overlordMayAct);`],
+    ['a default export of it', `${IMPORT}export default overlordMayAct;`],
+    ['a local alias, then a named export', `${IMPORT}const d = overlordMayAct;\nexport { d };`],
+    ['a member of a namespace import', "import * as m from './overlordMayAct.js';\nexport const decide = m.overlordMayAct;"],
+    ['the namespace itself', "import * as m from './overlordMayAct.js';\nexport { m };"],
+    ['a type exported under another name', "import type { GrantFact } from './overlordMayAct.js';\nexport type G = GrantFact;"],
+    ['a type named in an export list', "import type { GrantFact } from './overlordMayAct.js';\nexport type { GrantFact };"],
+  ];
+  it.each(LOCAL_REEXPORTS)('CONTROL: a local re-export in the wrapper is refused, %s (review 4224 F1)', (_name, src) => {
+    expect(localReexportProblems(W2, src).some((p) => /exports .* from the decider/.test(p)), src).toBe(true);
+  });
+  it('CONTROL: the wrapper\'s own shape, a function that calls the decider and a type built from its facts, is not a re-export', () => {
+    const own = `${IMPORT}import type { MayActFacts } from './overlordMayAct.js';\n`
+      + 'export interface G { readonly caller: MayActFacts[\'caller\'] }\n'
+      + 'export function mayActW2(): string { return typeof overlordMayAct; }\nexport const N = 1;';
+    expect(localReexportProblems(W2, own)).toEqual([]);
+    expect(localReexportProblems(F, "import { actRow } from '../../../shared/overlord.js';\nexport { actRow };")).toEqual([]);
+  });
+  it('no server/src file re-exports a binding it imported from the decider (review 4224 F1)', () => {
+    expect(SERVER_SRC.flatMap((f) => localReexportProblems(rel(f), readFileSync(f, 'utf8')))).toEqual([]);
   });
   it('CONTROL: a planted importer of the wrapper is seen', () => {
     expect(importerProblems(F, parseSource("import { mayActW2 } from './overlordMayActW2.js';", 'planted.ts').imports).w2).toBe(true);

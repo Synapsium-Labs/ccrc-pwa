@@ -79,17 +79,20 @@ function oracleGrant(g: GrantFact, kind: string, target: ActTarget, f: MayActFac
       if (target.startedBy === 'unmeasured') unread = true;
       else if (target.startedBy !== 'operator') no = true;
     } else if (c.kind === 'max-per-day') {
-      const used = gf === null ? 'unmeasured' : gf.usesToday[g.id] ?? 'unmeasured';
-      if (used === 'unmeasured') unread = true;
+      // Read in the positive form: only a number is a reading; absent, `unmeasured` or any other value is unread.
+      const used: unknown = gf === null ? 'unmeasured' : gf.usesToday[g.id] ?? 'unmeasured';
+      if (typeof used !== 'number') unread = true;
       else if (!(used < c.n)) no = true;
     } else if (c.kind === 'model-class') {
       const mc = gf === null ? 'unmeasured' : gf.modelClass;
       if (mc === 'unmeasured') unread = true;
       else if (mc !== c.modelClass) no = true;
     } else if (c.kind === 'only-when-recommended-by-coordinator') {
-      const rec = gf === null ? 'unmeasured' : gf.recommendedByCoordinator;
-      if (rec === 'unmeasured') unread = true;
+      // Positive form: exactly `true` covers, exactly `false` is `no`, any other value (`unmeasured` included) is unread.
+      const rec: unknown = gf === null ? 'unmeasured' : gf.recommendedByCoordinator;
+      if (rec === true) { /* covers */ }
       else if (rec === false) no = true;
+      else unread = true;
     } else {
       // A kind this build does not know (cast in by a test, so the type calls it unreachable): an unread fact, never a pass
       // and never a `no` by itself. The kind is read through a widened type, which `never` would not allow.
@@ -115,18 +118,27 @@ function oraclePath(c: Candidate, row: OverlordActRow, effRow: OverlordActRow | 
   if (strengthRank(f.caller) < need) return refusal('identity-too-weak', 'identity');
   // 5
   if (onCommand || onGrant) {
-    if (f.isolation.kind === 'unmeasured') return refusal('unmeasured', 'isolation');
-    if (f.isolation.word === 'shared-user') return refusal('server-not-isolated', 'isolation');
+    // Positive form: a measured separate user or host goes on, a measured shared user is `server-not-isolated`, and anything
+    // else (any other kind or word included) is `unmeasured`. Read through a widened type, so a cast-in value is not unreachable.
+    const iso: { readonly kind: unknown; readonly word?: unknown } = f.isolation;
+    if (iso.kind === 'measured' && (iso.word === 'separate-user' || iso.word === 'separate-host')) { /* goes on */ }
+    else if (iso.kind === 'measured' && iso.word === 'shared-user') return refusal('server-not-isolated', 'isolation');
+    else return refusal('unmeasured', 'isolation');
   }
   // 6
+  // Positive form: only a cell this build names goes on; any other value is `unmeasured`, before the by-grant rule.
+  const cell: unknown = f.cell;
+  if (cell !== 'allow' && cell !== 'proposal' && cell !== 'armed' && cell !== 'by-grant') return refusal('unmeasured', 'cell');
   if (f.cell === 'by-grant' && !onCommand && !onGrant) return refusal('operator-only', 'cell');
   // 6b: an unread arming refuses here, before the blind check could defer (fix after the monotonicity case: a refusal after
-  // step 12's defer let a weakening raise the rank)
-  if (f.cell === 'armed' && f.armedLive === 'unmeasured') return refusal('unmeasured', 'arming');
+  // step 12's defer let a weakening raise the rank). Positive form: exactly `true` is live, exactly `false` is shadow, any
+  // other value (`unmeasured` included) is unread.
+  const live: unknown = f.armedLive;
+  if (f.cell === 'armed' && live !== true && live !== false) return refusal('unmeasured', 'arming');
   // 15, the mode of every allow below
   const mint = (word: string, step: string, authority: string): Expected => {
     const at = pathText;
-    if (f.cell === 'armed') return { kind: 'allowed', word, mode: f.armedLive ? 'live' : 'shadow', authority, verdict: null, step, path: at };
+    if (f.cell === 'armed') return { kind: 'allowed', word, mode: live === true ? 'live' : 'shadow', authority, verdict: null, step, path: at };
     if (f.cell === 'proposal') return { kind: 'allowed', word: 'staged', mode: 'proposal', authority, verdict: null, step, path: at };
     return { kind: 'allowed', word, mode: 'act', authority, verdict: null, step, path: at };
   };
@@ -138,7 +150,10 @@ function oraclePath(c: Candidate, row: OverlordActRow, effRow: OverlordActRow | 
   // 9
   const a = f.answer;
   if (row.answer || onGrant) {
-    if (a.kind === 'not-an-answer') return refusal(row.answer ? 'unmeasured' : 'evidence-too-weak', 'evidence');
+    // Positive form: kind exactly `answer` goes on, exactly `not-an-answer` is as before, any other kind is `unmeasured`.
+    const ak: unknown = a.kind;
+    if (ak === 'not-an-answer') return refusal(row.answer ? 'unmeasured' : 'evidence-too-weak', 'evidence');
+    if (ak !== 'answer' || a.kind !== 'answer') return refusal('unmeasured', 'evidence');
     if (a.evidence === 'unmeasured') return refusal('unmeasured', 'evidence');
     if (a.evidence === 'too-weak') return refusal('evidence-too-weak', 'evidence');
   }
@@ -183,7 +198,8 @@ export function mayActOracle(act: string, effect: string | null, target: ActTarg
       return { kind: 'ceiling', word: 'ceiling', mode: null, authority: null, step: 'effect-ceiling', path: null,
         verdict: { pass: false, word: 'unavailable', group: effRow.ceiling.group, why: "the effect's ceiling was not asked", latch: null } };
     }
-  } else if (!ec.pass) {
+  } else if ((ec as { readonly pass: unknown }).pass !== true) {
+    // Positive form: a verdict passes only when its `pass` is exactly `true`; any other verdict is the ceiling answer.
     return { kind: 'ceiling', word: 'ceiling', mode: null, authority: null, verdict: ec, step: 'effect-ceiling', path: null };
   }
   // 3
@@ -197,19 +213,29 @@ export function mayActOracle(act: string, effect: string | null, target: ActTarg
   else {
     const e = f.statedEntry;
     if (e.kind === 'cited') {
-      const holds = e.active && e.stated && e.restsOnOperatorMessage && e.confirmedOrWhole && e.subjectMatches;
+      // Positive form: the entry holds only when each of the five booleans is exactly `true`.
+      const bits: readonly unknown[] = [e.active, e.stated, e.restsOnOperatorMessage, e.confirmedOrWhole, e.subjectMatches];
+      const holds = bits.every((b) => b === true);
       cands.push({ kind: 'stated-entry', id: e.id, v: barred('stated-entry') || !holds ? 'no' : 'covers', grant: null });
     }
     const r = f.request;
     if (r.kind === 'bound') {
+      // Positive form: origin exactly `operator`; then `namesTarget` exactly `true` covers, exactly `false` is `no`, any other
+      // value (`unmeasured` included) is `unmeasured`.
+      const names: unknown = r.namesTarget;
       const v: Verdict = barred('operator-request') || r.origin !== 'operator' ? 'no'
-        : r.namesTarget === 'unmeasured' ? 'unmeasured' : r.namesTarget ? 'covers' : 'no';
+        : names === true ? 'covers' : names === false ? 'no' : 'unmeasured';
       cands.push({ kind: 'operator-request', id: r.id, v, grant: null });
     }
     const c = f.command;
     if (c !== null) {
-      const v: Verdict = barred('command') || !c.live || !c.forThisProposal ? 'no'
-        : c.targetsMoved === 'unmeasured' ? 'unmeasured' : c.targetsMoved ? 'no' : 'covers';
+      // Positive form: `live` and `forThisProposal` exactly `true`, else `no`; then `targetsMoved` exactly `false` covers,
+      // exactly `true` is `no`, any other value (`unmeasured` included) is `unmeasured`.
+      const live: unknown = c.live;
+      const forThis: unknown = c.forThisProposal;
+      const moved: unknown = c.targetsMoved;
+      const v: Verdict = barred('command') || live !== true || forThis !== true ? 'no'
+        : moved === false ? 'covers' : moved === true ? 'no' : 'unmeasured';
       cands.push({ kind: 'command', id: c.id, v, grant: null });
     }
     for (const g of [...grants].sort((x, y) => x.id - y.id)) {
@@ -248,7 +274,8 @@ function shallowSame(a: object, b: object): boolean {
 const authorityText = (a: { readonly kind: string; readonly id: number | null }): string => (a.kind === 'none' ? 'none' : `${a.kind}:${a.id}`);
 
 /** Where a decider answer departs from the oracle's, or `null` when it does not. Checks the shape, word, mode, authority,
- *  the ceiling verdict, the step, and that the evidence is an object whose step is a string. */
+ *  the ceiling verdict and the step against the oracle's; the evidence path against the path the oracle computes; and that
+ *  the evidence read is a string that is not empty (its text is not compared: the oracle writes no reads). */
 export function diffAnswer(e: Expected, a: MayActAnswer): string | null {
   const step = (a as { evidence?: { step?: unknown } }).evidence?.step;
   if (typeof step !== 'string') return 'the answer carries no evidence step';
@@ -856,6 +883,35 @@ function namedCases(m: MayActModule): Record<string, SuiteCase> {
         isRefused(go(m, 'approve-spec', null, { ...GRANT_FACTS, answer }, [grant('approve-spec')]), 'defer', 'blind-check');
       }
     },
+    'a cast value at any fact the decider reads never reaches an allow (review 4224 F2, and the decider read again for its shape)': () => {
+      const odd = <T>(v: unknown): T => v as T;
+      // The answer facts' kind, where it is first read: on the grant path, and on an answer row's class-none path.
+      const oddAnswer = odd<typeof ANS>({ ...ANS, kind: 'answr', askOrAct: 'ask', blindCheck: 'not-clear' });
+      isRefused(go(m, 'approve-spec', null, { ...GRANT_FACTS, answer: oddAnswer }, [grant('approve-spec')]), 'unmeasured', 'evidence');
+      isRefused(go(m, 'syn-ans-none', null, { answer: oddAnswer }, [], { lookup: lookupSyn }), 'unmeasured', 'evidence');
+      // An entry's booleans, a request's naming and a command's facts.
+      isRefused(go(m, 'state-a-fact', null, { statedEntry: odd({ ...ENTRY, active: 'yes' }), answer: ANS }), 'operator-only', 'covers');
+      isRefused(go(m, 'relay', 'widen-scope', { request: odd({ ...REQ, namesTarget: 'yes' }) }), 'unmeasured', 'covers');
+      isRefused(go(m, 'approve-spec', null, { command: odd({ ...CMD, live: 'yes' }) }), 'operator-only', 'covers');
+      isRefused(go(m, 'approve-spec', null, { command: odd({ ...CMD, forThisProposal: 1 }) }), 'operator-only', 'covers');
+      isRefused(go(m, 'approve-spec', null, { command: odd({ ...CMD, targetsMoved: 0 }) }), 'unmeasured', 'covers');
+      // The isolation read, the cell, the arming and the ceiling verdict.
+      isRefused(go(m, 'approve-spec', null, { command: CMD, isolation: odd({ kind: 'measured-ish', word: 'separate-user', cause: 'x' }) }), 'unmeasured', 'isolation');
+      isRefused(go(m, 'approve-spec', null, { command: CMD, isolation: odd({ kind: 'measured', word: 'shared', cause: 'x' }) }), 'unmeasured', 'isolation');
+      for (const cell of ['refuse', 'allowed', '']) isRefused(go(m, 'read', null, { cell: odd(cell) }), 'unmeasured', 'cell');
+      isRefused(go(m, 'read', null, { cell: 'armed', armedLive: odd('yes') }), 'unmeasured', 'arming');
+      const c = go(m, 'relay', 'widen-scope', { request: REQ, effectCeiling: odd({ pass: 'yes', word: 'act-ceiling', group: 'relay' }) });
+      expect(c.kind).toBe('ceiling');
+    },
+    'a value that cannot be turned into text is still answered: the decider never throws on a cast read (review 4224 F3)': () => {
+      for (const v of [Symbol('cast'), Object.create(null) as object]) {
+        const answer = { ...ANS, blindCheck: v } as unknown as typeof ANS;
+        let a: MayActAnswer | undefined;
+        expect(() => { a = go(m, 'approve-spec', null, { ...GRANT_FACTS, answer }, [grant('approve-spec')]); }, String(typeof v)).not.toThrow();
+        isRefused(a!, 'defer', 'blind-check');
+        expect(a!.evidence.read).toMatch(/^the blind check is /);
+      }
+    },
     "isMayActKebab admits the decider's own words and refuses a foreign one (review 4213 F6)": () => {
       for (const w of ['allow-by-grant', 'not-an-answer', 'clear-yes', 'operator-started-only', 'not-asked', 'question-effect']) expect(m.isMayActKebab(w), w).toBe(true);
       for (const w of ['policy-refused', 'mail-disabled', 'no-such-word', 'allow-by']) expect(m.isMayActKebab(w), w).toBe(false);
@@ -1012,6 +1068,20 @@ export function grantCoversCases(m: MayActModule): Record<string, SuiteCase> {
       expect(gc(m, c, { gf: { ...GF, recommendedByCoordinator: false } })).toBe('unmeasured');
       expect(gc(m, g({ conditions: [...c.conditions], state: 'revoked' }))).toBe('no');
     },
+    'a cast value in the grant facts cannot say: a recommendation or a use count outside its type is unmeasured (review 4224)': () => {
+      const rec = g({ conditions: [{ kind: 'only-when-recommended-by-coordinator' }] });
+      expect(gc(m, rec, { gf: { ...GF, recommendedByCoordinator: 'yes' as never } })).toBe('unmeasured');
+      const uses = g({ conditions: [{ kind: 'max-per-day', n: 3 }] });
+      expect(gc(m, uses, { gf: { ...GF, usesToday: { 21: '1' as never } } })).toBe('unmeasured');
+    },
+    'a condition kind that cannot be turned into text is still unmeasured, never a throw (review 4224 F3)': () => {
+      for (const kind of [Symbol('cast'), Object.create(null) as object]) {
+        const c = g({ conditions: [{ kind } as unknown as GrantFact['conditions'][number]] });
+        let v: string | undefined;
+        expect(() => { v = gc(m, c); }, String(typeof kind)).not.toThrow();
+        expect(v).toBe('unmeasured');
+      }
+    },
     'every condition must hold: one that fails among holding ones is no': () => {
       const c = g({ conditions: [{ kind: 'operator-started-only' }, { kind: 'model-class', modelClass: 'class-a' }, { kind: 'only-when-recommended-by-coordinator' }, { kind: 'max-per-day', n: 2 }] });
       const gf = { ...GF, usesToday: { 21: 1 } };
@@ -1053,31 +1123,40 @@ export const MAY_ACT_SET: MutantSet<MayActModule> = {
     { id: 'D4 a listed effect the lookup lacks is carried', old: '  if (lookup(effect) === null) return', new: '  if (false) return' },
     // 2. the effect's ceiling
     { id: 'D5 a counted effect not asked passes', old: "    if (effRow !== null && effRow.ceiling.kind === 'counted') {", new: '    if (false) {' },
-    { id: 'D6 a refusing verdict is ignored', old: '  } else if (!ec.pass) {', new: '  } else if (false) {' },
+    { id: 'D6 a refusing verdict is ignored', old: '  } else if ((ec as { readonly pass: unknown }).pass !== true) {', new: '  } else if (false) {' },
+    { id: 'D68 a verdict read as passing unless false (review 4224)', old: '.pass !== true) {', new: '.pass === false) {' },
     // 3. covers
     { id: 'D7 CLASS_COVERS ignored', old: '    if (!CLASS_COVERS[m.member].includes(kind)) return', new: '    if (false) return' },
     { id: 'D8 the row\'s covers ignored', old: '    if (!rowOf(m).covers.includes(kind)) return', new: '    if (false) return' },
-    { id: 'D9 an inactive entry covers', old: 'const holds = e.active && e.stated &&', new: 'const holds = e.stated &&' },
-    { id: 'D10 an entry with another subject covers', old: '&& e.confirmedOrWhole && e.subjectMatches;', new: '&& e.confirmedOrWhole;' },
+    { id: 'D9 an inactive entry covers', old: 'const holds = e.active === true && e.stated === true', new: 'const holds = e.stated === true' },
+    { id: 'D10 an entry with another subject covers', old: '\n      && e.subjectMatches === true;', new: ';' },
+    { id: 'D69 an entry boolean read as truthy (review 4224)', old: 'const holds = e.active === true &&', new: 'const holds = !!e.active &&' },
     { id: 'D11 an overlord request covers', old: ": r.origin !== 'operator' ? {", new: ': false ? {' },
-    { id: 'D12 an unread naming reads as named', old: ": r.namesTarget === 'unmeasured' ? {", new: ': false ? {' },
-    { id: 'D13 a request not naming the target covers', old: ': r.namesTarget ? COVERS : {', new: ': true ? COVERS : {' },
-    { id: 'D14 a command not live covers', old: ': !c.live ? {', new: ': false ? {' },
-    { id: 'D15 a command for another proposal covers', old: ': !c.forThisProposal ? {', new: ': false ? {' },
-    { id: 'D16 a command whose targets moved covers', old: ": c.targetsMoved ? { kind: 'no'", new: ": false ? { kind: 'no'" },
-    { id: 'D17 an unread command reads as unmoved', old: ": c.targetsMoved === 'unmeasured' ? {", new: ': false ? {' },
-    { id: 'D18 no path and an unread cover is operator-only', old: "return unread !== null ? refused('unmeasured', ev('covers', null, `${unread} is unmeasured`))\n", new: "return false ? refused('unmeasured', ev('covers', null, `${unread} is unmeasured`))\n" },
+    { id: 'D12 an unread naming reads as named', old: ": { kind: 'unmeasured', fact: said`whether request ${r.id} names the target` } });", new: ': COVERS });' },
+    { id: 'D13 a request not naming the target covers', old: ': names === true ? COVERS : names === false ? {', new: ': names === true || names === false ? COVERS : names === false ? {' },
+    { id: 'D14 a command not live covers', old: ': c.live !== true ? {', new: ': false ? {' },
+    { id: 'D70 a live of another type read as live (review 4224)', old: ': c.live !== true ? {', new: ': !c.live ? {' },
+    { id: 'D15 a command for another proposal covers', old: ': c.forThisProposal !== true ? {', new: ': false ? {' },
+    { id: 'D71 a proposal match of another type read as a match (review 4224)', old: ': c.forThisProposal !== true ? {', new: ': !c.forThisProposal ? {' },
+    { id: 'D16 a command whose targets moved covers', old: ": moved === true ? { kind: 'no'", new: ": false ? { kind: 'no'" },
+    { id: 'D17 an unread command reads as unmoved', old: ": { kind: 'unmeasured', fact: said`whether command ${c.id}'s targets moved` } });", new: ': COVERS });' },
+    { id: 'D18 no path and an unread cover is operator-only', old: "return unread !== null ? refused('unmeasured', ev('covers', null, said`${unread} is unmeasured`))\n", new: "return false ? refused('unmeasured', ev('covers', null, said`${unread} is unmeasured`))\n" },
     // 4 to 7. identity, isolation, the cell, the arming
     { id: 'D19 the effect\'s least ignored', old: '  if (effRow !== null) need = strongest(need, effRow.leastStrength);', new: '' },
     { id: 'D20 the grant\'s least ignored', old: '  if (grant !== null) need = strongest(need, grant.leastStrength);', new: '' },
     { id: 'D21 identity not checked', old: '  if (!strengthAtLeast(facts.caller, need)) return', new: '  if (false) return' },
     { id: 'D22 isolation skipped on the command path', old: '  if (onGrant || onCommand) {', new: '  if (onGrant) {' },
-    { id: 'D23 an unmeasured isolation passes', old: "    if (iso.kind === 'unmeasured') return", new: '    if (false) return' },
+    { id: 'D23 an unmeasured isolation passes', old: "    if (iso.kind !== 'measured' || !ISOLATED_WORDS.includes(iso.word)) {", new: '    if (false) {' },
     { id: 'D24 an unmeasured isolation read as shared-user', old: "return no('unmeasured', 'isolation'", new: "return no('server-not-isolated', 'isolation'" },
-    { id: 'D25 a shared-user server passes', old: "    if (iso.word === 'shared-user') return", new: '    if (false) return' },
+    { id: 'D25 a shared-user server passes', old: "    if (iso.kind === 'measured' && iso.word === 'shared-user') return", new: '    if (false) return' },
+    { id: 'D72 an isolation of an unknown kind passes (review 4224)', old: "if (iso.kind !== 'measured' ||", new: "if (iso.kind === 'unmeasured' ||" },
+    { id: 'D73 an isolation word this build does not know passes (review 4224)', old: ' || !ISOLATED_WORDS.includes(iso.word)) {', new: ') {' },
+    { id: 'D74 an unknown cell passes (review 4224)', old: '  if (!PASSING_CELLS.includes(facts.cell)) return', new: '  if (false) return' },
     { id: 'D26 by-grant lets every path on', old: "  if (facts.cell === 'by-grant' && !onGrant && !onCommand) return", new: '  if (false) return' },
-    { id: 'D27 an unread arming reads as live', old: "  if (facts.cell === 'armed' && armedLive === 'unmeasured') return", new: '  if (false) return' },
-    { id: 'D28 the arming read after the blind check', old: "  if (facts.cell === 'armed' && armedLive === 'unmeasured') return no('unmeasured', 'arming', 'whether the kind is armed is unmeasured');\n", new: '' },
+    { id: 'D27 an unread arming reads as live', old: "  if (facts.cell === 'armed' && armedLive !== true && armedLive !== false) return", new: '  if (false) return' },
+    { id: 'D28 the arming read after the blind check', old: "  if (facts.cell === 'armed' && armedLive !== true && armedLive !== false) return no('unmeasured', 'arming', 'whether the kind is armed is unmeasured');\n", new: '' },
+    { id: 'D75 an arming of another type read as shadow (review 4224)', old: 'armedLive !== true && armedLive !== false) return', new: "armedLive === 'unmeasured') return" },
+    { id: 'D76 the answer kind read in the negative form (review 4224 F2)', old: "    if (a.kind !== 'answer') return no('unmeasured', 'evidence',", new: "    if (false) return no('unmeasured', 'evidence'," },
     { id: 'D29 a disarmed kind acts live', old: "mode: armedLive === true ? 'live' : 'shadow'", new: "mode: 'live'" },
     { id: 'D30 a proposal acts', old: "    if (cell === 'proposal') return", new: '    if (false) return' },
     // 8 to 15. the paths
@@ -1096,10 +1175,13 @@ export const MAY_ACT_SET: MutantSet<MayActModule> = {
     // the evidence and the kebab guard (review 4213 F5, F6)
     { id: 'D66 the evidence emptied', old: '({ step, path, read });', new: "({ step, path: null, read: '' });" },
     { id: 'D67 the kebab guard admits every word', old: 'export const isMayActKebab = (word: string): boolean =>', new: 'export const isMayActKebab = (word: string): boolean => true ||' },
+    // a read written from a value that cannot be shown (review 4224 F3)
+    { id: 'D77 shown with no guard', old: '  try {\n    return String(v);\n  } catch {\n    return UNSHOWABLE;\n  }', new: '  return `${v as string}`;' },
+    { id: 'D78 said bypasses shown', old: '(i < values.length ? shown(values[i]) : \'\')', new: '(i < values.length ? `${values[i] as string}` : \'\')' },
     { id: 'D42 an O3 effect is staged under operator', old: "members.some((m) => m.member === 'O3') && facts.caller === 'attributed'", new: "members.some((m) => m.member === 'O3')" },
     // Measured equivalent and left out: staging without the O3 test ("a classless grant is staged"), because `CLASS_COVERS` gives a
     // grant to O3 alone, so every grant path holds an O3 member.
-    { id: 'D44 a request allow names no authority', old: "{ kind: 'request', id: path.id }, `request ${path.id} covers every member, and it is not an answer`", new: "{ kind: 'none', id: null }, `request ${path.id} covers every member, and it is not an answer`" },
+    { id: 'D44 a request allow names no authority', old: "{ kind: 'request', id: path.id }, said`request ${path.id} covers every member, and it is not an answer`", new: "{ kind: 'none', id: null }, said`request ${path.id} covers every member, and it is not an answer`" },
     // across paths
     { id: 'D45 the first path answers', old: '    if (best === null || mayActRank(r) > mayActRank(best)) best = r;', new: '    if (best === null) best = r;' },
     { id: 'D46 a tie goes to the last path', old: 'mayActRank(r) > mayActRank(best)', new: 'mayActRank(r) >= mayActRank(best)' },
@@ -1140,15 +1222,17 @@ export const GRANT_COVERS_SET: MutantSet<MayActModule> = {
     { id: 'G9 who started it unread reads as the operator', old: "target.startedBy === 'unmeasured' ? unread(", new: 'false ? unread(' },
     { id: 'G10 who started it ignored', old: ": target.startedBy === 'operator' ? COVERS", new: ': true ? COVERS' },
     { id: 'G11 the uses read with <=', old: 'uses < c.n ? COVERS', new: 'uses <= c.n ? COVERS' },
-    { id: 'G12 unread uses read as a number', old: "checks.push(uses === 'unmeasured' ? unread(", new: 'checks.push(false ? unread(' },
-    { id: 'G13 absent uses read as zero', old: "(gf.usesToday[g.id] ?? 'unmeasured')", new: '(gf.usesToday[g.id] ?? 0)' },
+    { id: 'G12 unread uses read as a number', old: "checks.push(typeof uses !== 'number' ? unread(", new: 'checks.push(false ? unread(' },
+    { id: 'G13 absent uses read as zero', old: 'gf.usesToday[g.id];', new: 'gf.usesToday[g.id] ?? 0;' },
+    { id: 'G22 a use count of another type read as a number (review 4224)', old: "checks.push(typeof uses !== 'number' ? unread(", new: "checks.push(uses === 'unmeasured' || uses === undefined ? unread(" },
     { id: 'G14 the model class ignored', old: 'mc === c.modelClass ? COVERS', new: 'true ? COVERS' },
     { id: 'G15 an unread model class passes', old: "checks.push(mc === 'unmeasured' ? unread(", new: 'checks.push(false ? unread(' },
-    { id: 'G16 the recommendation ignored', old: ": r ? COVERS : no('the coordinator did not recommend it')", new: ": true ? COVERS : no('the coordinator did not recommend it')" },
-    { id: 'G17 an unread recommendation reads as yes', old: "checks.push(r === 'unmeasured' ? unread(", new: 'checks.push(false ? unread(' },
+    { id: 'G16 the recommendation ignored', old: "r === true ? COVERS : r === false ? no('the coordinator did not recommend it')", new: "true ? COVERS : r === false ? no('the coordinator did not recommend it')" },
+    { id: 'G17 an unread recommendation reads as yes', old: ": unread(\"the coordinator's recommendation\"));", new: ': COVERS);' },
+    { id: 'G23 a recommendation of another type read as yes (review 4224)', old: 'checks.push(r === true ? COVERS', new: "checks.push(r === 'unmeasured' ? unread('x') : r ? COVERS" },
     { id: 'G18 an unread check beats a failing one', old: "return vs.find((v) => v.kind === 'no') ?? vs.find((v) => v.kind === 'unmeasured') ?? COVERS;", new: "return vs.find((v) => v.kind === 'unmeasured') ?? vs.find((v) => v.kind === 'no') ?? COVERS;" },
     { id: 'G19 an unread check covers', old: "?? vs.find((v) => v.kind === 'unmeasured') ?? COVERS;", new: '?? COVERS;' },
     { id: 'G20 an unknown kind read as the recommendation (review 4213 F2)', old: "} else if (c.kind === 'only-when-recommended-by-coordinator') {", new: '} else if (true) {' },
-    { id: 'G21 an unknown kind covers', old: "checks.push(unread(`grant ${g.id}'s condition of kind", new: "checks.push(COVERS); void ((`grant ${g.id}'s condition of kind" },
+    { id: 'G21 an unknown kind covers', old: "checks.push(unread(said`grant ${g.id}'s condition of kind", new: "checks.push(COVERS); void ((said`grant ${g.id}'s condition of kind" },
   ],
 };
