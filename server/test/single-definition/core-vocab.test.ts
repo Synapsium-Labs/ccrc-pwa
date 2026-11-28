@@ -884,7 +884,10 @@ describe('Build 7 nouns', () => {
       // The Overlord's readiness word (Overlord W1, §6.4): the store's SQL takes the handle as an argument, and the lane's port
       // carries it from the composition root (`overlordReadinessWiring.ts` passes the one it is given); each names it by
       // `import type`.
-      'overlordReadinessStore.ts', 'overlordReadinessLane.ts']);
+      'overlordReadinessStore.ts', 'overlordReadinessLane.ts',
+      // The Overlord's request record (W2 request record A, §5.1): the three tables' SQL takes the caller's handle inside its
+      // transaction, and names it by `import type`.
+      'overlordRequestStore.ts']);
     const coordFiles = sources(coordDir);
 
     it('visits the whole directory — a moved directory must turn this red, not disarm it', () => {
