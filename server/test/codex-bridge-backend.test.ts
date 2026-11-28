@@ -142,16 +142,29 @@ describe.skipIf(!PY)('the backend adapter: the body (codex-bridge spec §2.2, §
     expect(Object.keys(bare.body)).not.toContain('instructions');
   });
 
-  it('the forbidden keys are never sent', async () => {
+  // The second row forces the collision a random cache key can meet by chance: its session id holds `max_tokens`' digits, so the
+  // cache key the bridge sends does too.
+  it.each([
+    ['', undefined],
+    [', though the cache key holds max_tokens\' digits', 'sess-32000'],
+  ])('the forbidden keys are never sent%s', async (_title, session) => {
     const body = anthropic({
       max_tokens: 32000, temperature: 0.5, top_p: 0.9, top_k: 5, metadata: { user_id: 'lane-a-user' },
       stop_sequences: ['STOP'], thinking: { type: 'enabled', budget_tokens: 1024 }, reasoning: { effort: 'high' },
     });
-    const { requests } = await post([{ status: 200, sse: COMPLETED }], { body });
+    const headers = session === undefined ? undefined : { 'x-claude-code-session-id': session };
+    const { requests } = await post([{ status: 200, sse: COMPLETED }], { body, ...(headers ? { headers } : {}) });
     const sent = requests[0].body!;
     for (const k of FORBIDDEN) expect(Object.keys(sent), k).not.toContain(k);
     expect(sent.reasoning).toEqual({ effort: 'high' });
-    expect(JSON.stringify(sent)).not.toContain('32000');
+    // `max_tokens` is not sent under any name: its value appears nowhere in the body. The search runs over KNOWN text, so it
+    // cannot collide. The body's one value this test does not choose is `prompt_cache_key`: with no session id, a fresh
+    // `ccrc:anon-<uuid4>`, whose 32 random hex digits can hold five digits in a row; with one, `ccrc:<session id>`. It is held to
+    // that form first, then replaced by a placeholder. What is left is the fixture's model, texts and effort and the bridge's own
+    // words, none of which holds the value, so an echo anywhere else in the body still shows and chance never does.
+    if (session === undefined) expect(sent.prompt_cache_key).toMatch(/^ccrc:anon-[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
+    else expect(sent.prompt_cache_key).toBe(`ccrc:${session}`);
+    expect(JSON.stringify({ ...sent, prompt_cache_key: '<key>' })).not.toContain('32000');
   });
 
   it('the key order puts model and stream first', async () => {

@@ -87,8 +87,10 @@ export function runOperatorModelBootPass(deps: BootPassDeps): { readonly counts:
         const have = new Set(present.value);
         const absent = citing.filter((p) => !have.has(p.messageId));
         if (absent.length > 0) {
+          // Up to the cap every pair is listed and the line says no "first"; past it, the first ones are, and it says how many.
           const shown = absent.slice(0, BOOT_ABSENT_CITATIONS_SHOWN).map((p) => `${p.requestId}:${p.messageId}`).join(', ');
-          lines.push(`boot pass: citations with no message row: ${absent.length} (request:message, the first ${BOOT_ABSENT_CITATIONS_SHOWN}: ${shown}); nothing moved for them`);
+          const which = absent.length > BOOT_ABSENT_CITATIONS_SHOWN ? `, the first ${BOOT_ABSENT_CITATIONS_SHOWN}` : '';
+          lines.push(`boot pass: citations with no message row: ${absent.length} (request:message${which}: ${shown}); nothing moved for them`);
         }
       }
     }
