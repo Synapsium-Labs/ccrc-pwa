@@ -11,6 +11,9 @@ import {
   nextRequestStateCases, openMoveVerdictCases, parentClockAfterChildMoveCases, type RequestsModule,
 } from '../requestCases.js';
 import { bootSpendCases, citedMessagesForBootCases, type BootSpendModule, type CitedReaderModule } from '../bootCitationCases.js';
+import {
+  codeShortlistCases, touchedAnswerCases, touchedReadCases, touchedRequestCases, type ShortlistModule,
+} from '../shortlistCases.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');
 const MODULE = path.join(ROOT, 'server/src/coord/overlordRequests.ts');
@@ -216,6 +219,71 @@ const SPEND_SET: MutantSet<BootSpendModule> = { modulePath: MESSAGES_MODULE, sui
   { id: 'S9 the floor is not read', old: `  ${FLOOR}\n`, new: '' },
 ] };
 
+// The code shortlist (Tasks B1 and B2, §7): its four deciders, in `requestShortlist.ts`, with the cases of `shortlistCases.ts`.
+const SHORTLIST_MODULE = path.join(ROOT, 'server/src/coord/requestShortlist.ts');
+const SHORTLIST_KEY = 'server/src/coord/requestShortlist.ts';
+const shortSet = (cases: (m: ShortlistModule) => Record<string, SuiteCase>, mutants: MutantSet<ShortlistModule>['mutants']):
+  MutantSet<ShortlistModule> => ({ modulePath: SHORTLIST_MODULE, mutants, suite: cases });
+const RANK = 'b.claimHits - a.claimHits || b.touchedHits - a.touchedHits';
+
+const SHORTLIST_SET = shortSet(codeShortlistCases, [
+  { id: 'K1 history outranks a claim (the first two keys swapped)', old: RANK, new: 'b.touchedHits - a.touchedHits || b.claimHits - a.claimHits' },
+  { id: 'K2 no cut', old: 'candidates.slice(0, SHORTLIST_MAX)', new: 'candidates' },
+  { id: 'K3 a programme not live is a candidate', old: '.filter((p) => live.has(p))', new: '' },
+  { id: 'K4 a claim of another project meets the path', old: 'c.project === e.project && c.paths', new: 'c.paths' },
+  { id: 'K5 a touched hit of another project counts', old: 'h.project === e.project && h.file === e.path', new: 'h.file === e.path' },
+  { id: 'K6 touched matches by directory', old: 'h.file === e.path', new: 'pathsOverlap(e.path, h.file)' },
+  { id: 'K7 claims match exactly', old: 'c.paths.some((p) => pathsOverlap(e.path, p))', new: 'c.paths.some((p) => p === e.path)' },
+  { id: 'K8 a programme with no hit is kept', old: '    if (claimHits + touchedHits === 0) continue;\n', new: '' },
+  { id: 'K9 the newest is not read', old: '|| (b.newest ?? -1) - (a.newest ?? -1) ', new: '' },
+  { id: 'K10 the oldest ranks first', old: '(b.newest ?? -1) - (a.newest ?? -1)', new: '(a.newest ?? -1) - (b.newest ?? -1)' },
+  { id: 'K11 an unknown time ranks first', old: '(b.newest ?? -1) - (a.newest ?? -1)', new: '(b.newest ?? Infinity) - (a.newest ?? Infinity) || 0' },
+  { id: 'K12 slugs rank backwards', old: "(a.programme < b.programme ? -1 : a.programme > b.programme ? 1 : 0)", new: "(a.programme < b.programme ? 1 : a.programme > b.programme ? -1 : 0)" },
+  { id: 'K13 claims-only counts claims, not paths', old: "new Set(own.flatMap((c) => c.paths.map((p) => `${c.project}\\0${p}`))).size", new: 'own.length' },
+  { id: 'K15 a partial read counts nothing', old: "input.touched.kind === 'measured' || input.touched.kind === 'partial' ? input.touched.hits : []", new: "input.touched.kind === 'measured' ? input.touched.hits : []" },
+  { id: 'K16 a repeated path counts twice', old: 'input.expected.filter((e, i) => input.expected.findIndex((x) => sameExpected(x, e)) === i)', new: 'input.expected' },
+  { id: 'K17 an unreadable live read admits every programme', old: "input.live.kind === 'measured' ? input.live.live : new Set<string>()", new: "input.live.kind === 'measured' ? input.live.live : { has: () => true }" },
+  { id: 'K18 the touched words are dropped', old: "    : input.touched.kind === 'unmeasured' ? [input.touched.why] : [];", new: '    : [];' },
+  { id: 'K19 claim hits count claims', old: '        if (meeting.length > 0) claimHits += 1;\n', new: '        claimHits += meeting.length;\n' },
+]);
+
+const REQUEST_SET = shortSet(touchedRequestCases, [
+  { id: 'Q1 every path is read', old: 'expected.slice(0, SHORTLIST_TOUCHED_PATHS)', new: 'expected' },
+  { id: 'Q2 a ninth path is not named', old: "(w === 'more-than-eight' && expected.length > SHORTLIST_TOUCHED_PATHS) || ", new: '' },
+  { id: 'Q3 a refused path is asked', old: "    if (!touchedPathOk(e.path)) { refused = true; continue; }\n", new: '' },
+  { id: 'Q4 a refused path is not named', old: " || (w === 'path-refused' && refused)", new: '' },
+  { id: 'Q5 a repeated path is asked twice', old: 'if (!paths.includes(e.path)) paths.push(e.path);', new: 'paths.push(e.path);' },
+  { id: 'Q6 an empty request is sent', old: '  if (paths.length === 0) return null;\n', new: '' },
+  { id: 'Q7 a leading dash is a path', old: "typeof p === 'string' && !p.startsWith('-') && ", new: "typeof p === 'string' && " },
+  { id: 'Q8 any character is a path', old: 'PATH_CHARS.test(p) && ', new: '' },
+  { id: 'Q9 the path bound is not read', old: ' && utf8Bytes(p) <= REQUEST_BOUNDS.pathBytes', new: '' },
+  { id: 'Q10 a path need not be normalised', old: '\n    && normalizeClaimPath(p) === p', new: '' },
+]);
+
+const ANSWER_SET = shortSet(touchedAnswerCases, [
+  { id: 'A1 no agent is always not served', old: "no(linkDown ? 'link-down' : 'not-served')", new: "no('not-served')" },
+  { id: 'A2 a lost read is not served', old: "    case 'lost': return no('link-down');\n", new: "    case 'lost': return no('not-served');\n" },
+  { id: 'A3 a busy slot is a deadline', old: "    case 'busy': return no('busy');\n", new: "    case 'busy': return no('deadline');\n" },
+  { id: 'A4 an older agent is refused', old: "a.word === 'bad-verb' ? 'not-served' : 'refused'", new: "'refused'" },
+  { id: 'A5 an unreadable history is a refusal', old: "    case 'store-refused': return no('history-unreadable');\n", new: "    case 'store-refused': return no('refused');\n" },
+  { id: 'A6 an item naming another path is taken', old: " || v['file'] !== file", new: '' },
+  { id: 'A7 an item for another index is taken', old: "v['asked'] !== i || ", new: '' },
+  { id: 'A9 a session id is not checked', old: "!isRegistryId(s['ccrcId']) || ", new: "typeof s['ccrcId'] !== 'string' || " },
+  { id: 'A10 a session time is not checked', old: " || !timeOk(s['latestMs'])", new: '' },
+  { id: 'A11 the sessions bound is not read', old: '  if (sessions.length > OVERLORD_HISTORY_TOUCHED_SESSIONS_MAX) return null;\n', new: '' },
+  { id: 'A13 fewer items is not budget', old: 'a.items.length < asked.paths.length || ', new: '' },
+  { id: 'A14 an item that is not whole is whole', old: '    if (!it.whole) cut = true;\n', new: '' },
+  { id: 'A15 a refused item is not named', old: " || (w === 'item-refused' && refused)", new: '' },
+  { id: 'A16 the request words are dropped', old: 'asked.partial.includes(w) || ', new: '' },
+  { id: 'A17 a timeout is link-down', old: "    case 'timeout': return no('deadline');\n", new: "    case 'timeout': return no('link-down');\n" },
+]);
+
+const READ_SET = shortSet(touchedReadCases, [
+  { id: 'R1 only the first programme counts', old: 'for (const run of runs.runs.get(r.ccrcId) ?? [])', new: 'for (const run of (runs.runs.get(r.ccrcId) ?? []).slice(0, 1))' },
+  { id: 'R2 an unreadable runs read is empty', old: "  if (runs.kind === 'unmeasured') return { kind: 'unmeasured', why: 'runs-unreadable' };\n", new: "  if (runs.kind === 'unmeasured') return { kind: 'measured', hits: [] };\n" },
+  { id: 'R3 a partial read is measured', old: "answer.partial.length === 0 ? { kind: 'measured', hits }", new: "true ? { kind: 'measured', hits }" },
+]);
+
 /** One entry per decider, keyed `<path>#<function>`; `mutation-floors.test.ts` spreads it into `MUTANT_SETS`. */
 export const REQUEST_MUTANT_SETS: Record<string, MutantSet<never>> = {
   [`${KEY}#nextRequestState`]: NEXT_SET as MutantSet<never>,
@@ -228,4 +296,8 @@ export const REQUEST_MUTANT_SETS: Record<string, MutantSet<never>> = {
   [`${KEY}#nextRequestId`]: ID_SET as MutantSet<never>,
   [`${STORE_KEY}#citedMessagesForBoot`]: BOOT_READ_SET as MutantSet<never>,
   [`${MESSAGES_KEY}#bootSpend`]: SPEND_SET as MutantSet<never>,
+  [`${SHORTLIST_KEY}#codeShortlist`]: SHORTLIST_SET as MutantSet<never>,
+  [`${SHORTLIST_KEY}#touchedRequestOf`]: REQUEST_SET as MutantSet<never>,
+  [`${SHORTLIST_KEY}#touchedAnswerOf`]: ANSWER_SET as MutantSet<never>,
+  [`${SHORTLIST_KEY}#touchedReadOf`]: READ_SET as MutantSet<never>,
 };
