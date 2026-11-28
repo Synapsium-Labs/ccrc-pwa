@@ -4,18 +4,20 @@
 //
 // - `liveProgrammes`: the programmes not ended (`isEnded`), through `CoordStore.programs()`.
 // - `claimsByProgramme`: the live claims (`CoordStore.activeClaims()`) whose lease has not run out (the claims route's own
-//   filter, `expiresAt > now`), each joined to its run's programme; a claim with no run, or whose run has no row, is dropped.
+//   filter, `expiresAt > now`), each joined to its run's programme (`CoordStore.run`); a claim with no run, or whose run has
+//   no row, is dropped.
 // - `touchedByProgramme`: the one history read an open makes. Its agent is the history door's own choice (`historyAgentFor`),
 //   its port the history op's (`FleetIO.overlordHistory`), its wait `TOUCHED_OPEN_WAIT_MS` through the time port. The wait's
 //   handle is a local of the call, so this is a deadline inside one adapter call, never a scheduler. Each row's ccrc id maps
-//   to its runs through `runs.sessionId` (the run's project) and `runs.claimedBy` (the coordinator's project, else the run's).
+//   to its runs through the store's one reader of the run and session link (`CoordStore.bindingRunsOf`): a run it works on
+//   gives that run's project, a run it claims gives the coordinator's project, else the run's.
 //
-// Each read answers what it is: a throw is that read's own unmeasured word, never an empty list. Nothing here logs: a path is
-// data from another box, and none reaches a log line (request-shortlist-read.test.ts plants a marker to prove it).
+// It holds no handle and writes no SQL: every read is a `CoordStore` method (the coordination ring's handle rule). Each read
+// answers what it is: a throw or an unreadable answer is that read's own unmeasured word, never an empty list. Nothing here
+// logs: a path is data from another box, and none reaches a log line (request-shortlist-read.test.ts plants a marker).
 //
 // No caller in production at this tip: the open door of request record B's next part is its first (a census in
-// request-shortlist-read.test.ts pins that no source outside this file imports it).
-import type { DatabaseSync } from 'node:sqlite';
+// request-shortlist-read.test.ts pins that no source imports it).
 import { isEnded } from '../../../shared/programmeLifecycle.js';
 import type { OverlordHistoryRequest } from '../../../shared/overlordHistory.js';
 import type { ExpectedPath } from '../../../shared/overlordRequests.js';
@@ -26,19 +28,29 @@ import {
   TOUCHED_OPEN_WAIT_MS, codeShortlist, touchedAnswerOf, touchedReadOf, touchedRequestOf,
   type ClaimByProgramme, type ClaimsRead, type LiveRead, type SessionRun, type SessionRunsRead, type Shortlist, type TouchedRead,
 } from './requestShortlist.js';
-import type { CoordStore } from './store.js';
+import type { CoordStore, RunRow } from './store.js';
 
 /** The store reads the shortlist takes. */
-export type ShortlistCoord = Pick<CoordStore, 'programs' | 'activeClaims'>;
+export type ShortlistCoord = Pick<CoordStore, 'programs' | 'activeClaims' | 'run' | 'bindingRunsOf'>;
 
 export interface ShortlistReadDeps {
   readonly coord: ShortlistCoord;
-  /** `coord.db`'s handle, for the two runs reads. */
-  readonly db: DatabaseSync;
   /** Every agent link this server holds, as the history door's choice reads it. */
   readonly links: () => readonly HistoryLink[];
   readonly io: Pick<FleetIO, 'overlordHistory'>;
   readonly time: { readonly clock: Clock; readonly scheduler: Scheduler };
+}
+
+/** A run read that is not a run: thrown inside a read, so that read answers its unmeasured word. */
+class RunUnreadable extends Error {}
+
+/** One run by id, read once per call through `cache`: the row, null for no row, or a throw for an unreadable one. */
+function runOf(coord: Pick<CoordStore, 'run'>, cache: Map<number, RunRow | null>, id: number): RunRow | null {
+  if (cache.has(id)) return cache.get(id)!;
+  const r = coord.run(id);
+  if (!r.ok) throw new RunUnreadable();
+  cache.set(id, r.run);
+  return r.run;
 }
 
 /** The live programmes, or `programmes-unreadable`. */
@@ -51,20 +63,14 @@ export function liveProgrammes(coord: Pick<CoordStore, 'programs'>): LiveRead {
 }
 
 /** The live, unexpired claims with a run, by their run's programme, or `claims-unreadable`. */
-export function claimsByProgramme(coord: Pick<CoordStore, 'activeClaims'>, db: DatabaseSync, now: number): ClaimsRead {
+export function claimsByProgramme(coord: Pick<CoordStore, 'activeClaims' | 'run'>, now: number): ClaimsRead {
   try {
-    const live = coord.activeClaims().filter((c) => c.expiresAt > now && c.runId !== null);
-    const ids = [...new Set(live.map((c) => c.runId as number))];
-    const programOf = new Map<number, string>();
-    if (ids.length > 0) {
-      const rows = db.prepare('SELECT id, program FROM runs WHERE id IN (SELECT value FROM json_each(?))')
-        .all(JSON.stringify(ids)) as { id: number | bigint; program: string }[];
-      for (const r of rows) programOf.set(Number(r.id), r.program);
-    }
+    const cache = new Map<number, RunRow | null>();
     const claims: ClaimByProgramme[] = [];
-    for (const c of live) {
-      const programme = programOf.get(c.runId as number);
-      if (programme !== undefined) claims.push({ programme, project: c.project, paths: c.paths, renewedAt: c.renewedAt });
+    for (const c of coord.activeClaims()) {
+      if (c.expiresAt <= now || c.runId === null) continue;
+      const run = runOf(coord, cache, c.runId);
+      if (run !== null) claims.push({ programme: run.program, project: c.project, paths: c.paths, renewedAt: c.renewedAt });
     }
     return { kind: 'measured', claims };
   } catch {
@@ -72,26 +78,26 @@ export function claimsByProgramme(coord: Pick<CoordStore, 'activeClaims'>, db: D
   }
 }
 
-/** Each ccrc id's runs: a worker's through `sessionId` (the run's project), a coordinator's through `claimedBy` (its
- *  coordinator project, else the run's). Unmeasured when the read throws. */
-export function sessionRuns(db: DatabaseSync, ids: readonly string[]): SessionRunsRead {
+/** Each ccrc id's runs: one it works on gives the run's project, one it claims the coordinator's project, else the run's.
+ *  Unmeasured when any read throws or answers unreadable (all or nothing: a partial map would drop a programme silently). */
+export function sessionRuns(coord: Pick<CoordStore, 'run' | 'bindingRunsOf'>, ids: readonly string[]): SessionRunsRead {
   try {
+    const cache = new Map<number, RunRow | null>();
     const runs = new Map<string, SessionRun[]>();
-    if (ids.length === 0) return { kind: 'measured', runs };
-    const json = JSON.stringify([...new Set(ids)]);
-    const rows = db.prepare(
-      'SELECT DISTINCT program, project, coordProject, sessionId, claimedBy FROM runs '
-      + 'WHERE sessionId IN (SELECT value FROM json_each(?)) OR claimedBy IN (SELECT value FROM json_each(?))',
-    ).all(json, json) as { program: string; project: string; coordProject: string | null; sessionId: string | null; claimedBy: string | null }[];
-    const add = (id: string, run: SessionRun): void => {
-      const list = runs.get(id) ?? [];
-      if (!list.some((r) => r.programme === run.programme && r.project === run.project)) list.push(run);
-      runs.set(id, list);
-    };
-    const wanted = new Set(ids);
-    for (const r of rows) {
-      if (r.sessionId !== null && wanted.has(r.sessionId)) add(r.sessionId, { programme: r.program, project: r.project });
-      if (r.claimedBy !== null && wanted.has(r.claimedBy)) add(r.claimedBy, { programme: r.program, project: r.coordProject ?? r.project });
+    for (const id of new Set(ids)) {
+      const bound = coord.bindingRunsOf(id);
+      if (!bound.ok) return { kind: 'unmeasured' };
+      const list: SessionRun[] = [];
+      const add = (run: SessionRun): void => {
+        if (!list.some((r) => r.programme === run.programme && r.project === run.project)) list.push(run);
+      };
+      for (const b of bound.runs) {
+        const run = runOf(coord, cache, b.id);
+        if (run === null) continue;
+        if (b.sessionId === id) add({ programme: run.program, project: run.project });
+        if (b.claimedBy === id) add({ programme: run.program, project: run.coordProject ?? run.project });
+      }
+      if (list.length > 0) runs.set(id, list);
     }
     return { kind: 'measured', runs };
   } catch {
@@ -123,7 +129,8 @@ export async function touchedByProgramme(deps: ShortlistReadDeps, expected: read
   const choice = historyAgentFor(links);
   const outcome: HistoryReadOutcome = choice.kind === 'agent' ? await askWithin(deps, asked.request) : choice;
   const answer = touchedAnswerOf(outcome, asked, links.some((l) => !l.connected));
-  const runs = answer.kind === 'rows' ? sessionRuns(deps.db, answer.rows.map((r) => r.ccrcId)) : { kind: 'measured' as const, runs: new Map() };
+  const runs: SessionRunsRead = answer.kind === 'rows'
+    ? sessionRuns(deps.coord, answer.rows.map((r) => r.ccrcId)) : { kind: 'measured', runs: new Map() };
   return touchedReadOf(answer, runs);
 }
 
@@ -131,7 +138,7 @@ export async function touchedByProgramme(deps: ShortlistReadDeps, expected: read
  *  is asked (RQ4: an empty list matches on claims alone). */
 export async function readShortlist(deps: ShortlistReadDeps, expected: readonly ExpectedPath[]): Promise<Shortlist> {
   const live = liveProgrammes(deps.coord);
-  const claims = claimsByProgramme(deps.coord, deps.db, deps.time.clock.wall());
+  const claims = claimsByProgramme(deps.coord, deps.time.clock.wall());
   const touched = await touchedByProgramme(deps, expected);
   return codeShortlist({ expected, claims, touched, live });
 }

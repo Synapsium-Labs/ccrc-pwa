@@ -66,7 +66,7 @@ function deps(answer: (req: OverlordHistoryRequest) => Promise<OverlordHistoryAs
   links = [{ connected: true, agentOps: [OVERLORD_HISTORY_OP] }], over: Partial<ShortlistReadDeps> = {}): ShortlistReadDeps & Io {
   const calls: Io['calls'] = [];
   return {
-    calls, coord, db: coord.db, links: () => links, time: ft.ports,
+    calls, coord, links: () => links, time: ft.ports,
     io: { overlordHistory: (req, signal) => { calls.push({ req, signal }); return answer(req); } },
     ...over,
   };
@@ -96,7 +96,7 @@ describe('claimsByProgramme', () => {
       summary(4, 99_999, ['a/w.ts']),
       summary(5, r1, ['b/v.ts'], { project: Q, renewedAt: NOW - 7 }),
     ];
-    expect(claimsByProgramme({ activeClaims: () => claims }, coord.db, NOW)).toEqual({ kind: 'measured', claims: [
+    expect(claimsByProgramme({ activeClaims: () => claims, run: (id) => coord.run(id) }, NOW)).toEqual({ kind: 'measured', claims: [
       { programme: 'alpha', project: P, paths: ['a/x.ts'], renewedAt: NOW - 100 },
       { programme: 'alpha', project: Q, paths: ['b/v.ts'], renewedAt: NOW - 7 },
     ] });
@@ -108,16 +108,18 @@ describe('claimsByProgramme', () => {
       .run(P, r1, NOW - 10, NOW - 5, NOW + 60_000, NOW + 120_000);
     const id = (coord.db.prepare('SELECT max(id) AS id FROM claims').get() as { id: number }).id;
     coord.db.prepare('INSERT INTO claim_paths (claimId, project, path) VALUES (?, ?, ?)').run(id, P, 'a/x.ts');
-    expect(claimsByProgramme(coord, coord.db, NOW)).toEqual({ kind: 'measured', claims: [
+    expect(claimsByProgramme(coord, NOW)).toEqual({ kind: 'measured', claims: [
       { programme: 'alpha', project: P, paths: ['a/x.ts'], renewedAt: NOW - 5 }] });
   });
   it('a read that throws is claims-unreadable, never an empty list', () => {
-    expect(claimsByProgramme({ activeClaims: () => { throw new Error('closed'); } }, coord.db, NOW))
+    expect(claimsByProgramme({ activeClaims: () => { throw new Error('closed'); }, run: (id) => coord.run(id) }, NOW))
       .toEqual({ kind: 'unmeasured', why: 'claims-unreadable' });
     programme('alpha');
     const r1 = run('alpha', P, 'lane-a-project-a');
+    expect(claimsByProgramme({ activeClaims: () => [summary(1, r1, ['a/x.ts'])], run: () => ({ ok: false, kind: 'run-unreadable', detail: 'x' }) }, NOW),
+      'a run the store cannot represent').toEqual({ kind: 'unmeasured', why: 'claims-unreadable' });
     coord.db.close();
-    expect(claimsByProgramme({ activeClaims: () => [summary(1, r1, ['a/x.ts'])] }, coord.db, NOW))
+    expect(claimsByProgramme({ activeClaims: () => [summary(1, r1, ['a/x.ts'])], run: (id) => coord.run(id) }, NOW))
       .toEqual({ kind: 'unmeasured', why: 'claims-unreadable' });
   });
 });
@@ -128,7 +130,7 @@ describe('sessionRuns', () => {
     run('alpha', P, 'lane-a-project-a', 'lane-c-coord');
     run('beta', Q, 'lane-a-project-a', 'lane-c-coord', 'project-c');
     run('beta', Q, 'lane-b-project-b');
-    const r = sessionRuns(coord.db, ['lane-a-project-a', 'lane-c-coord', 'lane-gone']);
+    const r = sessionRuns(coord, ['lane-a-project-a', 'lane-c-coord', 'lane-gone']);
     expect(r.kind).toBe('measured');
     const runs = r.kind === 'measured' ? r.runs : new Map();
     expect(runs.get('lane-a-project-a')).toEqual([{ programme: 'alpha', project: P }, { programme: 'beta', project: Q }]);
@@ -138,7 +140,11 @@ describe('sessionRuns', () => {
   });
   it('a read that throws is unmeasured', () => {
     coord.db.close();
-    expect(sessionRuns(coord.db, ['lane-a'])).toEqual({ kind: 'unmeasured' });
+    expect(sessionRuns(coord, ['lane-a'])).toEqual({ kind: 'unmeasured' });
+  });
+  it('an unreadable binding answer is unmeasured, never a dropped session', () => {
+    expect(sessionRuns({ run: (id) => coord.run(id), bindingRunsOf: () => ({ ok: false, kind: 'run-unreadable', detail: 'x' }) }, ['lane-a']))
+      .toEqual({ kind: 'unmeasured' });
   });
 });
 
@@ -260,6 +266,11 @@ describe('touchedByProgramme: the one history read', () => {
   });
 });
 
+/** The real store, with its live claims answered by `claims`. */
+const claimsAre = (claims: () => ClaimSummary[]): ShortlistReadDeps['coord'] => ({
+  programs: () => coord.programs(), activeClaims: claims, run: (id) => coord.run(id), bindingRunsOf: (id) => coord.bindingRunsOf(id),
+});
+
 describe('readShortlist: the three reads, then the decider', () => {
   it('a claim outranks history, end to end, and each read is named', async () => {
     programme('alpha'); programme('beta'); programme('gamma', 'done');
@@ -268,7 +279,7 @@ describe('readShortlist: the three reads, then the decider', () => {
     run('gamma', P, 'lane-g-project-a');
     const d = deps(answering(rowsAnswer([item(0, 'a/x.ts', [{ ccrcId: 'lane-b-project-a', latestMs: NOW }, { ccrcId: 'lane-g-project-a', latestMs: NOW }]),
       item(1, 'a/y.ts', [{ ccrcId: 'lane-b-project-a', latestMs: NOW }])])),
-    undefined, { coord: { programs: () => coord.programs(), activeClaims: () => [summary(1, ra, ['a'])] } });
+    undefined, { coord: claimsAre(() => [summary(1, ra, ['a'])]) });
     const s = await readShortlist(d, [ep('a/x.ts'), ep('a/y.ts')]);
     expect(s).toEqual({ candidates: [
       { programme: 'alpha', claimHits: 2, touchedHits: 0, newest: NOW - 100 },
@@ -280,7 +291,7 @@ describe('readShortlist: the three reads, then the decider', () => {
     programme('beta');
     run('beta', P, 'lane-b-project-a');
     const d = deps(answering(rowsAnswer([item(0, 'a/x.ts', [{ ccrcId: 'lane-b-project-a', latestMs: NOW }])])),
-      undefined, { coord: { programs: () => coord.programs(), activeClaims: () => { throw new Error('closed'); } } });
+      undefined, { coord: claimsAre(() => { throw new Error('closed'); }) });
     const s = await readShortlist(d, [ep('a/x.ts')]);
     expect([s.claims, s.candidates.map((c) => c.programme)]).toEqual(['unmeasured', ['beta']]);
   });
@@ -289,7 +300,7 @@ describe('readShortlist: the three reads, then the decider', () => {
     programme('alpha');
     const ra = run('alpha', P, 'lane-a-project-a');
     const d = deps(answering(rowsAnswer([])), undefined,
-      { coord: { programs: () => coord.programs(), activeClaims: () => [summary(1, ra, ['a/x.ts', 'a/y.ts'])] } });
+      { coord: claimsAre(() => [summary(1, ra, ['a/x.ts', 'a/y.ts'])]) });
     const s = await readShortlist(d, []);
     expect([s.basis, s.touched, s.candidates]).toEqual(['claims-only', 'not-asked', [{ programme: 'alpha', claimHits: 2, touchedHits: 0, newest: NOW - 100 }]]);
     expect(d.calls).toEqual([]);
