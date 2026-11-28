@@ -27,9 +27,10 @@ fakes over fixture homes.
 - **Carried from #3487's reviews.** The lane's version mismatch is now one warn line per attempt, and a case reads the
   `settings.json` the runner writes.
 - **Nothing that exists moves.** The send, the trust recipe and the delivery recipe are untouched:
-  `DELIVERY_RECIPE_VERSION` printed `da16fe2f55551e0b` before the first edit and after the last. The reducer's answers are
-  untouched: `FRAMES_RECIPE_VERSION` printed `bd7b9ac2b9896ec6` before and after (wave 197 moves it on its own branch).
-  `FRAME_SHAPE_VERSION` prints `63995109e58f3505`.
+  `DELIVERY_RECIPE_VERSION` printed `da16fe2f55551e0b` before the first edit and after the last. This wave leaves the
+  reducer's answers as they were: `FRAMES_RECIPE_VERSION` printed the same before and after its edits. Wave 197 (#3686)
+  then moved it on `main`, and on this branch merged with that `main` it prints `497e2fd1732fcb5d`, as `main` does.
+  `FRAME_SHAPE_VERSION` prints `63995109e58f3505`, before and after that merge.
 
 ## 2. What the status read carries, and when
 
@@ -131,8 +132,8 @@ It says "changed", never "fine".
 - An unsettled, refused or over-cap frame is not compared (the refusals word reports the last two).
 - Two builds wrong in the same way.
 - **Across a recipe version change**, older builds are never framed again (no back-fill), so the first build framed at a new
-  recipe version reads `first-form`. Wave 197 changes the reducer, so the first build framed after it lands reads
-  `first-form`. **Across a shape version change**, a stored shape at another shape version compares nothing
+  recipe version reads `first-form`. Wave 197 (#3686) changed the reducer and its version, so the first build framed at
+  the new version reads `first-form`. **Across a shape version change**, a stored shape at another shape version compares nothing
   (`not-compared`), and rows recorded before this migration have no shape.
 - `against` is the newest older COMPLETE build within the bound: a build superseded before its 52 parts finished, or one
   past the four older builds read, is never compared.
@@ -260,6 +261,11 @@ memory on most of the longer files. By the coordinator's ruling, the evidence is
   route (7 of 7), the frames lane capture (32 of 32), `sqlite-file` (18 of 18), `run-close-switch` (21 of 21),
   and `coord-db` with its count pin at 137 (155 of 155 on the second run; the first is the timeouts below), all green;
   `delegation-recovery` is in the last list.
+- At the second merge head (`7e75fdb0b9`, `main` at `37648b312f` absorbed: wave 197's reducer and its recipe version, a
+  clean merge): the server's and the agent's typechecks (exit 0), then alone, 18 of 18 files green: the reducer suite
+  (157 of 157), the two single-definition files that read the shared reducer as text (`docs-l0` and `late-census`), the
+  box frame fixtures, the frames transport and the test box frames route, every frames suite, the delivery lane capture,
+  the test box pins and the agent's three capture suites.
 
 **Timeouts `main` shares** (each a vitest `Test timed out`, no assertion failed; no third attempt, by the ruling):
 
