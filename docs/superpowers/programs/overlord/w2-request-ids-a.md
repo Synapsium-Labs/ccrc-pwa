@@ -63,6 +63,13 @@ Measured at `1efcbe78cb` (2026-11-28).
   words suite pins what a request-sourced version draws (the sentence, with Ratify offered, as every readable unratified version
   does: the spec's "counts as goal evidence once the operator has opened it" names no control, and Ratify is the operator's own
   act) and that a source kind the build lacks reads the unreadable words with no Ratify. No other console source file.
+- **Every exhaustive table the new source reached** (the rule of call 1940: one row each, by packet to its holder, with a case
+  pinning what this build draws): the console's `RATIFIED_WORDS` and `NOT_RATIFIED_WORDS` (`pwa/src/ledgers/ledgerWords.ts`),
+  and the continuity card's `RATIFIER_WORDS` (`server/src/continuity/card.ts`), whose row says what will be true once an
+  opening ratifies ("ratified by the operator opening the request it rests on") and is never printed on this build; its facts
+  suite pins that a definition of done resting on a request reads not ratified, and its render suite's stand-in for an unknown
+  word moved from `request` to `not-in-this-build`. The shared vocabulary maps (`RATIFIED_BY_KIND_MAP`,
+  `RATIFICATION_WHY_MAP`) gained their rows with the types.
 
 Nothing is reachable at merge: no request exists until the Overlord's doors open behind `overlord-route-v1`, so every new
 check is reachable only after that. The programme's design rule (item 9): everything here is the server's own doors, tables

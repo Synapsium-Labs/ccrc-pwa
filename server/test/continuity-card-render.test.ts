@@ -155,7 +155,7 @@ describe('the coordinator renderer (Task 1)', () => {
   it('(review 2240 F8) each ratified goal says who ratified it, inside its fenced block; a word this build cannot name is said so', () => {
     const goals = [
       { text: 'by the chair', ratified: true, ratifiedBy: 'coordinator' as const }, { text: 'by the operator', ratified: true, ratifiedBy: 'operator' as const },
-      { text: 'by an answer', ratified: true, ratifiedBy: 'item' as const }, { text: 'by a newer word', ratified: true, ratifiedBy: 'request' as unknown as 'item' },
+      { text: 'by an answer', ratified: true, ratifiedBy: 'item' as const }, { text: 'by a newer word', ratified: true, ratifiedBy: 'not-in-this-build' as unknown as 'item' },
       { text: 'by nobody named', ratified: true },
     ];
     const t = textOf(renderCard('coordinator', empty({ ledger: read([{ slug: 'prog-a', goals, openItems: [], decisions: [] }]) })));

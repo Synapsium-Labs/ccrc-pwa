@@ -66,6 +66,17 @@ describe('gatherCardFacts: each goal is ratified only when its version\'s verdic
     // Who ratified rides each ratified goal, for the card to say (review 2240 F8).
     expect(await goalsOf()).toEqual([{ text: 'Ship the card.', ratified: true, ratifiedBy: 'operator' }, { text: 'it ships', ratified: true, ratifiedBy: 'operator' }]);
   });
+
+  // Overlord W2, request ids A: a definition of done made for a request its programme owns rests on that request, which reads
+  // `not-opened` on this build, so the card never draws it as ratified and the card's `request` words cannot appear by accident.
+  it('a definition of done resting on the programme\'s own request reads not ratified (request ids A)', async () => {
+    const c = store();
+    openRun(c, 'prog-a', ME, 2);
+    c.db.prepare("INSERT INTO overlord_requests (id, origin, summary, owner, state, openedAt) VALUES (7, 'operator', 's', 'prog-a', 'routed', ?)").run(NOW - 2_000);
+    c.addModification('prog-a', { text: 'new list', ruling: null, itemId: null, pr: null, doneWhen: ['it ships'], requestId: 7 }, NOW - 900);
+    const goals = value((await gather(c)).facts.ledger)[0]!.goals;
+    expect(goals).toEqual([{ text: 'it ships', ratified: false }]);
+  });
 });
 
 describe('gatherCardFacts: each fact is read from its rows', () => {
