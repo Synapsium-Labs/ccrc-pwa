@@ -318,6 +318,8 @@ function stubHostname(home: string, line: string): void {
 
 /** The console arms, run for real on the pty under the poison, to seed a box. */
 const POISON: RunOpts = { extra: FORCE_LINUX };
+/** runPiped's own default, named at the call by the cases that assert the Linux unit reader's words (review 4211 A1). */
+const AS_LINUX: RunOpts = { rec: 'ok', extra: FORCE_LINUX };
 async function seedDuckdns(home: string, sub: string, bind = ''): Promise<void> {
   quietSs(home);
   const r = await runTty(home, ['duckdns'], [sub, TOKEN, bind], POISON);
@@ -739,11 +741,11 @@ describe('ccrc expose artifacts: the arm', () => {
     // writing nothing, and only unset or empty is the default (review 4022 F1, the coordinator's rule). This case was
     // `expose: an unusable CCRC_PORT is the default, as the server reads it`, which expected 7788 for abc, 07788 and 70000.
     const flags = ['expose', 'artifacts', '--artifact-origin', 'https://art.example.invalid', '--content-origin', 'https://content.example.invalid'];
-    for (const port of ['abc', '07788', '07790', '70000', ' 7790']) {
+    for (const port of ['abc', '07788', '07790', '70000', ' 7790', '7790 ']) {
       const home = box('ccrc-art-badport-');
       seedFile(home, byoEnv('https://ccrc.example.test', 'example.test'));
       writeFileSync(join(home, '.ccrc', 'ccrc.env'), `CCRC_PORT=${port}\n`);
-      const r = runPiped(home, flags);
+      const r = runPiped(home, flags, AS_LINUX);
       expect(r.code, `${port}: ${r.stderr}`).toBe(1);
       expect(r.stderr, port).toContain(`CCRC_PORT="${port}" is not a plain port number: write it as digits only (1 to 65535, no leading zero). Nothing was written.`);
       expect(bytesAt(exposurePath(home)), port).toBe(byoEnv('https://ccrc.example.test', 'example.test'));
@@ -752,8 +754,9 @@ describe('ccrc expose artifacts: the arm', () => {
       const home = box('ccrc-art-port-');
       seedFile(home, byoEnv('https://ccrc.example.test', 'example.test'));
       writeFileSync(join(home, '.ccrc', 'ccrc.env'), line);
-      const r = runPiped(home, flags);
+      const r = runPiped(home, flags, AS_LINUX);
       expect(r.code, `${line}: ${r.stderr}`).toBe(0);
+      expect(r.stderr, line).toBe('');
       expect(bytesAt(exposurePath(home)), line).toContain('CCRC_ARTIFACT_PORT=7790\n');
     }
   });
@@ -820,5 +823,370 @@ describe('ccrc expose artifacts: the arm', () => {
     expect(miss.stderr).toContain('a byo box names both artifact origins');
     expect([bytesAt(exposurePath(home)), bytesAt(caddyfilePath(home))]).toEqual(before);
     expect(bytesAt(exposurePath(byo))).toBe(byoEnv('https://ccrc.example.test', 'example.test'));
+  });
+});
+
+// X5-FU item 3 (x5-fu-expose-masked-label): the setup command refuses an artifact or content name the console's answer mask
+// would alter, as the server turns the tier off at boot (D-9161), naming the key and never the value. The bash shape list is
+// pinned to the server's: by id against CREDENTIAL_MASKS, and by answer against matchesShape. Every shaped label is built per
+// run. Appended, with its own imports.
+import { randomInt } from 'node:crypto';
+import { CREDENTIAL_MASKS } from '../../shared/api.js';
+import { isExactHttpsOrigin } from '../../shared/httpsOrigin.js';
+import { matchesShape, SHAPES, shapeMatchers } from '../src/accounts/shapes.js';
+
+const hex = (n: number): string => randomBytes(Math.ceil(n / 2)).toString('hex').slice(0, n);
+/** A text of each shape, built per run: what a label could hold, or what no accepted origin can. */
+const SHAPE_SAMPLES: Record<string, () => string> = {
+  genericSk: () => `sk-${hex(10)}`,
+  anthropic: () => `sk-ant-oat01-${hex(10)}`,
+  openrouter: () => `sk-or-v1-${hex(10)}`,
+  codexGateway: () => `sk-${hex(48)}`,
+  jwt: () => `eyJ${hex(6)}.eyJ${hex(6)}.${hex(4)}`,
+  codexTokenField: () => `"access_token": "${hex(12)}"`,
+};
+const bashList = (name: string): string[] => {
+  const m = new RegExp(`^${name}='([^']*)'$`, 'm').exec(readFileSync(CCRC_SRC, 'utf8'));
+  return m === null ? [] : m[1]!.split(' ');
+};
+/** One shape's own matcher, with the boundary the server adds. */
+const ownMatcher = (id: string): RegExp => shapeMatchers(CREDENTIAL_MASKS.filter((m) => m.id === id))[0]!;
+/** `fn` (`_art_masked` or `_art_hidden`) over each value, in one bash process under `lcAll`: true where it answers 0. */
+function bashMasked(values: string[], fn = '_art_masked', lcAll = 'C'): boolean[] {
+  const home = mkTmp('artmask-');
+  const inputPath = join(home, 'values.txt');
+  writeFileSync(inputPath, values.join('\n') + '\n');
+  const r = spawnSync(BASH, ['-c', `source "$1"; while IFS= read -r v; do if ${fn} "$v"; then echo 1; else echo 0; fi; done < "$2"`,
+    '_', CCRC_SRC, inputPath], { env: { ...fixtureEnv(home), LC_ALL: lcAll }, cwd: home, encoding: 'utf8' });
+  expect(r.stderr, 'bash stderr').toBe('');
+  expect(r.status).toBe(0);
+  const out = r.stdout.split('\n');
+  out.pop();
+  expect(out).toHaveLength(values.length);
+  return out.map((l: string): boolean => l === '1');
+}
+
+describe('ccrc expose artifacts: a name the answer mask would alter (X5-FU item 3)', () => {
+  it('mask: the bash lists are CREDENTIAL_MASKS, by id, each once', () => {
+    const shapes = bashList('_ART_MASK_SHAPES');
+    const never = bashList('_ART_MASK_NEVER');
+    expect(shapes.length, '_ART_MASK_SHAPES is in ccd/ccrc').toBeGreaterThan(0);
+    expect(never.length, '_ART_MASK_NEVER is in ccd/ccrc').toBeGreaterThan(0);
+    expect([...shapes, ...never].sort()).toEqual(CREDENTIAL_MASKS.map((m) => m.id).sort());
+    expect(new Set([...shapes, ...never]).size).toBe(CREDENTIAL_MASKS.length);
+    expect(Object.keys(SHAPE_SAMPLES).sort(), 'this file has a sample of every shape').toEqual(CREDENTIAL_MASKS.map((m) => m.id).sort());
+  });
+
+  it('mask: every shape a name can hold is matched in bash as matchesShape matches it; the others never make an origin', () => {
+    for (const id of bashList('_ART_MASK_SHAPES')) {
+      const origin = `https://${SHAPE_SAMPLES[id]!()}.art.invalid`;
+      expect(isExactHttpsOrigin(origin), `${id}: an origin the grammar accepts`).toBe(true);
+      expect(ownMatcher(id).test(origin), `${id}: the sample has its own shape`).toBe(true);
+      expect(matchesShape(origin), `${id}: the server's mask`).toBe(true);
+      expect(bashMasked([origin])[0], `${id}: the bash mask`).toBe(true);
+    }
+    for (const id of bashList('_ART_MASK_NEVER')) {
+      const sample = SHAPE_SAMPLES[id]!();
+      expect(ownMatcher(id).test(sample), `${id}: the sample has its own shape`).toBe(true);
+      for (const origin of [`https://${sample}.art.invalid`, `https://x.${sample}`, `https://${sample}`]) {
+        expect(isExactHttpsOrigin(origin), `${id}: never an origin the grammar accepts`).toBe(false);
+      }
+    }
+    // Why each is never in an accepted origin, as a property of its source, so a never id's source widened past it reds here:
+    // `jwt` begins with `eyJ`, an upper-case letter, and the token field needs a double quote; the grammar holds neither.
+    const source = (id: string): string => CREDENTIAL_MASKS.find((m) => m.id === id)!.source;
+    expect(bashList('_ART_MASK_NEVER').sort()).toEqual(['codexTokenField', 'jwt']);
+    expect(source('jwt').startsWith('eyJ')).toBe(true);
+    expect(source('codexTokenField')).toMatch(/^\(\?<="/);
+  });
+
+  it('mask: each shape the bash mirror covers is the server\'s matcher exactly, source and flags, by id (review 4202 F1)', () => {
+    // `_art_masked` mirrors these four by hand, so any change to one of them (widened, narrowed or its boundary moved) reds
+    // here, and the mirror is looked at again. The boundary is the one every shape without its own lookbehind carries.
+    const boundary = String.raw`(?:(?<![A-Za-z0-9])|(?<=\\[nrt])|(?<=\\u[0-9A-Fa-f]{4})|(?<=\\x[0-9A-Fa-f]{2})|(?<=%[0-9A-Fa-f]{2}))`;
+    const mirrored: Record<string, string> = {
+      genericSk: String.raw`sk-[A-Za-z0-9_-]{8,}`,
+      anthropic: String.raw`sk-ant-[a-z]{3}[0-9]{2}-[A-Za-z0-9_-]{8,}`,
+      openrouter: String.raw`sk-or-v1-[A-Za-z0-9]{8,}`,
+      codexGateway: String.raw`sk-[0-9a-f]{48}`,
+    };
+    expect(bashList('_ART_MASK_SHAPES').sort()).toEqual(Object.keys(mirrored).sort());
+    for (const [id, source] of Object.entries(mirrored)) {
+      const m = ownMatcher(id);
+      expect({ source: m.source, flags: m.flags }, id).toEqual({ source: `${boundary}(?:${source})`, flags: 'g' });
+    }
+    // And what matchesShape asks is those matchers, built from CREDENTIAL_MASKS, nothing else.
+    const pair = (r: RegExp): [string, string] => [r.source, r.flags];
+    expect(SHAPES.map(pair)).toEqual(shapeMatchers(CREDENTIAL_MASKS).map(pair));
+  });
+
+  it('mask: near-miss prefixes answer as matchesShape answers them, none a shape (review 4202 F1)', () => {
+    // Fixed, not sampled: a source widened to take one of these reds on every run. `pk-` and `rk-` reach `_art_masked` in
+    // an accepted origin; `sk_` and `SK-` are no origin the grammar accepts, so only a refusal's quoting sees them, and
+    // they are asked of `_art_hidden`, which decides that, as well.
+    const values = ['pk-', 'rk-', 'sk_', 'SK-'].flatMap((p: string): string[] => {
+      const label = `${p}${hex(10)}`;
+      return [`https://${label}.art.invalid`, `https://art.${label}.invalid`, label];
+    });
+    const want = values.map((v: string): boolean => matchesShape(v));
+    expect(want, 'the server answers no shape for any of them').toEqual(values.map(() => false));
+    expect(bashMasked(values)).toEqual(want);
+    expect(bashMasked(values, '_art_hidden'), 'and none is withheld from a refusal').toEqual(want);
+  });
+
+  it('mask: a shaped label last in the host, and directly before the port, answers as matchesShape answers it (review 4211 A2)', () => {
+    // Every corpus origin puts a `.` after the label, so a mirror that needs a following `.` or `-` passed it: these end the
+    // host with the shape, bare and before `:8443`, beside the same with no shape (`ask-`, a letter before it).
+    const values = [`sk-${hex(8)}`, `x-sk-${hex(8)}`, `ask-${hex(8)}`].flatMap((l: string): string[] =>
+      [`https://art.${l}`, `https://art.${l}:8443`]);
+    for (const v of values) expect(isExactHttpsOrigin(v), `${v}: the grammar accepts it`).toBe(true);
+    const want = values.map((v: string): boolean => matchesShape(v));
+    expect(want, 'the server masks the four shaped ones only').toEqual([true, true, true, true, false, false]);
+    expect(bashMasked(values)).toEqual(want);
+    expect(bashMasked(values, '_art_hidden')).toEqual(want);
+  });
+
+  it('mask: over origins the grammar accepts, the bash answer is matchesShape\'s', () => {
+    const labels: string[] = [
+      'art', 'content', 'sk', 'sk-', `sk-${hex(7)}`, `sk-${hex(8)}`, `a-sk-${hex(8)}`, `ask-${hex(8)}`, `${hex(3)}sk-${hex(9)}`,
+      `x-sk-${hex(7)}`, 'sk-ant', `sk-or-v1-${hex(7)}`, `sk-${hex(8)}-x`, `t${hex(12)}`,
+      // The near-miss prefixes (review 4202 F1), each with eight or more token characters, where the grammar accepts them.
+      `pk-${hex(10)}`, `rk-${hex(10)}`, `x-pk-${hex(9)}`, `a-rk-${hex(9)}`,
+    ];
+    // Generated labels over the grammar's alphabet: `sk-` and a run of 6 to 11 token characters at a random spot (where a
+    // letter or digit before it means no shape), the same after a `-` (a boundary, so mostly a shape), a bare `sk-`, and none.
+    const alphabet = 'abcdefghijklmnopqrstuvwxyz0123456789-';
+    const run = (len: number): string => Array.from({ length: len }, (): string => alphabet[randomInt(alphabet.length)]!).join('');
+    for (let i = 0; i < 400; i++) {
+      let s = run(1 + randomInt(20));
+      const at = randomInt(s.length + 1);
+      const shaped = 'sk-' + run(6 + randomInt(6));
+      if (i % 4 === 1) s = s.slice(0, at) + shaped + s.slice(at);
+      if (i % 4 === 2) s = `x-${shaped}${s}`;
+      if (i % 4 === 3) s = s.slice(0, at) + 'sk-' + s.slice(at);
+      labels.push(s);
+    }
+    const origins = labels.flatMap((l: string): string[] => [`https://${l}.art.invalid`, `https://art.${l}.invalid`,
+      `https://${l}.art.invalid:8443`]).filter((o: string): boolean => isExactHttpsOrigin(o));
+    expect(origins.length).toBeGreaterThan(300);
+    const want = origins.map((o: string): boolean => matchesShape(o));
+    expect(want.filter(Boolean).length, 'the corpus holds shaped origins').toBeGreaterThan(50);
+    expect(want.filter((w: boolean): boolean => !w).length, 'and ordinary ones').toBeGreaterThan(50);
+    // Under C, and under a UTF-8 locale where one is installed (the function pins its own collation).
+    for (const lc of HAS_EN_US ? ['C', 'en_US.UTF-8'] : ['C']) {
+      const got = bashMasked(origins, '_art_masked', lc);
+      origins.forEach((o: string, i: number): void => { expect(got[i], `${lc} ${o}`).toBe(want[i]); });
+    }
+  });
+
+  it('mask: what a refusal withholds is wider than the mask: every value the server\'s mask would alter, accepted or not', () => {
+    const values = [
+      `https://${SHAPE_SAMPLES.jwt!()}.art.invalid`, `https://x%2F${SHAPE_SAMPLES.genericSk!()}`, `https://a\\n${SHAPE_SAMPLES.genericSk!()}.x`,
+      `https://${SHAPE_SAMPLES.codexTokenField!()}`, `https://${SHAPE_SAMPLES.openrouter!()}.x.invalid`, `https://x.${SHAPE_SAMPLES.codexGateway!()}`,
+    ];
+    for (const v of values) expect(matchesShape(v), `${v}: the server's mask alters it`).toBe(true);
+    expect(bashMasked(values, '_art_hidden')).toEqual(values.map(() => true));
+    // An ordinary origin is not withheld, nor one with `sk-` or `eyJ` inside a word, where no shape starts.
+    expect(bashMasked(['https://art.example.invalid', 'https://content-1.example.invalid:8443', 'https://disk-images.example.invalid',
+      'https://keyjar.example.invalid'], '_art_hidden')).toEqual([false, false, false, false]);
+  });
+
+  it('expose: a name with sk- inside a word is refused in the server\'s own words, its value quoted', () => {
+    const home = box('ccrc-art-mask-word-');
+    seedFile(home, byoEnv('https://ccrc.example.test', 'example.test'));
+    const r = runPiped(home, ['expose', 'artifacts', '--artifact-origin', 'https://disk-images.example.test', '--content-origin', 'https://content.example.invalid']);
+    expect(r.code, r.stderr).toBe(1);
+    expect(r.stderr).toContain('CCRC_ARTIFACT_ORIGIN="https://disk-images.example.test": ');
+    expect(r.stderr).not.toContain('not shown');
+  });
+
+  it('expose: a shaped artifact or content label refuses, naming the key and never the value; an ordinary label passes', () => {
+    const console0 = byoEnv('https://ccrc.example.test', 'example.test');
+    for (const id of bashList('_ART_MASK_SHAPES')) {
+      for (const which of ['artifact', 'content'] as const) {
+        const label = SHAPE_SAMPLES[id]!();
+        const home = box('ccrc-art-mask-');
+        seedFile(home, console0);
+        const ao = which === 'artifact' ? `https://${label}.art.invalid` : 'https://art.example.invalid';
+        const co = which === 'content' ? `https://${label}.content.invalid` : 'https://content.example.invalid';
+        const r = runPiped(home, ['expose', 'artifacts', '--artifact-origin', ao, '--content-origin', co]);
+        const what = `${id} ${which}`;
+        expect(r.code, `${what}: ${r.stderr}`).toBe(1);
+        expect(r.stderr, what).toContain(which === 'artifact'
+          ? 'CCRC_ARTIFACT_ORIGIN has a name the console\'s answer mask would alter (it has a credential\'s shape), so no link could reach you; choose another label. Nothing was written.'
+          : 'CCRC_ARTIFACT_CONTENT_ORIGIN has a name the console\'s answer mask would alter (it has a credential\'s shape); both artifact hosts are held to the same rule; choose another label. Nothing was written.');
+        expect(r.stderr + r.stdout, `${what}: the value is never printed`).not.toContain(label);
+        expect(bytesAt(exposurePath(home)), what).toBe(console0);
+      }
+    }
+    // A near miss of the shape (seven characters after sk-) and an ordinary label are written.
+    for (const label of [`sk-${hex(7)}`, genLabel()]) {
+      const home = box('ccrc-art-mask-ok-');
+      seedFile(home, console0);
+      const r = runPiped(home, ['expose', 'artifacts', '--artifact-origin', `https://${label}.art.invalid`, '--content-origin', 'https://content.example.invalid']);
+      expect(r.code, `${label}: ${r.stderr}`).toBe(0);
+      expect(bytesAt(exposurePath(home)), label).toContain(`CCRC_ARTIFACT_ORIGIN=https://${label}.art.invalid\n`);
+    }
+  });
+
+  it('expose: the DuckDNS prompt\'s refusals never print a shaped label', async () => {
+    const sub = genLabel();
+    const shaped = SHAPE_SAMPLES.genericSk!();
+    // A label that is not bare (a character a label cannot hold), and the same shaped label typed twice.
+    const notBare = box('ccrc-art-mask-tty-');
+    await seedDuckdns(notBare, sub);
+    const before = bytesAt(exposurePath(notBare));
+    const r = await runTty(notBare, ['artifacts'], [`${shaped}!`, genLabel()]);
+    expect(r.code, r.stdout).toBe(1);
+    expect(r.stdout).toContain('(a value with a credential\'s shape, not shown) is not a bare DuckDNS label');
+    expect(r.stdout.split(shaped).length, 'the label shows only where the terminal echoed it').toBe(2);
+    const twice = await runTty(notBare, ['artifacts'], [shaped, shaped]);
+    expect(twice.code, twice.stdout).toBe(1);
+    expect(twice.stdout).toContain('(a value with a credential\'s shape, not shown) is the artifact host already');
+    expect(twice.stdout.split(shaped).length, 'the label shows only where it was typed').toBe(3);
+    expect(bytesAt(exposurePath(notBare))).toBe(before);
+    // The console's own name, when that name is shaped (a box written before the tier refused such names).
+    const own = box('ccrc-art-mask-tty-own-');
+    seedFile(own, duckdnsEnv(shaped, ''));
+    const o = await runTty(own, ['artifacts'], [shaped, genLabel()]);
+    expect(o.code, o.stdout).toBe(1);
+    expect(o.stdout).toContain('(a value with a credential\'s shape, not shown) is the console\'s own name');
+    expect(o.stdout.split(shaped).length, 'the label shows only where it was typed').toBe(2);
+  });
+
+  it('expose: a refusal never quotes a value with a credential\'s shape, whichever rule refuses it', () => {
+    // The site rule is decided before the mask (as the server decides it): a shaped label under the console's own domain is
+    // refused for the site, and the refusal says so without quoting the value.
+    const label = SHAPE_SAMPLES.genericSk!();
+    const home = box('ccrc-art-mask-site-');
+    seedFile(home, byoEnv('https://ccrc.example.test', 'example.test'));
+    const r = runPiped(home, ['expose', 'artifacts', '--artifact-origin', `https://${label}.example.test`, '--content-origin', 'https://content.example.invalid']);
+    expect(r.code, r.stderr).toBe(1);
+    expect(r.stderr).toContain('CCRC_ARTIFACT_ORIGIN=(a value with a credential\'s shape, not shown): it fails the site rule against the '
+      + 'console\'s host (a name with a credential\'s shape is not shown). Nothing was written.');
+    expect(r.stderr).not.toContain('answer mask');
+    expect(r.stderr + r.stdout).not.toContain(label);
+    // A shaped console host: the site rule's words would name it and the suffix it shares; they are withheld too.
+    const shapedSite = `${SHAPE_SAMPLES.genericSk!()}.test`;
+    const home2 = box('ccrc-art-mask-site2-');
+    seedFile(home2, byoEnv(`https://ccrc.${shapedSite}`, shapedSite));
+    const r2 = runPiped(home2, ['expose', 'artifacts', '--artifact-origin', `https://art.${shapedSite}`, '--content-origin', 'https://content.example.invalid']);
+    expect(r2.code, r2.stderr).toBe(1);
+    expect(r2.stderr).toContain('it fails the site rule against the console\'s host (a name with a credential\'s shape is not shown)');
+    expect(r2.stderr + r2.stdout).not.toContain(shapedSite.split('.')[0]!);
+    // The grammar's refusal of a value that holds a token never quotes it either.
+    const jwt = SHAPE_SAMPLES.jwt!();
+    const home3 = box('ccrc-art-mask-grammar-');
+    seedFile(home3, byoEnv('https://ccrc.example.test', 'example.test'));
+    const r3 = runPiped(home3, ['expose', 'artifacts', '--artifact-origin', `https://${jwt}.art.invalid`, '--content-origin', 'https://content.example.invalid']);
+    expect(r3.code, r3.stderr).toBe(1);
+    expect(r3.stderr).toContain('CCRC_ARTIFACT_ORIGIN=(a value with a credential\'s shape, not shown) is not a bare https origin');
+    expect(r3.stderr + r3.stdout).not.toContain(jwt);
+  });
+});
+
+// X5-FU item 4 (x5-fu-a4-expose-nits): the console port as the service manager reads it, and the stored-port remedy only where it
+// can work.
+describe('ccrc expose artifacts: the console port (X5-FU item 4)', () => {
+  const flags = ['expose', 'artifacts', '--artifact-origin', 'https://art.example.invalid', '--content-origin', 'https://content.example.invalid'];
+
+  it('expose: a CCRC_PORT line with a space before its = refuses, never read as the default', () => {
+    // _box_unit_env decides what ccrc.service receives: a CCRC_PORT line it cannot decide is refused with its words.
+    for (const line of ['CCRC_PORT =7790\n', 'CCRC_PORT\t=7790\n', '  CCRC_PORT =7790\n', 'export CCRC_PORT =7790\n', 'CCRC_PORT = 7790\n',
+      'export CCRC_PORT=7790\n', 'export\tCCRC_PORT=7790\n', 'FOO=a\\\nCCRC_PORT=7790\n']) {
+      const home = box('ccrc-art-spaced-');
+      seedFile(home, byoEnv('https://ccrc.example.test', 'example.test'));
+      writeFileSync(join(home, '.ccrc', 'ccrc.env'), line);
+      const r = runPiped(home, flags, AS_LINUX);
+      expect(r.code, `${JSON.stringify(line)}: ${r.stderr}`).toBe(1);
+      expect(r.stderr, line).toContain('ccrc.env names CCRC_PORT in a shape this reader does not decide');
+      expect(r.stderr, line).toContain('as KEY=value: no space before or after \'=\', no export');
+      expect(r.stderr, line).toContain('. Nothing was written.');
+      expect(bytesAt(exposurePath(home)), line).toBe(byoEnv('https://ccrc.example.test', 'example.test'));
+    }
+    // A carriage return inside a line makes the whole file undecided, whatever names the key.
+    const cr = box('ccrc-art-spaced-cr-');
+    seedFile(cr, byoEnv('https://ccrc.example.test', 'example.test'));
+    writeFileSync(join(cr, '.ccrc', 'ccrc.env'), 'A=1\rCCRC_PORT=7790\n');
+    const rc = runPiped(cr, flags, AS_LINUX);
+    expect(rc.code, rc.stderr).toBe(1);
+    expect(rc.stderr).toContain('has a carriage return inside a line');
+    expect(bytesAt(exposurePath(cr))).toBe(byoEnv('https://ccrc.example.test', 'example.test'));
+    // A line that only names the key further on, or a comment, is no such line.
+    for (const line of ['# CCRC_PORT =7790\n', 'XCCRC_PORT =1\nCCRC_PORT=7789\n']) {
+      const home = box('ccrc-art-spaced-ok-');
+      seedFile(home, byoEnv('https://ccrc.example.test', 'example.test'));
+      writeFileSync(join(home, '.ccrc', 'ccrc.env'), line);
+      const r = runPiped(home, flags, AS_LINUX);
+      expect(r.code, `${JSON.stringify(line)}: ${r.stderr}`).toBe(0);
+      expect(r.stderr, line).toBe('');
+    }
+  });
+
+  it('expose: a console arm\'s re-run beside a CCRC_PORT line with a space before its = drops the artifact keys and says why', async () => {
+    const home = box('ccrc-art-spaced-carry-');
+    await seedByo(home, 'https://ccrc.example.test', 'example.test');
+    const [ao, co] = ['https://art.example.invalid', 'https://content.example.invalid'];
+    expect(runPiped(home, ['expose', 'artifacts', '--artifact-origin', ao, '--content-origin', co], AS_LINUX).code).toBe(0);
+    writeFileSync(join(home, '.ccrc', 'ccrc.env'), 'CCRC_PORT =7788\n');
+    // POISON runs as Linux too (FORCE_LINUX): the words below are the Linux unit reader's.
+    const again = await runTty(home, ['byo'], ['https://ccrc.example.test', 'example.test', ''], POISON);
+    expect(again.code, again.stdout).toBe(0);
+    expect(again.stdout).toContain('artifacts turned off: ');
+    expect(again.stdout).toContain('names CCRC_PORT in a shape this reader does not decide');
+    expect(again.stdout, 'and how to make it decided').toContain(': rewrite the line naming CCRC_PORT in ');
+    expect(bytesAt(exposurePath(home))).toBe(byoEnv('https://ccrc.example.test', 'example.test'));
+  });
+
+  it('expose: beside a console on the default artifact port the remedy is the console\'s, not --off', () => {
+    for (const stored of [false, true]) {
+      const home = box('ccrc-art-defport-');
+      const base = byoEnv('https://ccrc.example.test', 'example.test')
+        + (stored ? artKeys('https://art.example.invalid', 'https://content.example.invalid', 7790) : '');
+      seedFile(home, base);
+      writeFileSync(join(home, '.ccrc', 'ccrc.env'), 'CCRC_PORT=7790\n');
+      const r = runPiped(home, flags);
+      expect(r.code, `${stored}: ${r.stderr}`).toBe(1);
+      expect(r.stderr, String(stored)).toContain('CCRC_ARTIFACT_PORT="7790" is the console\'s own port. The console itself listens on 7790, '
+        + 'the port this command writes for the tier, so the tier cannot be set on this box until the console\'s port (CCRC_PORT in ');
+      expect(r.stderr, String(stored)).toContain(') changes and the server restarts; then run ccrc expose artifacts --off and ccrc expose artifacts again. Nothing was written.');
+      expect(r.stderr, String(stored)).not.toContain('Turn the tier off first');
+      expect(bytesAt(exposurePath(home)), String(stored)).toBe(base);
+    }
+  });
+
+  it('reader: a directory is never read: nothing and rc 1, rc 2 (not decided) in unit mode, and no shell error', () => {
+    const home = mkTmp('artdir-');
+    const dir = join(home, 'ccrc.env');
+    mkdirSync(dir);
+    const r = spawnSync(BASH, ['-c', 'source "$1"; _box_env_value "$2" CCRC_PORT; echo "rc=$?"; _box_env_value "$2" CCRC_PORT unit; echo "rc=$?"',
+      '_', CCRC_SRC, dir], { env: fixtureEnv(home), cwd: home, encoding: 'utf8' });
+    expect(r.stderr).toBe('');
+    expect(r.stdout).toBe('rc=1\nrc=2\n');
+  });
+
+  it('expose: on a Mac an export CCRC_PORT line is the port the job receives, never the default', () => {
+    // The launchd job sources the file with bash, which drops the export word: the console is on 7790.
+    const home = box('ccrc-art-mac-export-');
+    seedFile(home, byoEnv('https://ccrc.example.test', 'example.test'));
+    writeFileSync(join(home, '.ccrc', 'ccrc.env'), 'export CCRC_PORT=7790\n');
+    const r = runPiped(home, flags, { rec: 'ok', extra: FORCE_DARWIN });
+    expect(r.code, r.stderr).toBe(1);
+    expect(r.stderr).toContain('CCRC_ARTIFACT_PORT="7790" is the console\'s own port. The console itself listens on 7790');
+    expect(bytesAt(exposurePath(home))).toBe(byoEnv('https://ccrc.example.test', 'example.test'));
+  });
+
+  it('expose: a CCRC_PORT the exposure file names is refused, since the rewrite drops it', () => {
+    // The second EnvironmentFile decides the port today, and this command writes that file again without the line, so the
+    // console's port after the run is ccrc.env's: judging the tier against the line it drops would pass a clash.
+    const home = box('ccrc-art-exp-port-');
+    const base = byoEnv('https://ccrc.example.test', 'example.test') + 'CCRC_PORT=7800\n';
+    seedFile(home, base);
+    writeFileSync(join(home, '.ccrc', 'ccrc.env'), 'CCRC_PORT=7790\n');
+    const r = runPiped(home, flags, AS_LINUX);
+    expect(r.code, r.stderr).toBe(1);
+    expect(r.stderr).toContain('names CCRC_PORT, and every ccrc expose write rewrites that file without it, so the console\'s port after the next '
+      + `write is not that one: move the CCRC_PORT line to ${join(home, '.ccrc', 'ccrc.env')}. Nothing was written.`);
+    expect(bytesAt(exposurePath(home))).toBe(base);
   });
 });

@@ -3534,6 +3534,10 @@ _box_env_value() {   # <file> <key> [unit|shell]
   # variable rather than a literal bracket expression because a tab and a CR
   # typed inline are invisible in a diff and one stray edit from being deleted.
   local ws=$' \t\r'
+  # A file that is not a readable regular file is never read: a directory made `read` fail aloud in every check that asked
+  # (X5-FU item 4). The answer is the one it gave already, nothing and rc 1 (rc 2, not decided, in `unit` mode), without
+  # the shell's error on stderr.
+  { [ -f "$file" ] && [ -r "$file" ]; } || { [ "$mode" = unit ] && return 2; return 1; }
   if [ "$mode" = unit ]; then _box_env_unit_whole "$file" || return 2; fi
   while IFS= read -r line || [ -n "$line" ]; do
     # `unit` mode only: a CR ends the line, as it does for systemd (wave 9 R10a).
@@ -7410,9 +7414,28 @@ _dr_ip4_global() {
 # exactly what the server refuses. server/test/fixtures/artifact-site-rule.json holds the cases both read. Pure bash on
 # purpose (no external binary): doctor runs it on a box whose PATH may be broken. Every argument is passed in.
 _ART_PUBLIC_SUFFIXES='duckdns.org'
+# The port the arm writes for a new tier (the plan's Global Constraints): the one spelling of it here.
+_ART_PORT_DEFAULT=7790
+# The shape half of the console's answer mask (server/src/accounts/shapes.ts#matchesShape over CREDENTIAL_MASKS, shared/api.ts),
+# as far as an origin `_art_https` accepts can hold it (lower case, digits, `-`, `.`, `:`): `genericSk` alone, which also
+# matches every `anthropic`, `openrouter` and `codexGateway` text; `jwt` needs an upper-case letter and `codexTokenField` a
+# quote, which no accepted origin holds (X5-FU item 3, the mirror of D-9161). ccrc-expose-artifacts.test.ts pins both lists
+# to CREDENTIAL_MASKS by id, each shape this mirrors to the server's matcher exactly (source and flags, so any change to one
+# reds there), and the answers to matchesShape's over fixed near misses and a generated corpus.
+_ART_MASK_SHAPES='genericSk anthropic openrouter codexGateway'
+_ART_MASK_NEVER='jwt codexTokenField'
+_art_masked() { local LC_ALL=C; [[ $1 =~ (^|[^A-Za-z0-9])sk-[A-Za-z0-9_-]{8,} ]]; }
 _art_port() { [[ $1 =~ ^[1-9][0-9]{0,4}$ ]] && (( $1 <= 65535 )); }
 _art_numeric() { local l=${1##*.}; [[ $l =~ ^[0-9]+$ || $l =~ ^0[xX][0-9a-fA-F]*$ ]]; }
-_art_q() { local s=$1; (( ${#s} > 80 )) && s="${s:0:80}..."; printf '"%s"' "$s"; }
+# What a refusal prints in place of a value that may hold a credential (X5-FU item 3). Wider than `_art_masked` on purpose:
+# it covers values the grammar refused too, where an `eyJ` token, an `sk-` after a percent-escape or a backslash escape, or a
+# quoted token field can stand, so it withholds an `sk-` or `eyJ` where a shape could start (the server's SHAPE_STARTED,
+# shapes.ts: not after a letter or digit), and any `%`, backslash or double quote, which every other boundary the mask has
+# needs. The server's boot warning (policy.ts#artifactConfig) withholds a value the mask would alter in every refusal too.
+_ART_HIDDEN="(a value with a credential's shape, not shown)"
+_art_hidden() { local LC_ALL=C; [[ $1 =~ (^|[^A-Za-z0-9])(sk-|eyJ) || $1 == *[%\\\"]* ]]; }
+_art_shown() { if _art_hidden "$1"; then printf '%s' "$_ART_HIDDEN"; else printf '%s' "$1"; fi; }
+_art_q() { local s=$1; _art_hidden "$s" && { printf '%s' "$_ART_HIDDEN"; return 0; }; (( ${#s} > 80 )) && s="${s:0:80}..."; printf '"%s"' "$s"; }
 _art_https() {  # isExactHttpsOrigin
   local LC_ALL=C r=${1#https://} h="" l='[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?'   # LC_ALL: [a-z] is ASCII only
   [[ $1 == https://* ]] || return 1
@@ -7460,7 +7483,12 @@ _art_check_origin() {  # key value console-is-loopback console-host console-port
     fi
     (( p == 443 )) && { ART_DETAIL="$k=$q names the default port; write it without :443"; return 1; }
   fi
-  w=$(_art_site_problem "$4" "${host%%:*}") || { ART_DETAIL="$k=$q: $w"; return 1; }
+  if ! w=$(_art_site_problem "$4" "${host%%:*}"); then
+    # The site rule's words name the host, the console's host and their shared suffix: none of them is printed when any could
+    # hold a credential (X5-FU item 3).
+    _art_hidden "$w" && w="it fails the site rule against the console's host (a name with a credential's shape is not shown)"
+    ART_DETAIL="$k=$q: $w"; return 1
+  fi
   _ART_H=$host
 }
 # _art_config console-origin console-port origin content port expose-mode: always returns 0 and sets ART_STATE (on, unset,
@@ -7496,6 +7524,9 @@ _art_config() {
   _art_check_origin CCRC_ARTIFACT_ORIGIN "$o" "$lo" "$ch" "$cp" || return 0
   ah=$_ART_H
   _art_check_origin CCRC_ARTIFACT_CONTENT_ORIGIN "$c" "$lo" "$ch" "$cp" || return 0
+  # Last, after the site rule, as the server decides it (D-9161): a name the answer mask would alter, the key named, never the value.
+  _art_masked "$o" && { ART_DETAIL="CCRC_ARTIFACT_ORIGIN has a name the console's answer mask would alter (it has a credential's shape), so no link could reach you; choose another label"; return 0; }
+  _art_masked "$c" && { ART_DETAIL="CCRC_ARTIFACT_CONTENT_ORIGIN has a name the console's answer mask would alter (it has a credential's shape); both artifact hosts are held to the same rule; choose another label"; return 0; }
   ART_STATE=on ART_HOST=$ah ART_CONTENT_HOST=$_ART_H
 }
 
@@ -7620,7 +7651,8 @@ _exp_artifact_carry() {   # <arm> <console-origin>
   if [ "$1" = ip ]; then
     echo "expose: artifacts turned off: an address has no second site"
   else
-    _art_config "$2" "$(_exp_console_port)" "$EXP_ART_ORIGIN" "$EXP_ART_CONTENT" "$EXP_ART_PORT" ""
+    if _exp_art_cport; then _art_config "$2" "$EXP_CPORT" "$EXP_ART_ORIGIN" "$EXP_ART_CONTENT" "$EXP_ART_PORT" ""
+    else ART_STATE=invalid ART_DETAIL="$EXP_CPORT_WHY: $EXP_CPORT_FIX"; fi
     [ "$ART_STATE" = on ] && return 0
     echo "expose: artifacts turned off: $ART_DETAIL (ccrc expose artifacts names them again)"
   fi
@@ -7630,7 +7662,7 @@ _exp_artifact_carry() {   # <arm> <console-origin>
 # `ccrc expose artifacts [--off | --artifact-origin <o> --content-origin <o>]`: the artifact tier's two names. `--off`
 # is the same write with no names, so the keys, the extra DuckDNS hosts and the second block go together.
 _exp_artifacts() {
-  local off="" ao="" co="" w="" origin rpid mode prov dom token bind arm=byo host l ok="" unit cmd
+  local off="" ao="" co="" w="" origin rpid mode prov dom token bind arm=byo host l ok="" unit cmd cport
   while [ $# -gt 0 ]; do
     case "$1" in
       --off) off=1; shift ;;
@@ -7670,6 +7702,8 @@ _exp_artifacts() {
   host="${origin#https://}"
   if [ "$prov" = duckdns ]; then arm=duckdns; host="${dom%%,*}"; fi
   if [ -z "$off" ]; then
+    # The console's port as the service receives it, before any label is asked (X5-FU item 4).
+    _exp_art_cport || _ccrc_die "$EXP_CPORT_WHY: $EXP_CPORT_FIX. Nothing was written."
     if [ "$arm" = duckdns ]; then
       [ -z "$ao$co" ] \
         || _ccrc_die "on a DuckDNS box the artifact names are two more DuckDNS labels, asked at the prompt, never flags. Nothing was written."
@@ -7682,11 +7716,11 @@ _exp_artifacts() {
         fi
         case "$l" in
           ''|*[!a-zA-Z0-9-]*)
-            _ccrc_die "\"$l\" is not a bare DuckDNS label — one label: letters, digits and hyphens only. Nothing was written." ;;
+            _ccrc_die "$(_art_q "$l") is not a bare DuckDNS label — one label: letters, digits and hyphens only. Nothing was written." ;;
         esac
         l="https://${l,,}.duckdns.org"
-        [ "$l" != "https://${host,,}" ] || _ccrc_die "$l is the console's own name; the artifact names need labels of their own. Nothing was written."
-        [ "$l" != "$ao" ] || _ccrc_die "$l is the artifact host already; the content host needs a label of its own. Nothing was written."
+        [ "$l" != "https://${host,,}" ] || _ccrc_die "$(_art_shown "$l") is the console's own name; the artifact names need labels of their own. Nothing was written."
+        [ "$l" != "$ao" ] || _ccrc_die "$(_art_shown "$l") is the artifact host already; the content host needs a label of its own. Nothing was written."
         if [ -z "$ao" ]; then ao="$l"; else co="$l"; fi
       done
     else
@@ -7694,10 +7728,15 @@ _exp_artifacts() {
         || _ccrc_die "a byo box names both artifact origins: --artifact-origin <o> --content-origin <o>. Nothing was written."
     fi
     _exp_art_keys
-    w="${EXP_ART_PORT:-7790}"
-    _art_config "$origin" "$(_exp_console_port)" "$ao" "$co" "$w" ""
-    # A stored artifact port a bare re-run keeps: --off clears it, and the next run writes the default (review 4022 L2-F1).
-    [[ $ART_DETAIL != CCRC_ARTIFACT_PORT=* || -z $EXP_ART_PORT ]] || ART_DETAIL+=". Turn the tier off first (ccrc expose artifacts --off), then run ccrc expose artifacts again"
+    w="${EXP_ART_PORT:-$_ART_PORT_DEFAULT}"
+    cport=$EXP_CPORT
+    _art_config "$origin" "$cport" "$ao" "$co" "$w" ""
+    # A stored artifact port a bare re-run keeps: --off clears it, and the next run writes the default (review 4022 L2-F1),
+    # unless the console itself listens on that default, where --off and a re-run would clash again (X5-FU item 4).
+    if [[ $ART_DETAIL == CCRC_ARTIFACT_PORT=* ]]; then
+      if [ "$cport" = "$_ART_PORT_DEFAULT" ]; then ART_DETAIL+=". The console itself listens on $_ART_PORT_DEFAULT, the port this command writes for the tier, so the tier cannot be set on this box until the console's port (CCRC_PORT in $BOX_ENV_FILE) changes and the server restarts; then run ccrc expose artifacts --off and ccrc expose artifacts again"
+      elif [ -n "$EXP_ART_PORT" ]; then ART_DETAIL+=". Turn the tier off first (ccrc expose artifacts --off), then run ccrc expose artifacts again"; fi
+    fi
     [ "$ART_STATE" = on ] || _ccrc_die "$ART_DETAIL. Nothing was written."
     [ "$arm" = duckdns ] \
       || echo "expose: artifacts: $ART_HOST and $ART_CONTENT_HOST must sit on a registrable domain of their own: page code can set cookies on its own registrable domain, which on a domain you share would reach your other services"
@@ -7801,6 +7840,36 @@ _exp_console_port() {
     port="$(_box_env_value "$BOX_ENV_FILE" CCRC_PORT)"
   fi
   echo "${port:-7788}"
+}
+# The console's port as ccrc.service receives it, for the artifact tier's readers (the arm, the carry, doctor): EXP_CPORT.
+# `_box_unit_env`, the one model of what the service manager receives, decides the shape and which file names the key
+# (X5-FU item 4): a CCRC_PORT it cannot decide (a space around `=`, an `export`, a CR, a line after one ending in a
+# backslash …) or an exposure file it cannot read is rc 1, with EXP_CPORT_WHY and EXP_CPORT_FIX, never read as the default.
+# A decided value is read as written from the file that decided it (as bash reads it, on Darwin), so `_art_port` still
+# refuses ` 7790`. A CCRC_PORT the exposure file names is refused too, for every reader: every `ccrc expose` write
+# rewrites that file with no CCRC_PORT line, so the port it names is not the console's after the next write, and
+# ccrc.env is the one file a port line is kept in (review 4202 F4: doctor judges as the arm does, and names that file).
+_exp_art_cport() {
+  local rc=0 m=""
+  EXP_CPORT="" EXP_CPORT_WHY="" EXP_CPORT_FIX=""
+  _box_unit_env CCRC_PORT || rc=$?
+  if [ "$rc" -ge 2 ]; then
+    EXP_CPORT_WHY=${BUE_WHY:-"$CCRC_EXPOSURE_FILE cannot be read, so the port ccrc.service receives was not measured"}
+    EXP_CPORT_FIX=${BUE_FIX:-"look at what is really there (ls -ld $CCRC_EXPOSURE_FILE)"}
+    # A CCRC_PORT line in the exposure file is never rewritten in place: the next write drops it, so its home is ccrc.env. This arm matches the Linux reader's words only: on a Mac an undecided line, and anywhere a file undecided as a whole, gets the reader's own remedy first, then one naming ccrc.env on the next run.
+    case "$BUE_WHY" in
+      "$CCRC_EXPOSURE_FILE names CCRC_PORT "*) EXP_CPORT_FIX="remove the CCRC_PORT line from $CCRC_EXPOSURE_FILE and write it in $BOX_ENV_FILE as KEY=value, digits only" ;;
+    esac
+    return 1
+  fi
+  if [ -n "$BUE_SRC" ] && [ "$BUE_SRC" = "$CCRC_EXPOSURE_FILE" ]; then
+    EXP_CPORT_WHY="$CCRC_EXPOSURE_FILE names CCRC_PORT, and every ccrc expose write rewrites that file without it, so the console's port after the next write is not that one"
+    EXP_CPORT_FIX="move the CCRC_PORT line to $BOX_ENV_FILE"
+    return 1
+  fi
+  [ "${CCD_OS:-linux}" != darwin ] || m=shell
+  [ -z "$BUE_SRC" ] || EXP_CPORT="$(_box_env_value "$BUE_SRC" CCRC_PORT "$m")"
+  EXP_CPORT=${EXP_CPORT:-7788}
 }
 
 # The complete Caddyfile (spec D1): the host, a loopback reverse_proxy, and

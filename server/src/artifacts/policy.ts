@@ -60,8 +60,9 @@ export function siteRuleProblem(consoleHost: string, artifactHost: string): stri
   return `${aj} shares the site ${shared} with the console`;
 }
 
-/** A value as the operator wrote it, bounded, for a detail line. */
-function shown(v: string): string {
+/** A value as the operator wrote it, bounded, for a detail line. A detail asks it through its own `shown`, which withholds what
+ *  the answer mask would alter. */
+function quoted(v: string): string {
   return JSON.stringify(v.length > 80 ? v.slice(0, 80) + '...' : v);
 }
 
@@ -93,8 +94,19 @@ function httpsHostOf(origin: string): { hostname: string; host: string } {
 
 type Checked = { ok: true; host: string } | { ok: false; detail: string };
 
-/** One artifact-tier origin against the console: its shape, and, for an https one, the site rule. */
-function checkOrigin(key: string, value: string, consoleLoopback: boolean, consoleHostname: string, consolePort: number): Checked {
+/** What a refusal's detail says in place of a value the answer mask would alter, and in place of a site rule sentence that would
+ *  name such a host or suffix (X5-FU, the coordinator's ruling on item 3): the setup command's words, `ccd/ccrc#_art_q`. */
+const MASKED_VALUE = '(a value with a credential\'s shape, not shown)';
+const MASKED_SITE = 'it fails the site rule against the console\'s host (a name with a credential\'s shape is not shown)';
+/** A detail's quoter under `masks`: the value as written (`quoted`), or `MASKED_VALUE` for one the mask would alter. */
+const shownUnder = (masks: (s: string) => boolean) => (v: string): string => (masks(v) ? MASKED_VALUE : quoted(v));
+
+/** One artifact-tier origin against the console: its shape, and, for an https one, the site rule. `masks` decides which values
+ *  and which site sentences the detail withholds. */
+function checkOrigin(
+  key: string, value: string, consoleLoopback: boolean, consoleHostname: string, consolePort: number, masks: (s: string) => boolean,
+): Checked {
+  const shown = shownUnder(masks);
   if (consoleLoopback) {
     // Loopback is for development and the browser suite only (spec 2.3): beside it, nothing but a 127.0.0.1 origin, on a
     // port other than the console's.
@@ -124,14 +136,15 @@ function checkOrigin(key: string, value: string, consoleLoopback: boolean, conso
     if (p === 443) return { ok: false, detail: `${key}=${shown(value)} names the default port; write it without :443` };
   }
   const problem = siteRuleProblem(consoleHostname, hostname);
-  if (problem !== null) return { ok: false, detail: `${key}=${shown(value)}: ${problem}` };
+  if (problem !== null) return { ok: false, detail: `${key}=${shown(value)}: ${masks(problem) ? MASKED_SITE : problem}` };
   return { ok: true, host };
 }
 
 /** The tier's one config decision (spec 2.3). Never throws. Order: an address (`CCRC_EXPOSE_MODE=ip`) has no second site, so
  *  it is off whatever keys stand; no keys is unset; some keys is partial; all three are validated and any failure is invalid. A
  *  key counts as present only when it is a non-empty string (an EnvironmentFile's bare `KEY=` line is absent). A detail holds
- *  only key names, the values the operator wrote and the rule's words, since it goes to a boot warning.
+ *  only key names, the values the operator wrote and the rule's words, since it goes to a boot warning; a value `masks` would
+ *  alter, and a site rule sentence that would name one, is withheld in every refusal, the earlier rules' included (X5-FU).
  *  `masks` says whether the console's answer mask would alter a string (the caller hands in the shape-only masker, its one
  *  home; absent, nothing is masked). Last, after the site rule: an origin it would alter is `invalid`, naming the key but never
  *  the value, because a mint answer carries the artifact origin and the mask would alter every one, so no link could reach the
@@ -146,6 +159,8 @@ export function artifactConfig(
   if (env.exposeMode === 'ip') {
     return { state: 'off', why: 'by-address', detail: 'this box is reached by address, and artifacts need names' };
   }
+  // Every value a detail quotes goes through the mask first: a boot warning never prints one it would alter (X5-FU).
+  const shown = shownUnder(masks);
   const origin = typeof env.origin === 'string' && env.origin !== '' ? env.origin : null;
   const content = typeof env.content === 'string' && env.content !== '' ? env.content : null;
   const portRaw = typeof env.port === 'string' && env.port !== '' ? env.port : null;
@@ -176,9 +191,9 @@ export function artifactConfig(
   if (content === consoleOrigin) return invalid(`${KEY_CONTENT}=${shown(content)} is the console origin`);
   if (content === origin) return invalid(`${KEY_CONTENT}=${shown(content)} is the same origin as ${KEY_ORIGIN}`);
 
-  const a = checkOrigin(KEY_ORIGIN, origin, consoleLoopback, consoleHostname, consolePort);
+  const a = checkOrigin(KEY_ORIGIN, origin, consoleLoopback, consoleHostname, consolePort, masks);
   if (!a.ok) return invalid(a.detail);
-  const c = checkOrigin(KEY_CONTENT, content, consoleLoopback, consoleHostname, consolePort);
+  const c = checkOrigin(KEY_CONTENT, content, consoleLoopback, consoleHostname, consolePort, masks);
   if (!c.ok) return invalid(c.detail);
   // The artifact origin is in every mint's answer, so a name the mask alters means no link can reach the operator. The content
   // origin is in no masked answer today (the wrapper and the page's headers come from the artifact listener, unmasked); it is held
@@ -865,6 +880,17 @@ export function frameFits(sent: number, length: number, total: number): boolean 
   return sent + length <= total;
 }
 
+/** What the hour's budget is charged for one frame handed to the door's sink, `charged` saying whether this response was charged
+ *  before (X5-FU item 2): the bytes the read takes. A framed file (`artifactFramed`) is read frame by frame, so each frame is charged
+ *  its length. A file at most `DOCS_LANE_LARGE_RAW` is read whole, one show, and the asked range cut from it, so the response's first
+ *  frame is charged the file's size, whatever its own length (an empty one included), and anything after it nothing: a ranged read of
+ *  a small file costs what a whole read of it costs, a whole read is charged once, and a read the client leaves after its first write
+ *  has still cost its size. */
+export function artifactCharge(entry: { size: number }, frameLength: number, charged: boolean): number {
+  if (artifactFramed(entry)) return frameLength;
+  return charged ? 0 : entry.size;
+}
+
 /** The whole header set of a 200 or a 206 (spec 4.3 and 5): the type (with its charset on text), the length, the CSP built for this
  *  capability, every `CONTENT_HEADERS` entry, the cache rule by the file's MIME kind, an attachment disposition for a file the
  *  MIME table does not know, and for a range the `Content-Range`. No `set-cookie` and no `access-control-*`. */
@@ -930,8 +956,9 @@ export function prepareFailureAction(error: string, wrote: boolean): ReadFailure
 export const ARTIFACT_BUDGET_WINDOW_MS = 3600000;
 
 /** Whether a capability's byte budget is already spent at `now` (spec 5: "1 GiB served an hour"): the window has not restarted and
- *  the bytes served in it have reached the budget. A request is refused (429) only then; what it is then served is charged frame by
- *  frame, so a ranged read that stops early costs only what it was sent. */
+ *  the bytes served in it have reached the budget. A request is refused (429) only then; what its read takes is then charged
+ *  (`artifactCharge`): a framed file frame by frame, so a ranged read of it that stops early costs only what it was sent, and a
+ *  small file its whole size once. A charge the hour cannot cover spends it, so this answers true from then on (X5-FU item 2). */
 export function budgetSpent(c: { servedThisHour: number; hourStart: number }, now: number): boolean {
   return now - c.hourStart < ARTIFACT_BUDGET_WINDOW_MS && c.servedThisHour >= ARTIFACT_HOURLY_BYTES;
 }

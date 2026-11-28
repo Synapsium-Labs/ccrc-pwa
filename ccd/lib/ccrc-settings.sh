@@ -23,6 +23,10 @@ _box_env_value() {   # <file> <key> [unit|shell]
   # variable rather than a literal bracket expression because a tab and a CR
   # typed inline are invisible in a diff and one stray edit from being deleted.
   local ws=$' \t\r'
+  # A file that is not a readable regular file is never read: a directory made `read` fail aloud in every check that asked
+  # (X5-FU item 4). The answer is the one it gave already, nothing and rc 1 (rc 2, not decided, in `unit` mode), without
+  # the shell's error on stderr.
+  { [ -f "$file" ] && [ -r "$file" ]; } || { [ "$mode" = unit ] && return 2; return 1; }
   if [ "$mode" = unit ]; then _box_env_unit_whole "$file" || return 2; fi
   while IFS= read -r line || [ -n "$line" ]; do
     # `unit` mode only: a CR ends the line, as it does for systemd (wave 9 R10a).

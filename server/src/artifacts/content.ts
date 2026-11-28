@@ -21,7 +21,7 @@
 import { ARTIFACT_FRAME_STALL_MS, ARTIFACT_RESPONSE_MAX_MS } from '../../../shared/artifacts.js';
 import type { ArtifactBytes, ArtifactReadAt } from './ports.js';
 import {
-  ARTIFACT_PREPARE_RETRY_MS, artifactFramed, budgetSpent, contentAnswer, contentFence, contentHeaders, contentKey,
+  ARTIFACT_PREPARE_RETRY_MS, artifactCharge, artifactFramed, budgetSpent, contentAnswer, contentFence, contentHeaders, contentKey,
   contentRequestPath, contentStatus, frameFits, parseRange, prepareFailureAction, prepareSlot, prepareTimeoutAction,
   prepareWaitUntil, queueWaitLeft, readEndVerdict, readFailureAction, responseLength, routeHostOk, secondsLeftOf,
   statusAnswerKind, unsatisfiableAnswer, withPrepareStart, type ReadFailureAction,
@@ -247,6 +247,8 @@ export function createContentDoor(deps: ContentDeps): ContentDoor {
       const total = responseLength(range, entry.size);
       let over = false;
       let sent = 0;
+      /** Whether this response has been charged a frame yet: a small file's read is charged its size once (`artifactCharge`). */
+      let chargedOnce = false;
       let live: Capability | null = null;
       let respTimer: ReturnType<typeof setTimeout> | undefined;
       let stallTimer: ReturnType<typeof setTimeout> | undefined;
@@ -306,13 +308,16 @@ export function createContentDoor(deps: ContentDeps): ContentDoor {
       const sink = async (frame: Uint8Array): Promise<'next' | 'stop'> => {
         if (over) return 'stop';
         if (!frameFits(sent, frame.length, total)) { terminate({ kind: 'destroy' }); return 'stop'; }
-        // The hour's budget is charged for what is written, frame by frame, and `charge` answers three words. `dead` is a
-        // capability that has ended (the identical 404 before a byte, a cut socket after one); `over-budget` is a spent hour (the
-        // 429 before any byte, a cut socket short of `Content-Length` after one). A count `charge` refuses throws: the frame's
-        // length is always whole, so that is a defect, and it goes where any throw of the sink goes: the real port turns it into an
+        // The hour's budget is charged for the bytes the read takes (`artifactCharge`: a framed file's frame, a small file's whole
+        // size once, on the response's first frame, X5-FU item 2), and `charge` answers three words. `dead` is a
+        // capability that has ended (the identical 404 before a byte, a cut socket after one); `over-budget` is a spent hour, which
+        // the refusal spends to its end (the 429 before any byte, a cut socket short of `Content-Length` after one). A count `charge`
+        // refuses throws: the count is a frame's length or a manifest entry's measured size, always whole, so that is a defect, and it
+        // goes where any throw of the sink goes: the real port turns it into an
         // unreadable read (the identical 404 before a byte, a cut socket after), and a port that lets it through reaches
         // `flow`'s catch (the instance's fixed 500 before a byte, a cut socket after).
-        const charged = store.charge(live!.id, frame.length);
+        const charged = store.charge(live!.id, artifactCharge(entry, frame.length, chargedOnce));
+        chargedOnce = true;
         if (charged !== 'ok') {
           terminate(reply.wrote() ? { kind: 'destroy' } : charged === 'dead' ? { kind: 'not-found' } : { kind: 'answer', answer: contentAnswer('too-many') });
           return 'stop';
@@ -390,7 +395,7 @@ export function createContentDoor(deps: ContentDeps): ContentDoor {
       reply.closed.addEventListener('abort', onGone, { once: true });
       live = store.lookup(token);
       if (live === null) { terminate({ kind: 'not-found' }); return; }
-      // Refused only when the hour's budget is already spent: what is served is charged frame by frame in the sink.
+      // Refused only when the hour's budget is already spent: what each read takes is charged in the sink (`artifactCharge`).
       if (budgetSpent(live, now())) { terminate({ kind: 'answer', answer: contentAnswer('too-many') }); return; }
       unsubEnd = store.onEnd(live.id, () => terminate({ kind: 'not-found' }));
       if (over) { unsubEnd(); return; }

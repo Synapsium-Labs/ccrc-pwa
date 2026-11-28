@@ -669,6 +669,8 @@ describe('sheet: what the sheet holds, and when it lets go', () => {
 
 describe('sheet: a link minted while its own re-read fails is still listed, and Revoke reaches it (review 4134 F1)', () => {
   const STALE = 'This list could not be read again; it shows what it last read.';
+  /** The unlisted row's note, the one cue on screen that it is not a listed link (X5-FU item 5, review 4153's F2). */
+  const UNLISTED = 'Made from this console; not in the list last read.';
   const PAGE_SCOPE = { project: 'demo', section: 'specs', path: 'm.html' } as const;
   const twoOrigins = { origins: ['https://cdn.a.test', 'https://cdn.b.test'], above: 0 };
 
@@ -692,7 +694,8 @@ describe('sheet: a link minted while its own re-read fails is still listed, and 
   async function sheetUp(over: { readonly revoke?: (id: string) => ArtifactAnswer<ArtifactRevokeOk>; readonly census?: ArtifactCensusState } = {}) {
     const control = { failing: false, reads: 0 };
     const f = fakeDoors({
-      // A capability that ends an hour from now (the shared `MINT` ends at 1, long past, which the list would leave out).
+      // A capability whose mint says it ends an hour from now, as a box answers. No list reads the end (the unlisted rows have no
+      // expiry filter since fix round 3: the box slides an end forward with use), so the value only keeps the answer realistic.
       mint: () => ok({ ...MINT, expiresAt: Date.now() + 60 * 60000 }),
       list: (rows) => {
         control.reads += 1;
@@ -766,6 +769,9 @@ describe('sheet: a link minted while its own re-read fails is still listed, and 
     expect(within(indexList()).getAllByRole('listitem')).toHaveLength(1);
     expect(within(pageList()).getByRole('listitem').textContent).toContain('specs/m.html');
     expect(within(pageList()).getByRole('listitem').textContent).toContain('Link cap-1');
+    // The row's note, in both lists.
+    expect(within(pageList()).getByRole('listitem').textContent).toContain(UNLISTED);
+    expect(within(indexList()).getByRole('listitem').textContent).toContain(UNLISTED);
     expect(within(pageList()).getByRole('button', { name: unlistedName(false) })).toBeInTheDocument();
     expect(within(indexList()).getByRole('button', { name: unlistedName(true) })).toBeInTheDocument();
     fireEvent.click(within(pageList()).getByRole('button', { name: unlistedName(false) }));
