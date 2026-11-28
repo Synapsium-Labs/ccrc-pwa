@@ -153,7 +153,8 @@ its cases:**
 - **A short user or host name.** On a box whose user or host is an ordinary short word, frames lose that word: each row
   holding it as a whole word is replaced (review 4069's F4). As built, beside a digit, a dot, a dash, an underscore or any
   letter (a non-ASCII one included) it is not the word and is not replaced, and case is not folded (`Bo` and `BO` are
-  kept); the injected private-name scan carries case (review 4086's F-E).
+  kept); the injected private-name scan carries case (review 4086's F-E). **Changed in wave 197 (10.4):** the word
+  classes are fixed ASCII, so beside a non-ASCII letter, digit or mark the name is the word and its row is replaced.
 - **A private name that is also part of our own text.** A row whose whole content is a private string that is also a run
   of one of our fixed texts is kept, because rule 2 runs before rule 3 and the two cannot be told apart there. Round 1's
   note said such a row is replaced; it is not (review 4086's F-E). The recipe's fixed texts are this repository's own, and
@@ -166,7 +167,8 @@ its cases:**
   content is not always the pane's width: inside a bordered box drawn narrower than the pane, a row holds only what fits
   between the borders, so the split needs a string longer than the box's content width, not the pane's 220 columns
   (review 4109's F7). The longest of the box's strings, its working directory, is about 70 characters: inferred, not
-  measured on a real box (review 4086's F-C). It goes onto the alarm wave's ticket.
+  measured on a real box (review 4086's F-C). **Closed in wave 197 (10.7):** the wrap rule reads a private string
+  through as many rows as it needs.
 - **Characters the class rule lets through.** Variation selectors, combining marks, unassigned and noncharacter code
   points, the Hangul fillers, the braille blank, the no-break and wide spaces, the object replacement and replacement
   characters and regional indicators pass the shape rule, which is by class as ruled. Placed inside a private string, a
@@ -175,11 +177,14 @@ its cases:**
   a combining mark splits the run each reads (review 4109's R2): the path rule (`PATH_LIKE`, components of `[\w.-]`), the
   private shapes (`PRIVATE_SHAPES`: a home or mount path, a home-relative path, an email, an IPv4 address, a host name and
   a long hex run) and the credential shapes (the product masker's `CREDENTIAL_MASKS`, which rule 9 runs on the box). No
-  build draws one there. A named residual (review 4086's F-D), on the alarm wave's ticket.
+  build draws one there. A named residual (review 4086's F-D), on the alarm wave's ticket. **Closed in wave 197 for the
+  variation selectors and the combining marks (10.5):** every matcher also reads the text less its marks. The other
+  characters of this list still pass, and still split a run.
 - **The third stash pane's notice row is replaced.** In `stash-after-cs.ansi` the stash notice shares its row with the tmux
   hint, which carries `~/.tmux.conf`, so the path rule replaces the whole row and the notice is not in the stored frame
   (pinned). If the first real capture's stash case shows a replacement on that row, that figure goes to the capture owner
   with the rest, and the question of replacing only the path comes back then (the coordinator's ruling on F-A).
+  **Wave 197 (10.6):** it stays a stated limit.
 - **The status pair is held on the literals.** The agent case holds `FRAMES_STATUS_TEXT` equal to the recorder's
   `STATUSLINE_REPLY`, and the settings the capture writes name the recorder; no case reads the `settings.json` the runner
   writes. A runner that dropped the status line would have every frame refused `status-row`: it fails closed (review
@@ -601,7 +606,8 @@ wave's last push; section 9.5 says what each push changed.
   hosts whose engines DISAGREE on a mark lose a frame. Two hosts whose engines are BOTH older than the table's Unicode
   version count a mark newer than their engine one cell, so a next row that begins with such a mark keeps its tail on
   both: the reviewer counts 42 such marks on a 16.0 engine (93 on 15.0), none on 17.0 or newer. The cure, a generated mark
-  table beside the width table, is the alarm wave's. The comment beside the mark class says the same.
+  table beside the width table, is the alarm wave's. The comment beside the mark class says the same. **Closed in wave
+  197 (10.3):** the rule reads a generated mark table and asks no engine.
 
 ### 9.5 The pushes
 
@@ -782,3 +788,345 @@ clone read clean by git after them:
   word left out, and a memory note, written with the file tools instead. The file tools turn a `\u` escape typed into an
   edit into the character itself, so the tables are written as numbers and spliced in by a script, and the probes spell
   their wide characters with `String.fromCodePoint`.
+
+## 10. Wave 197: the reducer's carried limits
+
+Seven reviews of the reducer left limits that were not must-fix for their pull requests. This wave closes them, in the
+order the coordinator gave. No real capture has run, so no stored frame was read under an older rule. Every change is in
+`shared/framesReduce.ts`, the one function the test box's reducer and the server's check both run, plus one new data
+fixture. Each rule is red first by case at 20 and 220 columns on both entry points, except where a rule is the box's
+alone (it needs the box's strings): there the case shows the box refusing, or the text the box sends passing the
+server's check. No frame that `main` refused is kept now with private text in it; some frames that `main` refused whole
+are now reduced with a row replaced instead, so the stored text holds neither the name nor the shape (10.4, 10.5). This
+section describes the code at the push of fix round 1 (10.11).
+
+### 10.1 A path's tail past the first run of the next row (review 4179's U8, two arms)
+
+Both tail readers took only the FIRST run of the next row's content. So a next row whose first run held no slash and
+whose later text did was kept: a directory name with a space wrapped (`…Ja`, then `ne Doe/project`), or a blank that is
+not whitespace (U+2800, U+3164), a space, then `ject/rest`. The cure the review called obvious, a slash anywhere in the
+next row after ANY token row, would refuse 77 of the 140 recorded panes the recipe reduces: a welcome-banner row under
+the model row carries a path in about 40 of them. So each arm asks the edge first (the coordinator's ruling, which took
+both arms):
+
+- **The token-row arm.** After a reduced row that ends in a token AND runs to the edge as a token row, a slash anywhere in
+  the next row's content (after its leading decoration) refuses the frame (`private-shape`). A replaced row is padded with
+  spaces to its content's width, so a token row is measured as drawn, SGR removed and its trailing spaces KEPT: its last
+  code point is not a decoration character other than the two spaces (a border closes the row), and its width in screen
+  cells is at least the pane's, or one cell short with the next row's first character two cells (the straddle). A token
+  row whose source had trailing spaces drawn out to the edge reads as at the edge too; that only refuses. A token row that
+  does not reach the edge keeps the first-run reading.
+- **The full-row arm (new against `main`).** After a row run to the edge that is not a token row (`runsToTheEdge`), a
+  slash anywhere in the next row's content refuses too, for the same next rows (not ours, not a rule row). It lives in
+  the full-width rule's reader, so on the box it reads the rows as drawn and in the server's check the reduced rows.
+- **Recorded cost.** Over every recorded pane the recipe meets (158 files, 147 with a rule row under the top row, at
+  their real sizes; 140 reduce), each arm newly refuses **0 of 147**. Only one reduced token row in all 147 reaches the
+  edge (the link row of the remote-control hint in `ask-user-question-real.txt`, 122 of 122 cells), and the row under it
+  is empty; the one raw row at the edge with a slash anywhere below (`cc280-permission-wrapped-100.txt`) is a real
+  wrapped path the rule already refused. The broad cure's count, 77 of 140, is why the edge is asked.
+- **One cell short.** A real read of a pane may trim the blank last column (a read without its trailing spaces drops
+  them), so a row one cell short of the edge before a NARROW character cannot be told from a row that simply ended a cell
+  early. That is why it is a kept side of both arms, and why only a two-cell character after it makes a straddle.
+- **What this does not cover.** These arms read a path's tail, a slash after the break. A box string that holds a space
+  and is wrapped at that space, with no slash after the break, is the wrap rule's, and that rule lost the space until fix
+  round 1 (10.11, R1).
+- **Told apart.** The rule word is the same for both arms, so a capture's refusal counts cannot tell them apart, but the
+  cases and the mutant rows do: each arm's edit taken back alone is red through its own cases and the probe table, and
+  green through the other arm's (U8t and U8f in 10.10). If the first real capture over-refuses, its frames can be replayed
+  against each arm alone. Cases, at 20 and 220 columns, each on both hosts: the token-row arm with each token that fits,
+  under the reviewer's shapes (bare and indented), and the box's own shape (a model row whose trailing spaces reach the
+  edge); its straddle; its kept sides (a token row two cells short, a token row closed by a border, a narrow character
+  after a token row one cell short, no slash at all); the full-row arm under the same shapes; its straddle; its kept sides
+  (no slash anywhere, a next row that is ours, a narrow character after a row one cell short).
+
+### 10.2 The pins U6 and U7
+
+- **U6.** No fingerprint probe reached the path-tail reader's whitespace skip, so taking it back moved no version. A probe
+  now does: a token row, then U+3000, then `x/y tail`. Mutant S1 is red through the probe table as well as the token-row
+  case.
+- **U7.** A full row with no slash, then U+3000, then a tail that holds the slash (`ject/rest`), refuses at the edge reader
+  on both hosts, bare and indented: a case at 20 and 220 columns. It was refused on `main` already, so the case is a pin
+  and is green on `main`. Since the full-row arm, it is refused twice over: S2 (the edge reader's skip taken back) alone
+  leaves it refused by the full-row arm, and S2 is red through the existing cases whose head holds the slash.
+
+### 10.3 The mark table (review 4168)
+
+- **The data file is the fixture.** `server/test/fixtures/unicode-derived-general-category.txt` is the Unicode Character
+  Database file `DerivedGeneralCategory-17.0.0.txt` (Unicode 17.0.0, dated 2025-07-24, from the Unicode Consortium's public
+  UCD directory for 17.0.0, `extracted/`), byte for byte: 277,514 bytes, sha256
+  `d62e5bab70ca74f099343f71224fa051cb1fdd61a1ab45c0488c44cfc0b6102e`, 4,144 data lines. It is the same version as the
+  width table. A case pins the sha256, the length, the name and date lines and the data line count. No test fetches it.
+- **The table.** `FRAMES_MARK_RANGES` is every code point the file lists as Mn, Mc or Me, merged: 327 ranges, 2,543 code
+  points, 6,240 bytes of ASCII source. It is generated and checked exactly as the width table is: the case parses the
+  fixture, writes the table's source text (eight pairs to a line) and requires the shared file's table to be exactly that
+  text. Both tables use one search (`inTable`).
+- **The rule asks no engine.** The leading-mark test reads the table, not the engine's mark class, and a case requires
+  that the shared file's only property escape, in any spelling, is the emoji-presentation one (fix round 1, R5: the case
+  first matched a short list of names, so a mark test in the general-category spelling slipped it). The emoji selector (Mn) and the keycap mark
+  (Me) are in the table, so their own arm at the first position is gone; the arm for them at the second position stays.
+  The engine's emoji class is still asked, as a widener only, as ruled in wave 195.
+- **The 42.** The marks the 16.0 file does not list as marks and the 17.0 file does (U+1ACF to U+1ADD, U+1AE0 to U+1AEB,
+  U+10EFA, U+10EFB, U+11B60 to U+11B67, U+1E6E3, U+1E6E6, U+1E6EE, U+1E6EF, U+1E6F5; measured against
+  `DerivedGeneralCategory-16.0.0.txt`, which is not in the tree) are a case at 20 and 220 columns: each, as the first code
+  point after the turn marker, bare and indented, makes a straddle that refuses on both hosts. A second case walks all
+  2,543 marks of the table through the straddle. This engine knows the 42, so `main`'s reducer refuses them here as well;
+  under an emulated 16.0 engine (`main`'s mark class with the 42 taken out of it, in a scratch file) `main` keeps all 84
+  frames on both hosts at each width, and this reducer refuses all 84 (10.10). The 42 are a HAND-TYPED list in the case
+  (`NEW_IN_17`): the tree holds no 16.0 data and the fixture has no age field, so the case checks the list's length and
+  that each of its code points is in the table, not that each is new in 17.0. Review 4217 verified the list independently
+  against 16.0 tables. The emulated 16.0 result is measured outside the tree and stated here only.
+- **The docs guard's allowance.** The mark table has a row with the docs path's selector ranges pair (the variation
+  selectors supplement is Mn), so the shared file now spells it twice, once in each generated table. The reducer case that
+  holds the allowance to generated rows only now requires one per table and two in the file; the docs guard's own row was
+  not touched (it already lists this file).
+
+### 10.4 The short-name word classes (review 4161's A4): fixed ASCII
+
+The whole-word test for a name of one to three characters asked the engine's letter and number classes, so an engine that
+knew a newer letter kept a name beside it, and every non-ASCII letter kept the name beside it. The classes are now fixed
+ASCII (letters, digits, dot, dash, underscore), not table-driven: ASCII asks nothing and keeps less text, where a letter
+table would keep the name beside every letter of 17.0. The only new replacement is a short name beside a non-ASCII letter,
+digit or mark, on the box (the server holds no box strings). No recorded result moves, because the recorded panes carry
+no box strings. A case, at 20 and 220 columns: a short name beside a Latin letter with an accent, a Cyrillic letter, an
+ideograph, an Arabic-Indic digit and a combining mark is replaced, and the text the box sends passes the server's check;
+the ASCII neighbours still do not make it the name. Some frames that `main` refused whole are now reduced: a short name
+beside a non-ASCII letter on a row that also holds a private shape (`seen ébo at 10.1.2.3`, with the box string `bo`) was
+refused on `main` by the shape, and is now reduced with that row replaced, because rule 3 replaces the whole row before
+rule 9 reads it. The text sent holds neither the name nor the address, and it passes the server's check.
+
+### 10.5 A variation selector or a combining mark inside a run (review 4086's F-D)
+
+A mark inside a private string, a model or account word, a path, a private shape or a credential shape split the run each
+rule reads. The coordinator offered two cures: refuse a frame whose private-shaped or token-shaped run holds such a
+character, or match on the run with those characters removed. **Built: the second, beside the first reading.** Every
+matcher reads the text as drawn AND the text less every code point the mark table lists (the variation selectors, the
+combining grapheme joiner and the combining marks are all in it), and either reading is a hit, with the rule's own
+action: rules 3 to 6 replace the row, the rule row's label refuses, rule 9 refuses. The first cure needs to know where a
+private-shaped run is, which is exactly what the mark hides, so it cannot be built without the second. The private
+strings are read less their marks too. Sites: the exact strings (rule 3 and the wrap rule, with the box's strings), the
+path, model and account rules (4 to 6) on a row and on a rule row's label, the private shapes, the committed matcher and
+the masker (rule 9). Cases, at 20 and 220 columns, with five marks (U+FE0F, U+FE00, U+0301, U+034F, U+E0100): a private
+string, a short name, a model word and an account word replaced on the box, the server refusing the unreduced model and
+account rows; a path replaced on the box and refused by the server unreduced; an address, a long hex run (at 220), a
+credential and the committed canary refused whole on both hosts; a private string wrapped across two rows refused on the
+box; a rule row's label holding a model word, an account word or a path refused on both hosts; and (fix round 1, R6) a
+mark in the private string with none in the text, and the other way, in one row and wrapped across two. Over the 147
+recorded panes nothing changed. As in 10.4, some frames that `main` refused whole are now reduced with a row replaced: a
+mark-split `host-a` on a row that also holds an address, and a rule row's label `ébo /a/b/c` (with the box string `bo`, at
+220 columns), each of which `main` refused by its shape, now has that row replaced by rule 3 (or rule 7's private-string
+replacement), so the text sent holds neither, and it passes the server's check (measured in scratch, 10.11). A name in one Unicode normalization form against a drawing in the other
+(a precomposed `é` against `e` then U+0301, either way) is kept, as on `main`: removing marks does not decompose a
+character, and normalising the text would ask the engine's decomposition tables, against ruling 3. The other characters the class rule lets through (unassigned and noncharacter code points, the
+Hangul fillers, the braille blank, the wide spaces, the replacement characters, the regional indicators) still split a
+run: they are not marks, and removing them could join two words that are not one. That stays a limit, as do the
+look-alike letters of 9.4 (D2).
+
+### 10.6 The stash notice row that shares its row with a path: a stated limit
+
+It stays as it is: the whole row is replaced and the notice is lost from the record (5, pinned). Replacing only the path is
+not small: the path rule matches a path's start, not its extent (on `~/.tmux.conf` it matches the `~/` alone), so it
+would need a reader of where a path ends, a second token width rule inside a row, and the path-tail rules re-read for a
+token in mid-row; and it would change that pane's pinned result. Safe, poorer, and on record.
+
+### 10.7 A private string split across three rows or more (the check widened)
+
+No case could prove it cannot happen: the recipe's panes are both 220 columns, but a bordered box narrower than the pane
+holds only what fits between its borders, so the string needed is longer than the box's content width, not the pane's.
+So the wrap rule is widened. An occurrence that starts in a row and runs past its end is read through as many rows as it
+needs, each middle row wholly inside it; a middle row is read as drawn, or, with the decoration at the breaks stripped,
+as its content only; each reading is read again less its marks (10.5). It stops once the middle rows are longer than the
+longest string. It is the box's rule (the server holds no box strings). Cases, at 20 and 220 columns: a 24-character
+string split across three rows, bare, indented and inside a bordered box narrower than the pane, across four rows, and
+with a mark in the middle row, refuses on the box; the same rows with a string that does not cross them reduce unchanged,
+and the server clears them. Fix round 1 (10.11) adds a reading with the whitespace squashed out (R1: a string wrapped at
+its own space) and stops the read at an empty or border-only middle row (R3: the widened read had joined a string across
+one).
+
+### 10.8 The version
+
+Seven probes, one per changed rule, none with an answer that depends on the engine: U6 (10.2); the token-row arm (a model
+row whose trailing spaces reach the edge, then a slash after the first run); the full-row arm (a full row of words, then
+the same); the mark table (a straddle whose next row is the turn marker then U+1ACF, a mark new in 17.0); the ASCII word
+classes (a short name beside a Latin letter with an accent); the marks-removed reading (a model word with a combining
+mark inside); and a private string split across three rows. Fix round 1 adds four (10.11): R1 (a box string wrapped at
+its space, the probe table's box list now holding `Ann Lee`), R3 (a short box string never joined across an empty middle
+row), and R4's two (a short box string with a mark inside it in the text, which reaches the private-string reader's
+marks-removed half; a credential shape with a mark inside, which reaches the masker's marks-removed reading). The probe
+case now pins 41 answers. The committed matcher's marks-removed reading is held by cases only: the probe table's scan
+answers no, so no probe can reach it. **The frames recipe's version: `bd7b9ac2b9896ec6` on `main` (wave 195's fix round
+3, as merged), `1b00197c76a46d08` at this wave's first push, `497e2fd1732fcb5d` at fix round 1's push, from 11 probes in
+all.** No file in the tree pins any of them. The delivery recipe's version still prints `da16fe2f55551e0b`.
+
+### 10.9 Two exports for the alarm wave (wave 198's packet, the coordinator's ruling)
+
+The alarm wave's shape rule classes a row as our text by the reducer's own rule 2 and reads a row's edges by the reducer's
+own spans, never a copy. So the reducer exports `oursSquashed` (the one builder of rule 2's list, which `reduceOnce` now
+calls) and `spans` (unchanged). The hunk is the alarm wave's packet, applied byte for byte as its own commit, so both
+branches carry the identical lines and whichever lands second keeps one copy. No answer moves: the frames recipe's
+version prints `1b00197c76a46d08` before and after that commit.
+
+### 10.10 Evidence
+
+Every run went through `ccrc test --local`, in the foreground or as one background loop, one file per command.
+- **Red first.** The wave's suite against `main`'s reducer (ee21bf76ce) in a scratch clone of the workspace: 29 cases red
+  by name, the other 118 green. The green ones are the kept sides of each new rule, the U7 pin and every case older than
+  this wave. The 42-mark cases are red on `main` because its file has no table (the import is missing); their behaviour
+  was measured red first under the emulated 16.0 engine (10.3). The reducer suite now passes 147 of 147, with the
+  property case's pins unchanged (132 panes checked, 128 reduced) and F8a's 6 of 90.
+- **Recorded panes, against `main`.** All 158 files; the 147 the recipe meets, as the property case meets them at their
+  real sizes: **0 differ** in kind, refusal, counts or text, and every reduced one passes the server's check (140 reduce on
+  both).
+- **Mutants**, in the scratch clone (never this workspace), one row at a time, each edit applied to the shared file, the
+  suite run once, the file put back; the clone read clean by git after the batch. **31 rows, 31 killed**, at the first
+  push's code and again at fix round 1's (the counts below are fix round 1's; seven rows are red in more cases than
+  before: K2 21 to 23, K4 20 to 22, B2 2 to 5, B4 2 to 3, B5 4 to 6, B6 13 to 15, T4 7 to 12). Fix round 1's own nine
+  rows are in 10.11. The rows, so that a reviewer can replay each by hand:
+
+| Row | The edit in `shared/framesReduce.ts` | Red in `server/test/frames-reduce.test.ts` |
+|---|---|---|
+| U8t the token-row arm taken back | the line `if (tokenRowAtTheEdge(a, b, pane) && nextRowContent(b).includes('/')) return …` removed | 5: the token-row arm and its straddle at 20 and 220, the probe table; the full-row cases stay green |
+| U8f the full-row arm taken back | `return nextRowContent(b).includes('/'); // the full-row arm` → `return false; // the full-row arm` | 5: the full-row arm and its straddle at 20 and 220, the probe table; the token-row cases stay green |
+| U8e1 the token row's trailing spaces trimmed | in `tokenRowAtTheEdge`, `Array.from(a)` → `Array.from(a.replace(/\s+$/u, ''))` | 5: the token-row arm and its straddle at 20 and 220, the probe table |
+| U8e2 the border clause removed | `if (last === undefined \|\| (DECOR.has(last) && !SPACES.has(last))) return false;` → `if (last === undefined) return false;` | 2: the token-row arm's kept sides at 20 and 220 |
+| U8e3 the token row's straddle branch removed | its `\|\| (cells === pane.cols - 1 && firstCells(…) === 2)` removed | 2: the token-row straddle at 20 and 220 |
+| U8e4 the token-row arm asks the first run only | `nextRowContent(b).includes('/')` → `pathTail(b)` in the arm | 5: as U8t |
+| S1 the path-tail reader's skip taken back | `/^\s*(\S+)/u … ?.[1]` → `/^\S+/u … ?.[0]` in `pathTail` | 3: the token-row space case at 20 and 220, the probe table (U6) |
+| S2 the edge reader's skip taken back | the same in `pathOffTheEdge` | 5: the full-row and one-cell-short space cases at 20 and 220, the probe table |
+| K1 the leading-mark arm removed | `if (isMark(cps[0])) return 2;` removed | 8: the selector, mark and 42-mark straddles at 20 and 220, the all-marks case, the probe table |
+| K2 the mark table emptied | `Object.freeze([` → `Object.freeze([] ?? [` on the mark table | 23 |
+| K3 the 42 dropped from the table (two ranges) | `[0x1AB0, 0x1ADD], [0x1AE0, 0x1AEB], [0x1B00, 0x1B04]` → `[0x1AB0, 0x1ACE], [0x1B00, 0x1B04]` in the mark table | 5: the 42-mark cases at 20 and 220, the all-marks case, the table case, the probe table |
+| K4 the mark search reads the wrong table | `isMark` reads the one-cell table, negated | 22 |
+| A1 the word classes back to the engine's | the two ASCII classes → the engine's letter and number classes | 3: the non-ASCII neighbour case, the probe table, the no-property-escape case |
+| B1 rules 4 to 9 read as drawn only | `readsAs` → `re.test(s)` | 9 |
+| B2 the private strings read as drawn only | `holdsPrivate`'s marks-removed half removed | 5: the exact matchers and the mark-in-the-string case at 20 and 220, the probe table |
+| B3 the committed matcher as drawn only | `scan(foreign) \|\| scan(lessMarks(foreign))` → `scan(foreign)` | 2: the shapes, credentials and matcher case at 20 and 220 |
+| B4 the masker as drawn only | its `\|\| mask(lessMarks(stripFrameSgr(text)))` removed | 3: as B3, and the probe table |
+| B5 the wrap rule as drawn only | `for (const bare of [false, true])` → `[false]` | 6: the two-row mark case, the mark-in-the-string case and the three-row splits at 20 and 220 |
+| B6 the marks-removed text is the text | `lessMarks` returns its input | 15 |
+| B7 the rule row's label as drawn only | the label's `readsAs` → `.test` | 2: the rule row's label case at 20 and 220 |
+| T1 the wrap rule reads two rows only | the window bounded at `i + 2` | 3: the three-row splits at 20 and 220, the probe table |
+| T2 a middle row read with its decoration | `spans(rows[j]!).content` → `lessLead(rows[j]!)` for a middle row | 2: the three-row splits at 20 and 220 (the bordered one) |
+| T3 the window stops after one row | `>= longest` → `>= 0` | 3: as T1 |
+| T4 the stripped reading dropped | `for (const strip of [false, true])` → `[false]` | 12: the three-row splits and the older two-row split cases, and, from fix round 1, the three-word name cases, the empty-middle-row cases (their bordered pair) and the 220-column path frame (its card) |
+| P1 to P7 each new probe removed | the probe's string removed from `probes` | 1 each: the probe table |
+
+- **Suites**, each file alone, on the wave's tree (the list is the one for a change under `shared/`): the reducer suite
+  and the server's frames suites, the tree and docs guards, the agent's six frames suites, every file under
+  `server/test/single-definition/`, the server tests CI's tree-scanner detector (`scansSourceTree`) marks as listing a
+  source tree, picked wider than needed (94 files whose source names a `shared` root by a loose text match, the 39 of
+  wave 195 among them), and the server's and the agent's compiles.
+  - Pass 1, on the code before the export commit (10.9): 176 files, 171 green, and both compiles pass. Five were red, and
+    every red was a test timing out on a box at load 7 to 14: `coord-store` (1 of 271), `delegation-recovery` (38 of 465,
+    with its leaked-descriptor checks), `mail-sweep` (10 of 187) and `secret-mask` (2 of 99), which, read afterwards, list
+    `server/src` only, so they read no file this wave changes and were not run again; and `mail-revive` (1 of 41), whose
+    census case walks `shared/`. Run alone, that case timed out again (25 s and 35 s), and on `main`'s tree in the scratch
+    clone, under the same load, it timed out too (27 s): it is the load, and the pull request's run is the arbiter.
+  - Pass 2, after the export commit, each alone: the reducer suite (147 of 147), the server's frames suites, the tree and
+    docs guards, the agent's six frames suites and all 50 files under `server/test/single-definition/` (`docs-l0` 159
+    with 1 skipped, `late-census` 83): 81 files, all green.
+- **Tests that read a file this wave changes as text** (#3562): the shared file is read as text by the reducer suite, by
+  `single-definition/late-census` and `single-definition/docs-l0`, and by every tree scanner over `shared/`; all ran above.
+  The new fixture is read by the reducer suite only.
+- **This note** is the existing task note with this new section and five pointers in sections 5 and 9.4; the head commit
+  carries the ledger guard's edit trailer for it.
+- **Process.** The brief asks that edits to the tree go through the file tools. Several edits in this wave (the mark table,
+  the matcher sites and three blocks of cases) were spliced in by a short script that refused unless its old text occurred
+  exactly once, before that was noticed; every edit after it went through the file tools. The content is what the file
+  tools would have written. One hook refusal: the graph gate refused a search command until one graph query had answered
+  (its words: "this tree has a knowledge graph (99707 nodes, fresh) and this session has no answer from it yet. Search
+  tools open after one graph query that answers"). One query ran, as the gate's text asks, and the search ran after it.
+
+### 10.11 Fix round 1 (review 4217, the coordinator's rulings)
+
+Review 4217 read the first push (56b7806a88) and found nothing this wave adds that must stay out of `main`. The
+coordinator ruled one finding into this pull request (R1), five small ones with it (R3 to R7, R9, R10) and one stated as
+a limit (R2). R8 (advisory, the intended direction) and the reviewer's three surviving mutants of its own (M3, M4 and M6)
+go to the coordinator's follow-up with R2. Everything below is in `shared/framesReduce.ts` and its suite, plus the
+wording above.
+
+- **R1, a box string wrapped AT its own space (the wrap rule).** A word wrap breaks a row at a space and takes that space
+  out, and a read may trim the blank it leaves, so a box string that holds a space and is wrapped there was kept in its
+  second half, on `main` as on the first push: with the box strings `/home/Jane Doe Smith/project` and `/home/Jane Doe
+  Smith`, a box row ending `working in /home/Jane` had its path replaced and the row below, `Doe Smith/project and more`,
+  was kept whole; with `Jane Doe Smith`, the rows `hello Jane` and `Doe Smith here` were both kept. The cure is the
+  reviewer's and only refuses: `privateFrom` reads each of its readings once more with the whitespace squashed out of the
+  rows and the strings, the straddle measured on the squashed head. A string of three characters or fewer, squashed, is
+  not read so, and keeps the whole-word rule on the readings as drawn (otherwise `nas` would be read in `(n a` then
+  `s) here`). Cases, at 20 and 220 columns: the reviewer's path frame, in a box of 50 columns inside the pane and as bare
+  rows (at 20 columns bare rows only, since no 20-column box holds a row wide enough for its token), refused on the box,
+  and refused by the server unreduced by its shape; the name broken at each of its two spaces, bare and in a box; the
+  first break with the row run to the last column, its blank last cell trimmed and kept (the kept one was refused on
+  `main` already, a pin); and the kept sides: the same rows with a string not in the box list reduce unchanged and the
+  server clears them; the path rows with another path string have only the path replaced; `bo` inside `robot` across the
+  break, and `nas` split by a space across it, are kept. The server holds no box strings, so for the name rows it is the
+  box's rule, as the wrap rule always was. **Recorded cost: 0.** Over the 147 recorded panes the recipe meets (6,108
+  adjacent row pairs), reduced by `main`, the first push and this code, with no box strings and with a fixture box list
+  (the suite's stand-ins and five strings that hold spaces): 140 reduce in every column, 0 differ, and the squashed
+  straddle alone hits none of the 6,108 pairs. The three pins are unchanged (132 checked, 128 reduced, 6 of 90).
+- **R3, an empty middle row.** The widened read (10.7) joined a string across an empty or border-only middle row, because
+  such a row adds no length: with the box string `alice`, `my pal`, an empty row, `ice cream` was refused, where `main`
+  kept it. A terminal wrap never leaves an empty row inside a string, so the read now stops at a middle row whose content
+  is empty. Case, at 20 and 220 columns: an empty, a blank and a bordered empty middle row are kept unchanged; the two
+  rows side by side, bare and bordered, still refuse.
+- **R4, three marks-removed readers that moved no version.** Two probes: a short box string with a mark inside it in the
+  text (`seen b`, U+0301, `o here and more`), which only the private-string reader's marks-removed half replaces; and a
+  credential shape with a mark inside (`key sk-abcd`, U+0301, `efgh`), which only the masker's marks-removed reading
+  refuses. The committed matcher's half is held by cases only (10.8).
+- **R5, the no-engine case.** It now requires that the shared file's only property escape, in any spelling, is the
+  emoji-presentation one, so a mark test written as the general-category escape is red (mutant R5).
+- **R6, a mark inside a private STRING.** Case, at 20 and 220 columns, with the five marks: a mark in the string and none
+  in the text, and the other way, in one row (replaced, the text sent passing the server's check) and wrapped across two
+  rows (refused on the box). Each of the reviewer's two edits, the strings' side of `holdsPrivate` and of `privateFrom`, is
+  now red (R6a, R6b).
+- **R7, R9 and R10, wording.** The 42 are said to be a hand-typed list, verified by the review against 16.0 tables, with
+  the emulated-engine result stated as measured outside the tree (10.3). The section's opening sentence no longer says
+  nothing refused on `main` is reduced now: some frames `main` refused whole are now reduced with a row replaced, measured
+  in scratch on both entry points (`seen ébo at 10.1.2.3` with `bo`, a mark-split `host-a` beside an address, at 20 and
+  220 columns; a rule row's label `ébo /a/b/c` at 220), each sent text passing the server's check (10.4, 10.5). One
+  sentence says why one cell short before a narrow character is a kept side (10.1), and one states the normalization
+  limit (10.5).
+- **R2, a stated limit (the coordinator's follow-up, not this pull request).** The credential, hex-id, address and
+  model-word checks read one row at a time; only the paths and the box strings have a wrap rule. So one of these shapes
+  wrapped across two rows is kept, on `main` as here. The review's four frames, measured again in scratch at 20 and 220
+  columns on `main` and on this code (reduced unchanged on the box, and the server clears the raw frame): `key sk-ant-ap`
+  then `i03-abcdefghijklmn`; 40 hex characters split 20 and 20; `host 10.1.` then `2.3 rest`; `Son` then `net 4.5`. The
+  server's live masker, in its rows mode, does join a key's prefix to an INDENTED continuation row (the review measured
+  it masked there), not an unindented one. The cure the review measured (the two rows joined after a row that runs to the
+  edge) changes one recorded pane (`ask-user-question-real.txt`), and a model word needs a reading of its own: that is the
+  coordinator's follow-up wave.
+- **The version.** Four probes, one per changed rule (R1, R3 and R4's two), none asking the engine, and the probe table's
+  box list now also holds `Ann Lee` (for R1's probe). The probe case pins 41 answers. **`497e2fd1732fcb5d`** at this
+  round's push (from `1b00197c76a46d08`), 11 probes added by this wave in all. The delivery recipe still prints
+  `da16fe2f55551e0b`. The exports commit (10.9) is unchanged.
+- **Red first.** The round's cases against the first push's code: 7 red (R1's path frame and its name cases at 20 and 220,
+  R3's case at 20 and 220, the probe table), the R5 and R6 cases green there (they pin what the two edits and the escape
+  would break). The whole suite against `main`'s reducer in the scratch clone: 35 of 157 red (the 29 of 10.10, R1's four
+  and R6's two; R3's case is green on `main`, which kept that frame). The reducer suite passes 157 of 157 here.
+- **Mutants, this round's nine**, in the scratch clone, as in 10.10, all killed; and the 31 of 10.10 rerun at this code,
+  all killed:
+
+| Row | The edit in `shared/framesReduce.ts` | Red in `server/test/frames-reduce.test.ts` |
+|---|---|---|
+| R1a the squashed reading taken back | `for (const sq of [false, true])` → `[false]` | 5: the path frame and the name cases at 20 and 220, the probe table |
+| R1b the short-name exclusion taken back | the `&& (!sq \|\| Array.from(p).length > FRAMES_SHORT_PRIVATE_MAX)` clause removed | 2: the kept sides at 20 and 220 (`nas`) |
+| R3 the empty-middle-row stop taken back | the `if (spans(rows[j]!).content === '') break;` line removed | 3: the empty-middle-row case at 20 and 220, the probe table |
+| R4a the private-string reader's marks-removed text taken back | `privateAt(lessMarks(text), p)` → `privateAt(text, p)` | 5: the exact matchers and the mark-in-the-string case at 20 and 220, the probe table |
+| R4b the masker's marks-removed reading taken back | its `\|\| mask(lessMarks(stripFrameSgr(text)))` removed | 3: the shapes, credentials and matcher case at 20 and 220, the probe table |
+| R5 the mark test asks the engine | `isMark` → the general-category escape for marks | 1: the no-engine case |
+| R6a `holdsPrivate`'s strings-less-marks side taken back | `privates.map(lessMarks).some(` → `privates.some(` | 2: the mark-in-the-string case at 20 and 220 |
+| R6b `privateFrom`'s strings-less-marks side taken back | `(bare ? privates.map(lessMarks) : privates)` → `privates` | 2: as R6a |
+| P8 R1's probe string taken back | `Ann Lee` removed from the probe table's box list | 1: the probe table |
+
+- **The coordinator's full run** on the first push (46132580483, every server file, no macOS), read once at the end:
+  completed, success, 33 jobs passed and 7 skipped, no red job.
+- **Suites**, each file alone through `ccrc test --local`, at this round's code: the reducer suite (157 of 157), the
+  server's twelve frames suites, `single-definition/docs-l0` (159, 1 skipped) and `single-definition/late-census` (83), the
+  two that read the shared file as text; the docs guards for this note (`docs-grammar` 158, `anchors` 9, `citations` 4,
+  `deviation-refs` 35, `ci-ledger-guard` 32, `dtbd` 1, `growth-check` 63 with 3 skipped, `oss-metadata` 29), the public-repo
+  guards (`topology-clean` 62 of 62, `public-text` 20, `private-names` 47, `private-names-characterization` 26) and the
+  agent's six frames suites: 33 files, all green. The server's compile exits 0. The server's test-project compile was
+  killed by the test slice's memory cap (exit 137), as the review measured, so it is unmeasured here; the pull request's
+  typecheck job is its measure. The public-repo guard file, run again on the committed note, was cut short twice by that
+  same cap (44 and 56 of 62 passed, none failed, and the log names the worker killed by SIGKILL and the slice's OOM kills);
+  with one worker it passed 62 of 62. That is the likely cause of the first push's single 44 of 62 (10.10), whose log was
+  not kept.

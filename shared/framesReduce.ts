@@ -18,6 +18,10 @@ import { CLASSES } from './models.js';
 /** Whitespace erased, as `server/src/inject/send.ts`'s `squash` reads a box row: wrapping moves only spaces. */
 const squash = (s: string): string => s.replace(/\s+/g, '');
 
+/** The `ours` list as rule 2 reads it: each text squashed, the empty ones dropped. The one builder of that list: the
+ *  reducer's own rule 2 and the shape rule's our-text class (`framesShape.ts`, wave 198) both call it. */
+export const oursSquashed = (ours: readonly string[]): string[] => ours.map(squash).filter((o) => o !== '');
+
 /** THE DECORATION LIST (the owner's corrected rule 2): the characters a row may carry around our text at its two ends and
  *  still be ours. The box's and a card's border characters, the prompt glyph (and its older `>`), the turn markers and
  *  spaces. A closed list, no pattern: a character not on it is foreign. */
@@ -26,8 +30,9 @@ export const FRAMES_DECORATION: readonly string[] = Object.freeze([
 ]);
 const DECOR = new Set(FRAMES_DECORATION);
 
-/** A row's three spans by code point: the decoration it starts with, its content, the decoration it ends with. */
-function spans(row: string): { readonly lead: string; readonly content: string; readonly tail: string } {
+/** A row's three spans by code point: the decoration it starts with, its content, the decoration it ends with. Exported
+ *  for the shape rule's other-row class (`framesShape.ts`, wave 198), which reads a row's edges by this one rule. */
+export function spans(row: string): { readonly lead: string; readonly content: string; readonly tail: string } {
   const cps = Array.from(row);
   let a = 0;
   while (a < cps.length && DECOR.has(cps[a]!)) a++;
@@ -86,11 +91,17 @@ export const FRAMES_REPLACED = Object.freeze({ cwd: '‹working directory›', m
 const TOKENS: readonly string[] = Object.values(FRAMES_REPLACED);
 
 /** A private string of at most this many code points (a short user or host name) is matched as a whole word (the
- *  coordinator's ruling on review 4069's F4): bounded on each side by the text's edge or by a character that is not a
- *  letter, digit, dot, dash or underscore. A longer one is matched anywhere. No name is dropped. */
+ *  coordinator's ruling on review 4069's F4): bounded on each side by the text's edge or by a character that is not an
+ *  ASCII letter, digit, dot, dash or underscore. A longer one is matched anywhere. No name is dropped.
+ *
+ *  FIXED ASCII, no engine asked (review 4161's A4, wave 197): the classes were the engine's letter and number classes,
+ *  so an engine that knew a newer letter kept a name beside it that an older one replaced, and every non-ASCII letter
+ *  kept the name beside it. A short name beside any character that is not one of these 66 is now the name, and its row
+ *  is replaced: the direction that keeps less text. The only new replacement is a short name next to a non-ASCII letter
+ *  or digit, or a mark, and no recorded result moves (the recorded panes carry no box strings). */
 export const FRAMES_SHORT_PRIVATE_MAX = 3;
-const WORD_BEFORE = /[\p{L}\p{N}._-]$/u;
-const WORD_AFTER = /^[\p{L}\p{N}._-]/u;
+const WORD_BEFORE = /[A-Za-z0-9._-]$/;
+const WORD_AFTER = /^[A-Za-z0-9._-]/;
 
 /** Every index (in code units) at which `p` occurs in `text` as the reducer counts an occurrence. */
 function privateAt(text: string, p: string): number[] {
@@ -102,8 +113,10 @@ function privateAt(text: string, p: string): number[] {
   }
   return out;
 }
-/** Whether `text` holds one of `privates`, counted as `privateAt` counts it. */
-export const holdsPrivate = (text: string, privates: readonly string[]): boolean => privates.some((p) => privateAt(text, p).length > 0);
+/** Whether `text` holds one of `privates`, counted as `privateAt` counts it: on the text as drawn, and on the text and
+ *  the strings less their marks (wave 197, item 5), so a mark inside a private string does not hide it. */
+export const holdsPrivate = (text: string, privates: readonly string[]): boolean =>
+  privates.some((p) => privateAt(text, p).length > 0) || privates.map(lessMarks).some((p) => p !== '' && privateAt(lessMarks(text), p).length > 0);
 
 /** A row less the decoration at its end, and a row less the decoration at its start. */
 const lessTail = (row: string): string => { const s = spans(row); return s.lead + s.content; };
@@ -113,11 +126,39 @@ const lessLead = (row: string): string => { const s = spans(row); return s.conte
  *  at any split point, read on the rows as drawn and again with the decoration at the break stripped, so padding or a
  *  border between the halves does not hide it. SGR is already gone from both rows, so a colour change between the halves
  *  does not either. A wrap through a private string means the pane is not laid out as the recipe expects: the frame is
- *  refused whole, never repaired. */
-function privateAcross(a: string, b: string, privates: readonly string[]): boolean {
-  for (const [x, y] of [[a, b], [lessTail(a), lessLead(b)]] as const) {
-    const joined = x + y;
-    for (const p of privates) if (privateAt(joined, p).some((i) => i < x.length && i + p.length > x.length)) return true;
+ *  refused whole, never repaired.
+ *
+ *  ANY NUMBER OF ROWS (wave 197, item 7): an occurrence that starts in row `i` and runs past its end is read through as
+ *  many rows as it needs, each middle row wholly inside it, so a split across three rows or more is caught too. A middle
+ *  row is read as drawn, or, with the decoration at the breaks stripped, as its content only (a row of a bordered box
+ *  narrower than the pane holds only what fits between its borders). Each reading is read again less its marks, with the
+ *  strings less theirs (item 5). The read stops once the middle rows are longer than the longest string, and at an empty
+ *  or border-only middle row (review 4217's R3): a terminal wrap never leaves an empty row inside a string.
+ *
+ *  SQUASHED TOO (review 4217's R1, the coordinator's fix round 1): a word wrap breaks a row AT a space and takes that space
+ *  out, and a read may trim the blank it leaves, so a string that holds a space and is wrapped there was kept in its second
+ *  half. Each reading is read once more with its whitespace squashed out, rows and strings alike, the straddle measured on
+ *  the squashed head. A string of three characters or fewer, squashed, is not read so: it keeps the whole-word rule on the
+ *  readings above (`bo` is not read in `therob` then `otruns`). This reading only refuses. */
+function privateFrom(rows: readonly string[], i: number, privates: readonly string[]): boolean {
+  const longest = Math.max(...privates.map((p) => p.length));
+  for (const strip of [false, true]) {
+    for (const bare of [false, true]) {
+      for (const sq of [false, true]) {
+        const read = (s: string): string => { const t = bare ? lessMarks(s) : s; return sq ? squash(t) : t; };
+        const ps = (bare ? privates.map(lessMarks) : privates).map((p) => (sq ? squash(p) : p))
+          .filter((p) => p !== '' && (!sq || Array.from(p).length > FRAMES_SHORT_PRIVATE_MAX));
+        const head = read(strip ? lessTail(rows[i]!) : rows[i]!);
+        let joined = head;
+        for (let j = i + 1; j < rows.length; j++) {
+          const upTo = joined + read(strip ? lessLead(rows[j]!) : rows[j]!);
+          for (const p of ps) if (privateAt(upTo, p).some((k) => k < head.length && k + p.length > head.length)) return true;
+          if (spans(rows[j]!).content === '') break; // R3: never read through an empty or border-only row
+          joined += read(strip ? spans(rows[j]!).content : rows[j]!);
+          if (joined.length - head.length >= longest) break;
+        }
+      }
+    }
   }
   return false;
 }
@@ -265,16 +306,21 @@ export function frameCellWidth(c: string): 1 | 2 {
   const cp = c.codePointAt(0) ?? 0;
   if (FRAMES_WIDE_KEPT.some(([a, b]) => cp >= a && cp <= b)) return 2;
   if (WIDE_CLASS.test(c)) return 2;
+  return inTable(cp, FRAMES_ONE_CELL_RANGES) ? 1 : 2;
+}
+/** Whether `cp` is in one of `table`'s inclusive `[first, last]` ranges (in code point order, disjoint): the one search
+ *  over both generated tables. */
+function inTable(cp: number, table: readonly (readonly [number, number])[]): boolean {
   let lo = 0;
-  let hi = FRAMES_ONE_CELL_RANGES.length - 1;
+  let hi = table.length - 1;
   while (lo <= hi) {
     const mid = (lo + hi) >> 1;
-    const [a, b] = FRAMES_ONE_CELL_RANGES[mid]!;
+    const [a, b] = table[mid]!;
     if (cp < a) hi = mid - 1;
     else if (cp > b) lo = mid + 1;
-    else return 1;
+    else return true;
   }
-  return 2;
+  return false;
 }
 /** A row's width in screen cells. */
 const cellsOf = (cps: readonly string[]): number => cps.reduce((n, c) => n + frameCellWidth(c), 0);
@@ -282,28 +328,80 @@ const cellsOf = (cps: readonly string[]): number => cps.reduce((n, c) => n + fra
 /** The emoji selector and the keycap mark: a base character before either is drawn as an emoji, two cells wide. */
 const EMOJI_SELECTOR = String.fromCodePoint(0xfe0f);
 const KEYCAP_MARK = String.fromCodePoint(0x20e3);
-/** A code point that cannot begin a character by itself: a combining mark, the engine's mark class (`\p{M}`). The
- *  engine's second class beside the table, and a WIDENER only, under F2's same exception and for the same reason as the
- *  emoji class (the coordinator's ruling on review 4161's F1): it only ever makes the first character of a next row count
- *  two cells, which only refuses. Two hosts whose engines disagree on a mark therefore lose a frame (one of them refuses
- *  it) and never keep a tail. The emoji selector and the keycap mark are named beside it, so those two hold with no
- *  engine asked. A LIMIT (review 4168): the class is only as new as the engine. Two hosts whose engines are BOTH older
- *  than the table's Unicode version count a mark newer than their engine one cell, so a next row that begins with such a
- *  mark keeps its tail on both (42 marks on a 16.0 engine, none on 17.0 or newer, by the reviewer's emulation). The cure,
- *  a generated mark table beside the width table, is the alarm wave's, by the coordinator's ruling. */
-const LEADING_MARK = /^\p{M}/u;
+/** THE MARK TABLE (review 4168, the coordinator's ruling for wave 197): every code point the Unicode Character Database
+ *  file DerivedGeneralCategory-17.0.0.txt lists as Mn (nonspacing), Mc (spacing) or Me (enclosing mark), adjacent ranges
+ *  merged, as inclusive `[first, last]` pairs in code point order: a code point that cannot begin a character by itself.
+ *  It is the same Unicode version as the width table, and it replaces the engine's mark class (a property escape), which was only
+ *  as new as the engine: two hosts whose engines were both older than 17.0 counted a mark newer than their engine one
+ *  cell, and kept a tail behind it (42 marks on a 16.0 engine). The rule now asks no engine. The emoji selector (Mn) and
+ *  the keycap mark (Me) are in it.
+ *
+ *  GENERATED, never edited by hand, as the width table is: the fixture
+ *  `server/test/fixtures/unicode-derived-general-category.txt` IS that public data file, byte for byte (a case pins its
+ *  sha256), and the mark table case in `server/test/frames-reduce.test.ts` parses it, merges the three mark categories'
+ *  lines, prints this table's source text from them, and fails unless this table is that text. */
+export const FRAMES_MARK_RANGES: readonly (readonly [number, number])[] = Object.freeze([
+  [0x0300, 0x036F], [0x0483, 0x0489], [0x0591, 0x05BD], [0x05BF, 0x05BF], [0x05C1, 0x05C2], [0x05C4, 0x05C5], [0x05C7, 0x05C7], [0x0610, 0x061A],
+  [0x064B, 0x065F], [0x0670, 0x0670], [0x06D6, 0x06DC], [0x06DF, 0x06E4], [0x06E7, 0x06E8], [0x06EA, 0x06ED], [0x0711, 0x0711], [0x0730, 0x074A],
+  [0x07A6, 0x07B0], [0x07EB, 0x07F3], [0x07FD, 0x07FD], [0x0816, 0x0819], [0x081B, 0x0823], [0x0825, 0x0827], [0x0829, 0x082D], [0x0859, 0x085B],
+  [0x0897, 0x089F], [0x08CA, 0x08E1], [0x08E3, 0x0903], [0x093A, 0x093C], [0x093E, 0x094F], [0x0951, 0x0957], [0x0962, 0x0963], [0x0981, 0x0983],
+  [0x09BC, 0x09BC], [0x09BE, 0x09C4], [0x09C7, 0x09C8], [0x09CB, 0x09CD], [0x09D7, 0x09D7], [0x09E2, 0x09E3], [0x09FE, 0x09FE], [0x0A01, 0x0A03],
+  [0x0A3C, 0x0A3C], [0x0A3E, 0x0A42], [0x0A47, 0x0A48], [0x0A4B, 0x0A4D], [0x0A51, 0x0A51], [0x0A70, 0x0A71], [0x0A75, 0x0A75], [0x0A81, 0x0A83],
+  [0x0ABC, 0x0ABC], [0x0ABE, 0x0AC5], [0x0AC7, 0x0AC9], [0x0ACB, 0x0ACD], [0x0AE2, 0x0AE3], [0x0AFA, 0x0AFF], [0x0B01, 0x0B03], [0x0B3C, 0x0B3C],
+  [0x0B3E, 0x0B44], [0x0B47, 0x0B48], [0x0B4B, 0x0B4D], [0x0B55, 0x0B57], [0x0B62, 0x0B63], [0x0B82, 0x0B82], [0x0BBE, 0x0BC2], [0x0BC6, 0x0BC8],
+  [0x0BCA, 0x0BCD], [0x0BD7, 0x0BD7], [0x0C00, 0x0C04], [0x0C3C, 0x0C3C], [0x0C3E, 0x0C44], [0x0C46, 0x0C48], [0x0C4A, 0x0C4D], [0x0C55, 0x0C56],
+  [0x0C62, 0x0C63], [0x0C81, 0x0C83], [0x0CBC, 0x0CBC], [0x0CBE, 0x0CC4], [0x0CC6, 0x0CC8], [0x0CCA, 0x0CCD], [0x0CD5, 0x0CD6], [0x0CE2, 0x0CE3],
+  [0x0CF3, 0x0CF3], [0x0D00, 0x0D03], [0x0D3B, 0x0D3C], [0x0D3E, 0x0D44], [0x0D46, 0x0D48], [0x0D4A, 0x0D4D], [0x0D57, 0x0D57], [0x0D62, 0x0D63],
+  [0x0D81, 0x0D83], [0x0DCA, 0x0DCA], [0x0DCF, 0x0DD4], [0x0DD6, 0x0DD6], [0x0DD8, 0x0DDF], [0x0DF2, 0x0DF3], [0x0E31, 0x0E31], [0x0E34, 0x0E3A],
+  [0x0E47, 0x0E4E], [0x0EB1, 0x0EB1], [0x0EB4, 0x0EBC], [0x0EC8, 0x0ECE], [0x0F18, 0x0F19], [0x0F35, 0x0F35], [0x0F37, 0x0F37], [0x0F39, 0x0F39],
+  [0x0F3E, 0x0F3F], [0x0F71, 0x0F84], [0x0F86, 0x0F87], [0x0F8D, 0x0F97], [0x0F99, 0x0FBC], [0x0FC6, 0x0FC6], [0x102B, 0x103E], [0x1056, 0x1059],
+  [0x105E, 0x1060], [0x1062, 0x1064], [0x1067, 0x106D], [0x1071, 0x1074], [0x1082, 0x108D], [0x108F, 0x108F], [0x109A, 0x109D], [0x135D, 0x135F],
+  [0x1712, 0x1715], [0x1732, 0x1734], [0x1752, 0x1753], [0x1772, 0x1773], [0x17B4, 0x17D3], [0x17DD, 0x17DD], [0x180B, 0x180D], [0x180F, 0x180F],
+  [0x1885, 0x1886], [0x18A9, 0x18A9], [0x1920, 0x192B], [0x1930, 0x193B], [0x1A17, 0x1A1B], [0x1A55, 0x1A5E], [0x1A60, 0x1A7C], [0x1A7F, 0x1A7F],
+  [0x1AB0, 0x1ADD], [0x1AE0, 0x1AEB], [0x1B00, 0x1B04], [0x1B34, 0x1B44], [0x1B6B, 0x1B73], [0x1B80, 0x1B82], [0x1BA1, 0x1BAD], [0x1BE6, 0x1BF3],
+  [0x1C24, 0x1C37], [0x1CD0, 0x1CD2], [0x1CD4, 0x1CE8], [0x1CED, 0x1CED], [0x1CF4, 0x1CF4], [0x1CF7, 0x1CF9], [0x1DC0, 0x1DFF], [0x20D0, 0x20F0],
+  [0x2CEF, 0x2CF1], [0x2D7F, 0x2D7F], [0x2DE0, 0x2DFF], [0x302A, 0x302F], [0x3099, 0x309A], [0xA66F, 0xA672], [0xA674, 0xA67D], [0xA69E, 0xA69F],
+  [0xA6F0, 0xA6F1], [0xA802, 0xA802], [0xA806, 0xA806], [0xA80B, 0xA80B], [0xA823, 0xA827], [0xA82C, 0xA82C], [0xA880, 0xA881], [0xA8B4, 0xA8C5],
+  [0xA8E0, 0xA8F1], [0xA8FF, 0xA8FF], [0xA926, 0xA92D], [0xA947, 0xA953], [0xA980, 0xA983], [0xA9B3, 0xA9C0], [0xA9E5, 0xA9E5], [0xAA29, 0xAA36],
+  [0xAA43, 0xAA43], [0xAA4C, 0xAA4D], [0xAA7B, 0xAA7D], [0xAAB0, 0xAAB0], [0xAAB2, 0xAAB4], [0xAAB7, 0xAAB8], [0xAABE, 0xAABF], [0xAAC1, 0xAAC1],
+  [0xAAEB, 0xAAEF], [0xAAF5, 0xAAF6], [0xABE3, 0xABEA], [0xABEC, 0xABED], [0xFB1E, 0xFB1E], [0xFE00, 0xFE0F], [0xFE20, 0xFE2F], [0x101FD, 0x101FD],
+  [0x102E0, 0x102E0], [0x10376, 0x1037A], [0x10A01, 0x10A03], [0x10A05, 0x10A06], [0x10A0C, 0x10A0F], [0x10A38, 0x10A3A], [0x10A3F, 0x10A3F], [0x10AE5, 0x10AE6],
+  [0x10D24, 0x10D27], [0x10D69, 0x10D6D], [0x10EAB, 0x10EAC], [0x10EFA, 0x10EFF], [0x10F46, 0x10F50], [0x10F82, 0x10F85], [0x11000, 0x11002], [0x11038, 0x11046],
+  [0x11070, 0x11070], [0x11073, 0x11074], [0x1107F, 0x11082], [0x110B0, 0x110BA], [0x110C2, 0x110C2], [0x11100, 0x11102], [0x11127, 0x11134], [0x11145, 0x11146],
+  [0x11173, 0x11173], [0x11180, 0x11182], [0x111B3, 0x111C0], [0x111C9, 0x111CC], [0x111CE, 0x111CF], [0x1122C, 0x11237], [0x1123E, 0x1123E], [0x11241, 0x11241],
+  [0x112DF, 0x112EA], [0x11300, 0x11303], [0x1133B, 0x1133C], [0x1133E, 0x11344], [0x11347, 0x11348], [0x1134B, 0x1134D], [0x11357, 0x11357], [0x11362, 0x11363],
+  [0x11366, 0x1136C], [0x11370, 0x11374], [0x113B8, 0x113C0], [0x113C2, 0x113C2], [0x113C5, 0x113C5], [0x113C7, 0x113CA], [0x113CC, 0x113D0], [0x113D2, 0x113D2],
+  [0x113E1, 0x113E2], [0x11435, 0x11446], [0x1145E, 0x1145E], [0x114B0, 0x114C3], [0x115AF, 0x115B5], [0x115B8, 0x115C0], [0x115DC, 0x115DD], [0x11630, 0x11640],
+  [0x116AB, 0x116B7], [0x1171D, 0x1172B], [0x1182C, 0x1183A], [0x11930, 0x11935], [0x11937, 0x11938], [0x1193B, 0x1193E], [0x11940, 0x11940], [0x11942, 0x11943],
+  [0x119D1, 0x119D7], [0x119DA, 0x119E0], [0x119E4, 0x119E4], [0x11A01, 0x11A0A], [0x11A33, 0x11A39], [0x11A3B, 0x11A3E], [0x11A47, 0x11A47], [0x11A51, 0x11A5B],
+  [0x11A8A, 0x11A99], [0x11B60, 0x11B67], [0x11C2F, 0x11C36], [0x11C38, 0x11C3F], [0x11C92, 0x11CA7], [0x11CA9, 0x11CB6], [0x11D31, 0x11D36], [0x11D3A, 0x11D3A],
+  [0x11D3C, 0x11D3D], [0x11D3F, 0x11D45], [0x11D47, 0x11D47], [0x11D8A, 0x11D8E], [0x11D90, 0x11D91], [0x11D93, 0x11D97], [0x11EF3, 0x11EF6], [0x11F00, 0x11F01],
+  [0x11F03, 0x11F03], [0x11F34, 0x11F3A], [0x11F3E, 0x11F42], [0x11F5A, 0x11F5A], [0x13440, 0x13440], [0x13447, 0x13455], [0x1611E, 0x1612F], [0x16AF0, 0x16AF4],
+  [0x16B30, 0x16B36], [0x16F4F, 0x16F4F], [0x16F51, 0x16F87], [0x16F8F, 0x16F92], [0x16FE4, 0x16FE4], [0x16FF0, 0x16FF1], [0x1BC9D, 0x1BC9E], [0x1CF00, 0x1CF2D],
+  [0x1CF30, 0x1CF46], [0x1D165, 0x1D169], [0x1D16D, 0x1D172], [0x1D17B, 0x1D182], [0x1D185, 0x1D18B], [0x1D1AA, 0x1D1AD], [0x1D242, 0x1D244], [0x1DA00, 0x1DA36],
+  [0x1DA3B, 0x1DA6C], [0x1DA75, 0x1DA75], [0x1DA84, 0x1DA84], [0x1DA9B, 0x1DA9F], [0x1DAA1, 0x1DAAF], [0x1E000, 0x1E006], [0x1E008, 0x1E018], [0x1E01B, 0x1E021],
+  [0x1E023, 0x1E024], [0x1E026, 0x1E02A], [0x1E08F, 0x1E08F], [0x1E130, 0x1E136], [0x1E2AE, 0x1E2AE], [0x1E2EC, 0x1E2EF], [0x1E4EC, 0x1E4EF], [0x1E5EE, 0x1E5EF],
+  [0x1E6E3, 0x1E6E3], [0x1E6E6, 0x1E6E6], [0x1E6EE, 0x1E6EF], [0x1E6F5, 0x1E6F5], [0x1E8D0, 0x1E8D6], [0x1E944, 0x1E94A], [0xE0100, 0xE01EF],
+]);
+/** Whether `c` (one code point) is a mark by the table. */
+const isMark = (c: string): boolean => inTable(c.codePointAt(0) ?? 0, FRAMES_MARK_RANGES);
+/** `s` less every mark the table lists (review 4086's F-D, the coordinator's item 5 for wave 197): what the matchers read
+ *  beside the text as drawn, so a variation selector or a combining mark inside a private string, a model or account word,
+ *  a path, a private shape or a credential shape no longer splits the run each rule reads. */
+const lessMarks = (s: string): string => { let out = ''; for (const c of s) if (!isMark(c)) out += c; return out; };
+/** A rule's pattern read on the text as drawn and on the text less its marks: either reading is a hit. */
+const readsAs = (re: RegExp, s: string): boolean => re.test(s) || re.test(lessMarks(s));
 /** How many cells the FIRST character of `content` takes, with what follows it (review 4133's F1, review 4161's F1): two
- *  when content begins with a code point that cannot begin a character by itself (the emoji selector, the keycap mark, or
- *  any combining mark: what is left when the leading decoration was a base the mark belonged to, as in the turn marker
- *  followed by the selector); two when its code point is two cells; two when the emoji selector or the keycap mark follows
- *  it, since a terminal may draw such a base in two cells though the base alone counts one; zero for an empty content.
- *  A mark before a narrow character also counts two, so such a next row refuses a row one cell short of the edge: an
- *  accepted over-refusal. */
+ *  when content begins with a code point that cannot begin a character by itself (a mark by the table, the emoji selector
+ *  and the keycap mark among them: what is left when the leading decoration was a base the mark belonged to, as in the
+ *  turn marker followed by the selector); two when its code point is two cells; two when the emoji selector or the keycap
+ *  mark follows it, since a terminal may draw such a base in two cells though the base alone counts one; zero for an empty
+ *  content. A mark before a narrow character also counts two, so such a next row refuses a row one cell short of the
+ *  edge: an accepted over-refusal. */
 function firstCells(content: string): number {
   const cps = Array.from(content);
   if (cps[0] === undefined) return 0;
-  if (cps[0] === EMOJI_SELECTOR || cps[0] === KEYCAP_MARK) return 2;
-  if (LEADING_MARK.test(cps[0])) return 2;
+  if (isMark(cps[0])) return 2;
   if (cps[1] === EMOJI_SELECTOR || cps[1] === KEYCAP_MARK) return 2;
   return frameCellWidth(cps[0]);
 }
@@ -329,13 +427,36 @@ export function runsToTheEdge(row: string, next: string, pane: FramesPane): bool
 
 /** THE FULL-WIDTH RULE, on both hosts (review 4069's F2): a token holding a `/` that runs to a full-width row's last
  *  column, or to the cell before a straddling wide character, and goes on at the start of the next row, which is not ours
- *  and not a rule row. The pane wrapped a path: refused whole. */
+ *  and not a rule row. The pane wrapped a path: refused whole.
+ *
+ *  THE FULL-ROW ARM (review 4179's U8, the coordinator's ruling for wave 197; new against main): after a row run to the
+ *  edge, a `/` ANYWHERE in the next row's content refuses too, not only in its first run, so a wrapped path whose head and
+ *  first run hold no slash (a directory name with a space: `…Ja` then `ne Doe/project`) is not kept. Its recorded cost is
+ *  0 of the 147 recorded panes the recipe meets; the same widening after ANY row (no edge asked) would refuse 77 of the
+ *  140 it reduces, which is why the edge is asked. The rule word is the same; the arm is told apart by its own case. */
 function pathOffTheEdge(a: string, b: string, pane: FramesPane): boolean {
   if (!runsToTheEdge(a, b, pane)) return false;
   // The head is read where the edge was measured: after the trailing spaces a straddle's blank cell may leave.
   const head = /\S+$/u.exec(a.replace(/\s+$/u, ''))?.[0] ?? '';
   const tail = /^\s*(\S+)/u.exec(nextRowContent(b))?.[1] ?? ''; // whitespace skipped first, as in `pathTail` (review 4168, F1)
-  return tail !== '' && (head + tail).includes('/');
+  if (tail !== '' && (head + tail).includes('/')) return true;
+  return nextRowContent(b).includes('/'); // the full-row arm
+}
+
+/** THE TOKEN-ROW ARM's edge (review 4179's U8, the coordinator's ruling for wave 197): whether a row that ends in a token
+ *  runs to the edge AS A TOKEN ROW. A replaced row is padded with spaces to its content's width, so it is measured as
+ *  drawn, SGR removed and its trailing spaces KEPT (trimmed, every token row would read short): its last code point is
+ *  not a decoration character other than the two spaces (a border closes the row), and its width in screen cells is at
+ *  least the pane's, or one cell short with the next row's first character two cells (the straddle, as `runsToTheEdge`
+ *  reads it). A row whose source had trailing spaces drawn out to the edge reads as at the edge too: that only refuses,
+ *  and the recorded cost is 0 of 147. */
+const SPACES = new Set([' ', String.fromCodePoint(0xa0)]);
+function tokenRowAtTheEdge(a: string, b: string, pane: FramesPane): boolean {
+  const cps = Array.from(a);
+  const last = cps[cps.length - 1];
+  if (last === undefined || (DECOR.has(last) && !SPACES.has(last))) return false;
+  const cells = cellsOf(cps);
+  return cells >= pane.cols || (cells === pane.cols - 1 && firstCells(nextRowContent(b)) === 2);
 }
 
 /** Each token less its opening quote (what follows a `‹`), and less its closing quote (what precedes a `›`). */
@@ -427,7 +548,7 @@ function reduceOnce(
 ): ReduceAnswer {
   // Rule 1: the shape gate.
   if (!frameTextFits(frame, pane)) return { kind: 'refused', refusal: 'not-a-frame' };
-  const oursSq = ours.map(squash).filter((o) => o !== '');
+  const oursSq = oursSquashed(ours);
   const priv = privates.filter((p) => p !== '');
   const count = { cwd: 0, path: 0, model: 0, account: 0 };
   const scanned: string[] = [];
@@ -443,7 +564,7 @@ function reduceOnce(
   // The wrap rule (box only: it needs the box's strings) and the full-width rule, on the rows as drawn, SGR removed.
   for (let i = 0; i + 1 < plains.length; i++) {
     const [a, b] = [plains[i]!, plains[i + 1]!];
-    if (priv.length > 0 && privateAcross(a, b, priv)) return { kind: 'refused', refusal: 'private-shape' };
+    if (priv.length > 0 && privateFrom(plains, i, priv)) return { kind: 'refused', refusal: 'private-shape' };
     if (!isRuleRow(b) && !rowIsOurs(b, oursSq) && pathOffTheEdge(a, b, pane)) return { kind: 'refused', refusal: 'private-shape' };
   }
   const ourRow = plains.map((p, i) => i === status || (!isRuleRow(p) && rowIsOurs(p, oursSq)));
@@ -455,7 +576,7 @@ function reduceOnce(
       // catch is never kept and never rewritten: the frame is refused (below), so a cut-short path, a model or a plan
       // cannot ride a rule row out of the box (the security review of F3).
       if (hasPrivate) { count.cwd++; return replace(plain, FRAMES_REPLACED.cwd); }
-      if (PATH_LIKE.test(plain) || MODEL_WORD.test(plain) || ACCOUNT_WORD.test(plain)) ruleLeak = true;
+      if (readsAs(PATH_LIKE, plain) || readsAs(MODEL_WORD, plain) || readsAs(ACCOUNT_WORD, plain)) ruleLeak = true;
       scanned.push(plain);
       return row;
     }
@@ -463,9 +584,9 @@ function reduceOnce(
     if (ourRow[i]) return row;
     let out: string | null = null;
     if (hasPrivate) { count.cwd++; out = replace(plain, FRAMES_REPLACED.cwd); } // rule 3
-    else if (PATH_LIKE.test(plain)) { count.path++; out = replace(plain, FRAMES_REPLACED.cwd); } // rule 4
-    else if (MODEL_WORD.test(plain)) { count.model++; out = replace(plain, FRAMES_REPLACED.model); } // rule 5
-    else if (ACCOUNT_WORD.test(plain)) { count.account++; out = replace(plain, FRAMES_REPLACED.account); } // rule 6
+    else if (readsAs(PATH_LIKE, plain)) { count.path++; out = replace(plain, FRAMES_REPLACED.cwd); } // rule 4
+    else if (readsAs(MODEL_WORD, plain)) { count.model++; out = replace(plain, FRAMES_REPLACED.model); } // rule 5
+    else if (readsAs(ACCOUNT_WORD, plain)) { count.account++; out = replace(plain, FRAMES_REPLACED.account); } // rule 6
     // Rule 8 judged the status row above (it is ours once it is exactly the capture's text). Any other row below the box
     // is read by rules 3 to 6 like any other.
     scanned.push(out ?? plain);
@@ -479,15 +600,19 @@ function reduceOnce(
   if (outPlain.some(cutToken)) return { kind: 'refused', refusal: 'private-shape' };
   for (let i = 0; i + 1 < outPlain.length; i++) {
     const [a, b] = [outPlain[i]!, outPlain[i + 1]!];
-    if (!ourRow[i + 1] && !isRuleRow(b) && pathTail(b) && endsInToken(a)) return { kind: 'refused', refusal: 'private-shape' };
+    if (ourRow[i + 1] || isRuleRow(b) || !endsInToken(a)) continue;
+    if (pathTail(b)) return { kind: 'refused', refusal: 'private-shape' };
+    // The token-row arm (review 4179's U8): after a token row run to the edge, a `/` anywhere in the next row's content.
+    if (tokenRowAtTheEdge(a, b, pane) && nextRowContent(b).includes('/')) return { kind: 'refused', refusal: 'private-shape' };
   }
-  // Rule 9: the scans over every row not ours, then the masker's over the whole frame. A hit refuses it whole.
+  // Rule 9: the scans over every row not ours, then the masker's over the whole frame. A hit refuses it whole. Each reads
+  // the text as drawn and the text less its marks (wave 197, item 5).
   const foreign = scanned.join('\n');
-  if (scan(foreign)) return { kind: 'refused', refusal: 'private-name' };
-  if (ruleLeak || PRIVATE_SHAPES.some((r) => r.test(foreign)) || holdsPrivate(foreign, priv)) return { kind: 'refused', refusal: 'private-shape' };
+  if (scan(foreign) || scan(lessMarks(foreign))) return { kind: 'refused', refusal: 'private-name' };
+  if (ruleLeak || PRIVATE_SHAPES.some((r) => readsAs(r, foreign)) || holdsPrivate(foreign, priv)) return { kind: 'refused', refusal: 'private-shape' };
   // The masker over the whole frame as drawn AND with its SGR removed, so a colour change inside a key cannot split it
-  // past the shapes (the security review of F3).
-  if (mask(text) || mask(stripFrameSgr(text))) return { kind: 'refused', refusal: 'masked' };
+  // past the shapes (the security review of F3), and less its marks, so a mark inside a key cannot either.
+  if (mask(text) || mask(stripFrameSgr(text)) || mask(lessMarks(stripFrameSgr(text)))) return { kind: 'refused', refusal: 'masked' };
   return { kind: 'reduced', text, replaced: count };
 }
 
@@ -531,11 +656,27 @@ export function reducerFingerprint(): string {
     'x'.repeat(35) + ' /pr\n' + String.fromCodePoint(0x23FA) + String.fromCodePoint(0xFE0F) + 'ject rest',
     // Review 4168's F1: a full row, then a next row that begins with the ideographic space, then the path's tail.
     'x'.repeat(36) + ' /pr\n' + String.fromCodePoint(0x3000) + 'ject rest',
+    // Wave 197, one probe per changed rule, none asking the engine: review 4179's U6 (a token row, then U+3000, then the
+    // path's tail, which reaches the path-tail reader's whitespace skip); U8's token-row arm (a model row whose trailing
+    // spaces reach the edge, then a slash after the first run) and its full-row arm (a full row of words, then the same);
+    // the mark table (a straddle whose next row is the turn marker then a mark new in 17.0); the ASCII word classes (a
+    // short name beside a non-ASCII letter); the marks-removed reading (a model word with a combining mark inside); and a
+    // private string split across three rows.
+    '‹model›\n' + String.fromCodePoint(0x3000) + 'x/y tail', 'Haiku 9' + ' '.repeat(33) + '\nne Doe/pro rest', 'x'.repeat(38) + 'Ja\nne Doe/pro rest',
+    'x'.repeat(35) + ' /pr\n' + String.fromCodePoint(0x23FA) + String.fromCodePoint(0x1ACF) + 'ject rest',
+    'seen bo' + String.fromCodePoint(0xE9) + ' here and more',
+    'Hai' + String.fromCodePoint(0x0301) + 'ku 9 row', 'a /sec\nre\nt/x b',
+    // Wave 197's fix round 1 (review 4217), one probe per changed rule, none asking the engine: R1 (a box string wrapped at
+    // its space, the space gone); R3 (a short box string never joined across an empty middle row); R4 (the private-string
+    // reader's marks-removed half: a short box string with a mark inside it in the text; and the masker's marks-removed
+    // reading: a credential shape with a mark inside). The committed matcher's marks-removed reading is held by cases
+    // only: this table's scan answers no.
+    'seen Ann\nLee here', 'a b\n\no c', 'seen b' + String.fromCodePoint(0x0301) + 'o here and more', 'key sk-abcd' + String.fromCodePoint(0x0301) + 'efgh',
   ];
   // Each probe drawn as a box draws it: between two rules, the capture's status row under the lower one (rule 8). And the
   // status rule's own probes: no rule, another status text, the text twice.
   const rule = '─'.repeat(12);
   const boxed = (p: string): string => `${rule}\n${p}\n${rule}\n  ${FRAMES_STATUS_TEXT}\n`;
   const status = ['plain row\n', `${rule}\n  other status\n`, `${rule}\n  ${FRAMES_STATUS_TEXT}\n  ${FRAMES_STATUS_TEXT}\n`];
-  return JSON.stringify([...probes.map(boxed), ...status].map((f) => reduceFrame(f, pane, ['ours text here'], ['/secret/x', 'bo'], none)));
+  return JSON.stringify([...probes.map(boxed), ...status].map((f) => reduceFrame(f, pane, ['ours text here'], ['/secret/x', 'bo', 'Ann Lee'], none)));
 }
