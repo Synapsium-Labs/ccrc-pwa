@@ -823,6 +823,7 @@ describe('ccrc expose artifacts: the arm', () => {
 // would alter, as the server turns the tier off at boot (D-9161), naming the key and never the value. The bash shape list is
 // pinned to the server's: by id against CREDENTIAL_MASKS, and by answer against matchesShape. Every shaped label is built per
 // run. Appended, with its own imports.
+import { randomInt } from 'node:crypto';
 import { CREDENTIAL_MASKS } from '../../shared/api.js';
 import { isExactHttpsOrigin } from '../../shared/httpsOrigin.js';
 import { matchesShape, shapeMatchers } from '../src/accounts/shapes.js';
@@ -900,11 +901,11 @@ describe('ccrc expose artifacts: a name the answer mask would alter (X5-FU item 
     // Generated labels over the grammar's alphabet: `sk-` and a run of 6 to 11 token characters at a random spot (where a
     // letter or digit before it means no shape), the same after a `-` (a boundary, so mostly a shape), a bare `sk-`, and none.
     const alphabet = 'abcdefghijklmnopqrstuvwxyz0123456789-';
-    const run = (len: number): string => Array.from(randomBytes(len), (b: number): string => alphabet[b % alphabet.length]!).join('');
+    const run = (len: number): string => Array.from({ length: len }, (): string => alphabet[randomInt(alphabet.length)]!).join('');
     for (let i = 0; i < 400; i++) {
-      let s = run(1 + (randomBytes(1)[0]! % 20));
-      const at = randomBytes(1)[0]! % (s.length + 1);
-      const shaped = 'sk-' + run(6 + (randomBytes(1)[0]! % 6));
+      let s = run(1 + randomInt(20));
+      const at = randomInt(s.length + 1);
+      const shaped = 'sk-' + run(6 + randomInt(6));
       if (i % 4 === 1) s = s.slice(0, at) + shaped + s.slice(at);
       if (i % 4 === 2) s = `x-${shaped}${s}`;
       if (i % 4 === 3) s = s.slice(0, at) + 'sk-' + s.slice(at);

@@ -1350,7 +1350,7 @@ Cases (`ccrc-expose-artifacts.test.ts`, under `ccrc expose artifacts: a name the
 - `doctor: a shaped artifact label FAILs, naming the key and never the value`.
 - The server's: `config: a grammar refusal of a shaped artifact or content origin names its key only`, `… a site refusal of a shaped name withholds the value and the site rule's sentence`, `… a clean value beside a shaped console host is quoted, and the site sentence that would name the host is withheld`, `… every refusal that quotes a value names a shaped one by its key only` (one row per reachable refusal), `… a shaped console origin the grammar refuses is named by its key only`, `CONTROL: an ordinary value is quoted as before, and with no mask handed in nothing is withheld`, `… the boot warning of a shaped name a site refusal turns off never holds the label`. D-9161's earlier case on the site rule's order is retitled `config: the site rule is decided before the mask, so a name both refuse is the site rule's refusal, not the mask's`.
 
-Every shaped label is built per run (`sk-` and random hex), so no credential-shaped literal sits in the tree.
+Every shaped label is built per run (`sk-` and random hex), so no credential-shaped literal sits in the tree. The corpus draws its lengths, positions and characters with `randomInt`: the first push drew them as a random byte modulo the range, which CodeQL flagged as biased (three high alerts on the pull request's first run; harmless in a test corpus, fixed all the same).
 
 | Row | Mutation (on the final code, made and reverted with the edit tools) | Red |
 |---|---|---|
