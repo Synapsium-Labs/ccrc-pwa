@@ -236,7 +236,21 @@ describe('the spend arm of runOperatorModelBootPass', () => {
     const r = pass(w, citations(w));
     expect(r.counts.spent).toBe(0);
     expect(stateOf(w, id)).toBe('settled');
-    expect(r.lines).toEqual([`boot pass: citations with no message row: 1 (request:message, the first 5: ${req}:${id + 50}); nothing moved for them`]);
+    expect(r.lines).toEqual([`boot pass: citations with no message row: 1 (request:message: ${req}:${id + 50}); nothing moved for them`]);
+  });
+
+  // The line's words are true for every count (#3647's follow-up): up to five pairs it lists them all and says no "first";
+  // past five it lists the first five and says so. None listed never happens: the line is not written then.
+  it.each([
+    [3, 'fewer than five: all listed, no "first"'],
+    [5, 'exactly five: all listed, no "first"'],
+    [6, 'more than five: the first five, and it says so'],
+  ])('citations with no message row, %i of them (%s)', (n) => {
+    const w = world();
+    const req = cite(w, Array.from({ length: n }, (_, i) => 101 + i));
+    const r = pass(w, citations(w));
+    const pairs = Array.from({ length: Math.min(n, 5) }, (_, i) => `${req}:${101 + i}`).join(', ');
+    expect(r.lines).toEqual([`boot pass: citations with no message row: ${n} (request:message${n > 5 ? ', the first 5' : ''}: ${pairs}); nothing moved for them`]);
   });
 
   it('citations with no message row: one line per boot, the count of all, the first five pairs by request then message, ids only', () => {
@@ -331,7 +345,7 @@ describe('the spend arm of runOperatorModelBootPass', () => {
       const req = cite(w, [3]);
       const again = pass(w, citations(w, { kind: 'floor', id: 4 }));
       expect(again.counts.spent).toBe(0);
-      expect(again.lines).toEqual([`boot pass: citations with no message row: 1 (request:message, the first 5: ${req}:3); nothing moved for them`]);
+      expect(again.lines).toEqual([`boot pass: citations with no message row: 1 (request:message: ${req}:3); nothing moved for them`]);
       expect(lines(w)).toHaveLength(2);
     });
 
