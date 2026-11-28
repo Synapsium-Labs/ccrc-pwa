@@ -57,7 +57,10 @@ function FactRow({ ctx, account, hold, onHoldCleared }: {
   // the lane when the clear landed, or when no hold stood (review 4056 F7). It holds the held-at of the hold that answer ended, so
   // it is set only by `cleared` or `gone`, never by a refusal, which ended nothing (review 4065 F2), and a hold that returns with
   // another held-at is a new hold, with its own live Clear and none of the old answer (review 4065 F1). The control is keyed by
-  // that held-at too.
+  // that held-at too. It is also set when the Clear is SENT (W2 Settings, the carried ticket
+  // `clear-answer-after-its-control-unmounted`): a re-read that another row's Clear triggers, and that no longer names this lane,
+  // then keeps the same control mounted, so its answer lands in it and is drawn, never a fresh Clear with no hold line. A refusal
+  // drops the latch again, as before.
   const [latch, setLatch] = useState<number | null>(null);
   const heldAt = hold?.heldAt ?? null;
   useEffect(() => { if (heldAt !== null && latch !== null && heldAt !== latch) setLatch(null); }, [heldAt, latch]);
@@ -86,8 +89,8 @@ function FactRow({ ctx, account, hold, onHoldCleared }: {
         <div className="ovs-actions" data-account-hold={account.id}>
           {hold !== null && <p className="ovs-note">{holdLineOf(hold)}</p>}
           <AccountHoldClear
-            key={shownAt} lane={account.id}
-            onAnswered={(outcome) => { if (outcome !== 'refused') setLatch(shownAt); onHoldCleared(); }}
+            key={shownAt} lane={account.id} onSent={() => setLatch(shownAt)}
+            onAnswered={(outcome) => { setLatch(outcome === 'refused' ? null : shownAt); onHoldCleared(); }}
           />
         </div>
       )}

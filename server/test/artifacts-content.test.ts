@@ -1595,3 +1595,114 @@ describe('content: hosts, logging and the socket', () => {
     await othersServed(r2, one2.token, two2.token);
   });
 });
+
+// X5-FU item 2 (x5-fu-range-charge): a file at most DOCS_LANE_LARGE_RAW is read whole (one show) and the asked range cut from it, so the
+// hour's budget is charged for the bytes that read takes, the file's size, once per read, not for the range written. Appended, with
+// its own import.
+import { artifactCharge } from '../src/artifacts/policy.js';
+
+describe('content: what a read of a small file is charged (X5-FU item 2)', () => {
+  const SIZE = 1000;
+
+  it('content: repeated small ranges of a small file exhaust the budget as whole-file reads would', async () => {
+    const r = await rig();
+    const ranged = mint(r, { 's.bin': SIZE });
+    const whole = mint(r, { 's.bin': SIZE });
+    // Each capability has room left for exactly three reads of the file.
+    for (const c of [ranged, whole]) expect(r.store.charge(c.id, ARTIFACT_HOURLY_BYTES - 3 * SIZE)).toBe('ok');
+    for (let i = 0; i < 3; i++) {
+      const a = await getFile(r, ranged.token, 's.bin', { range: `bytes=${i}-${i}` }).promise;
+      expect(a.status, `ranged read ${i}`).toBe(206);
+      expect(a.body).toEqual(bytesOf('x/s.bin', i, 1));
+      const b = await getFile(r, whole.token, 's.bin').promise;
+      expect(b.status, `whole read ${i}`).toBe(200);
+      expect(r.store.lookup(ranged.token)!.servedThisHour, `after read ${i}, one byte asked is charged as the whole file`)
+        .toBe(r.store.lookup(whole.token)!.servedThisHour);
+    }
+    expect(r.store.lookup(ranged.token)!.servedThisHour).toBe(ARTIFACT_HOURLY_BYTES);
+    expect(budgetSpent(r.store.lookup(ranged.token)!, Date.now())).toBe(true);
+    const fourth = await getFile(r, ranged.token, 's.bin', { range: 'bytes=3-3' }).promise;
+    expect(fourth.status, 'the fourth ranged read meets the spent hour, as the fourth whole read does').toBe(429);
+    expect(fourth.body.toString()).toBe('Too many requests.');
+    expect((await getFile(r, whole.token, 's.bin').promise).status).toBe(429);
+  });
+
+  it('content: a small ranged read the hour\'s remainder cannot cover is 429 before any byte, and spends the hour', async () => {
+    const r = await rig();
+    const { token, id } = mint(r, { 's.bin': SIZE, 'a.js': 10 });
+    // One byte less than the file is left: the one byte asked fits, the read it takes does not.
+    expect(r.store.charge(id, ARTIFACT_HOURLY_BYTES - SIZE + 1)).toBe('ok');
+    const got = await getFile(r, token, 's.bin', { range: 'bytes=0-0' }).promise;
+    expect(got.status).toBe(429);
+    expect(got.body.toString()).toBe('Too many requests.');
+    expect(await until(() => r.store.boxInflight() === 0), 'its slot is released').toBe(true);
+    // The refusal spends the rest of the hour, so the read it took is the last: the next request, even one that would fit in the
+    // old remainder, is refused at admission and reads nothing.
+    expect(r.store.lookup(token)!.servedThisHour).toBe(ARTIFACT_HOURLY_BYTES);
+    const reads = r.bytes.reads.length;
+    for (const rel of ['s.bin', 'a.js']) {
+      expect((await getFile(r, token, rel).promise).status, rel).toBe(429);
+    }
+    expect(r.bytes.reads.length, 'no read after the refusal').toBe(reads);
+  });
+
+  it('content: a framed read the hour\'s remainder cannot cover spends the hour, so the next request reads nothing', async () => {
+    const r = await rig();
+    const { token, id } = mint(r, { 'three.bin': 3 * FRAME });
+    expect(r.store.charge(id, ARTIFACT_HOURLY_BYTES - FRAME + 1)).toBe('ok');
+    const got = await getFile(r, token, 'three.bin').promise;
+    expect(got.status, 'the first frame does not fit: 429 before any byte').toBe(429);
+    expect(await until(() => r.store.boxInflight() === 0)).toBe(true);
+    expect(r.store.lookup(token)!.servedThisHour).toBe(ARTIFACT_HOURLY_BYTES);
+    const reads = r.bytes.reads.length;
+    const frames = r.bytes.frameReads;
+    for (let i = 0; i < 3; i++) expect((await getFile(r, token, 'three.bin').promise).status).toBe(429);
+    expect(r.bytes.reads.length, 'no read after the refusal').toBe(reads);
+    expect(r.bytes.frameReads, 'and no frame').toBe(frames);
+  });
+
+  it('content: a whole-file read of a small file charges its size once, not twice', async () => {
+    const r = await rig();
+    const { token } = mint(r, { 's.bin': SIZE, 'a.js': 10 });
+    const got = await getFile(r, token, 's.bin').promise;
+    expect(got.status).toBe(200);
+    expect(got.body).toEqual(bytesOf('x/s.bin', 0, SIZE));
+    expect(r.store.lookup(token)!.servedThisHour).toBe(SIZE);
+    // A port that hands the one show's bytes to the sink in two parts: still the one read, charged once.
+    r.bytes.readScript = async (c, sink) => {
+      const len = c.range.end - c.range.start + 1;
+      const half = Math.floor(len / 2);
+      r.bytes.activity++;
+      if (await sink(bytesOf(c.key, c.range.start, half)) === 'stop') return { ok: true };
+      await sink(bytesOf(c.key, c.range.start + half, len - half));
+      return { ok: true };
+    };
+    const parts = await getFile(r, token, 's.bin').promise;
+    expect(parts.status).toBe(200);
+    expect(parts.body).toEqual(bytesOf('x/s.bin', 0, SIZE));
+    expect(r.store.lookup(token)!.servedThisHour, 'the second read is charged its size once').toBe(2 * SIZE);
+    // A port whose first part is empty: the read is still charged once, on its first part, not again on the next.
+    r.bytes.readScript = async (c, sink) => {
+      r.bytes.activity++;
+      if (await sink(Buffer.alloc(0)) === 'stop') return { ok: true };
+      await sink(bytesOf(c.key, c.range.start, c.range.end - c.range.start + 1));
+      return { ok: true };
+    };
+    const empty = await getFile(r, token, 's.bin').promise;
+    expect(empty.status).toBe(200);
+    expect(empty.body).toEqual(bytesOf('x/s.bin', 0, SIZE));
+    expect(r.store.lookup(token)!.servedThisHour, 'the third read is charged its size once').toBe(3 * SIZE);
+  });
+
+  it('artifactCharge: a framed file is charged frame by frame; a small file its size once, on the first frame of its response', () => {
+    const small = { size: SIZE };
+    const framed = { size: 3 * FRAME };
+    expect(artifactCharge(small, 1, false)).toBe(SIZE);
+    expect(artifactCharge(small, SIZE, false)).toBe(SIZE);
+    expect(artifactCharge(small, 0, false), 'an empty first part is charged the read').toBe(SIZE);
+    expect(artifactCharge(small, 400, true)).toBe(0);
+    expect(artifactCharge({ size: MIB }, 7, false), 'at the large threshold a file is still read whole').toBe(MIB);
+    expect(artifactCharge(framed, FRAME, false)).toBe(FRAME);
+    expect(artifactCharge(framed, 10, true)).toBe(10);
+  });
+});

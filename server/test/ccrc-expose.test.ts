@@ -437,6 +437,29 @@ describe('ccrc expose: the shadow refusal', () => {
     }
   });
 
+  // Wave 193 C6: after CCRC_PORT moved from the port `on` wrote its origin for, `ccrc auth off` refuses that origin, so
+  // "run ccrc auth off first" would send the operator to a refusal; the hint is off's own way on there, the port back.
+  it('wave 193: when CCRC_PORT has moved from the port the lines were written for, the hint is the port back, then off', () => {
+    const marker = "# ccrc auth on: sign-in at http://localhost:7788 ('ccrc auth off' removes these lines)\n";
+    const lines = 'CCRC_AUTH=on\nCCRC_RP_ID=localhost\nCCRC_ORIGIN=http://localhost:7788\nCCRC_COOKIE_INSECURE=on\n';
+    const moved = box('ccrc-expose-shadow-moved-');
+    mkdirSync(join(moved, '.ccrc'), { recursive: true });
+    writeFileSync(envFilePath(moved), `CCRC_PORT=7799\n${marker}${lines}`);
+    const r = runPiped(moved, ['expose', 'duckdns'], `${SUB}\n${TOKEN}\n`);
+    expect(r.code).toBe(1);
+    expect(r.stderr).toContain('These are the lines ccrc auth on writes, for port 7788, and CCRC_PORT is now 7799: set it back to 7788, '
+      + 'run ccrc auth off, which removes them and restarts the server, then change the port and re-run this.');
+    expect(r.stderr).not.toContain('run ccrc auth off first');
+    expect(existsSync(exposurePath(moved))).toBe(false);
+    // The same port, spelled with a leading zero, has not moved: the plain hint.
+    const same = box('ccrc-expose-shadow-samepad-');
+    mkdirSync(join(same, '.ccrc'), { recursive: true });
+    writeFileSync(envFilePath(same), `CCRC_PORT=07788\n${marker}${lines}`);
+    const s = runPiped(same, ['expose', 'duckdns'], `${SUB}\n${TOKEN}\n`);
+    expect(s.code).toBe(1);
+    expect(s.stderr).toContain('These are the lines ccrc auth on writes: run ccrc auth off first');
+  });
+
   it('a bare KEY= line in ccrc.env is NOT a shadow — empty is unset, the || rule', async () => {
     // `config.ts` reads both keys with `||`, so a bare `CCRC_ORIGIN=` line is
     // an unset key to the server — and must be one to this refusal too, or the

@@ -465,7 +465,7 @@ describe('Settings › Overlord, only under overlord-v1', () => {
     expect(row('overlord')).toBeNull();
   });
 
-  it('with the word the index draws the Overlord last, with its status, and its page draws the six cards with scope and purpose', async () => {
+  it('with the word the index draws the Overlord last, with its status, and its page draws its cards with scope and purpose', async () => {
     pendingReads();
     word(true);
     renderSettings(null);
@@ -478,7 +478,10 @@ describe('Settings › Overlord, only under overlord-v1', () => {
     expect(document.title).toBe('Overlord · Settings · ccrc');
     const titles = screen.getAllByRole('heading', { level: 3 }).map((h) => h.textContent);
     const C = SETTINGS_CARDS.overlord;
-    expect(titles).toEqual([C.designation.title, C.model.title, C.accountSet.title, C.backstop.title, C.retention.title, C.accounts.title]);
+    // W2 Settings: with their reads still in flight, the decision model draws its host card (the read's loading line) and not yet
+    // its rows, and the private-name list draws its card; the rows card's title is held by `settings-decision-model`.
+    expect(titles).toEqual([C.designation.title, C.model.title, C.accountSet.title, C.backstop.title, C.retention.title, C.accounts.title,
+      C.decisionHost.title, C.privateNames.title]);
     for (const h of screen.getAllByRole('heading', { level: 3 })) {
       const head = h.parentElement!;
       const scope = [...head.children].find((el) => el !== h && el.tagName === 'P');

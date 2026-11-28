@@ -14,6 +14,7 @@ const OM = 'server/src/operatorModel/store.ts';
 const LS = 'server/src/coord/overlordLadderStore.ts';
 const RS = 'server/src/coord/overlordReadinessStore.ts';
 const RQ = 'server/src/coord/overlordRequestStore.ts';
+const AS = 'server/src/coord/overlordActsStore.ts';
 const INBOX = 'server/src/coord/overlordInboxRoutes.ts#registerOverlordInboxRoutes';
 const STAMP_ACK = 'server/src/coord/overlordSequenceStore.ts#stampInboxAcknowledgement';
 const STAMP_MESSAGE = 'server/src/coord/overlordSequenceStore.ts#stampMessageLine';
@@ -94,6 +95,13 @@ export const STAMPED_TABLES: Readonly<Record<SequenceKind, StampedTable>> = {
       [`${RQ}#setParentClockInTx`]: 'a parent\'s follow-up clock only, a bookkeeping write that changes no state word (F2)',
     },
   },
+  act: {
+    table: 'overlord_acts',
+    // The journal's two applies (act rows A): the insert stamps the state it writes, and the settle the state it reaches. Every
+    // write of the table is a state change, so none stamps nothing; PR B's column writers join `nothing` with their reasons.
+    stampers: [`${AS}#applySettle`, `${AS}#applyWrite`],
+    nothing: {},
+  },
 };
 
 /** The operator message's after-commit path (call 1218, slug `message-lines-stamp-after-the-move`; review 3646 F8): the one helper
@@ -111,9 +119,9 @@ export const MESSAGE_MOVERS: Readonly<Record<string, { readonly calls: number; r
   'server/src/coord/overlordInboxRoutes.ts#registerOverlordInboxRoutes': { calls: 1, how: 'acknowledge: settles, then stamps through recordInboxAcknowledgement and answers 503 when the line is refused (PR A)' },
 };
 /** Every call of the combinator, in server/src, counted per symbol (`server.ts#buildServer` composes the hook's pick-up port; the
- *  boot pass's three are its unsettle, queue and deliver arms). */
+ *  boot pass's four are its spend, unsettle, queue and deliver arms; the spend arm is W2 request record A's). */
 const COMBINATOR_CALLERS: Readonly<Record<string, number>> = {
-  'server/src/operatorModel/bootPass.ts#runOperatorModelBootPass': 3, 'server/src/operatorModel/nudgeLane.ts#deliverWhileQueued': 1,
+  'server/src/operatorModel/bootPass.ts#runOperatorModelBootPass': 4, 'server/src/operatorModel/nudgeLane.ts#deliverWhileQueued': 1,
   'server/src/operatorModel/promptRecord.ts#recordOperatorPrompt': 1, 'server/src/server.ts#buildServer': 1,
 };
 /** A count record as the list `callersOf` answers: each `file#symbol` once per call. */
@@ -122,7 +130,7 @@ const times = (counted: Readonly<Record<string, number>>): string[] =>
 
 /** The helpers a stamper calls, each of which calls the writer and checks its answer. */
 const TX_STAMP_HELPERS = [`${CS}#stampGeneration`, `${DS}#stampLines`, `${LS}#stampLadderLine`, `${RS}#stampReadinessLine`,
-  `${RQ}#stampRequestLine`] as const;
+  `${RQ}#stampRequestLine`, `${AS}#stampActLine`] as const;
 const AFTER_COMMIT = Object.values(STAMPED_TABLES).flatMap((row) => row.afterCommit === undefined ? [] : [row.afterCommit]);
 const STAMP_HELPERS = [...TX_STAMP_HELPERS, STAMP_MESSAGE];
 

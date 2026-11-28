@@ -30,13 +30,25 @@ import { useFleetStore } from '../../stores/fleet';
 
 const CARDS = SETTINGS_CARDS.overlord;
 
+/** The act a card hands the section with its `step-up-required`, for the confirm to send once more (review 4139 F1, ruled call
+ *  1876): `act` names it, so the mark is per act, and the retry's answer is worded for that act. A card makes it at its own level,
+ *  outside every send, so the closure the section keeps while the step shows can reach no value a send read (review 4167 F1, held
+ *  by `settings-retry-census.test.ts`). */
+export interface StepRetry { readonly act: string; readonly send: () => void }
+
 /** What every card is handed by the section: the one step-up, which card asked for it last, and the designation's gate. */
 export interface SectionCtx {
   readonly stepUp: StepUp;
   readonly gate: OverlordGate;
   /** The section's one `ConfirmItsYou`, drawn by the card whose act was refused `step-up-required`, or null in every other. */
   readonly confirmFor: (card: string) => ReactNode;
-  readonly ask: (card: string | null) => void;
+  /** Shows the step in `card` (null hides it). With `retry`, the confirm sends that act once more by itself: that send is the
+   *  retry, and a press by the operator is always a first send. Any other `ask` drops a retry not yet sent. */
+  readonly ask: (card: string | null, retry?: StepRetry) => void;
+  /** Whether `card` is held: its step is showing, or the confirm has landed and the retry it handed is not yet sent (review 4191
+   *  F1). A card that hands a retry holds itself whole while it is, every input and every act (review 4167 F2, F3, ruled call
+   *  1930), so nothing typed or pressed meets the retry; another card's answer frees it. */
+  readonly held: (card: string) => boolean;
 }
 
 /** A Settings door's refusal in words, for a card's act: the store's answer decides how `not-found` reads (plan question 3). */
@@ -56,11 +68,13 @@ export function useCardDoor(ctx: SectionCtx, card: string, refuse: (err: unknown
   // stood when the act was pressed (a `not-found` after the store went unmeasured is not "no designation row").
   const refuseNow = useRef(refuse);
   refuseNow.current = refuse;
-  /** `after` runs after every answer, a refusal and a step-up included, and is told which: a card keeps the operator's picks
-   *  unless the door answered, so pressing the act again after the step sends the same act. */
+  /** `after` runs after every answer, a refusal and a step-up included, and is told which, with the refusal's error: a card keeps
+   *  the operator's picks unless the door answered, so pressing the act again after the step sends the same act. `retry`, when
+   *  given, is handed to the section with a `step-up-required`, and the confirm sends it (`SectionCtx.ask`). */
   const run = async (
     call: () => Promise<unknown>, words: (answer: unknown) => readonly string[],
-    after: (outcome: 'done' | 'step-up' | 'refused') => Promise<unknown> | void,
+    after: (outcome: 'done' | 'step-up' | 'refused', err?: unknown) => Promise<unknown> | void,
+    retry?: StepRetry,
   ): Promise<void> => {
     if (inFlight.current) return;
     inFlight.current = true;
@@ -68,17 +82,19 @@ export function useCardDoor(ctx: SectionCtx, card: string, refuse: (err: unknown
     setSaid([]);
     setRefusal(null);
     let outcome: 'done' | 'step-up' | 'refused' = 'refused';
+    let failure: unknown;
     try {
       let answer: unknown;
       outcome = await ctx.stepUp.runAct(async () => { answer = await call(); });
-      if (outcome === 'step-up') ctx.ask(card);
+      if (outcome === 'step-up') ctx.ask(card, retry);
       else if (mounted.current) { ctx.ask(null); setSaid(words(answer)); }
     } catch (err) {
+      failure = err;
       if (!(err instanceof ApiError && err.status === 401) && mounted.current) setRefusal(refuseNow.current(err));
     } finally {
       inFlight.current = false;
       if (mounted.current) setBusy(false);
-      await after(outcome);
+      await after(outcome, failure);
     }
   };
   return { busy, said, refusal, run };
@@ -244,44 +260,88 @@ export function AccountSetCard({ ctx }: { readonly ctx: SectionCtx }): ReactNode
 // ── A card's own read ──
 
 /** One card's own read, kept as a `ReadState` through the store's L1 rule (`nextReadState`), so the card's absent, unread and
- *  stale states are the same five the Overlord store keeps. `parse` is the answer's one reader. */
-export function useCardRead<T>(call: () => Promise<unknown>, parse: (body: unknown) => T | null) {
+ *  stale states are the same five the Overlord store keeps. `parse` is the answer's one reader. With `detailOf`, an answer
+ *  `parse` refuses keeps the reader's own words (`unreadable`, null after any other outcome): a card says what a Read again
+ *  cannot cure (review 4139 F4). */
+export function useCardRead<T>(call: () => Promise<unknown>, parse: (body: unknown) => T | null, detailOf?: (body: unknown) => string | null) {
   const [read, setRead] = useState<ReadState<T>>({ state: 'loading' });
+  const [unreadable, setUnreadable] = useState<string | null>(null);
   const seq = useRef(0);
-  const outcomeOf = (body: unknown): ReadOutcome<T> => {
-    if (typeof body === 'object' && body !== null && (body as { absent?: unknown }).absent === true) return { kind: 'absent' };
+  const outcomeOf = (body: unknown): { o: ReadOutcome<T>; why: string | null } => {
+    if (typeof body === 'object' && body !== null && (body as { absent?: unknown }).absent === true) return { o: { kind: 'absent' }, why: null };
     const v = parse(body);
-    return v === null ? { kind: 'failed', error: 'unreadable answer' } : { kind: 'value', value: v };
+    if (v !== null) return { o: { kind: 'value', value: v }, why: null };
+    return { o: { kind: 'failed', error: 'unreadable answer' }, why: detailOf === undefined ? null : (detailOf(body) ?? 'unreadable answer') };
+  };
+  const keep = (r: { o: ReadOutcome<T>; why: string | null }): void => {
+    setUnreadable(r.why);
+    setRead((prev) => nextReadState(prev, r.o, Date.now()));
   };
   const reread = async (): Promise<void> => {
     const mine = ++seq.current;
-    const outcome = await call().then(outcomeOf, (err: unknown): ReadOutcome<T> => ({
-      kind: 'failed', error: err instanceof ApiError ? `HTTP ${err.status}` : err instanceof Error ? err.message : String(err),
+    const r = await call().then(outcomeOf, (err: unknown) => ({
+      o: { kind: 'failed', error: err instanceof ApiError ? `HTTP ${err.status}` : err instanceof Error ? err.message : String(err) } as ReadOutcome<T>,
+      why: null,
     }));
-    if (mine === seq.current) setRead((prev) => nextReadState(prev, outcome, Date.now()));
+    if (mine === seq.current) keep(r);
   };
   /** A door's answer that carries the read's own view: kept as the read's answer, as a fresh read would be. */
-  const put = (body: unknown): void => { const o = outcomeOf(body); seq.current++; setRead((prev) => nextReadState(prev, o, Date.now())); };
+  const put = (body: unknown): void => { const r = outcomeOf(body); seq.current++; keep(r); };
+  /** A door's answer that carries part of the view (a row's side, plan SQ4): installed over the value held, as an answer. A read
+   *  with no value yet is left as it is; the card reads again after every answer anyway. */
+  const patch = (f: (value: T) => T): void => {
+    seq.current++;
+    setRead((prev) => (prev.state === 'answered' || prev.state === 'stale'
+      ? nextReadState(prev, { kind: 'value', value: f(prev.value) }, Date.now()) : prev));
+  };
   // Once, on mount: the card's one read. A door's answer that carries the view goes through `put`, and Read again through `reread`.
   useEffect(() => { void reread(); }, []);
-  return { read, reread, put };
+  return { read, reread, put, patch, unreadable };
 }
 
-/** A read that failed, or is still loading, with its Read again. */
-function ReadLine({ read, unread, card, reread }: {
-  readonly read: ReadState<unknown>; readonly unread: (error: string) => string; readonly card: string; readonly reread: () => void;
+/** A note and the controls that act on it, in one row: a read's failure and its Read again, and (W2 Settings) a held row and its
+ *  Resume, an offered line and its Approve. `data` names the row for its tests. */
+export function NoteRow({ note, status = false, data, children }: {
+  readonly note: string; readonly status?: boolean; readonly data: Readonly<Record<`data-${string}`, string>>; readonly children?: ReactNode;
 }): ReactNode {
-  if (read.state === 'loading') return <p className="ovs-note" role="status">{W.loading}</p>;
-  if (read.state !== 'unmeasured' && read.state !== 'stale') return null;
   return (
-    <div className="ovs-actions" data-settings-unread={card}>
-      <p className="ovs-note" role="status">{read.state === 'stale' ? `${unread(read.error)} ${W.stale(read.at)}` : unread(read.error)}</p>
-      <Button variant="ghost" size="fit" onClick={reread}>{W.readAgain}</Button>
+    <div className="ovs-actions" {...data}>
+      <p className="ovs-note" {...(status ? { role: 'status' } : {})}>{note}</p>
+      {children}
     </div>
   );
 }
 
-const valueOf = <T,>(r: ReadState<T>): T | null => (r.state === 'answered' || r.state === 'stale' ? r.value : null);
+/** One labelled field of a card: its label above its control. */
+export function CardField({ label, children }: { readonly label: string; readonly children: ReactNode }): ReactNode {
+  return (
+    <label className="ovs-field">
+      <span>{label}</span>
+      {children}
+    </label>
+  );
+}
+
+/** A read that failed, or is still loading, with its Read again. Shared by every card with its own read (the W2 Settings cards
+ *  included). `unreadable`, when given, is the sentence for an answer this console cannot read: it is drawn with Reload in place
+ *  of a Read again that cannot cure it (review 4139 F4). */
+export function ReadLine({ read, unread, card, reread, unreadable = null }: {
+  readonly read: ReadState<unknown>; readonly unread: (error: string) => string; readonly card: string; readonly reread: () => void;
+  readonly unreadable?: { readonly sentence: string; readonly reload: string } | null;
+}): ReactNode {
+  if (read.state === 'loading') return <p className="ovs-note" role="status">{W.loading}</p>;
+  if (read.state !== 'unmeasured' && read.state !== 'stale') return null;
+  const said = unreadable === null ? unread(read.error) : unreadable.sentence;
+  return (
+    <NoteRow note={read.state === 'stale' ? `${said} ${W.stale(read.at)}` : said} status data={{ 'data-settings-unread': card }}>
+      {unreadable === null
+        ? <Button variant="ghost" size="fit" onClick={reread}>{W.readAgain}</Button>
+        : <Button variant="ghost" size="fit" data-settings-control={`${card}-reload`} onClick={() => window.location.reload()}>{unreadable.reload}</Button>}
+    </NoteRow>
+  );
+}
+
+export const valueOf = <T,>(r: ReadState<T>): T | null => (r.state === 'answered' || r.state === 'stale' ? r.value : null);
 
 // ── The renewal backstop ──
 

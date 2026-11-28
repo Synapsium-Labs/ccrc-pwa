@@ -2457,9 +2457,10 @@ _check_name() {
 _DR_ARTIFACT_FIXED='This host serves ccrc artifacts by private link only.'
 _check_artifacts() {
   if [ -z "${CCRC_EXPOSURE_FILE:-}" ] || [ -z "${CCRC_CADDYFILE:-}" ] || [ -z "${BOX_ENV_FILE:-}" ] \
-     || ! declare -F _box_env_value >/dev/null 2>&1 || ! declare -F _art_config >/dev/null 2>&1; then
+     || ! declare -F _box_env_value >/dev/null 2>&1 || ! declare -F _art_config >/dev/null 2>&1 \
+     || ! declare -F _exp_art_cport >/dev/null 2>&1 || [ -z "${_ART_PORT_DEFAULT:-}" ]; then
     _dr_fail artifacts "ccrc's own exposure constants are not loaded, so the artifact names were never checked" \
-      "this is a bug in ccrc, not a fact about your box — _check_artifacts reads CCRC_EXPOSURE_FILE, CCRC_CADDYFILE and BOX_ENV_FILE and calls _box_env_value and _art_config, all declared once in ccrc itself, and this check table was sourced by something that is not ccrc"
+      "this is a bug in ccrc, not a fact about your box — _check_artifacts reads CCRC_EXPOSURE_FILE, CCRC_CADDYFILE and BOX_ENV_FILE and calls _box_env_value, _art_config and _exp_art_cport and reads _ART_PORT_DEFAULT, all declared once in ccrc itself, and this check table was sourced by something that is not ccrc"
     return 1
   fi
   if [ ! -e "$CCRC_EXPOSURE_FILE" ]; then
@@ -2498,8 +2499,14 @@ _check_artifacts() {
         "look at what is really there: ls -ld $f"
       return 2; }
   done
-  [ ! -f "$BOX_ENV_FILE" ] || [ ! -r "$BOX_ENV_FILE" ] || cport="$(_box_env_value "$BOX_ENV_FILE" CCRC_PORT)"
-  _art_config "$(_box_env_value "$CCRC_EXPOSURE_FILE" CCRC_ORIGIN)" "${cport:-7788}" "$aorigin" "$corigin" "$port" ""
+  # The console's port as ccrc.service receives it, through the arm's own reader: a shape it cannot decide is refused, never
+  # read as the default (X5-FU item 4).
+  if [ -n "$aorigin$corigin$port" ] && ! _exp_art_cport; then
+    _dr_fail artifacts "$EXP_CPORT_WHY" "$EXP_CPORT_FIX, then restart: $(_svc_restart_hint ccrc.service)"
+    return 1
+  fi
+  cport=${EXP_CPORT:-7788}
+  _art_config "$(_box_env_value "$CCRC_EXPOSURE_FILE" CCRC_ORIGIN)" "$cport" "$aorigin" "$corigin" "$port" ""
   case "$ART_STATE" in
     on) ;;
     unset)
@@ -2514,7 +2521,11 @@ _check_artifacts() {
       local fix="re-run: ccrc expose artifacts — it writes all three keys together and checks them as the server does"
       case "$ART_DETAIL" in
         CCRC_PORT=*) fix="write CCRC_PORT in $BOX_ENV_FILE as digits only (1 to 65535, no leading zero), or remove the line for 7788, then restart: $(_svc_restart_hint ccrc.service)" ;;
-        CCRC_ARTIFACT_PORT=*) fix="ccrc expose artifacts --off, then ccrc expose artifacts — a bare re-run keeps the stored port" ;;
+        CCRC_ARTIFACT_PORT=*)
+          fix="ccrc expose artifacts --off, then ccrc expose artifacts — a bare re-run keeps the stored port"
+          # Unless the console itself listens on the port the arm writes: --off and a re-run would clash again (X5-FU item 4).
+          [ "$cport" != "$_ART_PORT_DEFAULT" ] \
+            || fix="the console itself listens on $_ART_PORT_DEFAULT, the port ccrc expose artifacts writes for the tier: move the console (CCRC_PORT in $BOX_ENV_FILE) and restart: $(_svc_restart_hint ccrc.service), then ccrc expose artifacts --off and ccrc expose artifacts" ;;
       esac
       _dr_fail artifacts "$ART_DETAIL" "$fix"
       return 1 ;;

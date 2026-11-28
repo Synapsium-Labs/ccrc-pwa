@@ -690,51 +690,73 @@ describe('ccrc rollback: by flip when the version is kept (W6 Task 4)', () => {
     expect(w.stderr).toContain('it cannot be trusted here');
   });
 
-  it('the refusal is only for a DISAGREEMENT, and only for a bare rollback: an agreeing layout proceeds (the control — the same box with the stamp on v1.0.0 asks the release host about the never-kept v2.0.0, the common first rollback after the move onto W6), `--to` names its own target, and an unversioned layout keeps wave 4\'s behaviour (C27)', () => {
+  // The refusal is only for a DISAGREEMENT, and only for a bare rollback. One
+  // case per arm (issue #3528): the arms ran as one case of seven runs of the
+  // verb plus the full first move's own update, which a slow runner could not
+  // finish inside one 20 s bound. Each title keeps the label "the refusal is only
+  // for a DISAGREEMENT, and only for a bare rollback" so a search finds every arm.
+  it('the refusal is only for a DISAGREEMENT, and only for a bare rollback: an agreeing layout proceeds (the control — the same box with the stamp on v1.0.0 asks the release host about the never-kept v2.0.0, the common first rollback after the move onto W6) (C27)', () => {
     // The control: stamp v1.0.0 agrees with the pointed-at v1.0.0.
     const agree = staleBox('ccrc-rollback-stale-previous-agree-', 'v1.0.0');
-    let r = rollbackRun(agree);
+    const r = rollbackRun(agree);
     expect(r.stderr).not.toContain('it cannot be trusted here');
     expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(2);
     expect(r.stderr).toMatch(/^ccrc: rollback: v2\.0\.0 is not a published release \(its SHA256SUMS answered 404\)/m);
+  });
+
+  it('the refusal is only for a DISAGREEMENT, and only for a bare rollback: `--to` names its own target — the disagreeing box, told its target, never consults the check (C27)', () => {
     // The disagreeing box, told its target: the check is never consulted.
     const stale = staleBox('ccrc-rollback-stale-previous-to-', 'v1.1.0');
-    r = rollbackRun(stale, ['--to', 'v2.0.0']);
+    const r = rollbackRun(stale, ['--to', 'v2.0.0']);
     expect(r.stderr).not.toContain('it cannot be trusted here');
     expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(2);
-    // An `untagged-<sha12>` name is compared with the stamp's sha12; an
-    // `unstamped-*` name and an unreadable stamp have no verdict.
+  });
+
+  it('the refusal is only for a DISAGREEMENT, and only for a bare rollback: an `untagged-<sha12>` name is compared with the stamp\'s sha12 — a stamp that agrees is not a disagreement, one that disagrees is refused (C27)', () => {
+    // An `untagged-<sha12>` name is compared with the stamp's sha12: first a
+    // stamp whose sha12 agrees, then, on the same box, one with another sha.
     const sha = 'd'.repeat(40);
     const untagged = staleBox('ccrc-rollback-stale-previous-untagged-', 'v1.1.0');
     renameSync(join(untagged, 'ccrc-versions', 'v1.0.0'), join(untagged, 'ccrc-versions', `untagged-${sha.slice(0, 12)}`));
     rmSync(join(untagged, 'ccrc'));
     symlinkSync(join(untagged, 'ccrc-versions', `untagged-${sha.slice(0, 12)}`), join(untagged, 'ccrc'));
     writeFileSync(join(untagged, '.ccrc', 'build.json'), `{"sha":"${sha}","ref":"main","builtAt":"2026-08-21T00:00:00Z","dirty":false}\n`);
-    r = rollbackRun(untagged);
+    let r = rollbackRun(untagged);
     expect(r.stderr, 'an untagged name whose sha12 the stamp agrees with is not a disagreement').not.toContain('it cannot be trusted here');
     writeFileSync(join(untagged, '.ccrc', 'build.json'), shippedStamp('v1.1.0', 'e'.repeat(40)));
     r = rollbackRun(untagged);
     expect(r.code, `stderr: ${r.stderr}`).toBe(1);
     expect(r.stderr).toContain('while this box\'s stamp reads v1.1.0');
+  });
+
+  it('the refusal is only for a DISAGREEMENT, and only for a bare rollback: an unreadable stamp is no verdict (C27)', () => {
     const unreadable = staleBox('ccrc-rollback-stale-previous-unreadable-', 'v1.1.0');
     writeFileSync(join(unreadable, '.ccrc', 'build.json'), 'not json\n');
-    r = rollbackRun(unreadable);
+    const r = rollbackRun(unreadable);
     expect(r.stderr, 'an unreadable stamp is no verdict').not.toContain('it cannot be trusted here');
+  });
+
+  // It builds the same full first move (`onKeptV1`) as the file's other callers
+  // of that helper, which all carry this bound; the default bound was the outlier.
+  it('the refusal is only for a DISAGREEMENT, and only for a bare rollback: the first rollback after a FULL first move onto W6, whose previous names the pre-migration tag, still proceeds (C27)', () => {
     // The commonest case, end to end (a FULL first move onto v1.0.0, whose
     // migration leaves `previous` naming the pre-migration tag — never a kept
     // version): its rollback must still proceed.
     const full = onKeptV1('ccrc-rollback-stale-previous-full-');
     expect(fileText(join(full, '.ccrc', 'previous')).split('\n')[0]).toBe('v0.9.0');
     writeFileSync(join(full, 'fixture-release-http'), '404\n');
-    r = rollbackRun(full);
+    const r = rollbackRun(full);
     expect(r.stderr, 'the first rollback after the move onto W6 was refused').not.toContain('it cannot be trusted here');
     expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(2);
+  }, scaled(60_000));
+
+  it('the refusal is only for a DISAGREEMENT, and only for a bare rollback: an unversioned (real-directory) layout keeps wave 4\'s behaviour, previous trusted (C27)', () => {
     // A real-directory (unversioned) box: wave 4's behaviour, previous trusted.
     const dirBox = freshUpdateBox('ccrc-rollback-stale-previous-directory-');
     plantOldBox(dirBox, { version: 'v1.1.0' });
     writeFileSync(join(dirBox, '.ccrc', 'previous'), `v2.0.0\n${V2_SHA}\n`);
     writeFileSync(join(dirBox, 'fixture-release-http'), '404\n');
-    r = rollbackRun(dirBox);
+    const r = rollbackRun(dirBox);
     expect(r.stderr).not.toContain('it cannot be trusted here');
     expect(r.code, `stderr: ${r.stderr}`).toBe(2);
   });

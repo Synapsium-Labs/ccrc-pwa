@@ -1,5 +1,5 @@
 // Overlord W1, the invariant monitor's gatherer (plan w1-sequence-monitor.md Task 5): `gatherInvariantInput` reads every input of
-// I2, I5, I7 and I17 in one synchronous span inside one transaction that writes nothing, and never folds `unmeasured` into
+// I2, I5, I7, I12 and I17 in one synchronous span inside one transaction that writes nothing, and never folds `unmeasured` into
 // `measured` or `absent`. Fixture databases in temp dirs only, never the live HOME.
 import { afterEach, describe, expect, it } from 'vitest';
 import path from 'node:path';
@@ -34,7 +34,7 @@ const depsOf = (db: DatabaseSync, over: Partial<InvariantFactsDeps> = {}): Invar
   designationBaseline: () => ({ kind: 'measured', value: null }),
   ...over,
 });
-const NAMES = ['I2', 'I5', 'I7', 'I17'] as const;
+const NAMES = ['I2', 'I5', 'I7', 'I12', 'I17'] as const;
 
 const timer = (db: DatabaseSync, setter: string): number => {
   const r = insertTimer(db, {
@@ -49,7 +49,7 @@ const mail = (db: DatabaseSync, fromId: string, toId: string): number => Number(
   .run(NOW, fromId, toId).lastInsertRowid);
 
 describe('gatherInvariantInput', () => {
-  it('an empty migrated database: every arm is measured, and I2, I5, I7 and I17 hold', () => {
+  it('an empty migrated database: every arm is measured, and I2, I5, I7, I12 and I17 hold', () => {
     const db = openDb();
     const input = gatherInvariantInput(depsOf(db));
     expect(input.lines.kind).toBe('measured');
@@ -64,7 +64,7 @@ describe('gatherInvariantInput', () => {
     expect(input.facts.I17).toEqual({ kind: 'absent', what: 'continuity_timers' });
     expect(invariantVerdict('I17', input)).toMatchObject({ kind: 'not-applicable', why: 'tables-absent' });
     expect(input.lines.kind).toBe('measured');
-    for (const n of ['I2', 'I5', 'I7'] as const) expect(input.facts[n]?.kind, n).toBe('measured');
+    for (const n of ['I2', 'I5', 'I7', 'I12'] as const) expect(input.facts[n]?.kind, n).toBe('measured');
   });
 
   it('a closed database reads unmeasured on every arm and does not throw', () => {
@@ -82,7 +82,7 @@ describe('gatherInvariantInput', () => {
     expect(input.facts.I5).toMatchObject({ kind: 'unmeasured' });
     expect(invariantVerdict('I5', input).kind).toBe('unmeasured');
     expect(input.lines.kind).toBe('measured');
-    for (const n of ['I2', 'I7', 'I17'] as const) expect(input.facts[n]?.kind, n).toBe('measured');
+    for (const n of ['I2', 'I7', 'I12', 'I17'] as const) expect(input.facts[n]?.kind, n).toBe('measured');
   });
 
   it('a journal that could not be read makes the I7 arm unmeasured, and only it (review 3843 F10)', () => {
@@ -90,7 +90,7 @@ describe('gatherInvariantInput', () => {
     const input = gatherInvariantInput(depsOf(db, { readJournal: () => ({ kind: 'unmeasured', why: 'unreadable' }) }));
     expect(input.facts.I7).toEqual({ kind: 'unmeasured', why: 'the authority journal could not be read' });
     expect(invariantVerdict('I7', input)).toEqual({ kind: 'unmeasured', why: 'the authority journal could not be read' });
-    for (const n of ['I2', 'I5', 'I17'] as const) expect(input.facts[n]?.kind, n).toBe('measured');
+    for (const n of ['I2', 'I5', 'I12', 'I17'] as const) expect(input.facts[n]?.kind, n).toBe('measured');
   });
 
   it('a malformed journal makes the I7 arm unmeasured with its code, never a fold of what it could read (review 3843 F10)', () => {
@@ -98,7 +98,7 @@ describe('gatherInvariantInput', () => {
     const input = gatherInvariantInput(depsOf(db, { readJournal: () => ({ kind: 'malformed', code: 'chain-broken', detail: 'a fixture', lines: 3 }) }));
     expect(input.facts.I7).toEqual({ kind: 'unmeasured', why: 'the authority journal is malformed: chain-broken' });
     expect(invariantVerdict('I7', input).kind).toBe('unmeasured');
-    for (const n of ['I2', 'I5', 'I17'] as const) expect(input.facts[n]?.kind, n).toBe('measured');
+    for (const n of ['I2', 'I5', 'I12', 'I17'] as const) expect(input.facts[n]?.kind, n).toBe('measured');
   });
 
   it('every read happens in one synchronous span inside a transaction, and the gather writes nothing', async () => {
