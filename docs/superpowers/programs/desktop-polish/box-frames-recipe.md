@@ -455,7 +455,7 @@ wave's last push; section 9.5 says what each push changed.
   content makes its first character count two cells (9.2). It is asked under the same exception as the emoji class and
   for the same reason: it only widens, so it only refuses. Two hosts whose engines disagree on a mark lose a frame (one
   of them refuses it) and never keep a tail. The emoji selector and the keycap mark are named beside it, so those two
-  hold with no engine asked.
+  hold with no engine asked. The class is only as new as the engine: 9.4 states that limit.
 - **Nothing counts narrower than on `main`.** A case holds `main`'s rule as data (its hand list's twelve ranges, from
   86b2c2d6e2) and compares every code point, with no engine asked: **none counts narrower, and exactly 768,240 count
   wider**, a figure that is the same on every engine. It also compares with the engine's emoji class on both sides, as
@@ -499,7 +499,27 @@ wave's last push; section 9.5 says what each push changed.
   narrow character with no mark (the turn marker among them) is still not a straddle, and is kept.
 - **The keycap clause at the third position is dropped (review 4161's A1).** It looked for the keycap mark after a
   selector, which the selector at the second position already counts, and nothing pinned the shape only it covered (a
-  base, a mark that is not the selector, then the keycap: an over-refusal). Dropped rather than given a case.
+  base, a mark that is not the selector, then the keycap: an over-refusal). Dropped rather than given a case. So one
+  shape now counts narrower than at bf24543d43 (review 4168): a first character, then a code point that is neither the
+  selector nor the keycap (a mark, a letter or U+FE0E), then the keycap mark; that head refused it, this one keeps it.
+  That it was an over-refusal is reasoned, not measured on a terminal.
+- **A next row that begins with a Unicode space off the decoration list (review 4168's F1, the coordinator's ruling: the
+  reviewer's measured fix, exactly).** `spans` strips only the two decoration spaces (the space and the no-break space),
+  and both tail readers took a run of non-space characters at the start of what was left, so a content that began with
+  U+3000, U+2000 to U+200A, U+202F, U+205F or U+1680 read as no tail at all: a full row then such a space then a
+  continued path was kept on both hosts, a row one cell short then U+3000 then a tail was kept although the straddle test
+  said the wide character wrapped (the two readers disagreed), and a token row then such a space then a path was kept.
+  Older than this wave. Both tail readers (`pathTail` and the edge reader in `pathOffTheEdge`) now skip leading
+  whitespace before they take the run. The spaces stay off the decoration list, because U+3000 is itself the wide
+  character that wrapped and the straddle test must still see it first; so the comment that the two readers cannot
+  disagree is now true. Cases, at 20 and 220 columns, each on both hosts: a full row, then each of the fifteen spaces
+  (U+3000, U+2000 to U+200A, U+202F, U+205F, U+1680), then the tail, bare, indented and after the turn marker, refuses;
+  a row one cell short, then U+3000, then the tail, bare and after the turn marker, refuses; a row one cell short, then a
+  one-cell space of the list (U+2003), then the tail, is kept, which is the correct answer, because the row did not reach
+  the edge; a token row (each token that fits the pane), then U+3000 or U+2003, then a path, refuses; a token row, then
+  an ASCII indent and a word that is not a path, is kept; a full row that holds no path, then such a space and a word, is
+  kept. A next row whose first character is narrow, with a mark later in it, is still not a straddle (the mark test is
+  anchored to the first code point).
 - **The capture owner's condition (ruling 4), red first on the old rule.** A row built with a wide character outside the
   old hand list reaching the last column, then a continued path tail, refuses the frame whole on both hosts (U+2329,
   U+FE10, U+A960, U+16FE0, U+17000, U+1B000 and U+1F200). A straddler at the last column, then a continued tail, refuses on
@@ -530,8 +550,11 @@ wave's last push; section 9.5 says what each push changed.
   Measured over all 136 recorded panes that have a rule row, `main`'s reducer against this one, as the recipe meets each
   at its real size: no refusal and no count changed. Re-measured at fix round 2 over all 147, the eleven in the busy
   folder included (158 files): still no refusal and no count changed, the same nine panes changed against `main`, and
-  nothing changed at all against fix round 1's reducer. Nine panes' reduced text changed in one row each, the replaced model
-  row, which carries four more pad spaces because its emoji now count two cells and the row keeps its drawn width:
+  nothing changed at all against fix round 1's reducer; at fix round 3, the same again over all 147, against fix round 2's
+  reducer and against `main`. Nine panes' reduced text changed in one row each, a replaced row that carries four more pad
+  spaces because its emoji now count two cells and the row keeps its drawn width. In eight it is the model row; in
+  `cc291-model-switch-220x50-full.txt` it is a working-directory row, because rule 4 replaces that row first, on a home
+  path hint that shares it (review 4168). The nine:
   `cc291-model-ack-220x50-full.txt`, `cc291-model-default-ack-120x30.txt`, `cc291-model-default-picker-120x30.txt`,
   `cc291-model-default-switch-120x30.txt`, `cc291-model-escape-to-picker-120x30.txt`,
   `cc291-model-picker-220x50-full.txt`, `cc291-model-switch-220x50-full.txt`, and in the box folder
@@ -549,9 +572,9 @@ wave's last push; section 9.5 says what each push changed.
 - **F9 and D1, the version.** The fingerprint gains eight probes, none of which asks the engine anything: a bare quote
   (kept), a Hangul syllable row reaching the edge, a row at the probe's own width, a straddle, a row reaching the edge
   through U+3248, a table-only wide character (U+2329) reaching the edge, a straddle whose row keeps its blank last cell
-  as a trailing space, and (fix round 2) a straddle whose next row is the turn marker then the emoji selector. A case pins
-  their eight answers. **The frames recipe's version: `03f101670690507b` on `main`, `bec098af3496f523` at the first push,
-  `962a0b5e963e0b92` at the second, `5d453fb42f2d80c8` at fix round 1, `e5feb5b34aa37b57` at fix round 2.** No file in
+  as a trailing space, (fix round 2) a straddle whose next row is the turn marker then the emoji selector, and (fix round
+  3) a full row then a next row that begins with U+3000 then the tail. A case pins their nine answers. **The frames recipe's version: `03f101670690507b` on `main`, `bec098af3496f523` at the first push,
+  `962a0b5e963e0b92` at the second, `5d453fb42f2d80c8` at fix round 1, `e5feb5b34aa37b57` at fix round 2, `bd7b9ac2b9896ec6` at fix round 3.** No file in
   the tree pins any of them outside this note. The delivery recipe's version still prints `da16fe2f55551e0b`.
 - **Bundle cost (A5 corrected).** No file under `pwa/src` or `ui/src` imports `shared/framesReduce.ts`, or the one shared
   file that imports it, `shared/framesCapture.ts` (`shared/framesLane.ts` imports `framesCapture.ts` only, not the
@@ -574,6 +597,11 @@ wave's last push; section 9.5 says what each push changed.
   private string replaced, so the server's check refuses the frame `status-row`), with D2 beside them; and how Claude
   Code's own wrap indents a continuation row, which the first real capture shows (F1's cases cover the decorated shapes
   without it).
+- **The mark class is only as new as the engine (review 4168; a limit, not fixed here, by the coordinator's ruling).** Two
+  hosts whose engines DISAGREE on a mark lose a frame. Two hosts whose engines are BOTH older than the table's Unicode
+  version count a mark newer than their engine one cell, so a next row that begins with such a mark keeps its tail on
+  both: the reviewer counts 42 such marks on a 16.0 engine (93 on 15.0), none on 17.0 or newer. The cure, a generated mark
+  table beside the width table, is the alarm wave's. The comment beside the mark class says the same.
 
 ### 9.5 The pushes
 
@@ -598,6 +626,10 @@ wave's last push; section 9.5 says what each push changed.
   combining mark: its first character counts two cells, the mark through the engine's mark class as a widener only),
   A1 (the keycap clause at the third position dropped), A6 (the property case's counts pinned and its red rows named),
   A3, A5 and A7 (the note and two comments corrected), A2 (an engine-dependent mutant row), and one probe.
+- **Fix round 3, review 4168** (the coordinator extended the cap by one round for it). F1 (both tail readers skip leading
+  whitespace, so a Unicode space off the decoration list no longer hides a path's tail), one probe, a kept case that pins
+  the mark test to the first code point, and the note's corrections: the red-first record of fix round 2, the mutant
+  table's case lists, the nine panes, the tests that name the file, the engine-age limit and the dropped keycap clause.
 
 ### 9.6 Evidence
 
@@ -664,17 +696,18 @@ clone read clean by git after them:
 | G3 a second copy in the reducer file, outside the table | `shared/framesReduce.ts` gains a first line `// mutant: [0xE0100, 0xE01EF]` | `frames-reduce.test.ts`: the docs guard's allowance is one generated row: the shared file spells the selector ranges pair once, inside the table (the docs guard stays green under it, which is why the case is needed) |
 
 - **Fix round 2.** Red first: the round's cases were run against fix round 1's reducer (the scratch clone's
-  `shared/framesReduce.ts`, the same file as at bf24543d43), and 4 were red by name, the two new straddle cases at each of
-  20 and 220 columns; the other 102 passed. The reducer suite now passes 106 of 106. The F8a count stays 6 of 90. Over all
+  `shared/framesReduce.ts`, the same file as at bf24543d43), and 5 were red by name, the two new straddle cases at each of
+  20 and 220 columns and the probe table (it asks 29 answers, that reducer gives 28); the other 101 passed (corrected by
+  review 4168: this record first said 4 and 102). The reducer suite now passes 106 of 106. The F8a count stays 6 of 90. Over all
   147 recorded panes (9.3), nothing changed against fix round 1's reducer. Its mutant rows, one at a time in the scratch
   clone with the round's suite in place (the clone read clean by git after them):
 
 | Row | The edit in `shared/framesReduce.ts` (old, then new; ⏎ is a line break) | Result in `server/test/frames-reduce.test.ts` |
 |---|---|---|
 | F2a the leading-selector arm removed | `if (cps[0] === EMOJI_SELECTOR \|\| cps[0] === KEYCAP_MARK) return 2;⏎` → (nothing) | **green on this engine, by design**: the selector and the keycap are themselves combining marks, so the engine's mark class still counts them two. The arm is the floor that holds with no engine asked; F2a+ is the row that shows it |
-| F2a+ the leading-selector arm removed, the mark class stubbed empty (an engine with no marks) | F2a, and `const LEADING_MARK = /^\p{M}/u;` → `const LEADING_MARK = /[^\s\S]/u;` | red: at 20 columns, a straddle whose next row is a decoration base, then the emoji selector or the keycap mark, refuses on both hosts (review 4161, F1) |
-| F2b the leading-mark arm removed | `if (LEADING_MARK.test(cps[0])) return 2;⏎` → (nothing) | red: at 20 columns, a straddle whose next row is a decoration base, then a combining mark, refuses on both hosts, before a wide character and, an accepted over-refusal, before a narrow one |
-| F2c the mark class stubbed empty, the selector arm kept | `const LEADING_MARK = /^\p{M}/u;` → `const LEADING_MARK = /[^\s\S]/u;` | red: the same combining-mark case; the selector cases stay green, which is the floor at work |
+| F2a+ the leading-selector arm removed, the mark class stubbed empty (an engine with no marks) | F2a, and `const LEADING_MARK = /^\p{M}/u;` → `const LEADING_MARK = /[^\s\S]/u;` | red, 5 cases: the selector case (a straddle whose next row is a decoration base, then the emoji selector or the keycap mark) at 20 and at 220 columns, the combining-mark case at 20 and at 220, and the probe table |
+| F2b the leading-mark arm removed | `if (LEADING_MARK.test(cps[0])) return 2;⏎` → (nothing) | red, 2 cases: the combining-mark case (a straddle whose next row is a decoration base, then a combining mark, refuses on both hosts, before a wide character and, an accepted over-refusal, before a narrow one) at 20 and at 220 columns |
+| F2c the mark class stubbed empty, the selector arm kept | `const LEADING_MARK = /^\p{M}/u;` → `const LEADING_MARK = /[^\s\S]/u;` | red, 2 cases: the combining-mark case at 20 and at 220 columns; the selector cases stay green, which is the floor at work |
 | F2d the leading-selector probe removed | `'x'.repeat(35) + ' /pr\n' + String.fromCodePoint(0x23FA) + String.fromCodePoint(0xFE0F) + 'ject rest',⏎` → (nothing) | red: the probe table case (29 answers) |
 | PH1 the self-check removed, and every replaced row padded past its width | `return c.ok ? r : { kind: 'refused', refusal: c.refusal };` → `return r;`, and `s.lead + token + ' '.repeat(w - t) + s.tail` → `s.lead + token + ' '.repeat(w - t) + ' '.repeat(300) + s.tail` | red: over every recorded pane as the recipe meets it, and the capture owner's frames, a reduced answer passes the server's check (and the 40-column case first) |
 | PH2 the same padding, the self-check kept | the second edit of PH1 only | red: the same property case, through its exact count of panes reduced (128) |
@@ -711,16 +744,35 @@ clone read clean by git after them:
   - the reducer suite, now 102 of 102, and the frames suites, tree guards and docs guards of the list above, with the
     same counts (`docs-grammar` 158, `anchors` 9, `citations` 4, `deviation-refs` 35, `ci-ledger-guard` 32), and the
     agent's six frames suites.
+- **Fix round 3.** Red first: the round's suite was run against fix round 2's reducer (`shared/framesReduce.ts` as at
+  a7bc29807e) in the scratch clone, and 7 cases were red by name: the full-row case, the one-cell-short case and the
+  token-row case at each of 20 and 220 columns, and the probe table (30 answers asked, 29 given); the other 105 passed.
+  The reducer suite now passes 112 of 112, with the property case's pins (132 panes checked, 128 reduced), F8a's 6 of 90
+  and the probe table unchanged otherwise. Over all 147 recorded panes, nothing changed against fix round 2's reducer, and
+  against `main` the same nine panes changed as before: the fix adds no refusal there. Its mutant rows, one at a time in
+  the scratch clone (it read clean by git after them):
+
+| Row | The edit in `shared/framesReduce.ts` (old, then new) | Result in `server/test/frames-reduce.test.ts` |
+|---|---|---|
+| S1 the path-tail reader's whitespace skip taken back | `(/^\s*(\S+)/u.exec(spans(row).content)?.[1] ?? '')` → `(/^\S+/u.exec(spans(row).content)?.[0] ?? '')` | red, 2 cases: the token-row case (a token row, then the ideographic space or the em space, then a path, refuses on both hosts) at 20 and at 220 columns |
+| S2 the edge reader's whitespace skip taken back | `const tail = /^\s*(\S+)/u.exec(nextRowContent(b))?.[1] ?? '';` → `const tail = /^\S+/u.exec(nextRowContent(b))?.[0] ?? '';` | red, 5 cases: the full-row case and the one-cell-short case at 20 and at 220 columns, and the probe table |
+| S3 the U+3000 probe removed | `'x'.repeat(36) + ' /pr\n' + String.fromCodePoint(0x3000) + 'ject rest',` → (nothing) | red, 1 case: the probe table |
+| O-F the mark test asked of the whole content, not its first code point | `if (LEADING_MARK.test(cps[0])) return 2;` → `if (/\p{M}/u.test(content)) return 2;` | red, 2 cases: decoration then a narrow character is still not a straddle, and is kept, at 20 and at 220 columns (its list now holds a narrow first character with a mark later in the row) |
+
+- **Suites before fix round 3's push**, each alone, on the round's tree: the same 119 files as fix round 2's list, all
+  passing (the reducer suite 112, `docs-l0` 159 with 1 skipped), and the server's and the agent's compiles. `main` is
+  ee9b069f30; the merge probe answered clean and `main` changes none of this wave's files, so nothing was absorbed. The
+  agent's six frames suites, which review 4168 could not run, are among the 119.
 - **Suites before fix round 2's push**, each alone, on the round's tree: 119 files, all passing. `main` is 9ccb5f19c2; the
   merge probe answered clean and `main` changes none of this wave's files, so nothing was absorbed. The list is the one
   for any change under `shared/`: the reducer suite (106) and the frames suites on the server, the tree and docs guards
   above, the agent's six frames suites, every file under `server/test/single-definition/` (49) and the 39 tree-scanning
   suites named above. The server's and the agent's compiles pass.
-- **Tests that read a file this wave changes as text** (#3562): the server tests that name `shared/framesReduce.ts` in a
-  string are `frames-reduce`, `box-frame-fixtures`, `frames-lane-capture`, `frames-transport`, `testbox-frames-route` and
-  `single-definition/late-census`, and since the red guard's push `single-definition/docs-l0`, which names the file in
-  its holder list (review 4161, A7); on the agent `testbox-capture-deadline` and `testbox-capture-frames-run`. All ran
-  above and pass. This wave changes no other TypeScript file.
+- **Tests that read a file this wave changes as text** (#3562): three read `shared/framesReduce.ts` as text,
+  `frames-reduce`, `single-definition/late-census` and, since the red guard's push, `single-definition/docs-l0`, which
+  names the file in its holder list (review 4161, A7). Six import it through the module path (review 4168):
+  `box-frame-fixtures`, `frames-lane-capture`, `frames-transport` and `testbox-frames-route` on the server, and
+  `testbox-capture-deadline` and `testbox-capture-frames-run` on the agent. All ran above and pass. This wave changes no other TypeScript file.
 - **Count lines.** No file this wave touches states the gate's count lines, so none was re-derived.
 - **This note** is an existing task note, edited with the coordinator's direction; the head commit carries the ledger
   guard's edit trailer for it.
