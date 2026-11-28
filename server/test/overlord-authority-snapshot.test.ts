@@ -12,13 +12,15 @@ import { DatabaseSync } from 'node:sqlite';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { OVERLORD_AUTHORITY_BASENAME, OVERLORD_AUTHORITY_TORN_DIR } from '../src/coord/overlordAuthority.js';
+import { OVERLORD_ACTS_BASENAME, OVERLORD_ACTS_TORN_DIR } from '../src/coord/overlordActRecords.js';
 import { mkTmp } from './tmpHelpers.js';
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const HELPER_PATH = path.join(REPO_ROOT, 'deploy', 'coordination-snapshot.mjs');
 const BACKUP_COORD_PATH = path.join(REPO_ROOT, 'deploy', 'backup-coord.mjs');
-/** Every spelling a copy of either could take: the constants' values, and the stem both share. */
-const NAMES = [OVERLORD_AUTHORITY_BASENAME, OVERLORD_AUTHORITY_TORN_DIR, 'overlord-authority'];
+/** Every spelling a copy of either could take: the constants' values, and the stem both share. The act journal's file, its torn
+ *  directory and their stem join them (Overlord W2, act journal A): never in a snapshot, never restored over. */
+const NAMES = [OVERLORD_AUTHORITY_BASENAME, OVERLORD_AUTHORITY_TORN_DIR, 'overlord-authority', OVERLORD_ACTS_BASENAME, OVERLORD_ACTS_TORN_DIR, 'overlord-acts'];
 
 /** The body of a bash function in `ccd/ccrc`, from its opening line to the first line that is a lone `}`. */
 function bashFunction(text: string, name: string): string {
@@ -47,6 +49,9 @@ describe('the Overlord authority journal is never in a snapshot (Task 4)', () =>
     mkdirSync(path.join(live, 'memory'), { recursive: true });
     writeFileSync(path.join(live, OVERLORD_AUTHORITY_BASENAME), 'the journal\n');
     writeFileSync(path.join(live, OVERLORD_AUTHORITY_TORN_DIR, 'a-torn-tail'), 'kept\n');
+    mkdirSync(path.join(live, OVERLORD_ACTS_TORN_DIR), { recursive: true });
+    writeFileSync(path.join(live, OVERLORD_ACTS_BASENAME), 'the act journal\n');
+    writeFileSync(path.join(live, OVERLORD_ACTS_TORN_DIR, 'a-torn-tail'), 'kept\n');
     writeFileSync(path.join(live, 'memory', 'note.md'), 'memory\n');
     const out = mkTmp('ccrc-fx-authority-backup-out-');
     // `ccd/ccrc` sources without running (its main is guarded); HOME is the fixture's, the one isolation boundary.
@@ -58,6 +63,7 @@ describe('the Overlord authority journal is never in a snapshot (Task 4)', () =>
     expect(r.stdout).toContain(path.join(live, 'memory'));
     for (const n of NAMES) expect(r.stdout, n).not.toContain(n);
     expect(readFileSync(path.join(live, OVERLORD_AUTHORITY_BASENAME), 'utf8')).toBe('the journal\n');
+    expect(readFileSync(path.join(live, OVERLORD_ACTS_BASENAME), 'utf8')).toBe('the act journal\n');
   });
 
   it('the SQLite snapshot step and the coordination snapshot helper name neither', () => {
@@ -84,7 +90,12 @@ describe('the Overlord authority journal is never in a snapshot (Task 4)', () =>
       const torn = path.join(live, OVERLORD_AUTHORITY_TORN_DIR);
       mkdirSync(torn, { mode: 0o700 });
       writeFileSync(path.join(torn, '8-0000.tail'), 'torn');
-      const before = [statSync(journal), statSync(torn)].map((s) => [s.ino, s.mtimeMs, s.size]);
+      const acts = path.join(live, OVERLORD_ACTS_BASENAME);
+      writeFileSync(acts, '{"v":1}\n');
+      const actsTorn = path.join(live, OVERLORD_ACTS_TORN_DIR);
+      mkdirSync(actsTorn, { mode: 0o700 });
+      writeFileSync(path.join(actsTorn, '8-0000.tail'), 'torn');
+      const before = [statSync(journal), statSync(torn), statSync(acts), statSync(actsTorn)].map((s) => [s.ino, s.mtimeMs, s.size]);
 
       const dir = path.join(home, 'ccrc-backups', '20261116-100000');
       mkdirSync(dir, { recursive: true });
@@ -98,8 +109,9 @@ describe('the Overlord authority journal is never in a snapshot (Task 4)', () =>
         expect(listing.filter((f) => f.includes(n)), n).toEqual([]);
         for (const f of listing.filter((x) => x.endsWith('.json'))) expect(readFileSync(path.join(dir, f), 'utf8'), `${f} names ${n}`).not.toContain(n);
       }
-      expect([statSync(journal), statSync(torn)].map((s) => [s.ino, s.mtimeMs, s.size])).toEqual(before);
+      expect([statSync(journal), statSync(torn), statSync(acts), statSync(actsTorn)].map((s) => [s.ino, s.mtimeMs, s.size])).toEqual(before);
       expect(readFileSync(journal, 'utf8')).toBe('{"v":1}\n');
+      expect(readFileSync(acts, 'utf8')).toBe('{"v":1}\n');
     });
   });
 });

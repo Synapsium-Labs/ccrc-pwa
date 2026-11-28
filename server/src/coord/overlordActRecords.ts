@@ -14,6 +14,7 @@
 // THE RECORD KINDS ARE PREFIXED (slug `act-record-kinds-are-prefixed`): `act-intent`, `act-settle` and `act-open-request`, the
 // ruling's three kinds under the journal's prefix, because the kernel has no domain tag and the kinds census holds every format's
 // kinds disjoint. A one-step act appends one `act-settle` with `from: null` (slug `one-step-act-one-record`).
+import type { DatabaseSync } from 'node:sqlite';
 import { isSessionIdShape } from '../../../shared/api.js';
 import { isOverlordActKind, type OverlordActKind } from '../../../shared/overlord.js';
 import {
@@ -54,6 +55,14 @@ type ActJournalRecord =
   | ({ readonly kind: 'act-intent' } & ActRecordBody)
   | ({ readonly kind: 'act-settle'; readonly from: 'pending' | 'unknown' | null; readonly to: ActState } & ActRecordBody)
   | { readonly kind: 'act-open-request'; readonly opKey: string; readonly requestId: number; readonly actId: number };
+/** The act store's L2 port (`overlordActsStore.ts#ActJournalPort`, declared there by its consumer), which the act journal's
+ *  writer implements. Structural, so stage 2's swap to the store's declaration is an import line. */
+export interface ActJournalPort {
+  appendInTx(db: DatabaseSync, records: readonly ActJournalRecord[], apply: () => void): ActJournalAppend;
+}
+export type ActJournalAppend =
+  | { readonly ok: true }
+  | { readonly ok: false; readonly error: 'not-in-transaction' | 'authority-rolled-back' | 'authority-unmeasured' | 'journal-append'; readonly detail: string };
 // ── end INTERIM ────────────────────────────────────────────────────────────────────────────────────────────────────────
 
 /** The act store's one record type, under the journal's name (F7). */

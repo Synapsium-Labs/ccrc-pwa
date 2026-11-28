@@ -40,6 +40,29 @@ export function actHeadPreimage(head: ActHead): string | null {
   return `${ACT_HEAD_DOMAIN}\n{"day":${JSON.stringify(head.day)},"digest":${JSON.stringify(head.digest)},"journalId":${JSON.stringify(head.journalId)},"sequence":${head.sequence}}`;
 }
 
+/** One recorded head as the head read and the digest carry it: signed (`signature`, base64) or unsigned (`unsigned`, the word
+ *  it was recorded with), exactly one of the two. */
+export interface ActHeadRecorded extends ActHead {
+  readonly signature: string | null;
+  readonly unsigned: string | null;
+}
+
+/** `GET /api/overlord/act-head?at=<sequence>`'s answer (Task A3): the newest recorded head (`absent` before the first), the
+ *  server key's public half to check a signature with (null when it could not be loaded), and, when `at` was asked, the digest
+ *  of the journal's record at that sequence, `absent` past the head, or `unmeasured`. Ids, words and hashes only. */
+export interface ActHeadReadWire {
+  readonly v: 1;
+  readonly head: ActHeadRecorded | 'absent';
+  readonly publicKeyPem: string | null;
+  readonly at: { readonly sequence: number; readonly digest: DigestAtKept } | null;
+}
+
+/** The digest's view of the newest head at or before its day: one line, drawn by the console's digest view. Additive: an answer
+ *  without it is a build before the act journal, or a day before its first head, and draws no line; `unmeasured` is a head read
+ *  that failed, drawn as such, never as no head (point 3). Rides `DigestAnswer` as an intersection, so `shared/api.ts` is not
+ *  touched (the brief's seam). */
+export interface DigestActHead { readonly actHead?: ActHeadRecorded | 'unmeasured' }
+
 /** What the console keeps of the last head it verified, and what a newer read offers. */
 export interface HeadPosition { readonly sequence: number; readonly digest: string }
 

@@ -17,8 +17,15 @@ export const HEAD_EXTENDS_KEY = 'shared/actJournalHead.ts#headExtends';
 const D = (c: string): string => c.repeat(64);
 
 export function actHeadSignVerdictCases(m: Pick<Verdict, 'actHeadSignVerdict'>): Record<string, SuiteCase> {
-  const v = (isolation: unknown, approvalsDisabled = false): unknown => m.actHeadSignVerdict({ isolation: isolation as never, approvalsDisabled });
+  const v = (isolation: unknown, approvalsDisabled = false, keyAvailable = true): unknown =>
+    m.actHeadSignVerdict({ isolation: isolation as never, approvalsDisabled, keyAvailable });
   return {
+    'a key that could not be loaded records it unsigned, after every isolation and switch word': () => {
+      expect(v({ kind: 'measured', word: 'separate-user', cause: 'other-user' }, false, false)).toEqual({ sign: false, unsigned: 'key-unavailable' });
+      expect(v({ kind: 'measured', word: 'shared-user', cause: 'same-user' }, false, false)).toEqual({ sign: false, unsigned: 'shared-user' });
+      expect(v({ kind: 'unmeasured', why: 'link-down' }, false, false)).toEqual({ sign: false, unsigned: 'isolation-unmeasured' });
+      expect(v({ kind: 'measured', word: 'separate-host', cause: 'other-host' }, true, false)).toEqual({ sign: false, unsigned: 'approvals-disabled' });
+    },
     'separate-user and separate-host sign': () => {
       expect(v({ kind: 'measured', word: 'separate-user', cause: 'other-user' })).toEqual({ sign: true });
       expect(v({ kind: 'measured', word: 'separate-host', cause: 'other-host' })).toEqual({ sign: true });
@@ -45,8 +52,56 @@ const VERDICT_SET: MutantSet<Verdict> = {
     { id: 'V3 unmeasured is shared-user', old: "unsigned: 'isolation-unmeasured' };", new: "unsigned: 'shared-user' };" },
     { id: 'V4 shared-user signs', old: "if (f.isolation.word === 'shared-user') return { sign: false, unsigned: 'shared-user' };", new: '' },
     { id: 'V5 only separate-host signs', old: "if (f.isolation.word === 'shared-user')", new: "if (f.isolation.word !== 'separate-host')" },
+    { id: 'V6 the key ignored', old: "if (!f.keyAvailable) return { sign: false, unsigned: 'key-unavailable' };", new: '' },
+    { id: 'V7 the key asked first', old: "  if (f.approvalsDisabled) return { sign: false, unsigned: 'approvals-disabled' };\n", new: "  if (!f.keyAvailable) return { sign: false, unsigned: 'key-unavailable' };\n  if (f.approvalsDisabled) return { sign: false, unsigned: 'approvals-disabled' };\n" },
   ],
   suite: (mod) => actHeadSignVerdictCases(mod),
+};
+
+export const ACT_HEAD_LANE_PLAN_KEY = 'server/src/coord/overlordActHead.ts#actHeadLanePlan';
+
+export function actHeadLanePlanCases(m: Pick<Verdict, 'actHeadLanePlan'>): Record<string, SuiteCase> {
+  const HEAD = { kind: 'head', sequence: 4, journalId: D('a'), digest: D('b') } as const;
+  const SIGN = { sign: true } as const;
+  const asked = { file: 0, verdict: 0 };
+  const plan = (today: unknown, file: unknown = HEAD, verdict: unknown = SIGN): unknown => {
+    asked.file = 0; asked.verdict = 0;
+    return m.actHeadLanePlan({ today: today as never, file: () => { asked.file += 1; return file as never; }, verdict: () => { asked.verdict += 1; return verdict as never; } });
+  };
+  return {
+    'today recorded writes nothing and reads no file': () => {
+      expect(plan('present')).toEqual({ kind: 'nothing', why: 'recorded-today' });
+      expect(asked).toEqual({ file: 0, verdict: 0 });
+    },
+    'a journal with no record writes nothing and says nothing new (every box at merge)': () => {
+      expect(plan('absent', { kind: 'empty' })).toEqual({ kind: 'nothing', why: 'no-record' });
+      expect(asked.verdict).toBe(0);
+    },
+    'today\'s row unreadable warns and reads no file': () => {
+      expect(plan({ unmeasured: 'locked' })).toEqual({ kind: 'warn', why: 'today\'s head row could not be read: locked' });
+      expect(asked.file).toBe(0);
+    },
+    'a journal that does not verify warns and writes nothing': () => {
+      expect(plan('absent', { kind: 'unverified', why: 'malformed' })).toEqual({ kind: 'warn', why: 'the act journal did not verify: malformed' });
+      expect(asked.verdict).toBe(0);
+    },
+    'a verified head records today\'s row with the verdict': () => {
+      expect(plan('absent', HEAD, SIGN)).toEqual({ kind: 'record', verdict: SIGN });
+      expect(plan('absent', HEAD, { sign: false, unsigned: 'shared-user' })).toEqual({ kind: 'record', verdict: { sign: false, unsigned: 'shared-user' } });
+    },
+  };
+}
+
+const LANE_SET: MutantSet<Verdict> = {
+  modulePath: path.join(ROOT, 'server/src/coord/overlordActHead.ts'),
+  mutants: [
+    { id: 'L1 today ignored', old: "if (f.today === 'present') return { kind: 'nothing', why: 'recorded-today' };", new: '' },
+    { id: 'L2 unreadable today records', old: "if (f.today !== 'absent') return { kind: 'warn'", new: "if (false) return { kind: 'warn'" },
+    { id: 'L3 an empty journal records', old: "if (file.kind === 'empty') return { kind: 'nothing', why: 'no-record' };", new: '' },
+    { id: 'L4 an unverified journal records', old: "if (file.kind === 'unverified') return { kind: 'warn'", new: "if (false) return { kind: 'warn'" },
+    { id: 'L5 the file read first', old: "  if (f.today === 'present') return { kind: 'nothing', why: 'recorded-today' };\n", new: "  f.file();\n  if (f.today === 'present') return { kind: 'nothing', why: 'recorded-today' };\n" },
+  ],
+  suite: (mod) => actHeadLanePlanCases(mod),
 };
 
 export function headExtendsCases(m: Pick<Head, 'headExtends'>): Record<string, SuiteCase> {
@@ -95,5 +150,6 @@ const EXTENDS_SET: MutantSet<Head> = {
 
 export const ACT_HEAD_MUTANT_SETS: Record<string, MutantSet<never>> = {
   [ACT_HEAD_SIGN_VERDICT_KEY]: VERDICT_SET as MutantSet<never>,
+  [ACT_HEAD_LANE_PLAN_KEY]: LANE_SET as MutantSet<never>,
   [HEAD_EXTENDS_KEY]: EXTENDS_SET as MutantSet<never>,
 };
