@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { expect } from 'vitest';
 import { buildChainedRecord, chainNext, type ChainedJournalRecord } from '../../src/chainedJournal.js';
 import { OVERLORD_ACTS_FORMAT, type OverlordActRecord } from '../../src/coord/overlordActRecords.js';
+import { ACT_HEAD_MUTANT_SETS } from './actHeadSets.js';
 import type { MutantSet, SuiteCase } from './mutate.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');
@@ -262,4 +263,5 @@ export const OVERLORD_ACT_JOURNAL_MUTANT_SETS: Record<string, MutantSet<never>> 
   [ACT_RECORD_ENTRY_KEY]: ENTRY_SET as MutantSet<never>,
   [ACT_JOURNAL_FOLD_KEY]: FOLD_SET as MutantSet<never>,
   [ACT_JOURNAL_HIGHEST_KEY]: HIGHEST_SET as MutantSet<never>,
+  ...ACT_HEAD_MUTANT_SETS,
 };
