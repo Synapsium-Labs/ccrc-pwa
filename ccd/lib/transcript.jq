@@ -9,7 +9,7 @@
 # `open`, `rate-limit [<resetsAt>]` or `none`, for the restart manifest's program, D-8368); and, for ccd/session-hook.sh's
 # roster-card wake arm (R-5a, D-8201), `idle_compaction_open` (whether the newest
 # compaction is an idle one with no turn since), and, for the same hook's main-turn Stop reply report (Overlord W1 chat,
-# PR B), `turn_reply($w)` (the reply of the turn a raw tail window ends in, `{entryUuid, text}` or nothing) and
+# PR B), `turn_reply($w; $k)` (the reply of the turn a raw tail window ends in, after the last reported key, `{entryUuid, text}` or nothing) and
 # `reply_report` (its report body, the text cut at a code point). Everything else is a
 # helper. A named jq argument (`--arg u`) is not visible inside a module, so
 # the uuid travels as a parameter.
@@ -409,7 +409,13 @@ def loads_body($o; $x; $id; $rid; $lp; $rc; $ver; $wd; $cf; $at):
 #     the reply is the Overlord's own text, not a decision.
 #   * Sidechain rows (`isSidechain == true`) are no part of the main thread's turn: they neither open it nor key it nor
 #     add text. Rows that are neither user nor assistant are stepped over.
-#   * THE TURN begins after the newest main-thread user row that is a real prompt, by this module's own `prompt` (the one
+#   * A REPLY IS ONE TURN'S TEXT (review 4173 F1, call 1952): `$k` is the key of the reply the hook last reported for this session
+#     (`$REG/<id>.replykey`, "" when none is kept). When a main-thread row of the window bears it, THE TURN begins right after that
+#     row, whatever opened the turn: a background-task notice or a typed command (neither is a prompt) after a reported Stop takes
+#     in nothing of the reported reply, and a prompt the model took in the middle of a turn does not move the start, so the turn's
+#     earlier text is still reported. The row is found from the end by the same tail recursion. A key the window does not hold
+#     (the window has moved past it, or it is another transcript's) or no key falls back to the rule below.
+#   * Failing that, THE TURN begins after the newest main-thread user row that is a real prompt, by this module's own `prompt` (the one
 #     definition the continuation reader uses: not a tool result, not meta, not a compact summary, not a slash command's
 #     echo, a leading tag or an interruption notice). It is found from the end, by a tail recursion that stops at the first
 #     hit (no `first`, `limit` or `label`, the jq 1.6 rule above), so a window of large tool results costs one pass.
@@ -427,20 +433,22 @@ def loads_body($o; $x; $id; $rid; $lp; $rc; $ver; $wd; $cf; $at):
 #   * THE KEY, `entryUuid`, is the uuid of the turn's LAST main-thread assistant row that is not an API error row, whether or not that row has text, in
 #     the 36-character lower-case shape `continued_in` reads (a row with no such uuid answers nothing, as nothing could key it).
 # `reply_cut($max)` cuts a string to at most `$max` UTF-8 bytes at a code point, never mid-character, and says whether it did;
-# `reply_report($w; $id; $u; $turnAt; $at; $max)` is the report's whole body over a window: the `reply` kind's six fields and the
-# two ids, `fromUuid` being the payload's session id. `droppedBefore` is the hook's spool's to add, never this body's.
+# `reply_report($w; $k; $id; $turnAt; $at; $max)` is the report's body over a window: the `reply` kind's six fields and `fromId`.
+# It carries no `fromUuid`: the hook adds the event's own session id at each send (`_hook_reply_send`), so a body spooled before the
+# registry's uuid moved is sent under the current one (review 4173 F3). `droppedBefore` is the hook's spool's to add, never this body's.
 def tr_isuuid: type == "string" and length == 36 and ([explode[] | select((. == 45 or (. >= 48 and . <= 57) or (. >= 97 and . <= 102)) | not)] == []);
 def tr_nonblank: explode as $c | def f($i): if $i >= ($c | length) then false elif ($c[$i] | jsws) then f($i + 1) else true end; f(0);
 def tr_rows($w): [$w | split("\n")[] | select(length > 0) | [turn_row] | .[]
   | select(type == "object" and .isSidechain != true and (.type == "user" or .type == "assistant"))];
 def tr_find($rows; $i): if $i < 0 then null elif $rows[$i].type == "user" and ($rows[$i] | prompt) then $i else tr_find($rows; $i - 1) end;
+def tr_key($rows; $k; $i): if $k == "" or $i < 0 then null elif $rows[$i].uuid == $k then $i else tr_key($rows; $k; $i - 1) end;
 def tr_texts: (.message | if type == "object" then .content else null end) as $c
   | if ($c | type) == "string" then [$c]
     elif ($c | type) == "array" then [$c[] | select(type == "object" and .type == "text" and (.text | type) == "string") | .text]
     else [] end;
-def turn_reply($w):
+def turn_reply($w; $k):
   tr_rows($w) as $rows
-  | tr_find($rows; ($rows | length) - 1) as $p
+  | (tr_key($rows; $k; ($rows | length) - 1) // tr_find($rows; ($rows | length) - 1)) as $p
   | if $p == null then empty
     else [$rows[$p + 1:][] | select(.type == "assistant" and .isApiErrorMessage != true)] as $a
     | if ($a | length) == 0 or ($a[-1].uuid | tr_isuuid | not) then empty
@@ -452,6 +460,6 @@ def reply_cut($max): if utf8bytelength <= $max then {text: ., truncated: false}
   else (.[:$max] | explode) as $c
   | [foreach $c[] as $x (0; . + (if $x < 128 then 1 elif $x < 2048 then 2 elif $x < 65536 then 3 else 4 end); .)] as $s
   | {text: ($c[:([$s[] | select(. <= $max)] | length)] | implode), truncated: true} end;
-def reply_report($w; $id; $u; $turnAt; $at; $max):
-  turn_reply($w) | (.text | reply_cut($max)) as $c
-  | {kind: "reply", entryUuid, turnAt: $turnAt, text: $c.text, truncated: $c.truncated, fromId: $id, fromUuid: $u, at: $at};
+def reply_report($w; $k; $id; $turnAt; $at; $max):
+  turn_reply($w; $k) | (.text | reply_cut($max)) as $c
+  | {kind: "reply", entryUuid, turnAt: $turnAt, text: $c.text, truncated: $c.truncated, fromId: $id, at: $at};

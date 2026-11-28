@@ -3347,48 +3347,54 @@ _hook_door_report() { _hook_net_bound "$(( REPORT_TIMEOUT_S * 1000 ))" || return
 # Defined here, beside the door's one sender, and CALLED after the loads arm (`_hook_reply_report || true`): defined above the child deny arm for the reason
 # `_hook_mail_hold` is (slug growth-counter-false-heredoc), so the growth check counts its comment lines as comments.
 # At a MAIN-thread `Stop` (never a SubagentStop) of a session with a door (`CCRC_DOOR_NONCE_SHA256`, a fact, never a role's name), not a child, whose registry row
-# stands, the hook reports the turn's reply, `{kind: "reply", entryUuid, turnAt, text, truncated, fromId, fromUuid, at}`, through the door's one sender verb
+# stands, the hook reports the turn's reply, `{kind: "reply", entryUuid, turnAt, text, truncated, fromId, at, fromUuid}`, through the door's one sender verb
 # (`ccrc-api sessions report`), so the private store records it when the turn ends. The gate is builtins only and comes FIRST: a session with no door, a
-# child, a SubagentStop or a row that is gone pays no process, no transcript read. The reply is read from the transcript, never from the Stop payload: the pinned
+# child, a SubagentStop or a row that is gone pays no process at all (session-hook-door-reports.test.ts runs the function alone to pin it). The reply is read from the transcript, never from the Stop payload: the pinned
 # build's Stop payload may carry the turn's last assistant text (`last_assistant_message`), but one turn may hold several text entries (text, a tool call, more
 # text), and only the transcript has them all. `tail -c REPLY_READ_MAX_BYTES` of `transcript_path` (an absolute regular file) goes through `reply_report`
 # (ccd/lib/transcript.jq: `turn_reply`, the text cut at a code point to REPLY_REPORT_MAX_BYTES UTF-8 bytes with `truncated`); no reply is no report and nothing spooled.
+# A REPLY IS ONE TURN'S TEXT (review 4173 F1): the key of each body built is kept in `$REG/<id>.replykey` (owner-only, written through a temp file and `mv`,
+# a symlink never followed, taken by the registry purge and by a purge during the arm), and handed to `turn_reply`, so the next turn begins after that row
+# whatever opened it. The body carries no `fromUuid`: each send adds the event's own session id (`psid`, refused unsent when it is not uuid-shaped), so a body
+# spooled before the registry's uuid moved goes under the current one (F3).
 # THE ONE REPORT THAT SPOOLS: every other report is sent once because the next event heals a lost one, and nothing later heals a lost reply. Its spool,
 # `$REG/<id>.replyspool` (created under umask 077: the file holds the operator's affairs in the Overlord's words), is one body a line, written without a lock
 # while `generation` stands (the registry purge removes it once more after its lock, as `loadpending`), rewritten whole through a temp file and `mv`. At each
-# gated Stop the spool is resent oldest first, BEFORE this Stop's own report, and the first send that keeps its body stops the pass (the rest stay). A send is
-# answered by `CCRC_API_STATUS=line`'s `http <code>`: 200 removes the body; 401, 404 (an older server with no reply arm), 408, 429, any 5xx, no answer, a timeout, or no
-# time or network budget left keeps it (spooled, sent at the next Stop); any other 4xx (403 not-the-overlord, 400, 409) is refused for good, dropped, neither sent
-# again nor spooled. Past REPLY_SPOOL_MAX bodies the oldest is dropped and counted: the count is added, as `droppedBefore`, to the body that now stands oldest
+# gated Stop the spool is resent oldest first, BEFORE this Stop's own report, and the first send that keeps its body stops the pass: the rest stay, this Stop's
+# own included, so a newer body is never sent before an older one (F2). A send is
+# answered by `CCRC_API_STATUS=line`'s `http <code>`: 200 removes the body; 401, 404, 408, 429, a 403 whose word is `stale-uuid`, any 5xx, no answer, a timeout, or no
+# time or network budget left keeps it (spooled, sent at the next Stop); any other 4xx (403 not-the-overlord, 400, 409; an older server with no reply arm answers
+# 400 bad-request) is refused for good, dropped, neither sent again nor spooled. Past REPLY_SPOOL_MAX bodies the oldest is dropped and counted: the count is added, as `droppedBefore`, to the body that now stands oldest
 # (the first one the gap is before), so it survives in the file to whichever Stop sends it. ONE deadline, REPORT_TIMEOUT_S from the arm's start, bounds the read, the
 # jq, every resend and the send; each send also asks `_hook_net_bound`, and one that runs out its bound (HOOK_NET_HUNG) stops every later send of the invocation, the
 # body staying spooled. Every path ends at the generation re-check (a purge during the arm orphans nothing). Prints nothing, never changes the exit code. Two
 # Stops of one session never overlap in practice (a turn lies between), and there is no lock: a lost append would be one the server's key makes a replay anyway.
-_hook_reply_send() {   # <body JSON> <deadline ms> -> 0 answered 200; 1 kept (not answered, hung, no time, 401/404/408/429/5xx); 2 refused for good (any other 4xx)
+_hook_reply_send() {   # <body JSON> <deadline ms> -> 0 answered 200; 1 kept (not answered, hung, no time, no uuid, 401/404/408/429/stale-uuid/5xx); 2 refused for good (any other 4xx)
   local out left=$(( $2 - $(_hook_epoch_ms) ))
-  _hook_net_bound "$left" || return 1
-  out=$(printf '%s\n' "$1" | CCRC_API_STATUS=line _hook_timeout "$NET_B" "$HOME/.local/bin/ccrc-api" sessions report "$id" --json - 2>&1)
+  [[ "$psid" =~ ^[0-9a-f-]{36}$ ]] && _hook_net_bound "$left" || return 1
+  out=$(printf '%s\n' "${1%\}},\"fromUuid\":\"$psid\"}" | CCRC_API_STATUS=line _hook_timeout "$NET_B" "$HOME/.local/bin/ccrc-api" sessions report "$id" --json - 2>&1)
   case "$?" in 0) ;; 124) HOOK_NET_HUNG=1; return 1 ;; *) return 1 ;; esac
-  case "${out##*$'\n'}" in 'http 200') return 0 ;; 'http 401'|'http 404'|'http 408'|'http 429') return 1 ;; 'http 4'[0-9][0-9]) return 2 ;; *) return 1 ;; esac
+  case "${out##*$'\n'}" in 'http 200') return 0 ;; 'http 401'|'http 404'|'http 408'|'http 429') return 1 ;; 'http 403') [[ "$out" == *'"stale-uuid"'* ]] && return 1; return 2 ;; 'http 4'[0-9][0-9]) return 2 ;; *) return 1 ;; esac
 }
 _hook_reply_report() {   # 0 on every path
-  local f="$REG/$id.replyspool" t0 dl tp body="" sp=() keep=() gone=() l r pass=1 IFS=$'\n'
+  local f="$REG/$id.replyspool" kf="$REG/$id.replykey" k="" t0 dl tp body="" sp=() keep=() gone=() l r pass=1 IFS=$'\n'
   [[ "$event" == Stop && -z "$paid" && "${CCRC_DOOR_NONCE_SHA256-}" =~ ^[0-9a-f]{64}$ && "$id" =~ ^[A-Za-z0-9_-]+$ \
     && -f "$REG/$id.generation" && ! -e "$REG/$id.child" && ! -L "$REG/$id.child" ]] || return 0
-  t0=$(_hook_epoch_ms); dl=$(( t0 + REPORT_TIMEOUT_S * 1000 ))
+  t0=$(_hook_epoch_ms); dl=$(( t0 + REPORT_TIMEOUT_S * 1000 )); [[ -f "$kf" && ! -L "$kf" ]] && { IFS= read -r k < "$kf"; } 2>/dev/null
   [[ -f "$f" && ! -L "$f" ]] && { while IFS= read -r l; do [[ "$l" == '{'* ]] && sp+=("$l"); done < "$f"; } 2>/dev/null
   tp=$(jq -r '.transcript_path | strings' <<<"$payload" 2>/dev/null)
   if [[ "$tp" == /* && -f "$tp" ]]; then
     body=$(_hook_timeout "$(_hook_left "$dl")" tail -c "$REPLY_READ_MAX_BYTES" -- "$tp" 2>/dev/null | _hook_timeout "$(_hook_left "$dl")" jq -Rsc -L "$ROSTER_CARD_LIB" \
-      --arg id "$id" --arg u "$psid" --argjson t "$t0" --argjson a "$(_hook_epoch_ms)" --argjson m "$REPLY_REPORT_MAX_BYTES" \
-      'include "transcript"; reply_report(.; $id; $u; $t; $a; $m)' 2>/dev/null) || body=""
+      --arg k "${k:0:36}" --arg id "$id" --argjson t "$t0" --argjson a "$(_hook_epoch_ms)" --argjson m "$REPLY_REPORT_MAX_BYTES" \
+      'include "transcript"; reply_report(.; $k; $id; $t; $a; $m)' 2>/dev/null) || body=""
   fi
   for l in ${sp[@]+"${sp[@]}"}; do
     (( pass )) || { keep+=("$l"); continue; }
     _hook_reply_send "$l" "$dl"; r=$?
     (( r == 1 )) && { pass=0; keep+=("$l"); }
   done
-  if [[ "$body" == '{'* ]]; then _hook_reply_send "$body" "$dl"; r=$?; (( r == 1 )) && keep+=("$body"); fi
+  if [[ "$body" == '{'* ]]; then l=${body#*\"entryUuid\":\"}; { ( umask 077; printf '%s\n' "${l%%\"*}" > "$kf$$" ) && mv -f -- "$kf$$" "$kf"; } 2>/dev/null
+    (( pass )) && { _hook_reply_send "$body" "$dl"; r=$?; } || r=1; (( r == 1 )) && keep+=("$body"); fi
   while (( ${#keep[@]} > REPLY_SPOOL_MAX )); do gone+=("${keep[0]}"); keep=("${keep[@]:1}"); done
   # Each body dropped counts one and takes with it the count it carried, so a count is never lost; it moves to the body that now stands oldest.
   (( ${#gone[@]} )) && { l=$(printf '%s\n' "${gone[@]}" "${keep[0]}" | jq -sc '(.[:-1] | map((.droppedBefore // 0) + 1) | add) as $n | .[-1] | .droppedBefore = ((.droppedBefore // 0) + $n)' 2>/dev/null) && [[ "$l" == '{'* ]] && keep[0]="$l"; }
@@ -3397,7 +3403,7 @@ _hook_reply_report() {   # 0 on every path
       { ( umask 077; printf '%s\n' "${keep[@]}" > "$f$$" ) && mv -f -- "$f$$" "$f"; } 2>/dev/null || rm -f -- "$f$$" 2>/dev/null
     else rm -f -- "$f" 2>/dev/null; fi
   fi
-  [[ -e "$REG/$id.generation" ]] || rm -f -- "$f" "$f$$" 2>/dev/null   # a purge during the arm: side (a); `_reg_purge` is side (b)
+  [[ -e "$REG/$id.generation" ]] || rm -f -- "$f" "$f$$" "$kf" "$kf$$" 2>/dev/null   # a purge during the arm: side (a); `_reg_purge` is side (b)
   return 0
 }
 MODEL_REPORT_JQ='def mdl: (if type == "string" then . elif type == "object" and (.id | type) == "string" then .id else "" end) | explode | map(select(. >= 32 and . <= 126)) | implode | .[0:128] | if . == "" then null else . end; def typed: (.prompt | strings | until(. == "" or (.[0:1] | IN(" ", "\t", "\n", "\r") | not); .[1:])) // "";'

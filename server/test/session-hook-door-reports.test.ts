@@ -38,8 +38,9 @@ function client(): void {
     'cat >> "$HOME/reports.log"',
     `[ -f "$HOME/purge-on-send" ] && rm -f "$HOME/.cc-sessions/${ID}.generation"`,
     '[ -f "$HOME/hang" ] && exec sleep 30',
-    // The real client: the body on stdout, and `http <code>` last on stderr (the code is the stub's `status` file, 200 by default).
-    'printf "{\\"ok\\":true}\\n"',
+    // The real client: the body on stdout, and `http <code>` last on stderr (the code is the stub's `status` file, 200 by default;
+    // the body is its `answer` file when one stands, so a case can answer a refusal's word).
+    'if [ -f "$HOME/answer" ]; then cat "$HOME/answer"; else printf "{\\"ok\\":true}\\n"; fi',
     'printf "http %s\\n" "$(cat "$HOME/status" 2>/dev/null || echo 200)" >&2',
     'exit 0',
   ].join('\n') + '\n', { mode: 0o755 });
@@ -367,7 +368,8 @@ describe('the reply report: sent at a main Stop, spooled and resent (the one rep
     expect(out, 'the arm prints nothing').toBe('');
     const rs = reports();
     expect(rs).toHaveLength(1);
-    expect(Object.keys(rs[0]!)).toEqual(['kind', 'entryUuid', 'turnAt', 'text', 'truncated', 'fromId', 'fromUuid', 'at']);
+    // `fromUuid` last: the hook adds the event's own session id at the send, never in the body it builds or spools (review 4173 F3).
+    expect(Object.keys(rs[0]!)).toEqual(['kind', 'entryUuid', 'turnAt', 'text', 'truncated', 'fromId', 'at', 'fromUuid']);
     expect(rs[0]).toMatchObject({ kind: 'reply', entryUuid: TU(7), text: 'the answer\n\nwith two paragraphs', truncated: false, fromId: ID, fromUuid: UUID });
     for (const k of ['turnAt', 'at']) {
       expect(Number.isInteger(rs[0]![k]), k).toBe(true);
@@ -442,10 +444,11 @@ describe('the reply report: sent at a main Stop, spooled and resent (the one rep
 
   it('a text past the cap is cut at a code point, never mid-character, with truncated: true; one exactly at the cap is whole', () => {
     expect(REPLY_REPORT_MAX_BYTES).toBeGreaterThan(1000);
-    for (const [ch, want] of [['€', 3], ['é', 2], ['😀', 4]] as const) {
+    // Each turn its own key: a Stop over a key already reported reports nothing (F1).
+    for (const [n, ch, want] of [[23, '€', 3], [24, 'é', 2], [25, '😀', 4]] as const) {
       fs.rmSync(path.join(home, 'reports.log'), { force: true });
       const head = 'a'.repeat(REPLY_REPORT_MAX_BYTES - want + 1);   // the character ends one byte past the cap
-      run(stopFor(20, `${head}${ch}tail`));
+      run(stopFor(n, `${head}${ch}tail`));
       const [r] = reports();
       expect(r!['truncated'], ch).toBe(true);
       expect(r!['text'], ch).toBe(head);
@@ -466,7 +469,9 @@ describe('the reply report: sent at a main Stop, spooled and resent (the one rep
       expect(run(stopFor(30)).out).toBe('');
       const sent = rawReports();
       expect(sent).toHaveLength(1);
-      expect(fs.readFileSync(spoolPath(), 'utf8'), 'one body a line, the very body that was sent').toBe(`${sent[0]}\n`);
+      expect(sent[0]!.endsWith(`,"fromUuid":"${UUID}"}`), 'the send adds the event\'s session id').toBe(true);
+      expect(fs.readFileSync(spoolPath(), 'utf8'), 'one body a line: the body that was sent, less the uuid the send added')
+        .toBe(`${sent[0]!.slice(0, -`,"fromUuid":"${UUID}"}`.length)}}\n`);
       expect(fs.statSync(spoolPath()).mode & 0o777, 'the spool is 0600').toBe(0o600);
       setStatus(null);
       fs.rmSync(path.join(home, 'reports.log'));
@@ -487,15 +492,47 @@ describe('the reply report: sent at a main Stop, spooled and resent (the one rep
       expect(fs.readdirSync(reg()).filter((f) => f.startsWith(`${ID}.replyspool`) && f !== `${ID}.replyspool`), 'no temp file is left').toEqual([]);
     });
 
-    it('the first failure stops the resend pass: one resend, then this Stop\'s own, and the rest stay', () => {
+    it('the first failure stops the pass: one resend, and nothing newer is sent before it, this Stop\'s own included (F2)', () => {
       setStatus(502);
-      run(stopFor(50)); run(stopFor(51));
-      expect(spoolLines()).toHaveLength(2);
+      run(stopFor(50));
+      expect(reports().map((r) => r['entryUuid']), 'the first Stop sends its own').toEqual([TU(50)]);
+      fs.rmSync(path.join(home, 'reports.log'));
+      run(stopFor(51));
+      expect(reports().map((r) => r['entryUuid']), 'the head is kept, so the Stop\'s own is kept unsent behind it').toEqual([TU(50)]);
       fs.rmSync(path.join(home, 'reports.log'));
       run(stopFor(52));
-      // The head is tried (502) and stops the pass; the Stop's own is sent once too. Neither of 51 is tried a second time.
-      expect(reports().map((r) => r['entryUuid'])).toEqual([TU(50), TU(52)]);
+      // The head is tried (502) and stops the pass; neither 51 nor this Stop's own is sent before it.
+      expect(reports().map((r) => r['entryUuid'])).toEqual([TU(50)]);
       expect(spoolLines().map((r) => r['entryUuid'])).toEqual([TU(50), TU(51), TU(52)]);
+      // Once the head is answered, the rest go in order, oldest first.
+      setStatus(null);
+      fs.rmSync(path.join(home, 'reports.log'));
+      run(stopFor(53));
+      expect(reports().map((r) => r['entryUuid'])).toEqual([TU(50), TU(51), TU(52), TU(53)]);
+      expect(fs.existsSync(spoolPath())).toBe(false);
+    });
+
+    it('a spooled body refused `stale-uuid` (the registry\'s uuid moved) is kept, ends the pass, and is sent under the current uuid (F3)', () => {
+      const NEXT = '00000000-0000-4000-8000-000000000002';
+      setStatus(403);
+      fs.writeFileSync(path.join(home, 'answer'), '{"ok":false,"error":"stale-uuid","detail":"the registry names another uuid"}\n');
+      run(stopFor(57));
+      expect(spoolLines().map((r) => r['entryUuid']), 'stale-uuid is not refused for good').toEqual([TU(57)]);
+      expect(spoolLines()[0], 'the spool holds no uuid').not.toHaveProperty('fromUuid');
+      // The registry follows the new conversation; the next Stop carries its session id, and the kept body goes under it.
+      setStatus(null);
+      fs.rmSync(path.join(home, 'answer'));
+      fs.rmSync(path.join(home, 'reports.log'));
+      run(stop({ transcript_path: transcript(58, 'reply 58'), session_id: NEXT }));
+      expect(reports().map((r) => [r['entryUuid'], r['fromUuid']])).toEqual([[TU(57), NEXT], [TU(58), NEXT]]);
+      expect(fs.existsSync(spoolPath())).toBe(false);
+    });
+
+    it('any other 403 word is still refused for good', () => {
+      setStatus(403);
+      fs.writeFileSync(path.join(home, 'answer'), '{"ok":false,"error":"not-the-overlord"}\n');
+      run(stopFor(59));
+      expect(fs.existsSync(spoolPath())).toBe(false);
     });
 
     it('a stub answering 403 (not-the-overlord) does not spool: the refusal is for good, and a resend would only repeat it', () => {
@@ -509,16 +546,17 @@ describe('the reply report: sent at a main Stop, spooled and resent (the one rep
     });
 
     it('keeps a body for 401, 404, 408, 429 and a 5xx, and drops it for any other 4xx (403, 400, 409, 413, 422)', () => {
+      // Each code its own turn (its own key, F1): the case asks what the answer does to a body, not what a re-fired Stop does.
       for (const code of [401, 404, 408, 429, 500, 502, 503, 504]) {
         fs.rmSync(spoolPath(), { force: true });
         setStatus(code);
-        run(stopFor(60));
-        expect(spoolLines().map((r) => r['entryUuid']), String(code)).toEqual([TU(60)]);
+        run(stopFor(code));
+        expect(spoolLines().map((r) => r['entryUuid']), String(code)).toEqual([TU(code)]);
       }
       for (const code of [400, 403, 409, 413, 422]) {
         fs.rmSync(spoolPath(), { force: true });
         setStatus(code);
-        expect(run(stopFor(61)).out).toBe('');
+        expect(run(stopFor(code + 1000)).out).toBe('');
         expect(fs.existsSync(spoolPath()), `${code} is refused for good: nothing is spooled`).toBe(false);
       }
     });
@@ -585,6 +623,108 @@ describe('the reply report: sent at a main Stop, spooled and resent (the one rep
       expect(fs.readFileSync(target, 'utf8'), 'and not written through').toBe('{"kind":"reply","entryUuid":"x"}\n');
       expect(fs.lstatSync(spoolPath()).isFile(), 'the spool is a regular file again').toBe(true);
       expect(spoolLines().map((r) => r['entryUuid'])).toEqual([TU(130)]);
+    });
+  });
+
+  // A REPLY IS ONE TURN'S TEXT (review 4173 F1, call 1952): the hook keeps the key of the reply it built last, in
+  // `$REG/<id>.replykey` (owner-only, taken with the registry row), and the next Stop's turn begins after that row.
+  describe('the reported key bounds the next turn (F1)', () => {
+    const keyPath = (): string => reg(`${ID}.replykey`);
+    const rows = (...r: object[]): string => r.map((x) => JSON.stringify(x)).join('\n') + '\n';
+    const u = (n: number, content: string): object => ({ type: 'user', uuid: TU(n), message: { role: 'user', content } });
+    const a = (n: number, t: string): object => ({ type: 'assistant', uuid: TU(n), message: { role: 'assistant', stop_reason: 'end_turn', content: [{ type: 'text', text: t }] } });
+    const NOTICE = '<task-notification><task-id>b1</task-id><status>completed</status></task-notification>';
+
+    it('a reply built keeps its key, in a file only its owner reads; the next Stop over the same transcript starts after it', () => {
+      const f = path.join(home, 'live.jsonl');
+      fs.writeFileSync(f, rows(u(1, 'the prompt'), a(2, 'REPLY-A')));
+      run(stop({ transcript_path: f }));
+      expect(fs.readFileSync(keyPath(), 'utf8').trim()).toBe(TU(2));
+      expect(fs.statSync(keyPath()).mode & 0o777, 'the key is 0600').toBe(0o600);
+      // A background-task notice opens the next turn: it is no prompt, so only the key keeps the earlier reply out.
+      fs.appendFileSync(f, rows(u(3, NOTICE), a(4, 'reply B')));
+      fs.rmSync(path.join(home, 'reports.log'));
+      run(stop({ transcript_path: f }));
+      expect(reports().map((r) => [r['entryUuid'], r['text']])).toEqual([[TU(4), 'reply B']]);
+      expect(fs.readFileSync(keyPath(), 'utf8').trim()).toBe(TU(4));
+      // The same Stop fired again over the same rows reports nothing.
+      fs.rmSync(path.join(home, 'reports.log'));
+      run(stop({ transcript_path: f }));
+      expect(reports()).toEqual([]);
+    });
+
+    it('a body that is kept (spooled) still moves the key: it was reported, and its text is never taken into the next turn', () => {
+      const f = path.join(home, 'live.jsonl');
+      fs.writeFileSync(f, rows(u(1, 'the prompt'), a(2, 'REPLY-A')));
+      setStatus(502);
+      run(stop({ transcript_path: f }));
+      expect(fs.readFileSync(keyPath(), 'utf8').trim()).toBe(TU(2));
+      setStatus(null);
+      fs.appendFileSync(f, rows(u(3, NOTICE), a(4, 'reply B')));
+      fs.rmSync(path.join(home, 'reports.log'));
+      run(stop({ transcript_path: f }));
+      expect(reports().map((r) => [r['entryUuid'], r['text']])).toEqual([[TU(2), 'REPLY-A'], [TU(4), 'reply B']]);
+    });
+
+    it('a key file that is a symlink is not followed, and a purge during the arm takes the key too', () => {
+      const f = path.join(home, 'live.jsonl');
+      fs.writeFileSync(f, rows(u(1, 'the prompt'), a(2, 'REPLY-A')));
+      const elsewhere = path.join(home, 'elsewhere');
+      fs.writeFileSync(elsewhere, 'untouched\n');
+      fs.symlinkSync(elsewhere, keyPath());
+      run(stop({ transcript_path: f }));
+      expect(reports().map((r) => r['entryUuid']), 'a symlinked key is no key: the prompt rule answers').toEqual([TU(2)]);
+      expect(fs.readFileSync(elsewhere, 'utf8'), 'the write never goes through the link').toBe('untouched\n');
+      expect(fs.lstatSync(keyPath()).isSymbolicLink(), 'the key is replaced, not followed').toBe(false);
+      fs.rmSync(keyPath(), { force: true });
+      fs.writeFileSync(path.join(home, 'purge-on-send'), '');
+      run(stop({ transcript_path: f }));
+      expect(fs.existsSync(keyPath()), 'the generation went during the arm: no key is left behind').toBe(false);
+    });
+  });
+
+  // NO PROCESS BEFORE THE GATE (review 4173 F9): the arm's function, cut from the hook and run alone with no PATH, a recorder for any
+  // command bash cannot find and recorders for the helpers it calls, spawns nothing for a session with no door, a child, a
+  // SubagentStop or a row that is gone. Moving any command above the gate makes the record non-empty.
+  describe('the gate spawns no process at all (F9)', () => {
+    const body = (): string => {
+      const text = fs.readFileSync(HOOK, 'utf8');
+      const m = /^_hook_reply_report\(\) \{[^]*?\n\}\n/m.exec(text);
+      expect(m, 'the function is in the hook').not.toBeNull();
+      return m![0];
+    };
+    const spawned = (env: Record<string, string>, files: Record<string, string> = {}): string[] => {
+      const dir = mkTmp('ccrc-reply-gate-');
+      const regDir = path.join(dir, 'reg');
+      fs.mkdirSync(regDir);
+      for (const [n, v] of Object.entries(files)) fs.writeFileSync(path.join(regDir, n), v);
+      const log = path.join(dir, 'spawned');
+      const script = [
+        `command_not_found_handle() { printf '%s\\n' "$1" >> ${JSON.stringify(log)}; return 127; }`,
+        ...['_hook_epoch_ms', '_hook_timeout', '_hook_left', '_hook_net_bound', '_hook_reply_send']
+          .map((fn) => `${fn}() { printf '%s\\n' ${fn} >> ${JSON.stringify(log)}; return 1; }`),
+        `REG=${JSON.stringify(regDir)}; id=lane-a-project-a; payload='{}'; psid=${UUID}`,
+        body(), '_hook_reply_report',
+      ].join('\n');
+      const r = spawnSync('/bin/bash', ['-c', script], { encoding: 'utf8', env: { PATH: '', ...env } });
+      expect(r.status, r.stderr).toBe(0);
+      const got = fs.existsSync(log) ? fs.readFileSync(log, 'utf8').split('\n').filter((l) => l !== '') : [];
+      fs.rmSync(dir, { recursive: true, force: true });
+      return got;
+    };
+    const ROW = { 'lane-a-project-a.generation': GENERATION };
+
+    it('no door, a bad hash, a child, a SubagentStop, a reader\'s Stop and a row that is gone: nothing at all is run', () => {
+      expect(spawned({ event: 'Stop', paid: '' }, ROW), 'no door').toEqual([]);
+      expect(spawned({ event: 'Stop', paid: '', CCRC_DOOR_NONCE_SHA256: 'nope' }, ROW), 'a bad hash').toEqual([]);
+      expect(spawned({ event: 'Stop', paid: '', CCRC_DOOR_NONCE_SHA256: HASH }, { ...ROW, 'lane-a-project-a.child': '7' }), 'a child').toEqual([]);
+      expect(spawned({ event: 'SubagentStop', paid: '', CCRC_DOOR_NONCE_SHA256: HASH }, ROW), 'a SubagentStop').toEqual([]);
+      expect(spawned({ event: 'Stop', paid: '1', CCRC_DOOR_NONCE_SHA256: HASH }, ROW), 'a reader\'s Stop').toEqual([]);
+      expect(spawned({ event: 'Stop', paid: '', CCRC_DOOR_NONCE_SHA256: HASH }), 'a row that is gone').toEqual([]);
+    });
+
+    it('CONTROL: the same probe sees the arm\'s first call once the gate opens', () => {
+      expect(spawned({ event: 'Stop', paid: '', CCRC_DOOR_NONCE_SHA256: HASH }, ROW).length).toBeGreaterThan(0);
     });
   });
 

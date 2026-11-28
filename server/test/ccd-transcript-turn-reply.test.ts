@@ -21,7 +21,7 @@ import { mkTmp } from './tmpHelpers.js';
 import { REPLY_READ_MAX_BYTES } from '../../shared/operatorMessages.js';
 
 const LIB = path.resolve(__dirname, '../../ccd/lib');
-const PROG = 'include "transcript"; turn_reply(.)';
+const PROG = 'include "transcript"; turn_reply(.; $k)';
 const dir = mkTmp('ccd-turn-reply-');
 
 const BASH = spawnSync('sh', ['-c', 'command -v bash'], { encoding: 'utf8' }).stdout.trim();
@@ -53,11 +53,12 @@ const toolResult = (n: number, id: string, out: string): Rec =>
 const jsonl = (rows: Array<Rec | string>): string => rows.map((r) => (typeof r === 'string' ? r : JSON.stringify(r))).join('\n') + '\n';
 
 let seq = 0;
-/** `tail -c <bytes>` of the transcript into `jq -Rsc`, the hook's own shape; the answer's lines, parsed. */
-function reply(jq: string, transcript: string, bytes = REPLY_READ_MAX_BYTES): Array<{ entryUuid: string; text: string }> {
+/** `tail -c <bytes>` of the transcript into `jq -Rsc`, the hook's own shape, with the previously reported reply's key (`''`:
+ *  none kept); the answer's lines, parsed. */
+function reply(jq: string, transcript: string, bytes = REPLY_READ_MAX_BYTES, key = ''): Array<{ entryUuid: string; text: string }> {
   const f = path.join(dir, `t${seq++}.jsonl`);
   writeFileSync(f, transcript, 'utf8');
-  const r = spawnSyncGroup(BASH, ['-c', 'tail -c "$3" -- "$2" | "$1" -L "$L" -Rsc "$P"', '_', jq, f, String(bytes)],
+  const r = spawnSyncGroup(BASH, ['-c', 'tail -c "$3" -- "$2" | "$1" -L "$L" -Rsc --arg k "$4" "$P"', '_', jq, f, String(bytes), key],
     { encoding: 'utf8', timeout: 60_000, env: ghContainedEnv(dir, { ...process.env, L: LIB, P: PROG }, { systemd: true, tmux: true }) });
   expect(r.status, r.stderr).toBe(0);
   return String(r.stdout).split('\n').filter((l) => l !== '').map((l) => JSON.parse(l) as { entryUuid: string; text: string });
@@ -66,11 +67,55 @@ function reply(jq: string, transcript: string, bytes = REPLY_READ_MAX_BYTES): Ar
 for (const jq of jqBinaries()) {
   const version = spawnSync(jq, ['--version'], { encoding: 'utf8' }).stdout.trim() || 'unknown';
   describe(`turn_reply on ${version} (${jq})`, () => {
-    const one = (rows: Array<Rec | string>, bytes?: number): { entryUuid: string; text: string } | undefined => {
-      const got = reply(jq, jsonl(rows), bytes);
+    const one = (rows: Array<Rec | string>, bytes?: number, key = ''): { entryUuid: string; text: string } | undefined => {
+      const got = reply(jq, jsonl(rows), bytes, key);
       expect(got.length, 'at most one answer').toBeLessThanOrEqual(1);
       return got[0];
     };
+
+    // A REPLY IS ONE TURN'S TEXT (review 4173 F1, call 1952): nothing at or before the previously reported reply's key row is ever in
+    // it. The hook keeps that key (`$REG/<id>.replykey`); a turn begins after it when the window holds it, whatever opened the turn.
+    describe('the turn begins after the previously reported key (F1)', () => {
+      const notice = (n: number): Rec => user(n, '<task-notification><task-id>b1</task-id><status>completed</status></task-notification>');
+      const typed = (n: number): Rec => user(n, '<command-name>/status</command-name><command-message>status</command-message>');
+
+      it('a task notice that opens a turn after a reported Stop takes in nothing of the reported reply', () => {
+        const rows = [user(1, 'the prompt'), asst(2, [text('REPLY-A')]), notice(3), asst(4, [text('reply B')])];
+        expect(one(rows, undefined, U(2))).toEqual({ entryUuid: U(4), text: 'reply B' });
+      });
+
+      it('a typed command that opens a turn after a reported Stop takes in nothing of the reported reply', () => {
+        const rows = [user(1, 'the prompt'), asst(2, [text('REPLY-A')]), typed(3), asst(4, [text('reply B')])];
+        expect(one(rows, undefined, U(2))).toEqual({ entryUuid: U(4), text: 'reply B' });
+      });
+
+      it('two such turns in a row: each takes in only its own text', () => {
+        const rows = [user(1, 'the prompt'), asst(2, [text('REPLY-A')]), notice(3), asst(4, [text('REPLY-B')]), notice(5), asst(6, [text('reply C')])];
+        expect(one(rows.slice(0, 4), undefined, U(2))).toEqual({ entryUuid: U(4), text: 'REPLY-B' });
+        expect(one(rows, undefined, U(4))).toEqual({ entryUuid: U(6), text: 'reply C' });
+      });
+
+      it('a prompt taken in the middle of a turn does not move its start: the turn\'s earlier text is still reported', () => {
+        const rows = [user(1, 'old'), asst(2, [text('REPLY-A')]), user(3, 'the prompt'), asst(4, [text('first half')]),
+          user(5, 'typed while it worked'), asst(6, [text('second half')])];
+        expect(one(rows, undefined, U(2))).toEqual({ entryUuid: U(6), text: 'first half\n\nsecond half' });
+      });
+
+      it('the key itself and every row before it are never text: a Stop fired twice over the same rows reports nothing', () => {
+        expect(one([user(1, 'go'), asst(2, [text('REPLY-A')])], undefined, U(2))).toBeUndefined();
+        expect(one([user(1, 'go'), asst(2, [text('REPLY-A')]), notice(3)], undefined, U(2))).toBeUndefined();
+      });
+
+      it('a key the window does not hold (an older window, another transcript) falls back to the newest real prompt', () => {
+        const rows = [user(1, 'old'), asst(2, [text('OLD')]), user(3, 'the prompt'), asst(4, [text('the answer')])];
+        expect(one(rows, undefined, '00000000-0000-4000-8000-999999999999')).toEqual({ entryUuid: U(4), text: 'the answer' });
+      });
+
+      it('a sidechain row bearing the key is not the bound: only a main-thread row is', () => {
+        const rows = [user(1, 'the prompt'), asst(2, [text('part one')]), asst(3, [text('SIDE')], { isSidechain: true }), asst(4, [text('part two')])];
+        expect(one(rows, undefined, U(3))).toEqual({ entryUuid: U(4), text: 'part one\n\npart two' });
+      });
+    });
 
     it('a turn of one text entry answers its text, keyed by that entry', () => {
       expect(one([user(1, 'hello'), asst(2, [text('the answer')])])).toEqual({ entryUuid: U(2), text: 'the answer' });
@@ -226,22 +271,22 @@ for (const jq of jqBinaries()) {
       const report = (t: string, max = MAX): Rec | undefined => {
         const f = path.join(dir, `r${seq++}.jsonl`);
         writeFileSync(f, jsonl([user(1, 'go'), asst(2, [text(t)])]), 'utf8');
-        const r = spawnSyncGroup(BASH, ['-c', '"$1" -L "$L" -Rsc --arg id lane-a-project-a --arg u "$U" --argjson t 111 --argjson a 222 --argjson m "$M" "$P" < "$2"',
-          '_', jq, f], { encoding: 'utf8', timeout: 60_000, env: ghContainedEnv(dir, { ...process.env, L: LIB, U: U(9), M: String(max), P: 'include "transcript"; reply_report(.; $id; $u; $t; $a; $m)' }, { systemd: true, tmux: true }) });
+        const r = spawnSyncGroup(BASH, ['-c', '"$1" -L "$L" -Rsc --arg k "" --arg id lane-a-project-a --argjson t 111 --argjson a 222 --argjson m "$M" "$P" < "$2"',
+          '_', jq, f], { encoding: 'utf8', timeout: 60_000, env: ghContainedEnv(dir, { ...process.env, L: LIB, M: String(max), P: 'include "transcript"; reply_report(.; $k; $id; $t; $a; $m)' }, { systemd: true, tmux: true }) });
         expect(r.status, r.stderr).toBe(0);
         const line = String(r.stdout).trim();
         return line === '' ? undefined : (JSON.parse(line) as Rec);
       };
 
-      it('carries the six fields and the two ids, in the report door\'s shape', () => {
-        expect(report('short')).toEqual({ kind: 'reply', entryUuid: U(2), turnAt: 111, text: 'short', truncated: false, fromId: 'lane-a-project-a', fromUuid: U(9), at: 222 });
+      it('carries the six fields and the sender\'s id, in the report door\'s shape, and no uuid (the hook adds it at each send)', () => {
+        expect(report('short')).toEqual({ kind: 'reply', entryUuid: U(2), turnAt: 111, text: 'short', truncated: false, fromId: 'lane-a-project-a', at: 222 });
       });
 
       it('answers nothing for a turn with no text', () => {
         const f = path.join(dir, `r${seq++}.jsonl`);
         writeFileSync(f, jsonl([user(1, 'go')]), 'utf8');
-        const r = spawnSyncGroup(BASH, ['-c', '"$1" -L "$L" -Rsc --arg id i --arg u u --argjson t 1 --argjson a 2 --argjson m 20 "$P" < "$2"', '_', jq, f],
-          { encoding: 'utf8', timeout: 60_000, env: ghContainedEnv(dir, { ...process.env, L: LIB, P: 'include "transcript"; reply_report(.; $id; $u; $t; $a; $m)' }, { systemd: true, tmux: true }) });
+        const r = spawnSyncGroup(BASH, ['-c', '"$1" -L "$L" -Rsc --arg k "" --arg id i --argjson t 1 --argjson a 2 --argjson m 20 "$P" < "$2"', '_', jq, f],
+          { encoding: 'utf8', timeout: 60_000, env: ghContainedEnv(dir, { ...process.env, L: LIB, P: 'include "transcript"; reply_report(.; $k; $id; $t; $a; $m)' }, { systemd: true, tmux: true }) });
         expect(r.status, r.stderr).toBe(0);
         expect(String(r.stdout)).toBe('');
       });
