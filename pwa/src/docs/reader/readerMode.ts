@@ -168,7 +168,7 @@ function entered(e: { doc: string; activation: boolean; fullscreenEnabled: boole
   return { state: { on: true, doc: e.doc, how: 'fill', overlay: false, placed: e.placeFree }, acts };
 }
 
-/** The operator's own exit (the exit control, `r`, the frame's exit op, and a block): step back once when placed. */
+/** The operator's own exit (the exit control, `r`, the frame's exit op): step back once when placed. */
 function operatorExit(s: On): ReaderModeAnswer {
   return exited(s, { leaveFullScreen: true, stopReading: true, tail: 'step-back' });
 }
@@ -198,8 +198,13 @@ export function readerModeStep(state: ReaderModeState, event: ReaderModeEvent): 
     case 'exit-tap':
     case 'key':
     case 'frame-exit':
-    case 'block':
       return state.on ? operatorExit(state) : NOTHING(state);
+    case 'block':
+      // The world's exit, stepped back over as the operator's is (a block is no pop, so no dead reader entry is left), with no
+      // focus act (wave 62, review 4092 F1): the cover that caused it mounts over the Docs screen first. The sign-in cover puts
+      // focus on its passphrase field at its commit, and a focus act would take it to the frame or the main region under the
+      // cover; the block screen takes no focus, and its Reload is first in the tab order.
+      return state.on ? exited(state, { leaveFullScreen: true, stopReading: true, tail: 'step-back', focus: false }) : NOTHING(state);
     case 'full-screen-lost':
       // Never `step-back` at once: the browser's own pop may be in flight, so the step-back waits for `settled`.
       return state.on ? exited(state, { leaveFullScreen: false, stopReading: true, tail: 'await-settle' }) : NOTHING(state);
@@ -254,16 +259,15 @@ export function readerModeExitShown(input: { on: boolean; frameStands: boolean }
 
 /** Where the `focus-frame` act puts focus (X6 XR fix round 2, item 3, review 4043 A2). `frame`: the frame, as it always was: a
  *  focus request while reader mode stays on (Esc, the overlay's menu, a dropped frame's dismiss), and every exit that has a frame
- *  standing. `head-action`: an exit with no frame standing (the frameless Exit's own), while the Docs head's Reader mode action is
- *  shown and stays (delivery reads that from its own offer after the step, never from a scan of the page alone, review 4052 F1).
- *  `main`: the same exit with no such action on screen. The frameless Exit unmounts holding the focus, and with no frame
- *  to give it to, focus would otherwise fall to the page's body with nothing announced. A frame that arrives afterwards is
- *  neither asked nor given focus: this is an answer for the act that ran, not a state. */
-export type ReaderExitFocus = 'frame' | 'head-action' | 'main';
+ *  standing. `main`: an exit with no frame standing (the frameless Exit's own). The frameless Exit unmounts holding the focus,
+ *  and with no frame to give it to, focus would otherwise fall to the page's body with nothing announced. A frame that arrives
+ *  afterwards is neither asked nor given focus: this is an answer for the act that ran, not a state. (Wave 62, review 4092 F2: a
+ *  third answer, the Docs head's Reader mode action, is deleted. The head draws that action only while reader mode is offered,
+ *  which needs a ready frame, so with no frame standing it was never taken, and delivery could not pin it.) */
+export type ReaderExitFocus = 'frame' | 'main';
 
-export function readerModeExitFocus(input: { on: boolean; frameStands: boolean; headActionShown: boolean }): ReaderExitFocus {
-  if (input.on || input.frameStands) return 'frame';
-  return input.headActionShown ? 'head-action' : 'main';
+export function readerModeExitFocus(input: { on: boolean; frameStands: boolean }): ReaderExitFocus {
+  return input.on || input.frameStands ? 'frame' : 'main';
 }
 
 /** Where focus goes when a focus guard of the reading container is reached (spec 6.5; X6 XR fix round 1). `none`: reader mode is

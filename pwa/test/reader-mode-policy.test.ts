@@ -176,16 +176,18 @@ describe('reader mode: exits', () => {
     expect(readerModeStep(on({ placed: false, how: 'fill' }), { kind: 'exit-tap' }).acts).toEqual(['clear-fill', 'stop-reading', 'show-console', 'focus-frame']);
   });
 
-  it("reader mode: every exit shows the console and focuses the frame, and no exit closes the frame's overlay itself", () => {
+  it("reader mode: every exit but a block shows the console and focuses the frame, and no exit closes the frame's overlay itself", () => {
     const exits: readonly ReaderModeEvent[] = [
-      { kind: 'exit-tap' }, { kind: 'key' }, { kind: 'frame-exit' }, { kind: 'block' }, { kind: 'full-screen-lost' },
+      { kind: 'exit-tap' }, { kind: 'key' }, { kind: 'frame-exit' }, { kind: 'full-screen-lost' },
       { kind: 'place-popped' }, { kind: 'doc-changed', doc: 'other' }, { kind: 'fallback' },
     ];
-    for (const e of exits) {
+    for (const e of [...exits, { kind: 'block' } as const]) {
       const r = readerModeStep(on({ overlay: true }), e);
       expect(r.state, e.kind).toEqual(READER_MODE_OFF);
       expect(r.acts, e.kind).toContain('show-console');
-      expect(r.acts, e.kind).toContain('focus-frame');
+      // A block (the sign-in or block cover mounting over the Docs screen) takes no focus act: the cover's field keeps focus
+      // (wave 62, review 4092 F1).
+      expect(r.acts.includes('focus-frame'), e.kind).toBe(e.kind !== 'block');
       // the vocabulary has no act that closes the frame's overlay: the step-back's pop does (XR1.3)
       expect(r.acts.filter((a) => /overlay/.test(a)), e.kind).toEqual([]);
     }
@@ -216,8 +218,9 @@ describe('reader mode: exits', () => {
   it('reader mode: a block exits full screen and reader mode', () => {
     const r = readerModeStep(on(), { kind: 'block' });
     expect(r.state).toEqual(READER_MODE_OFF);
-    // A block is not a pop, so a placed entry is stepped back over once, as Exit does: no dead reader entry is left.
-    expect(r.acts).toEqual(['exit-full-screen', 'clear-fill', 'stop-reading', 'show-console', 'step-back', 'focus-frame']);
+    // A block is not a pop, so a placed entry is stepped back over once, as Exit does: no dead reader entry is left. It moves no
+    // focus: the cover that caused it has just put focus on its own field (wave 62, review 4092 F1).
+    expect(r.acts).toEqual(['exit-full-screen', 'clear-fill', 'stop-reading', 'show-console', 'step-back']);
     expect(readerModeStep(READER_MODE_OFF, { kind: 'block' })).toEqual({ state: READER_MODE_OFF, acts: [] });
   });
 
@@ -458,15 +461,13 @@ describe('reader mode: the Exit with no frame, and where the guards send focus (
     expect(readerModeGuardTarget({ ...base, guard: 'trailing' })).toBe('frame');
   });
 
-  it('exit focus: the frame while one stands or reader mode is still on, else the head\'s Reader mode action, else the main region (X6 XR fix round 2, review 4043 A2)', () => {
-    // An exit with a frame standing: the frame, whatever the head draws (every frame-standing exit is as it was).
-    expect(readerModeExitFocus({ on: false, frameStands: true, headActionShown: false })).toBe('frame');
-    expect(readerModeExitFocus({ on: false, frameStands: true, headActionShown: true })).toBe('frame');
+  it('exit focus: the frame while one stands or reader mode is still on, else the main region (X6 XR fix round 2, review 4043 A2; the head-action arm deleted in wave 62, review 4092 F2)', () => {
+    // An exit with a frame standing: the frame (every frame-standing exit is as it was).
+    expect(readerModeExitFocus({ on: false, frameStands: true })).toBe('frame');
     // A focus request while reader mode stays on (Esc, the overlay's menu, a dropped frame's dismiss) is the frame's, whatever stands.
-    expect(readerModeExitFocus({ on: true, frameStands: false, headActionShown: true })).toBe('frame');
-    expect(readerModeExitFocus({ on: true, frameStands: false, headActionShown: false })).toBe('frame');
-    // An exit with no frame standing: the head's action when it is on screen, the main region otherwise.
-    expect(readerModeExitFocus({ on: false, frameStands: false, headActionShown: true })).toBe('head-action');
-    expect(readerModeExitFocus({ on: false, frameStands: false, headActionShown: false })).toBe('main');
+    expect(readerModeExitFocus({ on: true, frameStands: false })).toBe('frame');
+    expect(readerModeExitFocus({ on: true, frameStands: true })).toBe('frame');
+    // An exit with no frame standing: the main region.
+    expect(readerModeExitFocus({ on: false, frameStands: false })).toBe('main');
   });
 });

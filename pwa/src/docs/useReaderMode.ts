@@ -271,16 +271,6 @@ function createController(sink: Sink, initialTurn: ReaderTurn) {
       () => { if (alive) step({ kind: 'full-screen-refused' }); },
     );
   };
-  /** The Docs head's Reader mode action when one is on the page: the head draws it (the desk row's, the compact row's or the one
-   *  bar's, all named `READER_MODE_TEXT.enter`) only while a ready frame offers reader mode, from React's state, so the page can
-   *  still hold the action of the render before a step. So it is asked for only when this controller's own offer stands after the
-   *  step (`focus-frame`, review 4052 F1). Read from the page, at the act, after the console is shown again. */
-  const headAction = (): HTMLElement | null => {
-    for (const b of document.querySelectorAll<HTMLButtonElement>('button')) {
-      if (b.getAttribute('aria-label') === READER_MODE_TEXT.enter && !b.disabled && b.isConnected) return b;
-    }
-    return null;
-  };
   const perform = (act: ReaderModeAct): void => {
     const c = container;
     switch (act) {
@@ -319,23 +309,14 @@ function createController(sink: Sink, initialTurn: ReaderTurn) {
       case 'stop-reading':
         frame?.setReading('off');
         break;
-      case 'focus-frame': {
-        // `readerModeExitFocus` decides (L1). Only an exit with no frame standing asks the page for a target: the head's action is
-        // looked for then and not otherwise, so every other focus request is the frame's alone, as before. The head draws that
-        // action from React's state, which is one commit behind this controller: a scan of the page can find the action of the
-        // render before this step, and that action unmounts in the next commit (a fall back after entering drops the frame in the
-        // same step, so the head still holds it here). So the action counts only while this controller's own offer says it stays
-        // after the step (`available()`, read now), and otherwise focus goes to the main region (X6 follow-up, review 4052 F1). That
-        // offer needs a ready frame, so with no frame standing it is off: as built, every frameless exit's focus goes to the main
-        // region, and the head-action branch is kept so delivery reads as the L1 rule (`readerModeExitFocus`) states it.
-        const frameless = !state.on && frame === null;
-        const head = frameless && available() ? headAction() : null;
-        const where = readerModeExitFocus({ on: state.on, frameStands: frame !== null, headActionShown: head !== null });
-        if (where === 'frame') frame?.focus();
-        else if (where === 'head-action') head?.focus();
+      case 'focus-frame':
+        // `readerModeExitFocus` decides (L1): the frame, or, for an exit with no frame standing, the main region. The page's Reader
+        // mode action is never a target (wave 62, review 4092 F2): the head draws it from React's state, one commit behind this
+        // controller, and only while a ready frame offers reader mode, so with no frame standing the action on the page is one the
+        // next commit takes away (review 4052 F1).
+        if (readerModeExitFocus({ on: state.on, frameStands: frame !== null }) === 'frame') frame?.focus();
         else focusShownLandmark();
         break;
-      }
       case 'announce':
         // Cleared first, so a repeat of the same sentence is announced again.
         sink.live('');

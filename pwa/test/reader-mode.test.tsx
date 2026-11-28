@@ -20,7 +20,8 @@ import {
 import { READER_EXIT_SETTLE_MS, READER_WAKE_IDLE_MS } from '../src/docs/reader/readerMode';
 import { READER_MODE_TEXT } from '../src/docs/reader/readerModeWords';
 import { DocsScreen } from '../src/screens/DocsScreen';
-import { clearAuthLost, raiseAuthLost } from '../src/lib/auth';
+import { clearAuthLost, raiseAuthLost, useAuthLost } from '../src/lib/auth';
+import { LoginScreen } from '../src/components/LoginScreen';
 import { navigate, useLocation } from '../src/lib/router';
 import { IDX_KEY, PLACES_RECORD_KEY, PLACE_KEY } from '../src/lib/historyPlaces';
 import { onPop, readPlaces, resetPopstateForTests } from '../src/lib/popstate';
@@ -1293,10 +1294,10 @@ describe('reader mode: where focus goes after the frameless Exit (X6 XR fix roun
 
   // X6 follow-up, review 4052 F1: this case first pinned focus ON the stand-in action. The real head draws its action only while
   // reader mode is offered, from React's state, one commit behind the controller, so an action on the page with no frame standing
-  // is one the next commit takes away (a fall back after entering: `reader-mode-mount.test.tsx`, the real head). Focus now goes to
-  // that action only while the controller's own offer says it stays after the step, which needs a ready frame, so here it goes to
-  // the main region; the stand-in action stays drawn, as a stale one would be.
-  it('no frame: a head Reader mode action still on the page is not taken, since the controller\'s own offer is off after the exit; focus goes to the main region (review 4052 F1)', async () => {
+  // is one the next commit takes away (a fall back after entering: `reader-mode-mount.test.tsx`, the real head). Wave 62 (review
+  // 4092 F2) deleted the head-action answer of the exit's focus, which that offer made unreachable: an exit with no frame standing
+  // focuses the main region, and the stand-in action stays drawn, as a stale one would be.
+  it('no frame: a head Reader mode action still on the page is not taken; an exit with no frame standing focuses the main region (review 4052 F1, review 4092 F2)', async () => {
     await onWithoutFrame(true);
     const action = screen.getByRole('button', { name: READER_MODE_TEXT.enter, hidden: true });
     tapExit();
@@ -1358,6 +1359,62 @@ describe('reader mode: where focus goes after the frameless Exit (X6 XR fix roun
     expect(latest.state.on, 'reader mode ended with the frame').toBe(true);
     expect(screen.getByRole('button', { name: READER_MODE_TEXT.exit }), 'CONTROL: the frameless Exit is drawn').toBeTruthy();
     expect(document.activeElement, 'focus was moved to the head or the main region').toBe(document.body);
+  });
+});
+
+describe('reader mode: a block exit leaves focus where the cover put it (wave 62, review 4092 F1)', () => {
+  /** The app's order (`app.tsx`): the sign-in cover is a preceding sibling of the shell, mounted while sign-in is lost, and the
+   *  shell (here the reading container's harness) stays mounted under it. The cover's passphrase field takes focus at its commit
+   *  (`autoFocus`); the hook's block runs in a passive effect after it. */
+  function Covered(p: { frame: ReaderModeFrame | null; places: ReaderModePlaces }): ReactNode {
+    const { lost } = useAuthLost();
+    return <>{lost && <LoginScreen />}<CtxHarness frame={p.frame} places={p.places} /></>;
+  }
+  /** Enters with a frame whose focus really moves the document's focus (to the host), and drops the frame when `frameless`. */
+  async function enterCovered(frameless: boolean): Promise<{ places: ReturnType<typeof fakePlaces>; host: HTMLElement }> {
+    // The cover reads the box's sign-in status once; held unanswered, so nothing clears the loss under the case.
+    vi.stubGlobal('fetch', vi.fn(() => new Promise<never>(() => undefined)));
+    installFullScreen();
+    const places = fakePlaces();
+    const frame = fakeFrame();
+    const view = render(<Covered frame={frame} places={places} />);
+    const host = screen.getByTestId('host');
+    host.tabIndex = -1;
+    frame.focus.mockImplementation(() => { host.focus(); });
+    act(() => { latest.enter('button'); });
+    await flush();
+    expect(latest.state.on, 'CONTROL: reader mode is on').toBe(true);
+    expect(document.activeElement, 'CONTROL: entering gave the frame focus').toBe(host);
+    if (frameless) {
+      view.rerender(<Covered frame={null} places={places} />);
+      await flush();
+      expect(latest.state.on, 'CONTROL: reader mode stays on without the frame').toBe(true);
+    }
+    return { places, host };
+  }
+  afterEach(() => { vi.unstubAllGlobals(); });
+
+  it('block: the sign-in cover mounting over reader mode with a frame standing keeps focus on its passphrase field', async () => {
+    const { places, host } = await enterCovered(false);
+    await act(async () => { raiseAuthLost('expired'); });
+    await flush();
+    const field = document.getElementById('ccrc-passphrase');
+    expect(field, 'CONTROL: the sign-in cover is drawn').not.toBeNull();
+    expect(latest.state.on, 'the sign-in cover did not end reader mode').toBe(false);
+    expect(places.stepBack, 'CONTROL: a block steps back over its place once').toHaveBeenCalledTimes(1);
+    expect(document.activeElement, 'the block exit took focus from the passphrase field (to the frame)').not.toBe(host);
+    expect(document.activeElement, 'the passphrase field lost focus').toBe(field);
+  });
+
+  it('block: the sign-in cover mounting over reader mode with no frame standing keeps focus on its passphrase field', async () => {
+    await enterCovered(true);
+    await act(async () => { raiseAuthLost('expired'); });
+    await flush();
+    const field = document.getElementById('ccrc-passphrase');
+    expect(field, 'CONTROL: the sign-in cover is drawn').not.toBeNull();
+    expect(latest.state.on, 'the sign-in cover did not end reader mode').toBe(false);
+    expect(document.activeElement, 'the block exit took focus from the passphrase field (to the main region)').not.toBe(document.getElementById('content'));
+    expect(document.activeElement, 'the passphrase field lost focus').toBe(field);
   });
 });
 
