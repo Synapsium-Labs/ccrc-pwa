@@ -740,14 +740,17 @@ describe('the reply report: sent at a main Stop, spooled and resent (the one rep
       fs.mkdirSync(regDir);
       for (const [n, v] of Object.entries(files)) fs.writeFileSync(path.join(regDir, n), v);
       const log = path.join(dir, 'spawned');
+      // The script's text is fixed: the record's path and the registry directory reach it as its positional arguments, never as
+      // text in it, and every recorder writes through the one variable.
       const script = [
-        `command_not_found_handle() { printf '%s\\n' "$1" >> ${JSON.stringify(log)}; return 127; }`,
+        'gate_probe_log=$1; REG=$2',
+        `command_not_found_handle() { printf '%s\\n' "$1" >> "$gate_probe_log"; return 127; }`,
         ...['_hook_epoch_ms', '_hook_timeout', '_hook_left', '_hook_net_bound', '_hook_reply_send']
-          .map((fn) => `${fn}() { printf '%s\\n' ${fn} >> ${JSON.stringify(log)}; return 1; }`),
-        `REG=${JSON.stringify(regDir)}; id=lane-a-project-a; payload='{}'; psid=${UUID}`,
+          .map((fn) => `${fn}() { printf '%s\\n' ${fn} >> "$gate_probe_log"; return 1; }`),
+        `id=lane-a-project-a; payload='{}'; psid=${UUID}`,
         body(), '_hook_reply_report',
       ].join('\n');
-      const r = spawnSync('/bin/bash', ['-c', script], { encoding: 'utf8', env: { PATH: '', ...env } });
+      const r = spawnSync('/bin/bash', ['-c', script, 'gate-probe', log, regDir], { encoding: 'utf8', env: { PATH: '', ...env } });
       expect(r.status, r.stderr).toBe(0);
       const got = fs.existsSync(log) ? fs.readFileSync(log, 'utf8').split('\n').filter((l) => l !== '') : [];
       fs.rmSync(dir, { recursive: true, force: true });

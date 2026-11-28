@@ -12,7 +12,7 @@
 // Fixture transcripts are written under the run's temp root; the module is run on every jq this machine has (the list the
 // continuation parity test uses, and `CCRC_TEST_JQ`). No live box, no live HOME.
 import { describe, it, expect } from 'vitest';
-import { accessSync, constants, existsSync, realpathSync, writeFileSync } from 'node:fs';
+import { accessSync, constants, existsSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import path from 'node:path';
 import { spawnSyncGroup } from './spawnGroup.js';
@@ -120,7 +120,7 @@ for (const jq of jqBinaries()) {
       });
 
       it('the library\'s bound is the L0 constant', () => {
-        const lib = String(spawnSync('cat', [path.join(LIB, 'transcript.jq')], { encoding: 'utf8' }).stdout);
+        const lib = readFileSync(path.join(LIB, 'transcript.jq'), 'utf8');
         expect(/^def reply_answers_max: (\d+);$/m.exec(lib)?.[1]).toBe(String(REPLY_ANSWERS_MAX));
       });
     });
