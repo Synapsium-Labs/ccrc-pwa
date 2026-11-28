@@ -94,6 +94,9 @@ const DELEGATION_BACKFILL_SRC = read('server/src/coord/delegationBackfillRoutes.
  *  on five paths, the read, arm, off, ceiling and the key's `PUT` and `DELETE`, are the operator's and session-gated:
  *  `DECISION_MODEL_DOORS`. */
 const DECISION_MODEL_SRC = read('server/src/coord/decisionModelRoutes.ts');
+/** The label card doors (Overlord W2, the label queue): a routes file of its own with NO box-token lane. The read and the answer are
+ *  the operator's, behind the account gate: `LABEL_DOORS`. */
+const LABEL_SRC = read('server/src/coord/labelCardRoutes.ts');
 const GATE_SRC = read('server/src/auth/gate.ts');
 const README = read('README.md');
 const CLAUDE_MD = read('CLAUDE.md');
@@ -288,10 +291,14 @@ const DELEGATION_BACKFILL_DOORS = ['/api/coord/delegation-backfill', '/api/coord
 const DECISION_MODEL_DOORS = ['/api/decision-model', '/api/decision-model/rows/:id/arm', '/api/decision-model/rows/:id/off',
   '/api/decision-model/rows/:id/ceiling', '/api/decision-model/key', '/api/decision-model/key'];
 
+/** The label card doors (Overlord W2, the label queue): the read and the answer, compared with the file's registrations in both
+ *  directions below. Neither consults the box token or sits in EXEMPT; both ask the account gate. */
+const LABEL_DOORS = ['/api/labels', '/api/labels/:id'];
+
 /** Every session-only route the bullet must describe as carrying no box token. */
 const SESSION_ONLY_ALL = [...SESSION_ONLY_DOORS, KICKOFF, ARCHIVE, DIGEST_CORRECT, PROMPT, ...LEDGER_OPERATOR_DOORS, ...UPDATE_DOORS, ...TOKEN_DOORS,
   ...CONTINUITY_SESSION_DOORS, ...OVERLORD_OPERATOR_DOORS, ...NAME_LIST_DOORS, ...QUIZ_SESSION_DOORS,
-  ...DECISION_MODEL_DOORS, ...DELEGATION_BACKFILL_DOORS, ...MODELS_DOORS,...APPROVAL_CENSUS_DOORS];
+  ...DECISION_MODEL_DOORS, ...DELEGATION_BACKFILL_DOORS, ...MODELS_DOORS,...APPROVAL_CENSUS_DOORS, ...LABEL_DOORS];
 
 /** Number words, index-addressed. Starts the SCAN at `two` for the same reason
  *  `coord-pause-route.test.ts`'s `CARD_RE` does: `one` and `zero` are ordinary
@@ -691,6 +698,15 @@ describe('the box-token surface is derived, and no prose site under-claims it', 
       'decisionModelRoutes.ts and DECISION_MODEL_DOORS disagree — a door was registered, or a name listed, on one side only')
       .toEqual([...DECISION_MODEL_DOORS].sort());
     expect(lanesIn(DECISION_MODEL_SRC), 'a decision-model door consults the box token — all are the operator\'s').toEqual([]);
+    for (const key of keys) expect(GATE_SRC, `${key} is EXEMPT — the operator's doors sit behind the auth gate`).not.toContain(`  ['${key}',`);
+  });
+
+  it('LABEL_DOORS is exactly what the label card file registers, in both directions; none is a lane or EXEMPT (the label queue)', () => {
+    const keys = registrationsIn(LABEL_SRC).map((r) => r.key);
+    expect(keys.map((k) => k.slice(k.indexOf(' ') + 1)).sort(),
+      'labelCardRoutes.ts and LABEL_DOORS disagree — a door was registered, or a name listed, on one side only')
+      .toEqual([...LABEL_DOORS].sort());
+    expect(lanesIn(LABEL_SRC), 'a label card door consults the box token — both are the operator\'s').toEqual([]);
     for (const key of keys) expect(GATE_SRC, `${key} is EXEMPT — the operator's doors sit behind the auth gate`).not.toContain(`  ['${key}',`);
   });
 

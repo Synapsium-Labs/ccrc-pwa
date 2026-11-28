@@ -1608,7 +1608,9 @@ the same 404), and `GET /*`, the
 static bundle a browser has to
 download before it can show a login screen. Enrolling a passkey is **not**
 exempt — it requires already being signed in, which is what makes
-`attestation: 'none'` safe.
+`attestation: 'none'` safe. Nor are the label cards' read and answer (`GET /api/labels`, `POST /api/labels/:id`,
+Overlord W2): they ask the account gate and answer `auth-off` while sign-in is off, so a label always comes from an act under
+the sign-in cookie.
 
 **The review cap (D-8125).** A work run takes three review runs; the fourth is refused with `cap-review-rounds` and one
 operator ask. Two doors extend it. The operator's lift (`POST /api/coord/review-cap`, session-gated, no box token) removes

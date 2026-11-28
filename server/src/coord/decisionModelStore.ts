@@ -36,8 +36,8 @@ export type {
 
 /** A verdict as `decision_records.verdict` spells it: `yes`, `no`, `unsure`, `none` or `option:<slug>`. */
 export const verdictWord = (v: DecisionVerdict): string => (typeof v === 'string' ? v : `option:${v.option}`);
-/** The column read back, or null for a word out of this build's vocabulary. */
-const verdictOf = (w: string): DecisionVerdict | null => {
+/** The column read back, or null for a word out of this build's vocabulary. The label store reads records through it too. */
+export const verdictOf = (w: string): DecisionVerdict | null => {
   if (w === 'yes' || w === 'no' || w === 'unsure' || w === 'none') return w;
   return w.startsWith('option:') && w.length > 'option:'.length ? { option: w.slice('option:'.length) } : null;
 };

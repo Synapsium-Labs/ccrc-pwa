@@ -71,6 +71,7 @@ import { READINESS_MUTANT_SETS } from './readinessSets.js';
 import { SEQUENCE_DOOR_MUTANT_SETS } from './sequenceDoorSets.js';
 import { BOARD_MUTANT_SETS } from './overlordBoardSets.js';
 import { ACCOUNT_LOAD_MUTANT_SETS } from './accountLoadSets.js';
+import { LABEL_QUEUE_MUTANT_SETS } from './labelQueueSets.js';
 import { FORECAST_MUTANT_SETS } from './forecastSets.js';
 import { APPROVAL_DENY_FLOOR_MUTANT_SETS } from './approvalDenyFloorSets.js';
 import { APPROVAL_ENVELOPE_MUTANT_SETS } from './approvalEnvelopeSets.js';
@@ -325,6 +326,7 @@ const MUTANT_SETS: Record<string, MutantSet<never>> = {
   ...ISOLATION_MUTANT_SETS,
   ...CHAT_MUTANT_SETS,
   ...ACCOUNT_LOAD_MUTANT_SETS,
+  ...LABEL_QUEUE_MUTANT_SETS,
   ...REQUEST_MUTANT_SETS,
   ...ACT_ROWS_MUTANT_SETS,
 };

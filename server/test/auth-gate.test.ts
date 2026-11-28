@@ -108,7 +108,8 @@ function scanRoutes(file: string): ScannedRoute[] {
     .map((m) => ({ method: m[1]!.toUpperCase(), routePath: m[2]!, file }));
 }
 
-/** THIRTY-FOUR files register routes since the box frames read (`server/src/testboxFramesRoutes.ts`, Desktop polish wave 187:
+/** THIRTY-FIVE files register routes since the label card doors (`server/src/coord/labelCardRoutes.ts`, Overlord W2 label queue:
+ *  its two session-gated routes, registered from `server.ts`); THIRTY-FOUR since the box frames read (`server/src/testboxFramesRoutes.ts`, Desktop polish wave 187:
  *  its one box-token route, registered from `registerCoordRoutes`); THIRTY-THREE since the Overlord's board (`server/src/coord/overlordBoardRoutes.ts`, Overlord W1 PR B2: its one
  *  box-token route); THIRTY-TWO since the Overlord's cursor read of the sequence (`server/src/coord/overlordSequenceRoutes.ts`,
  *  Overlord W1 sequence C: its one box-token route); THIRTY-ONE since the runway read (`server/src/poolRunwayRoute.ts`, Overlord W1 serviceability B: its one session-gated route);
@@ -161,6 +162,7 @@ const ROUTES: ScannedRoute[] = [
   ...scanRoutes('review/routes.ts'),
   ...scanRoutes('poolRunwayRoute.ts'),
   ...scanRoutes('testboxFramesRoutes.ts'),
+  ...scanRoutes('coord/labelCardRoutes.ts'),
 ];
 
 /** The three websocket upgrades — the same registrations, told apart by their
@@ -863,9 +865,13 @@ describe('the scanner is looking at something', () => {
     // 345 with the chat's two reads (Overlord W1 chat), `GET /api/overlord/chat` and `GET /api/overlord/chat/earlier`, in
     // `coord/overlordRoutes.ts`: session-gated and NOT EXEMPT, no box token. The HTTP half 340 -> 342, the gated count 220 -> 222
     // (342 - 120), the exempt-HTTP count stays 120.
+    // 347 with the label card doors (Overlord W2 label queue), `GET /api/labels` and `POST /api/labels/:id`, in
+    // `coord/labelCardRoutes.ts`, a routes file of its own: session-gated and NOT EXEMPT, behind the account gate, no box token.
+    // The HTTP half 342 -> 344, the gated count 222 -> 224 (344 - 120), the exempt-HTTP count stays 120.
     expect(scanRoutes('coord/overlordBoardRoutes.ts').length).toBe(1);
     expect(scanRoutes('testboxFramesRoutes.ts').length).toBe(1);
-    expect(ROUTES.length).toBe(345);
+    expect(scanRoutes('coord/labelCardRoutes.ts').length).toBe(2);
+    expect(ROUTES.length).toBe(347);
     expect(scanRoutes('laneModelsRoutes.ts').length).toBe(1);
     expect(scanRoutes('coord/delegationBackfillRoutes.ts').length).toBe(2);
     expect(scanRoutes('coord/approvalCensusRoutes.ts').length).toBe(1);
@@ -1057,7 +1063,7 @@ describe('the scanner is COMPLETE — measured against Fastify\'s own route tabl
     const w = await openApp(); app = w.app;
     const real = realRouteTable(app);
     expect([...real].filter((r) => r.startsWith('UNPARSED'))).toEqual([]);
-    // 345 scanned + the static wildcard when the bundle is built.
+    // 347 scanned + the static wildcard when the bundle is built.
     // (59 stood here across several waves; the account-pools merge is where
     // it was finally re-measured, not where it went stale.)
     expect(real.size).toBe(ROUTES.length + (HAS_PWA ? 1 : 0));
@@ -1816,9 +1822,12 @@ describe('with CCRC_AUTH off — the shipped default', () => {
     // Its withdraw (review 3232 F1e): the account gate with `cap: null` and no step-up, so dark it answers `auth-off` (501):
     // BY DESIGN.
     'POST /api/continuity/quiz-runs/:id/withdraw',
+    // The label card doors (Overlord W2 label queue): the account gate with `cap: null` and no step-up, refused while sign-in is off
+    // before any read, so dark each answers `auth-off` (501): BY DESIGN (index F14: a label comes from an event under the cookie).
+    'GET /api/labels', 'POST /api/labels/:id',
   ]);
 
-  it('FLAG_AWARE is exactly those forty-one — joining it is how a route leaves the sweep', () => {
+  it('FLAG_AWARE is exactly those forty-three — joining it is how a route leaves the sweep', () => {
     // Review F2. The set is self-checking in ONE direction (a member is held to an
     // exact 501 dark) and nothing pinned its size, so a future route — Task 8's
     // passkey endpoints plausibly 501 when the gate is dark — could join it and
@@ -1840,6 +1849,7 @@ describe('with CCRC_AUTH off — the shipped default', () => {
       'DELETE /api/overlord/designate',
       'DELETE /api/programmes/:slug/secrets/:slot',
       'GET /api/auth/passkeys',
+      'GET /api/labels',
       'GET /api/overlord/chat',
       'GET /api/overlord/chat/earlier',
       'GET /api/overlord/designation',
@@ -1859,6 +1869,7 @@ describe('with CCRC_AUTH off — the shipped default', () => {
       'POST /api/decision-model/rows/:id/arm',
       'POST /api/decision-model/rows/:id/ceiling',
       'POST /api/decision-model/rows/:id/off',
+      'POST /api/labels/:id',
       'POST /api/linear/workspaces',
       'POST /api/linear/workspaces/:id/check',
       'POST /api/overlord/account-set',
@@ -1882,7 +1893,7 @@ describe('with CCRC_AUTH off — the shipped default', () => {
   });
 
   it('the gate changes the status of EXACTLY the gated routes, and of nothing else', async () => {
-    // THE PROPERTY, in one loop over all 342 HTTP routes, with THREE probes each:
+    // THE PROPERTY, in one loop over all 344 HTTP routes, with THREE probes each:
     // dark, armed-anonymous, and armed-with-a-live-session. Comparing dark
     // against AUTHENTICATED is what makes this a real status assertion for the
     // gated routes too (review R1) — the earlier version asserted only
@@ -1946,7 +1957,7 @@ describe('with CCRC_AUTH off — the shipped default', () => {
           }
 
           // 3. Armed WITH a live session: identical to dark, for every route that
-          //    is not itself flag-aware — the assertion that covers all 342 HTTP routes, not the 120 exempt.
+          //    is not itself flag-aware — the assertion that covers all 344 HTTP routes, not the 120 exempt.
           //    (Both counts are derived and checked against this very sentence at the
           //    bottom of this file. They read fifty-five and fifteen for several builds
           //    after the tree had grown past both — D-1223.)

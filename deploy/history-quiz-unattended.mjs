@@ -144,7 +144,7 @@ const plainObject = (o) => o !== null && typeof o === 'object' && !Array.isArray
 const oneLine = (s) => String(s).replace(/\s+/g, ' ').trim().slice(0, 300);
 
 // ── pure ────────────────────────────────────────────────────────────────────────────────────────────────────────────
-/** The ISO week of an instant, UTC, `YYYY-Www` (the same rule as server/src/continuity/quiz.ts#quizWeek: the ISO year is the
+/** The ISO week of an instant, UTC, `YYYY-Www` (the same rule as server/src/time/rules.ts#utcIsoWeek: the ISO year is the
  *  year of the week's Thursday). Pure.  @param {number} nowMs */
 export function weekKeyOf(nowMs) {
   const d = new Date(nowMs);

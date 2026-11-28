@@ -34,6 +34,7 @@ import type { QuizLanePort } from './continuity/quizLane.js';
 import type { ForecastLanePort } from './coord/forecastLane.js';
 import type { LimitSampleStore } from './limitSampler.js';
 import type { DecisionDeps } from './coord/decisionModelLane.js';
+import type { LabelLaneDeps } from './coord/labelQueueLane.js';
 import type { OverlordAuthorityJournal } from './coord/overlordAuthorityJournal.js';
 import type { OverlordAuthorityGuard } from './coord/overlordAuthorityGuard.js';
 import type { OverlordAuthorityExchange } from './coord/overlordAuthorityExchange.js';
@@ -239,6 +240,9 @@ export interface Deps {
   /** The decision model's anchor-set lane and its ports (Overlord W2, `coord/decisionModelLane.ts`), built once in `index.ts` over
    *  coord.db and the authority journal. Absent (a test, a script): the lane does not run. */
   decisions?: DecisionDeps;
+  /** The weekly label lane's ports (Overlord W2, the label queue, `coord/labelQueueLane.ts`), built once in `index.ts` over
+   *  coord.db and the owners' facts reads. Absent (a test, a script): the lane does not run. */
+  labelQueue?: Pick<LabelLaneDeps, 'reads' | 'refs'>;
   /** D-8182: the Linear plan sync, built once in `index.ts` beside the journal; the watcher's `linearPlanSync` lane ticks it. Absent (a test, a script): the lane does nothing. */
   planSync?: PlanSync | null;
   /** D-8183: the Linear drift pass, built once in `index.ts` after `planSync`; the watcher's `linearDrift` lane ticks it and the item route's `hand`/`keep` reach `act`. Absent (a test, a script): the lane does nothing and the acts are `unavailable`. */
