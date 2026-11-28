@@ -370,7 +370,8 @@ describe('touched: one CLI read per path, ids and times only, under its own budg
   // so the Overlord's read hands it a context whose kind reads as project, for that line alone.
   it('pin 3: the header line throws on the Overlord read kind, and not on any of the three scope kinds', () => {
     const h = { id: 'x', project: 'project-a', families: 1, transcripts: 1, indexedThroughMs: null, lagS: null };
-    expect(() => lib.headerLine({ ...h, kind: 'overlord' })).toThrow(/kind outside SCOPE_KINDS/);
+    // The Overlord's kind is off the header's own type, which is the point: the cast plants what the guard refuses.
+    expect(() => lib.headerLine({ ...h, kind: 'overlord' as never })).toThrow(/kind outside SCOPE_KINDS/);
     expect([...lib.SCOPE_KINDS].sort()).toEqual(['family', 'project', 'workspace']);
     for (const kind of lib.SCOPE_KINDS) expect(() => lib.headerLine({ ...h, kind }), kind).not.toThrow();
   });
