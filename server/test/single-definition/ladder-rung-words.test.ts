@@ -5,12 +5,14 @@
 //     where `.github/ci/fast-plan.mjs#GUARD_TESTS` runs it on every fast pull request.
 // (2) One home for the rung words and for the rung cells: no `'off' | 'chat' | 'advise' | 'full'` union and no SQL `IN`
 //     list of the four words is spelled outside `shared/overlord-ladder.ts` (the tables carry no CHECK on the rung
-//     words; the writer validates against `RUNGS`), and `RUNG_MAP` and `RUNG_CELL_MAP` are defined once.
+//     words; the writer validates against `RUNGS`), and `RUNG_MAP` is defined once. The rung cells moved into the act
+//     catalogue (`shared/overlord.ts`, W2 act catalogue A1), which is their one home.
 import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { SERVER_CAPS } from '../../../shared/api.js';
 import { RUNGS, RUNG_WORDS_NOT_YET_SHIPPED, rungNeeds } from '../../../shared/overlord-ladder.js';
+import { OVERLORD_ACT_KIND_LIST } from '../../../shared/overlord.js';
 import { ALL, ccrcRoot, rel } from './helpers.js';
 
 const SPEC = path.join(ccrcRoot, 'docs/superpowers/specs/2026-11-09-overlord-design.md');
@@ -59,6 +61,7 @@ const code = (f: string): string =>
 const holders = (re: RegExp): string[] => ALL.filter((f) => re.test(code(f))).map(rel).sort();
 
 const HOME = 'shared/overlord-ladder.ts';
+const CATALOGUE_HOME = 'shared/overlord.ts';
 // Scan whole consecutive literal lists, rather than one order or quote style. Extra literals are allowed, but all four
 // distinct rung words must be in the same list; separate smaller lists must never be joined into a false positive.
 const literalList = (separator: '|' | ','): RegExp => {
@@ -94,10 +97,62 @@ describe('one home for the rung words and the rung cells (F15)', () => {
   it('the four words are spelled as one list in no file (the authority journal reads RUNGS)', () => {
     expect(rungListHolders(',')).toEqual([]);
   });
-  it('RUNG_MAP and RUNG_CELL_MAP are defined in the home file and nowhere else', () => {
+  it('RUNG_MAP is defined in the home file and nowhere else, and the rung cells only in the act catalogue (W2 act catalogue A1)', () => {
     expect(holders(/\bconst RUNG_MAP\b/)).toEqual([HOME]);
-    expect(holders(/\bconst RUNG_CELL_MAP\b/)).toEqual([HOME]);
-    expect(holders(/\bexport const RUNG_CELLS\b/)).toEqual([HOME]);
     expect(holders(/\bexport const RUNGS\b/)).toEqual([HOME]);
+    // The cells moved: the catalogue's map is their one home, and the ladder's old names are gone everywhere, no alias left.
+    expect(holders(/\bconst OVERLORD_ACT_KIND_MAP\b/)).toEqual([CATALOGUE_HOME]);
+    expect(holders(/\bRUNG_CELL_MAP\b|\bRUNG_CELLS\b|\bLadderActKind\b|\bLADDER_ACT_KINDS\b/)).toEqual([]);
+  });
+});
+
+// The act catalogue's one home (W2 act catalogue A3, plan §8 "One home"): no other file under the source roots defines a cell
+// map, a list of act kinds, a map from class words to covers, a group's ceiling values or the map of the five cell words.
+const CELL = String.raw`['"](?:allow|refuse|proposal|armed|by-grant)['"]`;
+const CELL_MAP = new RegExp(String.raw`\{\s*chat:\s*${CELL}\s*,\s*advise:\s*${CELL}\s*,\s*full:\s*${CELL}\s*,?\s*\}`);
+const CLASS_COVERS_MAP = /\bO[1-6]\s*:\s*\[\s*(?:\]|['"](?:grant|command|operator-request|stated-entry)['"])/;
+/** The catalogue's kinds that are not plain words, so a list of three of them is a list of act kinds. */
+const DISTINCT_KINDS = new Set<string>(OVERLORD_ACT_KIND_LIST.filter((k) => k.includes('-')));
+/** A group's ceiling spelled as values (Table 5): a per-programme number or null beside an all number. */
+const CEILING_VALUE = /\bperProgramme\s*:\s*(?:\d+|null)\s*,\s*all\s*:\s*\d+/;
+/** A map keyed by the five cell words: every one of them as a key within one stretch of text around a `by-grant` key. */
+const CELL_WORD_KEYS = ['allow', 'refuse', 'proposal', 'armed'].map((w) => new RegExp(String.raw`(?:^|[\s{,])['"]?${w}['"]?\s*:`));
+const hasCellWordMap = (text: string): boolean =>
+  [...text.matchAll(/['"]by-grant['"]\s*:/g)].some((m) =>
+    CELL_WORD_KEYS.every((re) => re.test(text.slice(Math.max(0, m.index - 600), m.index + 600))));
+const hasKindList = (text: string): boolean =>
+  [...text.matchAll(literalList(','))].some(([list]) =>
+    new Set([...list.matchAll(/(['"])(.*?)\1/g)].map((m) => m[2]).filter((w) => DISTINCT_KINDS.has(w!))).size >= 3);
+
+describe('one home for the act catalogue (W2 act catalogue A3)', () => {
+  it('CONTROL: the scans see the catalogue, and a spelled-out copy would be found', () => {
+    expect(ALL.map(rel)).toContain(CATALOGUE_HOME);
+    expect(DISTINCT_KINDS.size).toBeGreaterThan(10);
+    expect(CELL_MAP.test(`const x = { chat: 'refuse', advise: 'proposal', full: 'allow' };`)).toBe(true);
+    expect(CELL_MAP.test(`const x = { chat: 'a', advise: 'b', full: 'c' };`)).toBe(false);
+    expect(CLASS_COVERS_MAP.test(`const m = { O3: ['grant'], O1: [] };`)).toBe(true);
+    expect(hasKindList(`export const K = ['drop-request', 'close-request', 'answer-item'];`)).toBe(true);
+    expect(hasKindList(`const K = ['drop-request', 'read', 'acknowledge'];`)).toBe(false);
+    expect(CEILING_VALUE.test(`const G = { relay: { perProgramme: 6, all: 30 } };`)).toBe(true);
+    expect(CEILING_VALUE.test(`const G = { 'own-record': { perProgramme: null, all: 60 } };`)).toBe(true);
+    expect(CEILING_VALUE.test('if (ceiling.perProgramme !== null && count.all >= ceiling.all)')).toBe(false);
+    expect(hasCellWordMap(`const W = {\n  allow: 'a',\n  refuse: 'b',\n  proposal: 'c',\n  armed: 'd',\n  'by-grant': 'e',\n};`)).toBe(true);
+    expect(hasCellWordMap(`const W = { refuse: 'b', proposal: 'c', armed: 'd', 'by-grant': 'e' };`)).toBe(false);
+    expect(hasCellWordMap(`if (cell === 'by-grant') return;`)).toBe(false);
+  });
+  it('only the catalogue spells a group\'s ceiling values (the plan\'s one home for Table 5, review 4135 F3)', () => {
+    expect(holders(CEILING_VALUE)).toEqual([CATALOGUE_HOME]);
+  });
+  it('only the catalogue spells the map of the five cell words (review 4135 F3)', () => {
+    expect(ALL.filter((f) => hasCellWordMap(code(f))).map(rel).sort()).toEqual([CATALOGUE_HOME]);
+  });
+  it('only the catalogue spells a cell map at chat, advise and full', () => {
+    expect(holders(CELL_MAP)).toEqual([CATALOGUE_HOME]);
+  });
+  it('only the catalogue maps class words to covers', () => {
+    expect(holders(CLASS_COVERS_MAP)).toEqual([CATALOGUE_HOME]);
+  });
+  it('no file spells a list of act kinds (the catalogue derives its list from its map)', () => {
+    expect(ALL.filter((f) => hasKindList(code(f))).map(rel).sort()).toEqual([]);
   });
 });

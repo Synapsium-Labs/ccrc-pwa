@@ -24,6 +24,7 @@ export const ladderCauseWords: Readonly<Record<LadderCause, string>> = {
   'launch-profile-unengaged': 'Its launch profile is not engaged',
   'restore-detected': 'A restore was detected',
   'invariant-violation': 'The invariant monitor found a violation',
+  'act-ceiling-hit': 'An act kind reached its ceiling',
   'no-witness-since-boot': 'No witness off the server\'s volume has answered since boot',
 };
 

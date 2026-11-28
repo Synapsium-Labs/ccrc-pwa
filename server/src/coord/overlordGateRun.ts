@@ -27,6 +27,26 @@ import {
 } from './overlordGate.js';
 import type { ActKeyFact, CounterAnswer, FenceRefusalRow } from './overlordGateStore.js';
 import type { CallerProfileRead } from './otherLanes.js';
+import { ceilingLatchDue, type GroupCount } from './overlordActCeiling.js';
+import { ACT_CEILING_WINDOW_MS, type CeilingGroup } from '../../../shared/overlord.js';
+
+/** Step 10's act-count reader (W2 act catalogue A; plan question 1, slug `ceiling-counter-is-an-act-rows-port`): act rows
+ *  written since `since` whose kind or effect is in the group, in all and for the programme (`null`: no programme target);
+ *  a row settled `refused` does not count. Its producer, act rows A's store, has not landed, so the runner reads it as its
+ *  stated default below, which refuses. */
+export interface ActCountReader {
+  count(group: CeilingGroup, programme: number | null, since: number): GroupCount;
+}
+/** The default until act rows A wires its count: every counted kind refuses `unavailable` (`not-wired`). No door of today
+ *  reaches it, because every W1 door's kind has its bound held by an owner, or names none (`gateReads`' `ceiling`). */
+export const NOT_WIRED_ACT_COUNT: ActCountReader = { count: () => ({ kind: 'unmeasured', why: 'not-wired' }) };
+
+/** The ceiling-hit latch's two ports (plan question 3): whether a latch for the cause stands, and its raise through the
+ *  ladder's one writer (`overlordLadderRead.ts#raiseLatch`, bound at L5). */
+export interface CeilingLatchPorts {
+  readonly standing: () => boolean | 'unmeasured';
+  readonly raise: (detail: string, actor: SessionCaller['actor']) => void;
+}
 
 /** One witness check, as door process B's `recordWitnessCheck` records it: what `witnessRecordOf` (L1) decided, the used
  *  witness on a pass or the reason of a refusal at step 7a, with where and when; an unmeasured witness records nothing. */
@@ -71,6 +91,10 @@ export interface OverlordGateDeps {
    *  designation is unmeasured at a `by-profile` door, so a measured designation costs no read. Absent: `not-read`, which
    *  refuses (unmeasured) as gates B did. */
   readonly profile?: (sessionId: string) => Promise<Exclude<CallerProfileRead, 'not-read'>>;
+  /** Step 10's act counts. Absent: `NOT_WIRED_ACT_COUNT`, the stated default, which refuses. */
+  readonly actCount?: ActCountReader;
+  /** The ceiling-hit latch. Absent: no latch is raised (the refusal still refuses). */
+  readonly ceilingLatch?: CeilingLatchPorts;
 }
 
 export type GateRun =
@@ -156,7 +180,7 @@ async function standingRead(deps: OverlordGateDeps, sessionId: string, door: Ove
 
 /** The facts past step 1 that no fence or witness touches, read once, each port's throw its unmeasured arm. */
 function plainFacts(deps: OverlordGateDeps, door: OverlordDoorRow, live: GenRow | null):
-  Pick<GateFacts, 'ladder' | 'card' | 'authority' | 'serverWords'> {
+  Pick<GateFacts, 'ladder' | 'card' | 'authority' | 'serverWords' | 'ceiling'> {
   const reads = gateReads(door);
   const ladder: GateFacts['ladder'] = reads.ladder ? attempt(() => deps.ladder(), (why) => ({ kind: 'unmeasured', why })) : 'start-door';
   let card: GateFacts['card'] = 'none';
@@ -167,7 +191,12 @@ function plainFacts(deps: OverlordGateDeps, door: OverlordDoorRow, live: GenRow 
   const authority: GateFacts['authority'] = reads.authority
     ? attempt<AuthorityState>(() => deps.authority(), () => ({ kind: 'unmeasured', why: 'journal' })) : 'start-door';
   const serverWords = attempt<GateFacts['serverWords']>(() => deps.serverWords(), (why) => ({ kind: 'unmeasured', why }));
-  return { ladder, card, authority, serverWords };
+  // Step 10's count, only for the group `gateReads` names. The door names no programme target in this piece, so the count is
+  // asked in all only (`null`); a later door that names its target passes it (W2 act catalogue A, known limit).
+  const group = reads.ceiling;
+  const ceiling: GateFacts['ceiling'] = group === null ? 'not-asked'
+    : attempt<GroupCount>(() => (deps.actCount ?? NOT_WIRED_ACT_COUNT).count(group, null, deps.now() - ACT_CEILING_WINDOW_MS), (why) => ({ kind: 'unmeasured', why }));
+  return { ladder, card, authority, serverWords, ceiling };
 }
 
 /** The gate's verdict for a caller that presents no call: the wake lane's own asking. It reads the facts the runner reads (the
@@ -214,6 +243,14 @@ export function overlordGateRun(deps: OverlordGateDeps):
     if (why === null) return;
     attempt(() => deps.recordFenceRefusal({ sessionId, generationId, door, why, at: deps.now() }), () => undefined);
   };
+  /** The cause a refusal names (step 10's `act-ceiling`), raised through the ladder's one writer unless one stands, as
+   *  `ceilingLatchDue` (L1) decides; the standing latches are read only for a refusal that names a cause. Never throws. */
+  const raiseCeilingLatch = (v: Extract<GateVerdict, { kind: 'refuse' }>, caller: SessionCaller): void => {
+    const ports = deps.ceilingLatch;
+    if (ports === undefined || v.latch === undefined) return;
+    const standing = attempt<boolean | 'unmeasured'>(() => ports.standing(), () => 'unmeasured');
+    if (ceilingLatchDue(v.latch, standing)) attempt(() => ports.raise(v.detail, caller.actor), () => undefined);
+  };
 
   return async (req, reply, key, claim) => {
     const row = doorRow(key);
@@ -240,7 +277,7 @@ export function overlordGateRun(deps: OverlordGateDeps):
     const reads = gateReads(door);
     const { gens, fact, live, generation } = callerGenerationOf(deps, claim.sessionId, designation);
     const term = fact === 'unmeasured' || fact.kind === 'none' ? null : fact.term;
-    const { ladder, card, authority, serverWords } = plainFacts(deps, door, live);
+    const { ladder, card, authority, serverWords, ceiling } = plainFacts(deps, door, live);
     let fence: GateFacts['fence'] = 'read-door';
     let witness: GateFacts['witness'] = 'read-door';
     let presented: FencePresented = { generation: null, counter: null, key: false };
@@ -263,10 +300,11 @@ export function overlordGateRun(deps: OverlordGateDeps):
         : attempt<WitnessVerdict>(() => deps.witness(claim.sessionId, live!.id, headerOf(req, WITNESS_KEY_HEADER)), () => ({ kind: 'unmeasured', why: 'the witness lookup failed' }));
     }
 
-    const verdict = overlordGate({ door, standing, serverWords, authority, ladder, term, fence, witness, card, generation });
+    const verdict = overlordGate({ door, standing, serverWords, authority, ladder, term, fence, witness, card, generation, ceiling });
     if (verdict.kind === 'refuse') {
       if (verdict.record === 'fence-refusal') recordFence(claim.sessionId, live?.id ?? null, key, verdict.why);
       recordWitness(witnessRecordOf(verdict, witness), live, caller, key);
+      raiseCeilingLatch(verdict, caller);
       return refused(reply, verdict);
     }
     if (verdict.kind === 'hook') return { kind: 'hook', caller };

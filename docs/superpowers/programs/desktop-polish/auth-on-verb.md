@@ -929,7 +929,9 @@ must not move did not, and in `ccd/ccrc` this round changes one printed sentence
 The new and changed cases were written first and run against `d43df54b86`'s `ccd/ccrc` through `ccrc test`. Of the
 suite's 111 cases, 5 were red there: the four role cases the install does not take, and the no-line case's new way on.
 The `server` case's whole-line assertion and the R2 pin were green there, because they pin what the code already did;
-mutants CL1, CL2 and M1 hold them. The four mutants are the last four rows of section 11.1's table, each made on the
+mutant M1 holds the R2 pin. No mutant of this round held the `server` case: CL1 and CL2 both leave it green, since each
+still prints `server` (corrected in wave 193, which adds mutant S1, `server` dropped from the clamp, red on that case,
+and a `both` row with its own mutant; see `auth-verb-mac.md`). The four mutants are the last four rows of section 11.1's table, each made on the
 fix's code, run against the whole verb suite, and then the file was put back from HEAD and compared with it.
 
 ### 13.2 Where CI prints the growth line

@@ -521,6 +521,8 @@ const GATE_WORDS: Record<GateWord, true> = {
   'not-the-overlord': true, unavailable: true, 'registry-unmeasurable': true, renewing: true, 'capability-missing': true,
   'authority-rolled-back': true, 'overlord-off': true, 'stale-designation': true, 'launch-profile-unmet': true,
   'stale-generation': true, unwitnessed: true, unmeasured: true, 'card-unread': true, 'rung-below': true,
+  // W2 act catalogue A: step 10's ceiling half.
+  'act-ceiling': true,
 };
 export const GATE_WORD_LIST = Object.keys(GATE_WORDS) as GateWord[];
 const served = (rows: readonly InboxRow[], behind: InboxBehind = NONE): InboxComposed => ({ kind: 'served', rows, behind });

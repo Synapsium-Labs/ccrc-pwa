@@ -11,6 +11,7 @@ import { mulberry32 } from '../fakeTime.js';
 import { OVERLORD_DOORS } from '../../src/coord/overlordDoors.js';
 import type { OverlordDoorRow } from '../../src/coord/overlordDoors.js';
 import type { DesignationRead, DesignationView } from '../../../shared/overlord-designation.js';
+import { ACT_CEILINGS, OVERLORD_ACT_KINDS, type OverlordActKind } from '../../../shared/overlord.js';
 
 const IDENTITY_TS = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../../shared/overlord-identity.ts');
 export const READ_ACTOR_COLUMNS_KEY = 'shared/overlord-identity.ts#readActorColumns';
@@ -344,8 +345,15 @@ type GateOut = { kind: string; word?: string; step?: string; record?: string | n
 export const GATE_DOOR_KEYS = Object.keys(OVERLORD_DOORS).filter((k) => OVERLORD_DOORS[k]!.group === 'overlord');
 const doorOf = (key: string, over: Partial<OverlordDoorRow> = {}): OverlordDoorRow => ({ ...(OVERLORD_DOORS[key] as OverlordDoorRow), ...over });
 export const isStart = (d: OverlordDoorRow) => d.ladderClass === 'card-probe-note';
-/** The acts written out, not read from the cells the cases judge: allowed at `full` only (D-8809). */
-const FULL_ONLY_ACTS: readonly string[] = ['link-team'];
+/** The act's counted group, read from the catalogue's data (L0), never from the gate under test: `null` for a kind whose
+ *  bound an owner holds, a kind refused everywhere, or no act kind (W2 act catalogue A). */
+const countedGroup = (act: OverlordActKind | null) => {
+  if (act === null) return null;
+  const c = OVERLORD_ACT_KINDS[act].ceiling;
+  return c.kind === 'counted' ? c.group : null;
+};
+/** Whether step 10's ceiling half reads a count at this door. */
+export const readsCount = (d: OverlordDoorRow): boolean => !isStart(d) && countedGroup(d.act) !== null;
 const FULL = { rung: 'full', operatorRung: 'full', binding: [], readBy: [] };
 const ladderRead = (over: Record<string, unknown> = {}) => ({ kind: 'read' as const, rung: { ...FULL, ...over } });
 
@@ -358,6 +366,7 @@ export function passFacts(door: OverlordDoorRow, over: Record<string, unknown> =
     fence: door.write ? { presented: PRES, facts: readOf(LIVE) } : 'read-door',
     witness: door.write ? { kind: 'witnessed', witnessId: 7 } : 'read-door',
     card: 'read-current', generation: { kind: 'state', state: 'active' },
+    ceiling: readsCount(door) ? { kind: 'counted', programme: 0, all: 0 } : 'not-asked',
     ...over,
   } as unknown as Gf;
 }
@@ -436,13 +445,23 @@ export const ORACLE_STEPS: ReadonlyArray<(f: Gf) => Res | null> = [
     if (f.generation.kind === 'none') return refuseOf('renewing', '9');
     return RENEWING.includes(f.generation.state) ? refuseOf('renewing', '9') : null;
   },
-  // 10: the effective rung; every W1 act is allowed at every rung above off, and the Overlord's team link (D-8809) at full only
+  // 10: the effective rung by the act's cell (the catalogue's data: only `refuse` refuses), then the act's ceiling (plan §5,
+  // written out here: a needed count not asked or unmeasured is unavailable; at or over the limit in all, then for the programme,
+  // is act-ceiling). A kind whose ceiling is not counted asks no count, whatever the fact holds.
   (f) => {
     if (isStart(f.door) || f.ladder === 'start-door' || f.ladder.kind !== 'read') return null;
-    // A door that names no act kind (the timer doors, Overlord W1) skips step 10 alone.
+    // A door that names no act kind (the timer doors, Overlord W1) skips step 10 alone, both halves.
     if (f.door.act === null) return null;
-    if (f.ladder.rung.rung === 'off') return refuseOf('rung-below', '10');
-    return FULL_ONLY_ACTS.includes(f.door.act) && f.ladder.rung.rung !== 'full' ? refuseOf('rung-below', '10') : null;
+    const rung = f.ladder.rung.rung;
+    if (rung === 'off' || OVERLORD_ACT_KINDS[f.door.act].rungs[rung] === 'refuse') return refuseOf('rung-below', '10');
+    const group = countedGroup(f.door.act);
+    if (group === null) return null;
+    const c = f.ceiling;
+    if (c === 'not-asked' || c.kind === 'unmeasured') return refuseOf('unavailable', '10');
+    const limit = ACT_CEILINGS[group];
+    if (c.all >= limit.all) return refuseOf('act-ceiling', '10');
+    if (limit.perProgramme !== null && c.programme !== null && c.programme >= limit.perProgramme) return refuseOf('act-ceiling', '10');
+    return null;
   },
 ];
 export const oracle = (f: Gf): Res => {
@@ -459,6 +478,8 @@ export function genCase(rnd: () => number): Gf {
   const base = OVERLORD_DOORS[pick(rnd, GATE_DOOR_KEYS)] as OverlordDoorRow;
   const door: OverlordDoorRow = {
     ...base, write: rnd() < 0.5, ladderClass: rnd() < 0.5 ? 'card-probe-note' : 'other', others: rnd() < 0.5 ? 'hook' : 'refuse',
+    // Half the cases keep the row's own act kind; the rest draw a catalogue kind of each cell and ceiling shape (W2 act catalogue A).
+    act: rnd() < 0.5 ? base.act : pick(rnd, GEN_ACTS),
   };
   const pPass = 0.5 + rnd() * 0.5;
   const ok = () => rnd() < pPass;
@@ -486,12 +507,23 @@ export function genCase(rnd: () => number): Gf {
   const card = ok() ? 'read-current' : pick(rnd, ['read-stale', 'none', { kind: 'unmeasured', why: 'c' }]);
   const generation = ok() ? { kind: 'state', state: pick(rnd, SERVING) } : pick(rnd, [
     { kind: 'state', state: pick(rnd, RENEWING) }, { kind: 'none' }, { kind: 'unmeasured', why: 'g' }]);
+  // The act's count: any arm, whatever the door reads, so a kind that asks no count is seen to ignore it.
+  const ceiling = ok() ? (readsCount(door) ? { kind: 'counted', programme: 0, all: 0 } : 'not-asked') : pick(rnd, [
+    'not-asked', { kind: 'unmeasured', why: 'not-wired' }, { kind: 'counted', programme: null, all: 1 },
+    { kind: 'counted', programme: 0, all: 59 }, { kind: 'counted', programme: 1, all: 1 }, { kind: 'counted', programme: 6, all: 6 },
+    { kind: 'counted', programme: 0, all: 2 }, { kind: 'counted', programme: 0, all: 30 }, { kind: 'counted', programme: 3, all: 3 },
+  ]);
   return {
     door, standing, serverWords: ok() ? [door.word, 'timers-v1'] : pick(rnd, [[], ['timers-v1'], { kind: 'unmeasured', why: 'caps' }]),
     authority: ok() ? { kind: 'coherent' } : pick(rnd, [{ kind: 'rolled-back', cause: 'behind' }, { kind: 'unmeasured', why: 'journal' }]),
-    ladder, term: rnd() < 0.9 ? 5 : null, fence, witness, card, generation,
+    ladder, term: rnd() < 0.9 ? 5 : null, fence, witness, card, generation, ceiling,
   } as unknown as Gf;
 }
+/** The kinds the generator draws: each cell word and each ceiling shape (counted, held by an owner, never). */
+const GEN_ACTS: readonly OverlordActKind[] = [
+  'read', 'acknowledge', 'link-team', 'relay', 'close-request', 'open-request', 'start-programme', 'rekick-coordinator',
+  'approve-spec', 'answer-item', 'state-a-fact', 'deploy', 'raise-item',
+];
 
 /** What replacing one fact by its unmeasured arm does at its step, for the facts the door reads. */
 const UNMEASURED_ARMS: ReadonlyArray<{ fact: string; step: string; reads: (d: OverlordDoorRow) => boolean; swap: (f: Gf) => Gf }> = [
@@ -503,6 +535,8 @@ const UNMEASURED_ARMS: ReadonlyArray<{ fact: string; step: string; reads: (d: Ov
   { fact: 'witness', step: '7a', reads: (d) => d.write, swap: (f) => ({ ...f, witness: { kind: 'unmeasured', why: 'u' } }) as Gf },
   { fact: 'card', step: '8', reads: (d) => !isStart(d), swap: (f) => ({ ...f, card: { kind: 'unmeasured', why: 'u' } }) as Gf },
   { fact: 'generation', step: '9', reads: (d) => !isStart(d), swap: (f) => ({ ...f, generation: { kind: 'unmeasured', why: 'u' } }) as Gf },
+  // W2 act catalogue A: the act's count, read only at a door that is not a start door and whose act's ceiling is counted.
+  { fact: 'ceiling', step: '10', reads: readsCount, swap: (f) => ({ ...f, ceiling: { kind: 'unmeasured', why: 'u' } }) as Gf },
 ];
 
 export function overlordGateCases(m: OverlordGateModule): Record<string, SuiteCase> {
@@ -526,7 +560,7 @@ export function overlordGateCases(m: OverlordGateModule): Record<string, SuiteCa
       // the generator reaches every step's refusal, the hook and a pass
       for (const k of ['pass', 'hook', '1:not-the-overlord', '1:renewing', '1:unavailable', '1:registry-unmeasurable', '2:capability-missing',
         '3:authority-rolled-back', '4:unavailable', '4:overlord-off', '5:stale-designation', '5:unavailable', '6:launch-profile-unmet',
-        '7:stale-generation', '7a:unwitnessed', '7a:unmeasured', '9:renewing', '8:card-unread', '8:unavailable', '9:unavailable', '10:rung-below']) {
+        '7:stale-generation', '7a:unwitnessed', '7a:unmeasured', '9:renewing', '8:card-unread', '8:unavailable', '9:unavailable', '10:rung-below', '10:act-ceiling', '10:unavailable']) {
         expect(seen.has(k), `the generator never reached ${k}`).toBe(true);
       }
     },
@@ -683,8 +717,45 @@ export function overlordGateCases(m: OverlordGateModule): Record<string, SuiteCa
     'gateReads: what each door reads': () => {
       for (const key of GATE_DOOR_KEYS) for (const write of [true, false]) for (const cls of ['card-probe-note', 'other'] as const) {
         const d = door(key, { write, ladderClass: cls });
-        expect(m.gateReads(d), `${key} ${write} ${cls}`).toEqual({ ladder: cls === 'other', authority: cls === 'other', card: cls === 'other', fence: write });
+        // Every W1 door's kind has its bound held by an owner (or names none), so no door of today asks a count.
+        expect(m.gateReads(d), `${key} ${write} ${cls}`).toEqual({ ladder: cls === 'other', authority: cls === 'other', card: cls === 'other', fence: write, ceiling: null });
       }
+    },
+    'gateReads: the act\'s count is asked only at a door that is not a start door and whose act\'s ceiling is counted, naming its group': () => {
+      const want: Record<string, string | null> = { relay: 'relay', 'nudge-owner': 'relay', 'close-request': 'request', 'escalate-request': 'request',
+        'open-request': 'own-record', 'start-programme': 'start', 'answer-ask': 'answer', 'widen-scope': 'o3-effect',
+        read: null, acknowledge: null, 'write-note': null, 'link-team': null, renew: null, deploy: null, 'accept-limit': null };
+      for (const [act, group] of Object.entries(want)) {
+        expect(m.gateReads(door('inbox', { act: act as OverlordActKind })).ceiling, act).toBe(group);
+        expect(m.gateReads(door('inbox', { act: act as OverlordActKind, ladderClass: 'card-probe-note' })).ceiling, `${act} at a start door`).toBeNull();
+      }
+      expect(m.gateReads(door('timer-set')).ceiling).toBeNull();
+    },
+    'step 10: the rung decides first, so a refused rung answers rung-below even when its count is unmeasured': () => {
+      const d = door('inbox', { act: 'relay' });
+      refused(passFacts(d, { ladder: ladderRead({ rung: 'chat' }), ceiling: { kind: 'unmeasured', why: 'not-wired' } }), 'rung-below', '10', 'relay at chat');
+      refused(passFacts(d, { ladder: ladderRead({ rung: 'advise' }), ceiling: { kind: 'unmeasured', why: 'not-wired' } }), 'unavailable', '10', 'relay at advise, unmeasured');
+      refused(passFacts(d, { ceiling: 'not-asked' }), 'unavailable', '10', 'relay with its count not asked');
+    },
+    'step 10: an act-ceiling refusal names the latch act-ceiling-hit, and an unavailable one names none': () => {
+      const d = door('inbox', { act: 'relay' });
+      const hit = g(passFacts(d, { ceiling: { kind: 'counted', programme: null, all: 30 } })) as GateOut & { latch?: string };
+      expect([hit.kind, hit.word, hit.step, hit.latch]).toEqual(['refuse', 'act-ceiling', '10', 'act-ceiling-hit']);
+      const prog = g(passFacts(d, { ceiling: { kind: 'counted', programme: 6, all: 6 } })) as GateOut & { latch?: string };
+      expect([prog.word, prog.latch]).toEqual(['act-ceiling', 'act-ceiling-hit']);
+      const un = g(passFacts(d, { ceiling: { kind: 'unmeasured', why: 'not-wired' } })) as GateOut & { latch?: string };
+      expect([un.word, un.latch]).toEqual(['unavailable', undefined]);
+      expect(g(passFacts(d, { ceiling: { kind: 'counted', programme: 5, all: 29 } }))).toEqual({ kind: 'pass' });
+      // no other refusal names a latch
+      const other = g(passFacts(d, { card: 'none' })) as GateOut & { latch?: string };
+      expect([other.word, other.latch]).toEqual(['card-unread', undefined]);
+    },
+    'step 10: a start door and a door with no act kind skip both halves, and a held-by kind ignores its count': () => {
+      const start = door('notes-write', { act: 'relay' });
+      expect(g(passFacts(start, { ceiling: { kind: 'unmeasured', why: 'u' } }))).toEqual({ kind: 'pass' });
+      expect(g(passFacts(door('timer-set'), { ceiling: { kind: 'unmeasured', why: 'u' } }))).toEqual({ kind: 'pass' });
+      expect(g(passFacts(door('acknowledge'), { ceiling: { kind: 'unmeasured', why: 'u' } }))).toEqual({ kind: 'pass' });
+      expect(g(passFacts(door('link-team'), { ceiling: { kind: 'counted', programme: 99, all: 99 } }))).toEqual({ kind: 'pass' });
     },
   };
 }
@@ -775,6 +846,14 @@ export const OVERLORD_GATE_SET: MutantSet<OverlordGateModule> = {
     G('O-18', "if (!start && ladder !== 'start-door' && ladder.kind === 'read') {\n    const unmet", "if (start && ladder !== 'start-door' && ladder.kind === 'read') {\n    const unmet"),
     // Overlord W1, the timer doors (question 1): the step-10 skip for a door that names no act kind.
     G('O-19', "if (door.act !== null && ladder !== 'start-door' && ladder.kind === 'read') {", "if (ladder !== 'start-door' && ladder.kind === 'read') {"),
+    // W2 act catalogue A: step 10's ceiling half, its order after the rung, its latch, and which doors read a count.
+    G('O-20', "      if (!rung.pass) return refuse(rung.word, '10',", "      if (!actCeilingStep(door.act, null, { act: f.ceiling, effect: 'not-asked' }).pass) return refuse('unavailable', '10', 'x');\n      if (!rung.pass) return refuse(rung.word, '10',"),
+    G('O-21', 'why: null, latch: ceiling.latch };', 'why: null };'),
+    G('O-22', "const ceiling = actCeilingStep(door.act, null, { act: f.ceiling, effect: 'not-asked' });", 'const ceiling = { pass: true } as never as ReturnType<typeof actCeilingStep>;'),
+    G('O-23', "      if (!ceiling.pass) return refuse('unavailable', '10',", "      if (false) return refuse('unavailable', '10',"),
+    G('O-24', 'ceiling: !start && cell !== null', 'ceiling: cell !== null'),
+    G('O-25', "cell.kind === 'counted' ? cell.group : null", "cell.kind === 'held-by' ? 'relay' : cell.kind === 'counted' ? cell.group : null"),
+    G('O-26', "if (!ceiling.pass && ceiling.word === 'act-ceiling') {", "if (!ceiling.pass && ceiling.word === 'unavailable') {"),
   ],
 };
 

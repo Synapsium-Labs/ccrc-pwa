@@ -60,6 +60,10 @@ beforeEach(() => {
   vi.spyOn(api, 'renewalBackstop').mockResolvedValue(BACKSTOP);
   vi.spyOn(api, 'responseRetention').mockResolvedValue(RETENTION);
   vi.spyOn(api, 'accountHolds').mockResolvedValue({ ok: true, holds: [] });
+  // The W2 Settings cards (their own suites: `settings-decision-model`, `settings-private-names`): an older server's 404 here, so
+  // these cases see the six W1 cards only.
+  vi.spyOn(api, 'decisionModel').mockResolvedValue({ absent: true });
+  vi.spyOn(api, 'privateNameList').mockResolvedValue({ absent: true });
   act(() => {
     useFleetStore.setState({ roster: ROSTER, accountsHeard: true, refreshAccounts: vi.fn().mockResolvedValue('ok') });
     navigate('/settings/overlord');
