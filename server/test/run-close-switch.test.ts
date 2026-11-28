@@ -92,7 +92,8 @@ describe('the store: three states per group, default shadow', () => {
     const file = path.join(mkTmp('ccrc-runclose-migrate-'), 'coord.db');
     const fresh = openCoordDb(file);
     fresh.prepare("UPDATE run_close_settings SET neverStarted = 'on', claimantCrashed = 'off', updatedAt = 9").run();
-    // Back to version 53: undo migrations 135 (overlord_requests, overlord_request_messages and overlord_request_moves, the
+    // Back to version 53: undo migrations 136 (runs.requestId, mail.requestId, programme_modifications.requestId and
+    // runs_request, Overlord W2 request ids A), 135 (overlord_requests, overlord_request_messages and overlord_request_moves, the
     // Overlord's request record, W2), 134 (claude_build_frames, the box frames recipe's results, Desktop polish wave 187),
     // 133 (overlord_account_holds, the Overlord's account holds, renewal readings H),
     // 132 (overlord_readiness and overlord_readiness_items, the Overlord's readiness word), 131 (docs_settings),
@@ -113,8 +114,9 @@ describe('the store: three states per group, default shadow', () => {
     // D-8395), 61 (nodes.reportedSweep, D-8386), 60 (claude_builds, D-8289), 59 (the plan model, D-8181), 58 (practice_cases,
     // Overlord W1a), 57 (testbox_events, D-8166), 56 (lane_arm_settings, D-8274) and 55 (coordinator_calls, D-8126) as well
     // as 54 (100, the replay quiz run's state and counts, goes with continuity_quiz_runs), so the reopen replays
-    // 54 through 135, including the unseeded Docs settings singleton (131, X2 P4.3), the readiness word's two tables (132),
-    // the account holds (133), the box frames table (134) and the request record's three tables (135).
+    // 54 through 136, including the unseeded Docs settings singleton (131, X2 P4.3), the readiness word's two tables (132),
+    // the account holds (133), the box frames table (134), the request record's three tables (135) and the request ids (136).
+    fresh.exec('DROP INDEX runs_request; ALTER TABLE runs DROP COLUMN requestId; ALTER TABLE mail DROP COLUMN requestId; ALTER TABLE programme_modifications DROP COLUMN requestId;');
     fresh.exec('DROP TABLE overlord_request_moves; DROP TABLE overlord_request_messages; DROP TABLE overlord_requests;');
     fresh.exec('DROP TABLE claude_build_frames;');
     fresh.exec('DROP TABLE overlord_account_holds;');
