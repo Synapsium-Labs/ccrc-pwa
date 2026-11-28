@@ -8,8 +8,8 @@ import {
   type DecisionQuestionRow, type DecisionRowId, type DecisionRowMode,
 } from '../../../shared/decisionModel.js';
 import {
-  LABEL_ANSWER_WORDS, LABEL_CARD_OUTCOMES, LABEL_CARDS_PER_WEEK, LABEL_DOOR_REFUSALS, LABEL_ROW_MAX_GAP_WEEKS, LABELS_NEEDED_CAP,
-  type LabelCardOutcome,
+  LABEL_ANSWER_WORDS, LABEL_CARD_OUTCOMES, LABEL_CARDS_PER_WEEK, LABEL_DOOR_REFUSALS, LABEL_ROW_MAX_GAP_WEEKS, LABEL_SKIP_WORDS,
+  LABELS_NEEDED_CAP, type LabelCardOutcome, type LabelSkipWord,
 } from '../../../shared/labelQueue.js';
 import { lineCounts, type LabelledAnswer } from './decisionLines.js';
 
@@ -36,6 +36,7 @@ export const isLabelQueueKebab = (token: string): boolean =>
   (LABEL_ANSWER_WORDS as readonly string[]).includes(token)
   || (LABEL_CARD_OUTCOMES as readonly string[]).includes(token)
   || (LABEL_DOOR_REFUSALS as readonly string[]).includes(token)
+  || (LABEL_SKIP_WORDS as readonly string[]).includes(token)
   || (DECISION_LABEL_SOURCES as readonly string[]).includes(token);
 
 /** LQ3: the rows a card may serve, in catalogue order: those whose `labelSources` name `label-queue`. */
@@ -50,15 +51,24 @@ export function cardRowsOf(q: typeof DECISION_QUESTIONS): readonly DecisionRowId
  * `LABELS_NEEDED_CAP` does it.
  */
 export function labelsNeeded(row: DecisionQuestionRow, cases: readonly LabelledAnswer[]): number | 'none' | 'far' {
+  const t = nextCandidate(row, cases);
+  if (t === null) return 'none';
+  const { n, errors } = lineCounts(row, cases, t);
+  for (let k = 0; k <= LABELS_NEEDED_CAP; k++) {
+    if (upperBound95(errors, n + k) <= row.target) return k;
+  }
+  return 'far';
+}
+
+/** The next fixed-sequence candidate (ruling F10): the first line, strictest first, whose bound is over the row's target, or
+ *  null when every candidate passes. `labelsNeeded` counts at it, and the lane marks the cases the model marked at it. */
+export function nextCandidate(row: DecisionQuestionRow, cases: readonly LabelledAnswer[]): number | null {
   for (const t of DECISION_LINE_CANDIDATES) {
     const { n, errors } = lineCounts(row, cases, t);
     if (upperBound95(errors, n) <= row.target) continue;
-    for (let k = 0; k <= LABELS_NEEDED_CAP; k++) {
-      if (upperBound95(errors, n + k) <= row.target) return k;
-    }
-    return 'far';
+    return t;
   }
-  return 'none';
+  return null;
 }
 
 /** One card row's facts at the pass: its mode, how near its line is, the week its last card was picked in, and the cases that
@@ -168,4 +178,76 @@ export function labelFor(labels: readonly { source: LabelSource; label: Labelled
 /** LQ13 (F12): the one filter of open cards. Hidden while the row is `off` or its revision is not the card's. */
 export function cardShown(card: { row: DecisionRowId; revision: string }, rowNow: { mode: DecisionRowMode; revision: string }): 'shown' | 'hidden' {
   return rowNow.mode === 'off' || card.revision !== rowNow.revision ? 'hidden' : 'shown';
+}
+
+// ── a state's refs (the coordinator's ruling on the gap, call 1913) ─────────────────────────────────────────────────────
+
+/** The ref kinds a card can read: an operator message by id, and a mail body by its row id. A `programme` ref is its own
+ *  text; a `goals-version` ref has no reader in this build (its spelling is the first producer's to set). */
+export type CardRefKind = 'message' | 'mail';
+export type CardRefNeeds =
+  | { kind: 'reads'; reads: readonly { name: string; refKind: CardRefKind; ids: readonly number[] }[] }
+  | { kind: 'no-reader' } | { kind: 'malformed' };
+/** A recorded id: a decimal positive safe integer, written without a leading zero. */
+const refId = (v: string): number | null => (/^[1-9][0-9]{0,15}$/.test(v) && Number.isSafeInteger(Number(v)) ? Number(v) : null);
+
+/** The reads a state's refs need, from the row's catalogue fields. A name the row does not cite by a ref kind, or an id that
+ *  is not one, is `malformed`; any `goals-version` ref makes the state `no-reader`. */
+export function cardRefNeeds(row: DecisionQuestionRow, refs: Readonly<Record<string, string | readonly string[]>>): CardRefNeeds {
+  const reads: { name: string; refKind: CardRefKind; ids: number[] }[] = [];
+  let noReader = false;
+  for (const [name, value] of Object.entries(refs)) {
+    const refKind = row.fields.find((f) => f.name === name)?.refKind;
+    if (refKind === undefined) return { kind: 'malformed' };
+    if (refKind === 'goals-version') { noReader = true; continue; }
+    if (refKind === 'programme') continue;
+    const ids = (typeof value === 'string' ? [value] : value).map(refId);
+    if (ids.length === 0 || ids.some((i) => i === null)) return { kind: 'malformed' };
+    reads.push({ name, refKind, ids: ids as number[] });
+  }
+  return noReader ? { kind: 'no-reader' } : { kind: 'reads', reads };
+}
+
+/** What an owner's facts read answered for one ref: it exists, it does not, or the read could not answer. */
+export type RefFound = 'present' | 'absent' | 'unmeasured';
+/** The key a ref's answer is filed under: `<kind>:<id>`. */
+export const refKey = (refKind: CardRefKind, id: number): string => `${refKind}:${id}`;
+
+/** Whether a state can be drawn, one word, never folded: `no-reader` first, then `absent` (a malformed ref, or one ref proven
+ *  absent), then `unmeasured` (a ref unread or unanswerable), else `drawable`. */
+export function stateDrawability(needs: CardRefNeeds, found: ReadonlyMap<string, RefFound>): 'drawable' | LabelSkipWord {
+  if (needs.kind === 'no-reader') return 'no-reader';
+  if (needs.kind === 'malformed') return 'absent';
+  let unmeasured = false;
+  for (const r of needs.reads) {
+    for (const id of r.ids) {
+      const f = found.get(refKey(r.refKind, id));
+      if (f === 'absent') return 'absent';
+      if (f !== 'present') unmeasured = true;
+    }
+  }
+  return unmeasured ? 'unmeasured' : 'drawable';
+}
+
+/** Whether an open card holds one of the ten slots (point a of the ruling): a shown card does, unless its state is proven
+ *  absent or has no reader, which can never be drawn. An unmeasured one still holds its slot until a read measures it. */
+export function cardHoldsSlot(shown: 'shown' | 'hidden', drawability: 'drawable' | LabelSkipWord): boolean {
+  return shown === 'shown' && drawability !== 'absent' && drawability !== 'no-reader';
+}
+
+/** One card row's facts for `pickLabelCards`: its need at the next candidate, and the waiting states that can be drawn, each
+ *  marked when its newest record marks at that candidate (by `lineCounts`' own rule, so the rule is written once). */
+export function pickRowFactsOf(f: {
+  row: DecisionQuestionRow; mode: DecisionRowMode; answers: readonly LabelledAnswer[]; lastCardWeekStart: number | 'never';
+  waiting: readonly { stateHash: string; recordId: number; at: number; verdict: LabelledAnswer['verdict'] | null; p: number;
+    drawability: 'drawable' | LabelSkipWord }[];
+}): PickRowFacts {
+  const t = nextCandidate(f.row, f.answers);
+  const marked = (verdict: LabelledAnswer['verdict'] | null, p: number): boolean =>
+    t !== null && verdict !== null && lineCounts(f.row, [{ p, verdict, label: 'none' }], t).n === 1;
+  return {
+    row: f.row, mode: f.mode, needed: labelsNeeded(f.row, f.answers), lastCardWeekStart: f.lastCardWeekStart,
+    waiting: f.waiting.filter((w) => w.drawability === 'drawable')
+      .map((w) => ({ stateHash: w.stateHash, recordId: w.recordId, at: w.at, markedAtNext: marked(w.verdict, w.p) })),
+  };
 }

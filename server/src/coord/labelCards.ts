@@ -3,9 +3,38 @@
 // no I/O; the card, the row now and the answer are arguments. The card doors (`labelCardRoutes.ts`, L4) ask these and decide
 // nothing themselves, and the C5 store asks none of them (F13).
 import type { DecisionQuestionRow, DecisionRowMode } from '../../../shared/decisionModel.js';
-import type { CardField, CardView, LabelAnswer } from '../../../shared/labelQueue.js';
+import type { CardField, CardView, LabelAnswer, LabelSkipWord } from '../../../shared/labelQueue.js';
 import type { LabelledAnswer } from './decisionLines.js';
-import type { LabelCardRow } from './labelQueue.js';
+import { cardRefNeeds, refKey, type LabelCardRow } from './labelQueue.js';
+
+/** What the door read for one ref, through an owner's text read: its text, absent, or could not be measured. */
+export type CardRefText = { kind: 'resolved'; text: string } | { kind: 'absent' } | { kind: 'unmeasured'; why: string };
+
+/**
+ * A card's fields from its record and what the door read (the coordinator's ruling on the gap): the inline fields, a
+ * `programme` ref as its own slug, a `message` or `mail` ref as the text read under its key (`refKey`), a list of ids as a list
+ * of texts. A state that does not resolve is skipped under one word, never drawn empty: `no-reader`, then `absent` (a
+ * malformed ref, or one read proven absent), then `unmeasured` (a read that could not answer, or a ref not read).
+ */
+export function cardFieldsOf(row: DecisionQuestionRow, refs: Readonly<Record<string, string | readonly string[]>>,
+  inline: Readonly<Record<string, string>> | null, texts: ReadonlyMap<string, CardRefText>):
+  { kind: 'fields'; fields: Record<string, string | readonly string[]> } | { kind: 'skip'; word: LabelSkipWord } {
+  const needs = cardRefNeeds(row, refs);
+  if (needs.kind === 'no-reader') return { kind: 'skip', word: 'no-reader' };
+  if (needs.kind === 'malformed') return { kind: 'skip', word: 'absent' };
+  const fields: Record<string, string | readonly string[]> = { ...refs, ...(inline ?? {}) };
+  let unmeasured = false;
+  for (const r of needs.reads) {
+    const out: string[] = [];
+    for (const id of r.ids) {
+      const t = texts.get(refKey(r.refKind, id));
+      if (t?.kind === 'absent') return { kind: 'skip', word: 'absent' };
+      if (t?.kind === 'resolved') out.push(t.text); else unmeasured = true;
+    }
+    fields[r.name] = typeof refs[r.name] === 'string' ? out[0] ?? '' : out;
+  }
+  return unmeasured ? { kind: 'skip', word: 'unmeasured' } : { kind: 'fields', fields };
+}
 
 /** The answers a card offers (LQ12): a yes-no row, yes, no and not-sure; a choice row, each of its options, none, not-sure. */
 export function cardAllowedAnswers(row: DecisionQuestionRow, options: readonly string[]): readonly LabelAnswer[] {

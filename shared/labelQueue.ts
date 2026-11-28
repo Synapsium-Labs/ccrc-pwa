@@ -26,6 +26,12 @@ export type LabelCardOutcome = (typeof LABEL_CARD_OUTCOMES)[number];
 export const LABEL_DOOR_REFUSALS = ['not-found', 'bad-request', 'row-changed', 'write-failed'] as const;
 export type LabelDoorRefusal = (typeof LABEL_DOOR_REFUSALS)[number];
 
+/** Why a card's state is not drawn: a ref no longer resolves (`absent`), a read could not answer (`unmeasured`), or the ref's
+ *  kind has no reader in this build (`no-reader`: a goals version, until the piece that first writes those refs sets their
+ *  spelling). Never folded into one another. */
+export const LABEL_SKIP_WORDS = ['absent', 'unmeasured', 'no-reader'] as const;
+export type LabelSkipWord = (typeof LABEL_SKIP_WORDS)[number];
+
 /** One field of a card, rebuilt from the record at each read and never stored. A `quoted` field is text a session wrote. */
 export interface CardField {
   readonly name: string;
@@ -45,15 +51,15 @@ export interface CardView {
   readonly week: string;
 }
 
-/** `GET /api/labels`. `skipped` counts the open cards left out because their state did not resolve: `absent` (a ref no
- *  longer resolves) and `unmeasured` (a read could not answer), never drawn empty and never from a stored copy. */
+/** `GET /api/labels`. `skipped` counts the open cards left out because their state did not resolve, one count per
+ *  `LABEL_SKIP_WORDS` word: never drawn empty and never from a stored copy. */
 export interface LabelCardsAnswer {
   readonly ok: true;
   readonly cards: readonly CardView[];
   readonly open: number;
   readonly pickedThisWeek: number;
   readonly week: string;
-  readonly skipped: { readonly absent: number; readonly unmeasured: number };
+  readonly skipped: { readonly absent: number; readonly unmeasured: number; readonly noReader: number };
 }
 
 /** `POST /api/labels/:id`: `changed` is false when the card was already closed. */

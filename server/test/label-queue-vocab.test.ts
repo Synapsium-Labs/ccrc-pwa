@@ -2,8 +2,8 @@
 // words written out, and a card's wire shape with no field that could carry the model's answer (LQ10).
 import { describe, expect, it } from 'vitest';
 import {
-  LABEL_ANSWER_WORDS, LABEL_CARD_OUTCOMES, LABEL_CARDS_PER_WEEK, LABEL_DOOR_REFUSALS, LABEL_ROW_MAX_GAP_WEEKS, LABELS_NEEDED_CAP,
-  isLabelAnswerWord, type CardField, type CardView, type LabelCardsAnswer,
+  LABEL_ANSWER_WORDS, LABEL_CARD_OUTCOMES, LABEL_CARDS_PER_WEEK, LABEL_DOOR_REFUSALS, LABEL_ROW_MAX_GAP_WEEKS, LABEL_SKIP_WORDS,
+  LABELS_NEEDED_CAP, isLabelAnswerWord, type CardField, type CardView, type LabelCardsAnswer,
 } from '../../shared/labelQueue.js';
 
 describe('the label queue vocabulary', () => {
@@ -17,6 +17,7 @@ describe('the label queue vocabulary', () => {
     expect(LABEL_ANSWER_WORDS).toEqual(['yes', 'no', 'none', 'not-sure']);
     expect(LABEL_CARD_OUTCOMES).toEqual(['labelled', 'not-sure']);
     expect(LABEL_DOOR_REFUSALS).toEqual(['not-found', 'bad-request', 'row-changed', 'write-failed']);
+    expect(LABEL_SKIP_WORDS).toEqual(['absent', 'unmeasured', 'no-reader']);
     expect(LABEL_ANSWER_WORDS.every(isLabelAnswerWord)).toBe(true);
     for (const v of ['maybe', '', 'Yes', null, 1, { option: 'a' }]) expect(isLabelAnswerWord(v)).toBe(false);
   });
@@ -27,7 +28,10 @@ describe('the label queue vocabulary', () => {
     const card: Record<keyof CardView, true> = { id: true, row: true, question: true, fields: true, answers: true, pickedAt: true, week: true };
     const field: Record<keyof CardField, true> = { name: true, quoted: true, text: true };
     const read: Record<keyof LabelCardsAnswer, true> = { ok: true, cards: true, open: true, pickedThisWeek: true, week: true, skipped: true };
+    const skipped: Record<keyof LabelCardsAnswer['skipped'], true> = { absent: true, unmeasured: true, noReader: true };
     const forbidden = ['verdict', 'p', 'band', 'line', 'probability'];
-    for (const keys of [card, field, read]) expect(Object.keys(keys).filter((k) => forbidden.includes(k))).toEqual([]);
+    for (const keys of [card, field, read, skipped]) expect(Object.keys(keys).filter((k) => forbidden.includes(k))).toEqual([]);
+    // One count per skip word, never folded.
+    expect(Object.keys(skipped)).toHaveLength(LABEL_SKIP_WORDS.length);
   });
 });

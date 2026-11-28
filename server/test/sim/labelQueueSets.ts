@@ -66,12 +66,12 @@ const leastTotal = (errors: number): number => { let n = errors; while (upperBou
 const LABELS_NEEDED_SET: MutantSet<Queue> = {
   modulePath: QUEUE_TS,
   mutants: [
-    { id: 'LN1', old: 'if (upperBound95(errors, n) <= row.target) continue;', new: "if (upperBound95(errors, n) <= row.target) return 'none';" },
+    { id: 'LN1', old: 'if (upperBound95(errors, n) <= row.target) continue;', new: 'if (upperBound95(errors, n) <= row.target) return null;' },
     { id: 'LN2', old: 'for (let k = 0; k <= LABELS_NEEDED_CAP; k++) {', new: 'for (let k = 0; k < LABELS_NEEDED_CAP; k++) {' },
     { id: 'LN3', old: "return 'far';", new: "return 'none';" },
     { id: 'LN4', old: 'for (const t of DECISION_LINE_CANDIDATES) {', new: 'for (const t of [...DECISION_LINE_CANDIDATES].reverse()) {' },
     { id: 'LN5', old: 'upperBound95(errors, n + k) <= row.target', new: 'upperBound95(errors, n + k + 1) <= row.target' },
-    { id: 'LN6', old: "return 'none';\n}", new: 'return 0;\n}' },
+    { id: 'LN6', old: "if (t === null) return 'none';", new: 'if (t === null) return 0;' },
   ],
   suite(m): Record<string, SuiteCase> {
     return {
@@ -379,8 +379,152 @@ const CARD_VIEW_SET: MutantSet<Cards> = {
   },
 };
 
-/** One set per decider. Not yet registered in mutation-floors.test.ts (another session holds it). */
+// ── a state's refs (the coordinator's ruling on the gap, call 1913) ─────────────────────────────────────────────────────
+
+const REF_NEEDS_SET: MutantSet<Queue> = {
+  modulePath: QUEUE_TS,
+  mutants: [
+    { id: 'RN1', old: "if (refKind === 'goals-version') { noReader = true; continue; }", new: "if (refKind === 'goals-version') continue;" },
+    { id: 'RN2', old: "if (refKind === undefined) return { kind: 'malformed' };", new: 'if (refKind === undefined) continue;' },
+    { id: 'RN3', old: "if (ids.length === 0 || ids.some((i) => i === null)) return { kind: 'malformed' };", new: '' },
+    { id: 'RN4', old: "/^[1-9][0-9]{0,15}$/.test(v)", new: "/^[0-9]+$/.test(v)" },
+    { id: 'RN5', old: "if (refKind === 'programme') continue;", new: '' },
+  ],
+  suite(m): Record<string, SuiteCase> {
+    const rb = Q['readback.omits'];
+    return {
+      'message and mail ids are read': () => {
+        expect(m.cardRefNeeds(rb, { request: ['3', '41'], readback: '12' })).toEqual({ kind: 'reads', reads: [
+          { name: 'request', refKind: 'message', ids: [3, 41] }, { name: 'readback', refKind: 'mail', ids: [12] }] });
+      },
+      'a programme ref needs no read': () => {
+        expect(m.cardRefNeeds(choiceRow, { candidates: ['prog-a'] })).toEqual({ kind: 'reads', reads: [] });
+      },
+      'a goals-version ref is no-reader': () => { expect(m.cardRefNeeds(gateRow, { cited: '7', goals: 'g' })).toEqual({ kind: 'no-reader' }); },
+      'a bad id or an uncited name is malformed': () => {
+        for (const bad of ['0', '01', 'x', '']) expect(m.cardRefNeeds(rb, { request: bad, readback: '1' })).toEqual({ kind: 'malformed' });
+        expect(m.cardRefNeeds(rb, { request: [], readback: '1' })).toEqual({ kind: 'malformed' });
+        expect(m.cardRefNeeds(yesNo, { part: '1' })).toEqual({ kind: 'malformed' });
+      },
+    };
+  },
+};
+
+const DRAWABILITY_SET: MutantSet<Queue> = {
+  modulePath: QUEUE_TS,
+  mutants: [
+    { id: 'SD1', old: "if (needs.kind === 'no-reader') return 'no-reader';", new: '' },
+    { id: 'SD2', old: "if (needs.kind === 'malformed') return 'absent';", new: "if (needs.kind === 'malformed') return 'unmeasured';" },
+    { id: 'SD3', old: "if (f === 'absent') return 'absent';", new: '' },
+    { id: 'SD4', old: "if (f !== 'present') unmeasured = true;", new: "if (f === 'unmeasured') unmeasured = true;" },
+    { id: 'SD5', old: "return unmeasured ? 'unmeasured' : 'drawable';", new: "return 'drawable';" },
+  ],
+  suite(m): Record<string, SuiteCase> {
+    const needs = { kind: 'reads' as const, reads: [{ name: 'request', refKind: 'message' as const, ids: [3, 4] }] };
+    const f = (o: Record<string, 'present' | 'absent' | 'unmeasured'>) => new Map(Object.entries(o));
+    return {
+      'present draws': () => { expect(m.stateDrawability(needs, f({ 'message:3': 'present', 'message:4': 'present' }))).toBe('drawable'); },
+      'absent beats unmeasured': () => { expect(m.stateDrawability(needs, f({ 'message:3': 'unmeasured', 'message:4': 'absent' }))).toBe('absent'); },
+      'an unmeasured or unread ref is unmeasured': () => {
+        expect(m.stateDrawability(needs, f({ 'message:3': 'present', 'message:4': 'unmeasured' }))).toBe('unmeasured');
+        expect(m.stateDrawability(needs, f({ 'message:3': 'present' }))).toBe('unmeasured');
+      },
+      'no-reader and malformed have their own words': () => {
+        expect(m.stateDrawability({ kind: 'no-reader' }, f({}))).toBe('no-reader');
+        expect(m.stateDrawability({ kind: 'malformed' }, f({}))).toBe('absent');
+      },
+    };
+  },
+};
+
+const HOLDS_SLOT_SET: MutantSet<Queue> = {
+  modulePath: QUEUE_TS,
+  mutants: [
+    { id: 'HS1', old: "return shown === 'shown' && drawability !== 'absent' && drawability !== 'no-reader';", new: "return shown === 'shown';" },
+    { id: 'HS2', old: "&& drawability !== 'absent' && drawability !== 'no-reader';", new: "&& drawability !== 'absent';" },
+    { id: 'HS3', old: "return shown === 'shown' && drawability", new: 'return true && drawability' },
+    { id: 'HS4', old: "drawability !== 'absent' && drawability !== 'no-reader'", new: "drawability !== 'no-reader' && drawability !== 'unmeasured'" },
+  ],
+  suite(m): Record<string, SuiteCase> {
+    return {
+      'a shown drawable or unmeasured card holds a slot': () => {
+        expect(m.cardHoldsSlot('shown', 'drawable')).toBe(true);
+        expect(m.cardHoldsSlot('shown', 'unmeasured')).toBe(true);
+      },
+      'an absent or no-reader card, or a hidden one, holds none': () => {
+        expect(m.cardHoldsSlot('shown', 'absent')).toBe(false);
+        expect(m.cardHoldsSlot('shown', 'no-reader')).toBe(false);
+        expect(m.cardHoldsSlot('hidden', 'drawable')).toBe(false);
+      },
+    };
+  },
+};
+
+const ROW_FACTS_SET: MutantSet<Queue> = {
+  modulePath: QUEUE_TS,
+  mutants: [
+    { id: 'RF1', old: "waiting: f.waiting.filter((w) => w.drawability === 'drawable')", new: 'waiting: f.waiting' },
+    { id: 'RF2', old: 't !== null && verdict !== null && lineCounts(', new: 'verdict !== null && lineCounts(' },
+    { id: 'RF3', old: '[{ p, verdict, label: \'none\' }], t).n === 1', new: '[{ p, verdict, label: \'none\' }], 0.5).n === 1' },
+    { id: 'RF4', old: 'needed: labelsNeeded(f.row, f.answers)', new: 'needed: labelsNeeded(f.row, [])' },
+    { id: 'RF5', old: 'markedAtNext: marked(w.verdict, w.p)', new: 'markedAtNext: false' },
+  ],
+  suite(m): Record<string, SuiteCase> {
+    const w = (stateHash: string, verdict: 'yes' | 'no' | null, p: number, drawability: 'drawable' | 'absent' = 'drawable') =>
+      ({ stateHash, recordId: 1, at: 1, verdict, p, drawability });
+    return {
+      'marks at the next candidate, keeps drawable states': () => {
+        const r = m.pickRowFactsOf({ row: yesNo, mode: 'shadow', answers: [], lastCardWeekStart: 'never',
+          waiting: [w('a', 'yes', 0.96), w('b', 'yes', 0.9), w('c', 'yes', 0.99, 'absent')] });
+        expect(r.waiting.map((x) => [x.stateHash, x.markedAtNext])).toEqual([['a', true], ['b', false]]);
+      },
+      'no next candidate marks nothing, and the need is the answers\'': () => {
+        const r = m.pickRowFactsOf({ row: yesNo, mode: 'shadow', answers: clean(29), lastCardWeekStart: 'never',
+          waiting: [w('a', 'yes', 0.99)] });
+        expect(r.needed).toBe('none');
+        expect(r.waiting[0]!.markedAtNext).toBe(false);
+      },
+    };
+  },
+};
+
+const CARD_FIELDS_SET: MutantSet<Cards> = {
+  modulePath: CARDS_TS,
+  mutants: [
+    { id: 'CF1', old: "if (needs.kind === 'no-reader') return { kind: 'skip', word: 'no-reader' };", new: '' },
+    { id: 'CF2', old: "if (t?.kind === 'absent') return { kind: 'skip', word: 'absent' };", new: '' },
+    { id: 'CF3', old: "if (t?.kind === 'resolved') out.push(t.text); else unmeasured = true;", new: "if (t?.kind === 'resolved') out.push(t.text);" },
+    { id: 'CF4', old: "fields[r.name] = typeof refs[r.name] === 'string' ? out[0] ?? '' : out;", new: 'fields[r.name] = out;' },
+    { id: 'CF5', old: "if (needs.kind === 'malformed') return { kind: 'skip', word: 'absent' };", new: "if (needs.kind === 'malformed') return { kind: 'skip', word: 'unmeasured' };" },
+  ],
+  suite(m): Record<string, SuiteCase> {
+    const rb = Q['readback.omits'];
+    const t = (o: Record<string, { kind: 'resolved'; text: string } | { kind: 'absent' } | { kind: 'unmeasured'; why: string }>) => new Map(Object.entries(o));
+    return {
+      'texts fill the fields, one id a string and a list a list': () => {
+        expect(m.cardFieldsOf(rb, { request: '3', readback: '12' }, null, t({ 'message:3': { kind: 'resolved', text: 'q' }, 'mail:12': { kind: 'resolved', text: 'w' } })))
+          .toEqual({ kind: 'fields', fields: { request: 'q', readback: 'w' } });
+        expect(m.cardFieldsOf(rb, { request: ['3'], readback: '12' }, null, t({ 'message:3': { kind: 'resolved', text: 'q' }, 'mail:12': { kind: 'resolved', text: 'w' } })))
+          .toEqual({ kind: 'fields', fields: { request: ['q'], readback: 'w' } });
+      },
+      'each skip word': () => {
+        expect(m.cardFieldsOf(gateRow, { cited: '1', goals: 'g' }, null, t({}))).toEqual({ kind: 'skip', word: 'no-reader' });
+        expect(m.cardFieldsOf(rb, { request: '3', readback: '12' }, null, t({ 'message:3': { kind: 'absent' }, 'mail:12': { kind: 'resolved', text: 'w' } })))
+          .toEqual({ kind: 'skip', word: 'absent' });
+        expect(m.cardFieldsOf(rb, { request: '3', readback: '12' }, null, t({ 'mail:12': { kind: 'resolved', text: 'w' } }))).toEqual({ kind: 'skip', word: 'unmeasured' });
+        expect(m.cardFieldsOf(rb, { request: 'x', readback: '12' }, null, t({}))).toEqual({ kind: 'skip', word: 'absent' });
+      },
+    };
+  },
+};
+
+/** One set per decider; registered in mutation-floors.test.ts with a floor each. */
 export const LABEL_QUEUE_MUTANT_SETS: Record<string, MutantSet<never>> = {
+  [`${KEY_Q}cardRefNeeds`]: REF_NEEDS_SET as MutantSet<never>,
+  [`${KEY_Q}stateDrawability`]: DRAWABILITY_SET as MutantSet<never>,
+  [`${KEY_Q}cardHoldsSlot`]: HOLDS_SLOT_SET as MutantSet<never>,
+  [`${KEY_Q}pickRowFactsOf`]: ROW_FACTS_SET as MutantSet<never>,
+  [`${KEY_C}cardFieldsOf`]: CARD_FIELDS_SET as MutantSet<never>,
   [`${KEY_Q}cardRowsOf`]: CARD_ROWS_SET as MutantSet<never>,
   [`${KEY_Q}labelsNeeded`]: LABELS_NEEDED_SET as MutantSet<never>,
   [`${KEY_Q}pickLabelCards`]: PICK_SET as MutantSet<never>,
