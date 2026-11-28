@@ -22,7 +22,7 @@ what the ledger should learn; no plan, spec or ledger text is edited here.
 | `LabelledCases`, `DecisionStateReads` | In `server/src/coord/decisionModelPort.ts`. `index.ts` passed an empty labels source (`noLabelsYet`). Its `inlineStateReads` resolves only inline fields and `programme` refs. |
 | The row's mode reader | No `decisionRowOf`. The store's `decisionRowRead` (row or `unreadable`) and `decisionRowSideOf` are the owners; this piece reads `decisionRowRead` (point 2). |
 | `quizWeek`'s importers | Five: `quiz.ts` itself (the status mail's key), `quizLane.ts`, `continuity-quiz-lane.test.ts`, `history-quiz-unattended.test.ts`, `sim/quizSets.ts`. The plan named three (point 1). |
-| Migrations | 134, so this piece's is slot 135. Request record A (#3609) also holds 135: whoever lands second renumbers after one merge of main, on the coordinator's go. |
+| Migrations | 134, so this piece's was slot 135. Request record A (#3609) landed 135 first, so after one merge of main (below) this piece's is slot 136. |
 | `LANE_SCHEDULE`'s `mono` rows | 66 (the plan said 46); 67 with the label lane. |
 | Route counts (auth-gate) | 34 route files, 345 routes, 342 HTTP, 120 exempt. Now 35, 347, 344, 120. |
 | Card rows | `scope.widens`, `relay.method`, `readback.omits`, `readback.adds` (LQ3, derived from the catalogue). |
@@ -137,6 +137,29 @@ Both doors are session-gated, behind the account gate (`{ cap: null }`, no step-
 | `write-failed` | 503 | POST | the close threw, or the row cannot be read |
 
 An older server has neither door, so the console should read a 404 on the GET as "no label cards here".
+
+## The merge of main (#3609)
+
+The request record's first part (#3609) merged with one coordination-database migration at slot 135, the slot this piece
+was built at. On the coordinator's go, this branch took one merge of `main` at `1efcbe78cb` (a merge, no rebase). What it changed:
+
+- **The migration moved to slot 136.** The schema keeps the request record's three tables at 135 and puts `label_cards` and
+  `decision_labels` at 136, and the comment's re-measure line now expects 135 before this entry.
+- **Files both sides touched**, each resolved to keep both:
+  - `server/src/coord/schema.ts`: the two migrations, in order.
+  - `server/test/coord-db.test.ts`: the version pins go to 136, and both comment lines name `MIGRATIONS[134]` and `[135]`.
+  - `server/test/run-close-switch.test.ts`: the undo list drops both table sets and its prose names 136.
+  - `server/test/limit-samples-store.test.ts`: the undo list drops both sets; limit samples now sits at `N-11`.
+  - `server/test/sim/mutation-floors.test.ts`: both spreads (`LABEL_QUEUE_MUTANT_SETS`, `REQUEST_MUTANT_SETS`).
+  - `server/test/single-definition/core-vocab.test.ts`: both handle holders.
+  - `server/test/single-definition/writers-map.test.ts`: both sets of tables.
+  - `server/test/mail-routes.test.ts` and `server/test/sim/mutation-floors.json`: merged without a conflict and keep both sides.
+- **Re-run, each file alone, all green:**
+  - the suites the merge touched: the coordination database, limit samples, the run-close switch, the handle holders, the
+    writers map, the label store, doors and lane, the mail routes, the stamp census, the request store and the sqlite file;
+  - the censuses: auth-gate, box-token, operator-message readers, vocabularies, time ports, row revisions and the rings
+    directory;
+  - the floors suite (429 of 429, locally) and the source type check.
 
 ## Known limits
 
