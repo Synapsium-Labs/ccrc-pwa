@@ -6009,6 +6009,28 @@ C1's move of B4's limiter into `server/src/bounded.ts` stays under D-6388. Issue
   when the block opens or closes, with the same fallback, and still moves focus only when focus has fallen to the page
   and the block holds a record of the control that had it. Task note:
   `docs/superpowers/programs/desktop-polish/landing-line-rolled-up.md`.
+- **D-9158** — `auth-verb-on-a-mac`: desktop-polish wave 193, issued on 2026-11-27. `ccrc auth on|off` acts on a Mac
+  (issue #3475) where it can prove the console's launchd job, and refuses, naming the file, where it cannot: review
+  3971's ruling B stands only there. The job file must be what `_inst_plist_server` prints for this home but for its
+  `PATH` (one or more plain absolute directories, no markup, quote or backslash, no empty entry) and its `ProcessType`
+  (one of `_launchd_class`'s four words); the writer takes those two as optional arguments, so install's bytes do not
+  move. A link, an edit, an older writer's job, a home outside the closed form of `_box_said`, a job launchd holds other
+  than that file (`launchctl print`: its path, program, arguments, and an environment of `PATH`, `HOME` and at most
+  `XPC_SERVICE_NAME` holding the label and `OSLogRateLimit` holding one to nine digits, the four a real launchd drew, each
+  matched by its whole name), the caller's launchd domain setting a sign-in key or `BASH_ENV`, and a `ccrc.env` that is
+  not plain assignments all refuse; a print the reader does not know the shape of refuses as not measured, a key printed
+  twice in the job's own environment among them (fix round 4). The lock, the
+  restart and the proof are Linux's code, with three Mac words: the no-flock refusal names `brew install flock`, the
+  restart is `launchctl kickstart -k`, and the unit's state word is printed only in the closed form. A job `PATH` that
+  fails its grammar is offered the install from a shell whose `PATH` is printable ASCII only and holds none, or the hand
+  route: an install writes the
+  `PATH` of the shell it runs in, so one from the same shell would write the same field again (the coordinator's step-1
+  ruling on A1). With it, review 4061's follow-ups: the printed-role rows
+  (`both`, and the bad roles on `off`), an unreadable `ccrc.env`'s own words, every file value printed only in a closed
+  form (`_box_said`), the reload advice that could not cure two arms, and `off`'s and expose's way on after `CCRC_PORT`
+  moved. `ccd/ccrc` grows past the per-PR limit, by 140 code lines, waived at that figure as
+  `growth-waivers/D-9158-ccd-ccrc.json`: `passwd`, `expose` and `auth` stay one family inline (D-9105's reason). Task note:
+  `docs/superpowers/programs/desktop-polish/auth-verb-mac.md`.
 
 ## Out of scope
 

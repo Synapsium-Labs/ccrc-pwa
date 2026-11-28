@@ -24,7 +24,7 @@
     "ccd/ccd-update-sync": {"count":2,"codes":{"SC2088":2}},
     "ccd/ccd-usage-sweep": {"count":2,"codes":{"SC1090":1,"SC2088":1}},
     "ccd/ccgpt-runtime": {"count":0,"codes":{}},
-    "ccd/ccrc": {"count":62,"codes":{"SC1007":2,"SC1010":6,"SC1090":2,"SC2034":15,"SC2053":1,"SC2069":1,"SC2088":9,"SC2115":1,"SC2155":2,"SC2165":1,"SC2167":1,"SC2174":3,"SC2206":14,"SC2209":3,"SC2319":1}},
+    "ccd/ccrc": {"count":59,"codes":{"SC1007":2,"SC1010":6,"SC1090":2,"SC2034":12,"SC2053":1,"SC2069":1,"SC2088":9,"SC2115":1,"SC2155":2,"SC2165":1,"SC2167":1,"SC2174":3,"SC2206":14,"SC2209":3,"SC2319":1}},
     "ccd/ccrc-adopt": {"count":0,"codes":{}},
     "ccd/ccrc-api": {"count":0,"codes":{}},
     "ccd/ccrc-codex": {"count":0,"codes":{}},
