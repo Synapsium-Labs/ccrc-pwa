@@ -76,13 +76,25 @@
 //     is larger than a part (the container's text goes to P1, which reads no comment; measured at 200 bytes on an item, a lone item, a
 //     quote and an item holding a fence then the comment: commented text in 4 of 5, 4 of 4, 4 of 4 and 4 of 5 parts); for the
 //     top-level shapes the library draws inside a paragraph, which go to P1 as a paragraph does (review 4126 F2, ruled a residual on
-//     2026-11-27): text after the first `-->` on its line, text before `<!--` on its line, and a `<!-->` or `<!--->` opener with a
-//     later closer (measured at 200 bytes: hidden text in 3 of 5 parts for each; at the gate, a 576 089-byte old table behind
-//     `<!--` and `--> (removed …)`: 2 of 4); for a comment the cutter hands to P1 itself, one whose closer line does not fit a part
-//     beside the `<!--` reopen line or one in a window too small for its close and reopen lines; and on P1's own paths: the unread tail, the console with no
-//     render job, and the whole-text fallback of a cutter that throws. The cure for these (the same candidates and close and reopen
-//     inside each container path, with the container's prefix, and the paragraph shapes) is carried as the follow-up ticket
-//     `x2-fu-comment-in-container`.
+//     2026-11-27): text after the first `-->` on its line and text before `<!--` on its line (measured at 200 bytes: hidden text in
+//     3 of 5 parts for each; at the gate, a 576 089-byte old table behind `<!--` and `--> (removed …)`: 2 of 4); for a comment the
+//     cutter hands to P1 itself, one whose closer line does not fit a part beside the `<!--` reopen line or one in a window too
+//     small for its close and reopen lines; and on P1's own paths: the unread tail, the console with no render job, and the
+//     whole-text fallback of a cutter that throws. Measured on this cutter on 2026-11-28 (wave 62), each still shown, with no cure
+//     claimed: an opener indented four columns, or by a tab, that continues a paragraph (review 4131 O1; at 200 bytes, all 30
+//     hidden lines shown; at the gate, a 576 051-byte paragraph shows all 36 000); a quote whose comment lines are lazy, carrying no
+//     `>` (wrong at 91 of 91 sizes from 30 to 120 bytes; at the gate, a 544 034-byte quote shows all 34 000); a list item whose
+//     content column is past its marker and one space, `-   x` or `10.  x` (wrong at 111 of 111 sizes from 60 to 170; at the gate,
+//     all 24 000 lines of a 528 043-byte item); a part beginning at a `<!--->` or `<!-->` opener inside a paragraph (wrong at 111
+//     of 111 sizes from 40 to 150); and lines of dashes after
+//     a top-level comment whose closer line is longer than a part, where a part may begin at the dashes and be read as front matter
+//     (P1's fallback: the shown lines lost at 52 of 171 sizes, measured by wave 62's review; the same input's hidden lines shown at
+//     105 of 177 sizes from 24 to 200 bytes); the inputs are in the plan's class 10 note of that day. Beside them, by structure:
+//     any unit the block cutter hands to P1 whole, since P1 reads no comment. The cure for these is carried to its own wave
+//     (`x2-fu-comment-in-container`, `x2-fu-comment-paragraph-shapes`). (2026-11-28, review 4131 A2: a `<!-->` or `<!--->` opener at
+//     the start of its line with a later closer, once recorded here as a third paragraph shape, hides nothing: the library reads it
+//     as a block comment that closes on that line, so the lines after it are shown. Inside a paragraph, after text on its line, it
+//     hides up to the later `-->` like any opener: that is the shape "text before `<!--` on its line".)
 // The line cutter's own description follows.
 //
 // THE LINE CUTTER (P1). The cut, in this order of preference, taking the latest cut of the best kind that keeps the part within `maxBytes`:
