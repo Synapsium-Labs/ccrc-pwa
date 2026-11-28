@@ -865,6 +865,17 @@ export function frameFits(sent: number, length: number, total: number): boolean 
   return sent + length <= total;
 }
 
+/** What the hour's budget is charged for one frame handed to the door's sink, `charged` saying whether this response was charged
+ *  before (X5-FU item 2): the bytes the read takes. A framed file (`artifactFramed`) is read frame by frame, so each frame is charged
+ *  its length. A file at most `DOCS_LANE_LARGE_RAW` is read whole, one show, and the asked range cut from it, so the response's first
+ *  frame is charged the file's size, whatever its own length (an empty one included), and anything after it nothing: a ranged read of
+ *  a small file costs what a whole read of it costs, a whole read is charged once, and a read the client leaves after its first write
+ *  has still cost its size. */
+export function artifactCharge(entry: { size: number }, frameLength: number, charged: boolean): number {
+  if (artifactFramed(entry)) return frameLength;
+  return charged ? 0 : entry.size;
+}
+
 /** The whole header set of a 200 or a 206 (spec 4.3 and 5): the type (with its charset on text), the length, the CSP built for this
  *  capability, every `CONTENT_HEADERS` entry, the cache rule by the file's MIME kind, an attachment disposition for a file the
  *  MIME table does not know, and for a range the `Content-Range`. No `set-cookie` and no `access-control-*`. */
@@ -930,8 +941,9 @@ export function prepareFailureAction(error: string, wrote: boolean): ReadFailure
 export const ARTIFACT_BUDGET_WINDOW_MS = 3600000;
 
 /** Whether a capability's byte budget is already spent at `now` (spec 5: "1 GiB served an hour"): the window has not restarted and
- *  the bytes served in it have reached the budget. A request is refused (429) only then; what it is then served is charged frame by
- *  frame, so a ranged read that stops early costs only what it was sent. */
+ *  the bytes served in it have reached the budget. A request is refused (429) only then; what its read takes is then charged
+ *  (`artifactCharge`): a framed file frame by frame, so a ranged read of it that stops early costs only what it was sent, and a
+ *  small file its whole size once. A charge the hour cannot cover spends it, so this answers true from then on (X5-FU item 2). */
 export function budgetSpent(c: { servedThisHour: number; hourStart: number }, now: number): boolean {
   return now - c.hourStart < ARTIFACT_BUDGET_WINDOW_MS && c.servedThisHour >= ARTIFACT_HOURLY_BYTES;
 }
