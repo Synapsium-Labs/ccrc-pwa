@@ -110,28 +110,53 @@ step-up without state, and neither had a multiline form. The coordinator ruled t
     `secret-field-sheets.test.tsx` (the first commit, condition 1).
   - Their own suites are untouched and green.
 - **The key.**
-  - Save reads the field with `peek()` and builds the body, so the key lives in the request and nowhere else.
+  - Save's request reads the field with `peek()` inside the request itself, so the key lives in the request and nowhere else, the
+    heap included (review 4167 F1, ruled call 1930). No local of the send holds it, and Save's retry is made outside the send
+    (`saveRetry`, from one boolean), so the closure the section keeps while the step shows can reach no key. The shape is held by
+    source, in `settings-retry-census.test.ts`, because no runtime check sees what a closure captures (below).
   - The field is emptied on the door's answer and on every refusal, never on a first `step-up-required`, so the retry sends the
     same key once more.
   - The retry is the send the confirm starts (review 4139 F1, ruled call 1876; below). Its own `step-up-required` is final: it is
     worded for what was refused (`DECISION_WORDS.stepUpFinal` with a key, `stepUpFinalHost` for the host alone, A4) and the field is
     emptied (condition 4).
   - The retry never sends less than the first send carried (F2). Save keeps one boolean, whether a key was typed, never the key. A
-    retry that finds the field emptied, because the page was hidden while the step showed, sends nothing and says so
-    (`DECISION_WORDS.keyGone`). A Save that carried no key retries with none.
+    retry that finds the field emptied sends nothing and says so (`DECISION_WORDS.keyGone`). With the card held while the step
+    shows (below), only the page hide can empty it, so the sentence's cause is the true one. A Save that carried no key retries with
+    none.
 - **The names.**
-  - Upload reads the box with `peek()`, turns the text into rows, and sends them. The rows live in the request body, and only the
-    line numbers they came from are kept, to word a refused row.
+  - Upload reads the box with `peek()`, checks that the text parses, and sends. The rows are built inside the request
+    (`rowsBodyOf`), so they live in the request body and nowhere else, the heap included (F1), and only the line numbers they came
+    from are kept, to word a refused row. The check and the request run in one task with no await between, so the request sees the
+    text the check saw; text that no longer parses there is refused before anything is sent, never an emptier upload.
   - The box keeps the names only where the operator must edit or confirm them (A2, `names-kept-only-to-be-edited`): a refused row,
-    a refused cap (the row count's `bad-request`, and `oversize`) and a first step-up. The door's answer, a 401 (the person at the
-    screen is no longer proven) and every other refusal empty it. The field's header says so.
-  - The retry reads the box again; one that finds it emptied sends nothing and says so (`NAME_LIST_WORDS.namesGone`). Its own
-    step-up is final and worded for its act: Upload's or Clear's (`clearFinal`).
+    a refused cap (the row count's `bad-request`, and `oversize`) and a first step-up. The rule reads the words, so the one server
+    fault that also answers `bad-request` with no row (a row it could not hash, which the console's own body cannot cause) keeps
+    them too (review 4167's residual under C7). The door's answer, a 401 (the person at the screen is no longer proven) and every
+    other refusal empty it. The field's header, the card's and the rule's say so.
+  - The retry reads the box again; one that finds it emptied (only the page hide can, with the card held) sends nothing and says so
+    (`NAME_LIST_WORDS.namesGone`). Its own step-up is final and worded for its act: Upload's or Clear's (`clearFinal`).
 - **The confirm starts the retry** (F1). The section keeps the one retry a card hands with its `step-up-required`, and sends it when
   the confirm lands, once. A press by the operator is always a first send; only the confirm's send is a retry. The mark is per act
-  (Upload and Clear hand their own), and the control that asked is held while its own step shows, so its value is not sent again to
-  a door that will refuse it. Any other `ask`, another card's answer included, drops a retry not yet sent. `useStepUp` still retries
-  nothing; the section owns this (`SectionCtx.ask`, `stepShows`).
+  (Upload and Clear hand their own), so a retry's answer is worded for its act. Each retry is made at the card's own level,
+  outside every send (`saveRetry`, `uploadRetry`, `clearRetry`), so it can reach no value a send read (review 4167 F1). Any other
+  `ask`, another card's answer included, drops a retry not yet sent. `useStepUp` still retries nothing; the section owns this
+  (`SectionCtx.ask`, `held`).
+- **The card is held whole while its step shows** (review 4167 F2 and F3, ruled call 1930; slug
+  `card-held-whole-while-its-step-shows`). Every input and every act of the card is disabled: the host's kind, endpoint and model
+  id, the key field, Save and Remove; the names box, Upload and Clear. So a key typed during the step is never discarded, an
+  edited key is never sent as "the same key", the box never uploads fewer rows than the first send, and no other act of the card
+  can be in flight when the confirm lands. Another card's answer frees it, and the next press is a first send. The secret field
+  carries the hold as an additive `held` prop: absent, it is as before, and the account sheets pass none.
+  - The hold is by attribute, and no path reaches a handler while it stands. A disabled button gets no click, and the cards have
+    no form, no submit and no key handler. The two fields' only handler is their presence report (`onInput`), which sends nothing,
+    and a browser delivers no keystroke to a disabled field. So the cases that click a held control check the attribute and that
+    nothing was sent, and that is the whole of the path (the reviewer's remark on case 16).
+  - The retry's in-flight guard is unreachable for a retry, and the cases show the preconditions. The asking door clears its own
+    in-flight mark before the step is drawn (`useCardDoor` sets it in `finally`, right after the `ask`). While the step shows,
+    nothing of the card can start a send (every control held), and the names card's two acts share one door. The cases assert
+    that, while Upload's or Clear's step shows, the other act is held and the door is idle, and that the confirm's retry is sent.
+  - The decision rows and home C's cards hand no retry, so they keep their old shape: the operator presses again after the confirm,
+    and nothing is held but the press in flight.
 - **Where neither is, measured.** The cases check that neither value is ever in:
   - the markup;
   - a `console` call;
@@ -140,8 +165,13 @@ step-up without state, and neither had a multiline form. The coordinator ruled t
   - a refusal line;
   - a React fiber's props or state.
 
-  The last is a reachability walk with its own control case. Since fix round 1 (A1) it runs for the key as well as the names, after
-  typing, with the step showing, and after the retry and its answer. Fixtures use a synthetic key and synthetic names only.
+  The last is a walk of every fiber's props and hook state, with its own control case. Since fix round 1 (A1) it runs for the key as
+  well as the names, after typing, with the step showing, and after the retry and its answer. It is one helper since fix round 2
+  (`pwa/test/helpers/fiberWalk.ts`, F5). **What it cannot see** (F6): it skips functions, so a value kept only in a closure's scope
+  is invisible to it. The reviewer's mutant that kept the typed key in the retry's closure left every case green. What a closure
+  may hold is therefore pinned by source: `settings-retry-census.test.ts` reads the two card files and requires every retry to be
+  made by a maker at the component's level, whose only parameter is a boolean and whose only free name is the card's send, and
+  every request to read its field inside itself. Fixtures use a synthetic key and synthetic names only.
 - **Not mine (c).** The item secret panel (`pwa/src/ledgers/ItemView.tsx`'s `SecretPanel`) still keeps its value in component state.
   It is on the coordinator's ticket `item-secret-panel-holds-its-value-in-state`.
 
@@ -162,7 +192,10 @@ step-up without state, and neither had a multiline form. The coordinator ruled t
   a first send.
 - `rows-keep-the-press-after-the-confirm`: the decision rows hand no retry. They carry no value a field could lose, so they keep the
   section's doctrine, as home C's cards do: the operator presses the move again after the confirm. Their table runs every move in
-  both arms (A9).
+  both arms (A9), the armed gate switched off among them since fix round 2 (review 4167 F4): Table 1's one widening off.
+- `card-held-whole-while-its-step-shows` (review 4167 F2, F3, ruled call 1930): above. A card that hands a retry disables every input
+  and every act of its own while its step shows; another card's answer frees it.
+- `retry-made-outside-every-send` (review 4167 F1): above. The retry's maker can reach no value; a source census holds the shape.
 - `retry-never-sends-less` (F2): one boolean per Save, never the value; an emptied field on the retry sends nothing.
 - `names-kept-only-to-be-edited` (A2): above, and in the field's header.
 - `empty-list-is-its-own-state` (A3): a list read back with no names (after a Clear; the door stores its check alone) says so, draws
@@ -278,6 +311,42 @@ takes no value), and "draw an unknown row with a control" (the shared reader ref
 home C's section, unchanged; its mount case is `settings-decision-model`'s "no step on mount". "Nothing a running session sees changes
 at merge" is held by the section's `overlord-v1` cases in `settings-frame` and by `secret-field-sheets` for the account sheets.
 
+**Fix round 2, by hand** (review 4167, ruled call 1930). Applied on a throwaway copy of `pwa/` in the session's temp root, never the
+checkout: each file's baseline green first, the mutant in, the reds counted, the file restored. The counts are of the round's files:
+`settings-decision-model` (71), `settings-private-names` (31), `settings-retry-census` (9) and `secret-field-forms` (17). The
+review could not re-run the round-1 rows below, so they are measured again here, on this round's code. M17 to M19 are re-aimed at the
+section's whole-card hold, which replaced the per-act one.
+
+| Id | Mutant | Red with it in | Green after |
+|---|---|---|---|
+| M30 | F1: the reviewer's mutant, Save's retry arrow written again inside the send (it captures the send's scope) | `settings-retry-census` 4 of 9; `settings-decision-model` 0 of 71, as F6 says | yes |
+| M31 | F1: the names' body built in a local of Upload, which the request's closure names | `settings-retry-census` 1 of 9; `settings-private-names` 0 of 31 | yes |
+| M32 | F2: the key field not held | `settings-decision-model` 3 of 71 | yes |
+| M33 | F2: Remove not held | `settings-decision-model` 4 of 71 | yes |
+| M34 | F2: the names box not held | `settings-private-names` 3 of 31 | yes |
+| M35 | F3: Clear not held while Upload's step shows | `settings-private-names` 2 of 31 | yes |
+| M36 | F2: the secret field ignores `held` | `secret-field-forms` 2 of 17, `settings-decision-model` 3 of 71, `settings-private-names` 3 of 31 | yes |
+| M37 | F2: another card's answer does not free the card (held while any step shows) | `settings-decision-model` 2 of 71, `settings-private-names` 1 of 31 | yes |
+| M38 | F4: an armed gate switched off sent through the arm door | `settings-decision-model` 2 of 71 | yes |
+| M17 | (again) nothing held while the step shows | `settings-decision-model` 4 of 71, `settings-private-names` 3 of 31 | yes |
+| M18 | (again, re-aimed) the mark not per act: Clear's step hands Upload's retry | `settings-private-names` 2 of 31 | yes |
+| M19 | (again) another `ask` does not drop the retry | `settings-decision-model` 1 of 71 (case 18) | yes |
+| M22 | (again) the names' emptied retry worded as an empty box | `settings-private-names` 1 of 31 | yes |
+| M23 | (again) `bad-ceiling` without the door's range | `settings-decision-model` 1 of 71 | yes |
+| M24 | (again) an unreadable answer loses its detail (no Reload) | `settings-decision-model` 3 of 71 | yes |
+| M26 | (again) Clear offered on an empty list | `settings-private-names` 1 of 31 | yes |
+| M27 | (again) Clear's final worded as Upload's | `settings-private-names` 1 of 31 | yes |
+| M28 | (again) the row's answer not installed | `settings-decision-model` 2 of 71 | yes |
+
+The floors suite's rows N6 to N8 and DW6 to DW8 were run again in this round, on its code: the two sets
+(`nameListRowsOf`, `decisionRowLine`) pass with every mutant killed, beside the baseline and the keys check (4 of 4, run with the
+suite filtered to them).
+
+M19 and case 18: Remove is held while Save's step shows now, so round 1's order (Remove asked after Save) cannot be pressed.
+Case 18 now drops Save's retry through a row's step, which is another card's ask. That order alone cannot kill M19, because the
+section sends a retry only from the card that asked last. So the case goes on: once the row's step is confirmed, Remove's own step
+in the host card is confirmed too, and no Save may follow. With M19 in, the kept retry is sent there, 1 of 71.
+
 ## Fix round 1 and the one merge of main (review 4139, ruled call 1876)
 
 The round is three commits on the reviewed tip `af6b399fdd`: the red cases first, then the build, then this note and the case that
@@ -305,6 +374,52 @@ kills M19. Then the branch took one merge of main, on the coordinator's go once 
   still drawn loading (`data-step-up="loading"`). The race was in the case from the first build. The case now waits for the
   field (`findByLabelText`), a one-line commit; the file passes 68 of 68 alone, three runs in a row. Every other job of that
   run was green, the four browser shards among them.
+
+## Fix round 2 (review 4167, ruled call 1930)
+
+Review 4167 read `28b233b966`. The round is two commits on it, the red cases first and then the fix, and this note. Nothing in
+`server`, `shared` or `ccd`; no door is sent anything new in the ruled orders; no new refusal word.
+
+- **F1, the retry holds no value.** The retries are made by makers at each card's own level (`saveRetry`, `uploadRetry`,
+  `clearRetry`), and the requests read their fields themselves: the key's `peek` inside the request, the names' body built inside
+  it (`rowsBodyOf`). The check is by source, because no runtime check sees a closure: `pwa/test/settings-retry-census.test.ts`, 9
+  cases over the two card files. It goes red on the reviewer's mutant (M30, 4 of 9) and on a body kept in a local (M31), where every
+  runtime case stays green.
+- **F2 and F3, one rule.** While a card's step shows, that card is held whole (`SectionCtx.held`, which replaces `stepShows`). The
+  secret field gains `held`, additive: the account sheets pass none, and their characterization is untouched and green (10 of 10).
+  The cases: the key field, Remove and Save held through a key Save's step; the key field held through a host-only Save's step;
+  Clear held through Upload's step and Upload and the box through Clear's; everything freed by another card's answer, with the next
+  press a first send. The two emptied-field sentences stay as worded, since only the page hide can now empty a held field; no
+  other cause was found. The in-flight guard is unreachable for a retry, as argued above, and the cases show its preconditions.
+- **F4.** The move table gains the armed gate switched off (`readback.omits`, Off); it passes on the code, which already sent it
+  through the off door, and M38 shows it can go red.
+- **F5.** One fiber walk, `pwa/test/helpers/fiberWalk.ts`, imported by both settings files.
+- **F6.** The note, the helper's header and both files' comments say what the walk cannot see and point at the census.
+- **The remark on case 16.** Above: the hold is by attribute, and no path reaches a handler while it stands.
+- **C7's residual wording.** Corrected in this note, the card's header, the secret field's header and the keep rule's own comment
+  (`nameListWords.ts`): the one server fault that answers `bad-request` with no row keeps the names too.
+- **The changed assertions, and why.** Case 15 asserted Remove enabled during Save's step; the ruling holds it, so the case asserts
+  the whole card held. Case 18 pressed Remove during Save's step, which the hold forbids; it drops the retry through a row's step
+  now and goes on to Remove's own step (above). The names file's per-act case pressed Clear during Upload's step; it is two cases
+  now, one hold in each direction, with Clear's own body retried. Nothing else was loosened.
+- **Verified**, each file alone through the fleet test wrapper, two workers at most:
+  - `settings-decision-model` 71 and `settings-private-names` 31;
+  - `secret-field` 3, `secret-field-forms` 17 and `secret-field-sheets` 10;
+  - `confirm-its-you` 34;
+  - `settings-overlord` 28, `settings-account-facts` 15 and `settings-frame` 33;
+  - `overlord-chat` 33, `overlord-chat-words` 29 and `overlord-chat-part` 2;
+  - `control-census` 13 and `tap-targets` 101;
+  - `contrast` 376, `theme-catalogue` 20, `theme-bridge` 14 and `focus-ring` 11;
+  - `refusal-literal-ratchet` 2, `decision-model-words` 34 and `name-list-words` 37;
+  - `settings-retry-census` 9;
+  - the section's browser file, 80 of 80;
+  - the console's rings, `pwa-rings` 10 and `pwa-one-owner` 42;
+  - the floors' keys for this branch's two sets (4 of 4, filtered);
+  - `growth-check` 63 (3 skipped) and `growth-caps` 12;
+  - the console's type check, clean.
+
+  The control census and the browser file draw no state with a step showing, so they see no held control. Their rows are
+  unchanged, because nothing they measure changed.
 
 ## What a merge arms
 

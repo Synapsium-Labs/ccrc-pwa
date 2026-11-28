@@ -877,6 +877,7 @@ describe('the host card', () => {
     // F2), so the other ask is a row's: the row hands no retry, so after its confirm nothing is sent, and the host card is free.
     const save = vi.spyOn(api, 'setDecisionKey').mockRejectedValueOnce(stepUpRequired()).mockResolvedValue({ ok: true });
     const arm = vi.spyOn(api, 'armDecisionRow').mockRejectedValueOnce(stepUpRequired()).mockResolvedValue(OK);
+    const remove = vi.spyOn(api, 'removeDecisionKey');
     await open(viewOf({ rows: [rowOf('programme.pick')] }));
     typeKey();
     fireEvent.click(hostSave());
@@ -892,6 +893,16 @@ describe('the host card', () => {
     expect(save).toHaveBeenCalledTimes(1);
     expect(arm).toHaveBeenCalledTimes(1);
     expect(keyField().value).toBe(KEY);
+    // The dropped retry stays dropped: Remove's own step in the host card, confirmed, sends no Save (Remove hands no retry).
+    remove.mockRejectedValueOnce(stepUpRequired()).mockResolvedValue({ ok: true, held: [] });
+    fireEvent.click(control(card('decision-host'), 'decision-key-remove'));
+    fireEvent.click(within(await screen.findByRole('dialog')).getByRole('button', { name: W.removeKey }));
+    await waitFor(() => expect(card('decision-host').querySelector('[data-step-up]')).not.toBeNull());
+    await confirmStep();
+    await waitFor(() => expect(document.querySelector('[data-step-up]')).toBeNull());
+    await settle();
+    expect(save).toHaveBeenCalledTimes(1);
+    expect(remove).toHaveBeenCalledTimes(1);
   });
 
   it('18. a refused removal is worded by its own sentence', async () => {
