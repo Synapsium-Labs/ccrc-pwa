@@ -86,6 +86,10 @@ const TIME_PORT_FILES: readonly string[] = [
   // Overlord W2, forecasts B: the health decider and the shared measures take `now` and every range as arguments.
   'server/src/coord/programmeHealth.ts',
   'server/src/coord/programmeMeasures.ts',
+  // Overlord W2, request record B1: the shortlist decider reads no clock, and its reader reads the wall and waits through
+  // the time port (`Clock`, `Scheduler`), never the ambient clock or a timer of its own.
+  'server/src/coord/requestShortlist.ts',
+  'server/src/coord/requestShortlistRead.ts',
 ];
 const TIME_PORT_SCOPE = { test: (f: string): boolean => TIME_PORT_FAMILIES.test(f) || TIME_PORT_FILES.includes(f) };
 /** The one file allowed to read the ambient sources: the system adapters. */

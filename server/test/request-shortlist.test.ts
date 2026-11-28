@@ -3,7 +3,7 @@
 import { describe, expect, it } from 'vitest';
 import * as shortlist from '../src/coord/requestShortlist.js';
 import { SHORTLIST_MAX } from '../../shared/overlordRequests.js';
-import { OVERLORD_HISTORY_TOUCHED_PATHS_MAX } from '../../shared/overlordHistory.js';
+import { OVERLORD_HISTORY_OUTCOMES, OVERLORD_HISTORY_TOUCHED_PATHS_MAX } from '../../shared/overlordHistory.js';
 import { codeShortlistCases, touchedAnswerCases, touchedReadCases, touchedRequestCases } from './shortlistCases.js';
 
 const run = (cases: Record<string, () => void | Promise<void>>): void => { for (const [name, c] of Object.entries(cases)) it(name, c); };
@@ -20,7 +20,7 @@ describe('the bounds are declared once', () => {
 
   it('isShortlistKebab admits its declared words and nothing else', () => {
     for (const w of [...shortlist.TOUCHED_UNMEASURED_WHYS, ...shortlist.TOUCHED_PARTIAL_WHYS, ...shortlist.SHORTLIST_READ_WHYS,
-      ...shortlist.SHORTLIST_BASES, ...shortlist.SHORTLIST_READ_KINDS]) expect(shortlist.isShortlistKebab(w), w).toBe(true);
+      ...shortlist.SHORTLIST_BASES, ...shortlist.SHORTLIST_READ_KINDS, ...OVERLORD_HISTORY_OUTCOMES]) expect(shortlist.isShortlistKebab(w), w).toBe(true);
     for (const w of ['nothing-touched', 'empty', 'bad-verb']) expect(shortlist.isShortlistKebab(w), w).toBe(false);
   });
 });

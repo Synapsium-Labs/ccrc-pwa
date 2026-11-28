@@ -18,7 +18,8 @@
 // not asked. The answer carries those words back, so no caller can mistake an unread input for an empty one.
 import { isRegistryId } from '../../../shared/api.js';
 import {
-  OVERLORD_HISTORY_TOUCHED_PATHS_MAX, OVERLORD_HISTORY_TOUCHED_SESSIONS_MAX, type OverlordHistoryRequest,
+  OVERLORD_HISTORY_OUTCOMES, OVERLORD_HISTORY_TOUCHED_PATHS_MAX, OVERLORD_HISTORY_TOUCHED_SESSIONS_MAX, refusedAsUnknownVerb,
+  type OverlordHistoryRequest,
 } from '../../../shared/overlordHistory.js';
 import { REQUEST_BOUNDS, SHORTLIST_MAX, type ExpectedPath } from '../../../shared/overlordRequests.js';
 import { utf8Bytes } from '../../../shared/utf8.js';
@@ -59,11 +60,11 @@ const SHORTLIST_READ_KIND_MAP: Record<ShortlistReadKind, true> = { measured: tru
 export const SHORTLIST_READ_KINDS = Object.keys(SHORTLIST_READ_KIND_MAP) as ShortlistReadKind[];
 
 /** Whether a kebab word is one this file or its reader names (the coordination directory's kebab-token census admits a word
- *  only from its declared home). */
+ *  only from its declared home): its own maps, and the history op's outcomes it reads (`OVERLORD_HISTORY_OUTCOMES`, L0). */
 export const isShortlistKebab = (word: string): boolean =>
   Object.hasOwn(TOUCHED_UNMEASURED_WHY_MAP, word) || Object.hasOwn(TOUCHED_PARTIAL_WHY_MAP, word)
   || Object.hasOwn(SHORTLIST_READ_WHY_MAP, word) || Object.hasOwn(SHORTLIST_BASIS_MAP, word)
-  || Object.hasOwn(SHORTLIST_READ_KIND_MAP, word);
+  || Object.hasOwn(SHORTLIST_READ_KIND_MAP, word) || (OVERLORD_HISTORY_OUTCOMES as readonly string[]).includes(word);
 
 // ---------------------------------------------------------------------------------------------------------------- the bounds
 
@@ -188,7 +189,7 @@ export function touchedAnswerOf(o: HistoryReadOutcome, asked: TouchedRequest, li
     case 'busy': return no('busy');
     case 'deadline': return no('deadline');
     // An agent built before `touched` refuses the verb with the word its request reader gives any verb it does not know.
-    case 'request-refused': return no(a.word === 'bad-verb' ? 'not-served' : 'refused');
+    case 'request-refused': return no(refusedAsUnknownVerb(a.word) ? 'not-served' : 'refused');
     case 'verb-refused': return no('history-unreadable');
     case 'store-refused': return no('history-unreadable');
     case 'too-large': return no('history-unreadable');

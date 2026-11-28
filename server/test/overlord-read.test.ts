@@ -334,32 +334,81 @@ describe('touched: one CLI read per path, ids and times only, under its own budg
 
   /** One family whose epoch root is a fixture directory, and a native leaf per call naming files (history-touched.test.ts'
    *  `plant`, kept to what touched reads). */
-  function touchedBox(prefix: string): { box: HistoryBox; plant: (id: string, latest: number, files: string[]) => void } {
+  type Plant = (id: string, latest: number, files: string[], family?: 'a' | 'b') => void;
+  function touchedBox(prefix: string, rootName = 'work-root'): { box: HistoryBox; plant: Plant } {
     const box = twoProjects(prefix);
-    const root = path.join(box.home, 'work-root');
+    const root = path.join(box.home, rootName);
     fs.mkdirSync(root, { recursive: true });
     const db = new DatabaseSync(dbFile(box));
-    let ids: { pk: number; seq: number; tpk: number };
+    const ids: Record<'a' | 'b', { pk: number; seq: number; tpk: number }> = {} as never;
     try {
-      const fam = db.prepare('SELECT session_pk FROM sessions WHERE ccrc_id = ? AND generation = ?').get(ID_A, GA) as { session_pk: number };
-      const ep = db.prepare('SELECT seq FROM epochs WHERE session_pk = ? AND confirmed_ms IS NOT NULL ORDER BY seq LIMIT 1').get(fam.session_pk) as { seq: number };
-      const tr = db.prepare("SELECT transcript_pk FROM transcripts WHERE cc_session_uuid = ? AND agent_id = ''").get(TA) as { transcript_pk: number };
-      db.prepare('UPDATE epochs SET cwd = ?, cwd_real = ? WHERE session_pk = ?').run(root, root, fam.session_pk);
-      ids = { pk: Number(fam.session_pk), seq: Number(ep.seq), tpk: Number(tr.transcript_pk) };
+      for (const [k, id, gen, t] of [['a', ID_A, GA, TA], ['b', ID_B, GB, TB]] as const) {
+        const fam = db.prepare('SELECT session_pk FROM sessions WHERE ccrc_id = ? AND generation = ?').get(id, gen) as { session_pk: number };
+        const ep = db.prepare('SELECT seq FROM epochs WHERE session_pk = ? AND confirmed_ms IS NOT NULL ORDER BY seq LIMIT 1').get(fam.session_pk) as { seq: number };
+        const tr = db.prepare("SELECT transcript_pk FROM transcripts WHERE cc_session_uuid = ? AND agent_id = ''").get(t) as { transcript_pk: number };
+        db.prepare('UPDATE epochs SET cwd = ?, cwd_real = ? WHERE session_pk = ?').run(root, root, fam.session_pk);
+        ids[k] = { pk: Number(fam.session_pk), seq: Number(ep.seq), tpk: Number(tr.transcript_pk) };
+      }
     } finally { db.close(); }
-    const plant = (id: string, latest: number, files: string[]): void => {
+    const plant: Plant = (id, latest, files, family = 'a') => {
+      const f = ids[family];
       const w = new DatabaseSync(dbFile(box));
       try {
         w.prepare(`INSERT INTO nodes (node_id, session_pk, epoch_seq, transcript_pk, kind, depth, status, gist, topics,
           summary_blob_id, boundary_entry_id, span_start_uuid, earliest_ms, latest_ms, src_chars, desc_count, desc_chars,
           directive_flag, capped, parser_version, created_ms)
           VALUES (?, ?, ?, ?, 'native_leaf', 0, 'fixture', ?, NULL, NULL, NULL, NULL, ?, ?, 0, 0, 0, 0, 0, 1, ?)`)
-          .run(id, ids.pk, ids.seq, ids.tpk, `Gist zqgisttext of ${id}.`, latest - 500, latest, Date.now());
-        for (const f of files) w.prepare("INSERT INTO node_refs (node_id, kind, value, origin) VALUES (?, 'path', ?, 'tool_use')").run(id, f);
+          .run(id, f.pk, f.seq, f.tpk, `Gist zqgisttext of ${id}.`, latest - 500, latest, Date.now());
+        for (const p of files) w.prepare("INSERT INTO node_refs (node_id, kind, value, origin) VALUES (?, 'path', ?, 'tool_use')").run(id, p);
       } finally { w.close(); }
     };
     return { box, plant };
   }
+
+  // The header copy (slug touched-header-reads-as-project, the coordinator's three pins, call 2022): the history library's
+  // header line refuses the Overlord's read kind on purpose, and the touched runner builds that line only to size its reserve,
+  // so the Overlord's read hands it a context whose kind reads as project, for that line alone.
+  it('pin 3: the header line throws on the Overlord read kind, and not on any of the three scope kinds', () => {
+    const h = { id: 'x', project: 'project-a', families: 1, transcripts: 1, indexedThroughMs: null, lagS: null };
+    expect(() => lib.headerLine({ ...h, kind: 'overlord' })).toThrow(/kind outside SCOPE_KINDS/);
+    expect([...lib.SCOPE_KINDS].sort()).toEqual(['family', 'project', 'workspace']);
+    for (const kind of lib.SCOPE_KINDS) expect(() => lib.headerLine({ ...h, kind }), kind).not.toThrow();
+  });
+
+  it("pin 1: the copy is the header's alone: under each of the three targets the rows are that target's", () => {
+    const { box, plant } = touchedBox('ccrc-ovr-touched-targets-');
+    plant('Lpin1a', T0 + 1000, ['ccd/both.mjs'], 'a');
+    plant('Lpin1b', T0 + 2000, ['ccd/both.mjs'], 'b');
+    const ids = (target: object): string[] => {
+      const a = read(box, { verb: 'touched', target, agents: false, args: ['ccd/both.mjs'] });
+      expect(a.outcome, JSON.stringify(a).slice(0, 300)).toBe('rows');
+      const item = (a['items'] as { whole: boolean; sessions: { ccrcId: string }[] }[])[0]!;
+      // Whole: every row the read ranked named a session of this target's families (a row outside them would be unnamed).
+      expect(item.whole, `${JSON.stringify(target)}: every ranked row is the target's`).toBe(true);
+      return item.sessions.map((s) => s.ccrcId).sort();
+    };
+    expect(ids({ kind: 'all' })).toEqual([ID_A, ID_B]);
+    expect(ids({ kind: 'project', project: 'project-b' })).toEqual([ID_B]);
+    expect(ids({ kind: 'project', project: 'project-a' })).toEqual([ID_A]);
+    expect(ids({ kind: 'session', session: ID_A })).toEqual([ID_A]);
+  }, HEAVY);
+
+  it('pin 2: nothing of the header leaves: ids and times only, the scope record the real one, no planted marker', () => {
+    const MARK = 'zqhdrmarker';
+    const { box, plant } = touchedBox('ccrc-ovr-touched-header-', `root-${MARK}`);
+    plant(`L${MARK}1`, T0 + 1000, ['ccd/one.mjs', `ccd/${MARK}.mjs`]);
+    for (const target of [{ kind: 'all' }, { kind: 'project', project: 'project-a' }, { kind: 'session', session: ID_A }]) {
+      const a = read(box, { verb: 'touched', target, agents: false, args: ['ccd/one.mjs'] });
+      expect(a.outcome).toBe('rows');
+      const text = JSON.stringify(a);
+      for (const t of [MARK, 'scope=', 'coverage=', 'indexed-through=', 'lag=', 'touched ccd/', '(no graph)', 'zqgisttext', 'refs ']) {
+        expect(text, `${JSON.stringify(target)} carries ${t}`).not.toContain(t);
+      }
+      const scope = a['scope'] as { kind: string; id: string };
+      expect([scope.kind, scope.id], 'the scope record is the real context, never the copy').toEqual(['overlord', overlordTargetId(target as never)]);
+      for (const it of a['items'] as Record<string, unknown>[]) expect(Object.keys(it).sort()).toEqual(['asked', 'file', 'sessions', 'trust', 'whole']);
+    }
+  }, HEAVY);
 
   it('one item per path, in order: the asked index and path, whole, each session once at its newest time; no gist, no ref', () => {
     const { box, plant } = touchedBox('ccrc-ovr-touched-');

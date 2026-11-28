@@ -67,6 +67,9 @@ const REQUEST_REFUSAL_MAP: Record<OverlordHistoryRequestRefusal, true> = {
 };
 /** Every `OverlordHistoryRequestRefusal`, derived from the type. */
 export const OVERLORD_HISTORY_REQUEST_REFUSALS = Object.keys(REQUEST_REFUSAL_MAP) as OverlordHistoryRequestRefusal[];
+/** Whether a refused request says the agent does not know its verb: this reader's word for any verb off its list, so an agent
+ *  built before a verb (W2's `touched`) answers it this way, and a caller reads it as "not served" (request record B1). */
+export const refusedAsUnknownVerb = (word: OverlordHistoryRequestRefusal): boolean => word === 'bad-verb';
 
 /** The request's bound, in UTF-8 bytes of its body's JSON and of the typed request's JSON (the agent's body is the typed
  *  request the server sends, less the frame's envelope keys `t`, `id` and `op`). The door's route bound is this plus room

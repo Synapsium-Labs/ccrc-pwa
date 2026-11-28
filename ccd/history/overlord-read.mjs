@@ -79,10 +79,11 @@ function touchedItem(asked, file, res) {
 function runTouchedPaths(rc, argv, mono) {
   const files = argv.map(touchedPathOf);
   if (files.some((f) => f === null)) return null;
-  // runTouched always builds the CLI's human header, and lib.mjs#headerLine refuses the `overlord` scope kind (it prints
-  // the three CLI kinds only). The header is discarded here (only the items leave), so touched reads a copy of the context
-  // whose kind is `project`, the kind with no family or workdir of its own; nothing else in runTouched reads the kind.
-  // A lib.mjs change is a gate-code change, which is not this piece's (slug `touched-header-reads-as-project`).
+  // The history library's header line (lib.mjs#headerLine) refuses the `overlord` read kind on purpose: it is the guard that
+  // keeps that kind from ever reaching a printed scope line. runTouched builds that line only to size its reserve, and this
+  // read returns no header, so it hands runTouched a copy of the context whose kind reads as `project`, for that line alone.
+  // What the read selects (its sessions, transcripts and families) is the real context's; only ids and times leave
+  // (slug `touched-header-reads-as-project`; overlord-read.test.ts pins all three).
   const trc = { ...rc, scope: { ...rc.scope, kind: 'project' } };
   const started = mono();
   const items = [];
