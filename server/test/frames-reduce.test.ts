@@ -384,8 +384,8 @@ describe('the mark table is the Unicode general category data file, so the leadi
     expect(bytes.length).toBe(6240);
     expect(bytes.filter((b) => b > 0x7f)).toEqual([]);
   });
-  it('the rule asks no engine: the shared file holds no property escape for the mark class, or for letters and numbers', () => {
-    expect(SHARED).not.toMatch(/\\p\{(?:M|Mn|Mc|Me|Mark|L|N|Letter|Number)\}/);
+  it('the rule asks no engine: the shared file\'s only property escape, in any spelling, is the emoji-presentation one (review 4217, R5)', () => {
+    expect([...new Set(SHARED.match(/\\[pP]\{[^}]*\}/g) ?? [])]).toEqual(['\\p{Emoji_Presentation}']);
   });
   it('every mark the table lists, as the first code point of a next row after the turn marker, is a straddle: a row one cell short is at the edge', () => {
     const P = { cols: 20, rows: 8 };
@@ -636,6 +636,15 @@ describe('a variation selector or a combining mark inside a run is read through:
         expect(reduceFrame(f, W, [], ['host-a.example'], NONE), JSON.stringify(m)).toEqual({ kind: 'refused', refusal: 'private-shape' });
       }
     });
+    it(`at ${cols} columns, a mark in the PRIVATE STRING and none in the text, and the other way, in one row and wrapped across two: replaced or refused on the box (review 4217, R6)`, () => {
+      for (const m of MARKS_IN) {
+        replacedBy(one('on host-a now'), [`ho${m}st-a`], 'cwd');
+        replacedBy(one(`on ho${m}st-a now`), ['host-a'], 'cwd');
+        for (const [rows, p] of [[['seen host-a.ex', 'ample here'], `host-a.ex${m}ample`], [['seen host-a.ex', `am${m}ple here`], 'host-a.example']] as const) {
+          expect(reduceFrame(raw(...rows, '─'.repeat(cols), STATUS), W, [], [p], NONE), JSON.stringify([rows, p])).toEqual({ kind: 'refused', refusal: 'private-shape' });
+        }
+      }
+    });
     it(`at ${cols} columns, a rule row's label: a model word, an account word or a path with a mark inside refuses the frame on both hosts (rule 7 never rewrites a label)`, () => {
       for (const m of MARKS_IN) {
         for (const label of [`Hai${m}ku 9`, `pl${m}an`, `/s${m}rv/x`]) {
@@ -670,6 +679,77 @@ describe('a private string split across three rows or more is refused whole on t
         const f = at(...rows);
         expect(reduceFrame(f, W, [], ['other-host-b-name'], NONE), JSON.stringify(rows)).toEqual({ kind: 'reduced', text: f, replaced: { cwd: 0, path: 0, model: 0, account: 0 } });
         expect(checkReducedFrame(f, W, [], NONE)).toEqual({ ok: true });
+      }
+    });
+    it(`at ${cols} columns: an empty or border-only middle row stops the read, so a string is never joined across it, and the two rows side by side still refuse (review 4217, R3)`, () => {
+      const box = Math.min(50, cols);
+      const card = (...cs: string[]): string[] => cs.map((c) => `│ ${c.padEnd(box - 4)} │`);
+      for (const rows of [['my pal', '', 'ice cream'], ['my pal', '   ', 'ice cream'], card('my pal', '', 'ice cream')]) {
+        const f = at(...rows);
+        expect(reduceFrame(f, W, [], ['alice'], NONE), JSON.stringify(rows)).toEqual({ kind: 'reduced', text: f, replaced: { cwd: 0, path: 0, model: 0, account: 0 } });
+      }
+      for (const rows of [['my pal', 'ice cream'], card('my pal', 'ice cream')]) {
+        expect(reduceFrame(at(...rows), W, [], ['alice'], NONE), JSON.stringify(rows)).toEqual({ kind: 'refused', refusal: 'private-shape' });
+      }
+    });
+  }
+});
+
+describe('a box string with a space, wrapped AT that space, is refused whole on the box: the wrap rule reads the rows with their whitespace squashed too (review 4217, R1; the coordinator\'s fix round 1 for wave 197)', () => {
+  // A wrap at a space takes the space out: a terminal breaks a row at the space, and a read may trim the blank it leaves.
+  // The server holds none of the box's strings, so this is the box's rule, as the two-row wrap rule is; the server still
+  // refuses the path form by its shape (rule 4 would replace its first row).
+  const REFUSED = { kind: 'refused', refusal: 'private-shape' };
+  const KEPT = (f: string): unknown => ({ kind: 'reduced', text: f, replaced: { cwd: 0, path: 0, model: 0, account: 0 } });
+  const NAME = 'Jane Doe Smith';
+  for (const cols of [20, 220]) {
+    const W = { cols, rows: 9 };
+    const at = (...rows: string[]): string => raw(...rows, '─'.repeat(cols), STATUS);
+    const box = Math.min(50, cols);
+    const card = (...cs: string[]): string[] => cs.map((c) => `│ ${c.padEnd(box - 4)} │`);
+    // At 20 columns no box holds a row wide enough for its replacement token, so the path frame is bare rows only there
+    // (a narrower row would be refused as too narrow on main too, which proves nothing).
+    const [head, tail] = cols >= 50 ? ['working in /home/Jane', 'Doe Smith/project and more'] : ['seeing a /home/Jane', 'Doe Smith/pro x'];
+    const PATHS = cols >= 50 ? ['/home/Jane Doe Smith/project', '/home/Jane Doe Smith'] : ['/home/Jane Doe Smith/pro', '/home/Jane Doe Smith'];
+    const PATH_ROWS = cols >= 50 ? [card(head, tail), [head, tail]] : [[head, tail]];
+    // The name broken at each of its two spaces, then the first break with the row run to the last column: its blank
+    // last cell trimmed (one cell short) and kept (the row full, ending in the space).
+    const edge = `${'x'.repeat(cols - 6)} Jane`;
+    const NAME_ROWS = [
+      ['hello Jane', 'Doe Smith here'], ['hello Jane Doe', 'Smith here'],
+      card('hello Jane', 'Doe Smith here'), card('hello Jane Doe', 'Smith here'),
+      [edge, 'Doe Smith here'], [`${edge} `, 'Doe Smith here'],
+    ];
+    it(`at ${cols} columns: the reviewer's path frame (a box narrower than the pane, and bare rows) refuses on the box, and the server refuses it unreduced by its shape`, () => {
+      for (const rows of PATH_ROWS) {
+        expect(reduceFrame(at(...rows), W, [], PATHS, NONE), JSON.stringify(rows)).toEqual(REFUSED);
+        expect(checkReducedFrame(at(...rows), W, [], NONE), JSON.stringify(rows)).toEqual({ ok: false, refusal: 'private-shape' });
+      }
+    });
+    it(`at ${cols} columns: a three-word name broken at each space, bare and in a box, and at the last column trimmed and untrimmed, refuses on the box`, () => {
+      expect([Array.from(edge).length, Array.from(`${edge} `).length]).toEqual([cols - 1, cols]);
+      for (const rows of NAME_ROWS) expect(reduceFrame(at(...rows), W, [], [NAME], NONE), JSON.stringify(rows)).toEqual(REFUSED);
+    });
+    it(`at ${cols} columns, the kept sides: the same rows with a string not in the box list reduce unchanged and the server clears them; the path rows have only their path replaced; a short name inside a longer word across the break is kept`, () => {
+      for (const rows of NAME_ROWS) {
+        const f = at(...rows);
+        expect(reduceFrame(f, W, [], ['Jane Roe Smith'], NONE), JSON.stringify(rows)).toEqual(KEPT(f));
+        expect(checkReducedFrame(f, W, [], NONE), JSON.stringify(rows)).toEqual({ ok: true });
+      }
+      for (const rows of PATH_ROWS) {
+        expect(reduceFrame(at(...rows), W, [], ['/home/Ann Lee/x'], NONE), JSON.stringify(rows)).toMatchObject({ kind: 'reduced', replaced: { cwd: 0, path: 1 } });
+      }
+      // `bo` inside `robot`: the whole-word rule holds for a name of three characters or fewer, so the squashed reading,
+      // which would read `therob` then `otruns`, does not read it.
+      for (const rows of [['the rob', 'ot runs here'], card('the rob', 'ot runs here')]) {
+        const f = at(...rows);
+        expect(reduceFrame(f, W, [], ['bo'], NONE), JSON.stringify(rows)).toEqual(KEPT(f));
+      }
+      // And a short name whose letters a space splits across the break: squashed, `(n a` then `s) here` would read `nas`
+      // as a whole word; it is not read so, as no reading of three characters or fewer is.
+      for (const rows of [['(n a', 's) here'], card('(n a', 's) here')]) {
+        const f = at(...rows);
+        expect(reduceFrame(f, W, [], ['nas'], NONE), JSON.stringify(rows)).toEqual(KEPT(f));
       }
     });
   }
@@ -992,15 +1072,21 @@ describe('rule 10, and the receiver\'s check', () => {
     // The nine probes after the eighteen of round 2, and wave 197's seven, each drawn in its box: a change in what the
     // reducer does with any of them moves the version. None has an answer that depends on the engine.
     const answers = JSON.parse(reducerFingerprint()) as { kind: string; refusal?: string; text?: string; replaced?: Record<string, number> }[];
-    expect(answers).toHaveLength(37);
+    expect(answers).toHaveLength(41);
     expect(answers[18]).toMatchObject({ kind: 'reduced' });
     expect(answers[18]!.text).toContain('› stashed');
     // 27 U6 (a token row, then U+3000, then the tail), 28 U8's token-row arm, 29 its full-row arm, 30 the mark table's
-    // straddle, 33 the three-row split.
-    for (const i of [19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 33]) expect(answers[i], String(i)).toEqual({ kind: 'refused', refusal: 'private-shape' });
+    // straddle, 33 the three-row split; fix round 1: 34 a box string wrapped at its space (R1).
+    for (const i of [19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 33, 34]) expect(answers[i], String(i)).toEqual({ kind: 'refused', refusal: 'private-shape' });
     // 31 the ASCII word classes (a short name beside a non-ASCII letter), 32 a model word with a combining mark inside.
     expect(answers[31]).toMatchObject({ kind: 'reduced', replaced: { cwd: 1 } });
     expect(answers[32]).toMatchObject({ kind: 'reduced', replaced: { model: 1 } });
+    // Fix round 1: 35 a string never joined across an empty middle row (R3), kept whole; 36 a short box string with a
+    // mark inside it in the text (R4, the private-string reader's marks-removed half); 37 a credential shape with a mark
+    // inside (R4, the masker's marks-removed reading).
+    expect(answers[35]).toMatchObject({ kind: 'reduced', replaced: { cwd: 0, path: 0, model: 0, account: 0 } });
+    expect(answers[36]).toMatchObject({ kind: 'reduced', replaced: { cwd: 1 } });
+    expect(answers[37]).toEqual({ kind: 'refused', refusal: 'masked' });
   });
 });
 

@@ -132,20 +132,31 @@ const lessLead = (row: string): string => { const s = spans(row); return s.conte
  *  many rows as it needs, each middle row wholly inside it, so a split across three rows or more is caught too. A middle
  *  row is read as drawn, or, with the decoration at the breaks stripped, as its content only (a row of a bordered box
  *  narrower than the pane holds only what fits between its borders). Each reading is read again less its marks, with the
- *  strings less theirs (item 5). The read stops once the middle rows are longer than the longest string. */
+ *  strings less theirs (item 5). The read stops once the middle rows are longer than the longest string, and at an empty
+ *  or border-only middle row (review 4217's R3): a terminal wrap never leaves an empty row inside a string.
+ *
+ *  SQUASHED TOO (review 4217's R1, the coordinator's fix round 1): a word wrap breaks a row AT a space and takes that space
+ *  out, and a read may trim the blank it leaves, so a string that holds a space and is wrapped there was kept in its second
+ *  half. Each reading is read once more with its whitespace squashed out, rows and strings alike, the straddle measured on
+ *  the squashed head. A string of three characters or fewer, squashed, is not read so: it keeps the whole-word rule on the
+ *  readings above (`bo` is not read in `therob` then `otruns`). This reading only refuses. */
 function privateFrom(rows: readonly string[], i: number, privates: readonly string[]): boolean {
   const longest = Math.max(...privates.map((p) => p.length));
   for (const strip of [false, true]) {
     for (const bare of [false, true]) {
-      const read = (s: string): string => (bare ? lessMarks(s) : s);
-      const ps = bare ? privates.map(lessMarks).filter((p) => p !== '') : privates;
-      const head = read(strip ? lessTail(rows[i]!) : rows[i]!);
-      let joined = head;
-      for (let j = i + 1; j < rows.length; j++) {
-        const upTo = joined + read(strip ? lessLead(rows[j]!) : rows[j]!);
-        for (const p of ps) if (privateAt(upTo, p).some((k) => k < head.length && k + p.length > head.length)) return true;
-        joined += read(strip ? spans(rows[j]!).content : rows[j]!);
-        if (joined.length - head.length >= longest) break;
+      for (const sq of [false, true]) {
+        const read = (s: string): string => { const t = bare ? lessMarks(s) : s; return sq ? squash(t) : t; };
+        const ps = (bare ? privates.map(lessMarks) : privates).map((p) => (sq ? squash(p) : p))
+          .filter((p) => p !== '' && (!sq || Array.from(p).length > FRAMES_SHORT_PRIVATE_MAX));
+        const head = read(strip ? lessTail(rows[i]!) : rows[i]!);
+        let joined = head;
+        for (let j = i + 1; j < rows.length; j++) {
+          const upTo = joined + read(strip ? lessLead(rows[j]!) : rows[j]!);
+          for (const p of ps) if (privateAt(upTo, p).some((k) => k < head.length && k + p.length > head.length)) return true;
+          if (spans(rows[j]!).content === '') break; // R3: never read through an empty or border-only row
+          joined += read(strip ? spans(rows[j]!).content : rows[j]!);
+          if (joined.length - head.length >= longest) break;
+        }
       }
     }
   }
@@ -655,11 +666,17 @@ export function reducerFingerprint(): string {
     'x'.repeat(35) + ' /pr\n' + String.fromCodePoint(0x23FA) + String.fromCodePoint(0x1ACF) + 'ject rest',
     'seen bo' + String.fromCodePoint(0xE9) + ' here and more',
     'Hai' + String.fromCodePoint(0x0301) + 'ku 9 row', 'a /sec\nre\nt/x b',
+    // Wave 197's fix round 1 (review 4217), one probe per changed rule, none asking the engine: R1 (a box string wrapped at
+    // its space, the space gone); R3 (a short box string never joined across an empty middle row); R4 (the private-string
+    // reader's marks-removed half: a short box string with a mark inside it in the text; and the masker's marks-removed
+    // reading: a credential shape with a mark inside). The committed matcher's marks-removed reading is held by cases
+    // only: this table's scan answers no.
+    'seen Ann\nLee here', 'a b\n\no c', 'seen b' + String.fromCodePoint(0x0301) + 'o here and more', 'key sk-abcd' + String.fromCodePoint(0x0301) + 'efgh',
   ];
   // Each probe drawn as a box draws it: between two rules, the capture's status row under the lower one (rule 8). And the
   // status rule's own probes: no rule, another status text, the text twice.
   const rule = '─'.repeat(12);
   const boxed = (p: string): string => `${rule}\n${p}\n${rule}\n  ${FRAMES_STATUS_TEXT}\n`;
   const status = ['plain row\n', `${rule}\n  other status\n`, `${rule}\n  ${FRAMES_STATUS_TEXT}\n  ${FRAMES_STATUS_TEXT}\n`];
-  return JSON.stringify([...probes.map(boxed), ...status].map((f) => reduceFrame(f, pane, ['ours text here'], ['/secret/x', 'bo'], none)));
+  return JSON.stringify([...probes.map(boxed), ...status].map((f) => reduceFrame(f, pane, ['ours text here'], ['/secret/x', 'bo', 'Ann Lee'], none)));
 }
