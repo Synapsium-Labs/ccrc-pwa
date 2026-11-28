@@ -14,11 +14,11 @@ import { createHash } from 'node:crypto';
 import { pathToFileURL } from 'node:url';
 import { DatabaseSync } from 'node:sqlite';
 import * as lib from '../../ccd/history/lib.mjs';
-import { OVERLORD_READ_ANSWER_MAX_BYTES } from '../../ccd/history/overlord-read.mjs';
+import { OVERLORD_READ_ANSWER_MAX_BYTES, TOUCHED_SESSIONS_MAX } from '../../ccd/history/overlord-read.mjs';
 import * as overlordHistory from '../../shared/overlordHistory.js';
 import {
-  HISTORY_REASON_WORDS, OVERLORD_HISTORY_ANSWER_MAX_BYTES, OVERLORD_HISTORY_SCOPE_ARGS, readOverlordHistoryAnswer,
-  readOverlordHistoryRequest, overlordTargetId,
+  HISTORY_REASON_WORDS, OVERLORD_HISTORY_ANSWER_MAX_BYTES, OVERLORD_HISTORY_SCOPE_ARGS, OVERLORD_HISTORY_TOUCHED_SESSIONS_MAX,
+  readOverlordHistoryAnswer, readOverlordHistoryRequest, overlordTargetId,
 } from '../../shared/overlordHistory.js';
 import { requestReaderCases, answerReaderCases } from './sim/overlordHistorySets.js';
 import {
@@ -267,8 +267,10 @@ describe('overlord-read.mjs on a fixture store, in a worker', () => {
       return b.length === 0 ? 'empty' : createHash('sha256').update(b).digest('hex');
     };
     const before = [bytes(dbFile(box)), bytes(`${dbFile(box)}-wal`)];
-    for (const verb of ['search', 'describe', 'expand'] as const) {
-      read(box, { verb, target: { kind: 'all' }, agents: true, args: verb === 'search' ? ['fixture'] : ['N0123456789abcdef'] });
+    for (const verb of ['search', 'describe', 'expand', 'touched'] as const) {
+      const args = verb === 'search' ? ['fixture'] : verb === 'touched' ? ['ccd/one.mjs', 'ccd/two.mjs'] : ['N0123456789abcdef'];
+      const a = read(box, { verb, target: { kind: 'all' }, agents: true, args });
+      if (verb === 'touched') expect(a.outcome, 'CONTROL: touched read the store').toBe('rows');
     }
     expect([bytes(dbFile(box)), bytes(`${dbFile(box)}-wal`)]).toEqual(before);
   }, HEAVY);
@@ -321,5 +323,152 @@ describe('no credential file is opened (R1), in a child process under the open s
       expect(opened.split('\n'), `CONTROL: the spy sees ${fn}`).toContain(`${fn} ${control}`);
     }
     for (const p of ['.cc-secrets', 'mail.token', 'ccrc.env', 'agent.env', 'auth-scratch', 'operator-secrets']) expect(opened, p).not.toContain(p);
+  }, HEAVY);
+});
+
+// ── touched, the fourth verb (Overlord W2, request record B1, RQ5) ─────────────────────────────────────────────────────
+describe('touched: one CLI read per path, ids and times only, under its own budget', () => {
+  it("the runner's session bound is the wire's bound", () => {
+    expect(TOUCHED_SESSIONS_MAX).toBe(OVERLORD_HISTORY_TOUCHED_SESSIONS_MAX);
+  });
+
+  /** One family whose epoch root is a fixture directory, and a native leaf per call naming files (history-touched.test.ts'
+   *  `plant`, kept to what touched reads). */
+  type Plant = (id: string, latest: number, files: string[], family?: 'a' | 'b') => void;
+  function touchedBox(prefix: string, rootName = 'work-root'): { box: HistoryBox; plant: Plant } {
+    const box = twoProjects(prefix);
+    const root = path.join(box.home, rootName);
+    fs.mkdirSync(root, { recursive: true });
+    const db = new DatabaseSync(dbFile(box));
+    const ids: Record<'a' | 'b', { pk: number; seq: number; tpk: number }> = {} as never;
+    try {
+      for (const [k, id, gen, t] of [['a', ID_A, GA, TA], ['b', ID_B, GB, TB]] as const) {
+        const fam = db.prepare('SELECT session_pk FROM sessions WHERE ccrc_id = ? AND generation = ?').get(id, gen) as { session_pk: number };
+        const ep = db.prepare('SELECT seq FROM epochs WHERE session_pk = ? AND confirmed_ms IS NOT NULL ORDER BY seq LIMIT 1').get(fam.session_pk) as { seq: number };
+        const tr = db.prepare("SELECT transcript_pk FROM transcripts WHERE cc_session_uuid = ? AND agent_id = ''").get(t) as { transcript_pk: number };
+        db.prepare('UPDATE epochs SET cwd = ?, cwd_real = ? WHERE session_pk = ?').run(root, root, fam.session_pk);
+        ids[k] = { pk: Number(fam.session_pk), seq: Number(ep.seq), tpk: Number(tr.transcript_pk) };
+      }
+    } finally { db.close(); }
+    const plant: Plant = (id, latest, files, family = 'a') => {
+      const f = ids[family];
+      const w = new DatabaseSync(dbFile(box));
+      try {
+        w.prepare(`INSERT INTO nodes (node_id, session_pk, epoch_seq, transcript_pk, kind, depth, status, gist, topics,
+          summary_blob_id, boundary_entry_id, span_start_uuid, earliest_ms, latest_ms, src_chars, desc_count, desc_chars,
+          directive_flag, capped, parser_version, created_ms)
+          VALUES (?, ?, ?, ?, 'native_leaf', 0, 'fixture', ?, NULL, NULL, NULL, NULL, ?, ?, 0, 0, 0, 0, 0, 1, ?)`)
+          .run(id, f.pk, f.seq, f.tpk, `Gist zqgisttext of ${id}.`, latest - 500, latest, Date.now());
+        for (const p of files) w.prepare("INSERT INTO node_refs (node_id, kind, value, origin) VALUES (?, 'path', ?, 'tool_use')").run(id, p);
+      } finally { w.close(); }
+    };
+    return { box, plant };
+  }
+
+  // The header copy (slug touched-header-reads-as-project, the coordinator's three pins, call 2022): the history library's
+  // header line refuses the Overlord's read kind on purpose, and the touched runner builds that line only to size its reserve,
+  // so the Overlord's read hands it a context whose kind reads as project, for that line alone.
+  it('pin 3: the header line throws on the Overlord read kind, and not on any of the three scope kinds', () => {
+    const h = { id: 'x', project: 'project-a', families: 1, transcripts: 1, indexedThroughMs: null, lagS: null };
+    // The Overlord's kind is off the header's own type, which is the point: the cast plants what the guard refuses.
+    expect(() => lib.headerLine({ ...h, kind: 'overlord' as never })).toThrow(/kind outside SCOPE_KINDS/);
+    expect([...lib.SCOPE_KINDS].sort()).toEqual(['family', 'project', 'workspace']);
+    for (const kind of lib.SCOPE_KINDS) expect(() => lib.headerLine({ ...h, kind }), kind).not.toThrow();
+  });
+
+  it("pin 1: the copy is the header's alone: under each of the three targets the rows are that target's", () => {
+    const { box, plant } = touchedBox('ccrc-ovr-touched-targets-');
+    plant('Lpin1a', T0 + 1000, ['ccd/both.mjs'], 'a');
+    plant('Lpin1b', T0 + 2000, ['ccd/both.mjs'], 'b');
+    const ids = (target: object): string[] => {
+      const a = read(box, { verb: 'touched', target, agents: false, args: ['ccd/both.mjs'] });
+      expect(a.outcome, JSON.stringify(a).slice(0, 300)).toBe('rows');
+      const item = (a['items'] as { whole: boolean; sessions: { ccrcId: string }[] }[])[0]!;
+      // Whole: every row the read ranked named a session of this target's families (a row outside them would be unnamed).
+      expect(item.whole, `${JSON.stringify(target)}: every ranked row is the target's`).toBe(true);
+      return item.sessions.map((s) => s.ccrcId).sort();
+    };
+    expect(ids({ kind: 'all' })).toEqual([ID_A, ID_B]);
+    expect(ids({ kind: 'project', project: 'project-b' })).toEqual([ID_B]);
+    expect(ids({ kind: 'project', project: 'project-a' })).toEqual([ID_A]);
+    expect(ids({ kind: 'session', session: ID_A })).toEqual([ID_A]);
+  }, HEAVY);
+
+  it('pin 2: nothing of the header leaves: ids and times only, the scope record the real one, no planted marker', () => {
+    const MARK = 'zqhdrmarker';
+    const { box, plant } = touchedBox('ccrc-ovr-touched-header-', `root-${MARK}`);
+    plant(`L${MARK}1`, T0 + 1000, ['ccd/one.mjs', `ccd/${MARK}.mjs`]);
+    for (const target of [{ kind: 'all' }, { kind: 'project', project: 'project-a' }, { kind: 'session', session: ID_A }]) {
+      const a = read(box, { verb: 'touched', target, agents: false, args: ['ccd/one.mjs'] });
+      expect(a.outcome).toBe('rows');
+      const text = JSON.stringify(a);
+      for (const t of [MARK, 'scope=', 'coverage=', 'indexed-through=', 'lag=', 'touched ccd/', '(no graph)', 'zqgisttext', 'refs ']) {
+        expect(text, `${JSON.stringify(target)} carries ${t}`).not.toContain(t);
+      }
+      const scope = a['scope'] as { kind: string; id: string };
+      expect([scope.kind, scope.id], 'the scope record is the real context, never the copy').toEqual(['overlord', overlordTargetId(target as never)]);
+      for (const it of a['items'] as Record<string, unknown>[]) expect(Object.keys(it).sort()).toEqual(['asked', 'file', 'sessions', 'trust', 'whole']);
+    }
+  }, HEAVY);
+
+  it('one item per path, in order: the asked index and path, whole, each session once at its newest time; no gist, no ref', () => {
+    const { box, plant } = touchedBox('ccrc-ovr-touched-');
+    plant('Lt0uch1', T0 + 1000, ['ccd/one.mjs']);
+    plant('Lt0uch2', T0 + 5000, ['ccd/one.mjs', 'ccd/two.mjs']);
+    const a = read(box, { verb: 'touched', target: { kind: 'all' }, agents: false, args: ['ccd/one.mjs', 'ccd/two.mjs', 'ccd/none.mjs'] });
+    expect(a.outcome, JSON.stringify(a).slice(0, 400)).toBe('rows');
+    expect(readOverlordHistoryAnswer(a), JSON.stringify(a).slice(0, 400)).not.toBe('off-shape');
+    expect(Object.keys(a).sort()).toEqual(['exit', 'items', 'outcome', 'scope', 'shown', 'total']);
+    expect([a.outcome, a['exit'], a['shown'], a['total']]).toEqual(['rows', 0, 3, 3]);
+    expect(a['items']).toEqual([
+      { asked: 0, file: 'ccd/one.mjs', whole: true, sessions: [{ ccrcId: ID_A, latestMs: T0 + 5000 }], trust: 'untrusted' },
+      { asked: 1, file: 'ccd/two.mjs', whole: true, sessions: [{ ccrcId: ID_A, latestMs: T0 + 5000 }], trust: 'untrusted' },
+      { asked: 2, file: 'ccd/none.mjs', whole: true, sessions: [], trust: 'untrusted' },
+    ]);
+    expect(JSON.stringify(a)).not.toContain('zqgisttext');
+    const none = read(box, { verb: 'touched', target: { kind: 'all' }, agents: false, args: ['ccd/none.mjs'] });
+    expect([none.outcome, none['exit'], (none['items'] as unknown[]).length], 'nothing found is exit 3 with its item').toEqual(['rows', 3, 1]);
+  }, HEAVY);
+
+  it('a path whose rows pass the read limit is not whole', () => {
+    const { box, plant } = touchedBox('ccrc-ovr-touched-cut-');
+    for (let k = 0; k < 51; k += 1) plant(`Lcut${k.toString(36).padStart(3, '0')}`, T0 + k, ['ccd/many.mjs']);
+    const a = read(box, { verb: 'touched', target: { kind: 'all' }, agents: false, args: ['ccd/many.mjs'] });
+    const items = a['items'] as { whole: boolean; sessions: unknown[] }[];
+    expect([a.outcome, items[0]!.whole, items[0]!.sessions.length]).toEqual(['rows', false, 1]);
+  }, HEAVY);
+
+  it('a path off the CLI grammar is the verb refusing its arguments; the request reader still refuses a regex', () => {
+    const { box } = touchedBox('ccrc-ovr-touched-args-');
+    // A path with a line suffix is built from its parts, so the citation guard does not read it as a numeric line citation.
+    for (const bad of [['a b.ts'], ['a:b'], [['ccd/x.mjs', '12'].join(':')]]) {
+      expect(read(box, { verb: 'touched', target: { kind: 'all' }, agents: false, args: bad }), bad.join(' '))
+        .toEqual({ outcome: 'verb-refused', word: 'bad-args' });
+    }
+    expect(read(box, { verb: 'touched', target: { kind: 'all' }, agents: false, args: ['--regex', 'x'] }))
+      .toEqual({ outcome: 'request-refused', word: 'regex' });
+  }, HEAVY);
+
+  it('the budget: it stops between paths once TOUCHED_OPEN_BUDGET_MS has passed, answers what it read, and its worker exits', () => {
+    const { box, plant } = touchedBox('ccrc-ovr-touched-budget-');
+    plant('Lbudg1', T0 + 1000, ['ccd/one.mjs']);
+    const probe = path.join(box.home, 'budget.mjs');
+    fs.writeFileSync(probe, [
+      `import { overlordRead, TOUCHED_OPEN_BUDGET_MS } from ${JSON.stringify(pathToFileURL(READ).href)};`,
+      // The clock reads 0 at the start, then the budget exactly at the first check between paths.
+      'const ticks = [0, TOUCHED_OPEN_BUDGET_MS];',
+      'const mono = () => ticks.shift() ?? 1e12;',
+      `const a = await overlordRead(${JSON.stringify(box.home)}, { verb: 'touched', target: { kind: 'all' }, agents: false, args: ['ccd/one.mjs', 'ccd/two.mjs'] }, Date.now(), mono);`,
+      'const under = [0, TOUCHED_OPEN_BUDGET_MS - 1, TOUCHED_OPEN_BUDGET_MS - 1];',
+      `const b = await overlordRead(${JSON.stringify(box.home)}, { verb: 'touched', target: { kind: 'all' }, agents: false, args: ['ccd/one.mjs', 'ccd/two.mjs'] }, Date.now(), () => under.shift() ?? 1e12);`,
+      'process.stdout.write(JSON.stringify([a, b]));',
+    ].join('\n'));
+    const r = spawnSync(process.execPath, ['--no-warnings', probe], { encoding: 'utf8', timeout: 120_000, env: box.env });
+    expect(r.status, r.stderr).toBe(0);
+    const [cut, whole] = JSON.parse(r.stdout) as Answer[];
+    expect([cut!.outcome, cut!['shown'], cut!['total'], (cut!['items'] as { asked: number }[]).map((i) => i.asked)]).toEqual(['rows', 1, 2, [0]]);
+    expect([whole!['shown'], whole!['total']], 'CONTROL: under the budget every path is read').toEqual([2, 2]);
+    // The worker's own exit: the agent's run of the same request in a file worker answers and the thread exits.
+    expect(readInWorker(box, { verb: 'touched', target: { kind: 'all' }, agents: false, args: ['ccd/one.mjs'] }).answer.outcome).toBe('rows');
   }, HEAVY);
 });

@@ -21,8 +21,9 @@
 // through errLine, which the agent drains and discards.
 import {
   EXIT, SCHEMA_ADDED, idOk, makePairIndex, redactFinalJson, parseReadArgs, parseGrepArgs, parseDescribeArgs, expandArgsOf,
+  touchedQuery,
 } from './lib.mjs';
-import { familiesOf, transcriptsOf, scopeJsonOf, runGrep, runDescribe, runExpand } from './recall.mjs';
+import { familiesOf, transcriptsOf, scopeJsonOf, runGrep, runDescribe, runExpand, runTouched } from './recall.mjs';
 import { openAdmitted, readFailure, recordedPairsOf, NO_PAIRS } from './read-context.mjs';
 
 /** SQLite's busy timeout on the read handle, below the agent's deadline (20 s, agent/src/historyOp.ts), so the read's
@@ -34,9 +35,71 @@ export const OVERLORD_READ_BUSY_TIMEOUT_MS = 15_000;
  *  which this plain module cannot import (overlord-read.test.ts checks the two are equal). */
 export const OVERLORD_READ_ANSWER_MAX_BYTES = 65_536;
 
+/** The `touched` runner's own budget (Overlord W2, request record B1, RQ5): it stops between paths once this much time has
+ *  passed, and answers the paths it read, so its worker exits and frees the agent's one history slot well inside the agent's
+ *  deadline. Below the server's wait for the read (`requestShortlist.ts#TOUCHED_OPEN_WAIT_MS`, 5 s), which
+ *  request-shortlist-read.test.ts checks. One path's read is never interrupted: the budget is read between paths. */
+export const TOUCHED_OPEN_BUDGET_MS = 4_000;
+/** The most sessions one path's item names: shared/overlordHistory.ts' OVERLORD_HISTORY_TOUCHED_SESSIONS_MAX, which this
+ *  plain module cannot import (overlord-read.test.ts checks the two are equal). */
+export const TOUCHED_SESSIONS_MAX = 32;
+/** The rows one path's read ranks (the CLI's `--limit`): the sessions are taken from these. */
+const TOUCHED_ROWS_READ = 50;
+
+/** A request path as the CLI's touched query reads it: `./<path>` parses as a path whose file is the path itself, or the
+ *  path is off the CLI's grammar (null). */
+function touchedPathOf(arg) {
+  const q = touchedQuery(`./${arg}`);
+  return q !== null && q.kind === 'path' && q.file === arg ? arg : null;
+}
+
+/** One path's item: the asked index and path, each session once (its newest time, newest first, at most
+ *  TOUCHED_SESSIONS_MAX), and whether the item is whole: no candidate cap, every ranked row shown, every row's session named
+ *  and no session cut. Only ids and times leave the read: no gist, no ref, no text. */
+function touchedItem(asked, file, res) {
+  const newest = new Map();
+  let unnamed = false;
+  for (const it of res.items ?? []) {
+    const id = it.family?.ccrcId;
+    if (typeof id !== 'string' || id === '') { unnamed = true; continue; }
+    const t = typeof it.latestMs === 'number' ? it.latestMs : null;
+    const was = newest.get(id);
+    if (was === undefined || (t !== null && (was === null || t > was))) newest.set(id, t);
+  }
+  const sessions = [...newest].map(([ccrcId, latestMs]) => ({ ccrcId, latestMs }))
+    .sort((a, b) => (b.latestMs ?? -1) - (a.latestMs ?? -1) || (a.ccrcId < b.ccrcId ? -1 : a.ccrcId > b.ccrcId ? 1 : 0));
+  const whole = res.candidatesCapped !== true && (res.shown ?? 0) >= (res.total ?? 0) && !unnamed
+    && sessions.length <= TOUCHED_SESSIONS_MAX;
+  return { asked, file, whole, sessions: sessions.slice(0, TOUCHED_SESSIONS_MAX) };
+}
+
+/** `touched` over every requested path, one CLI read per path, in order, stopping between paths at the budget. A rows-shaped
+ *  result: one item per path read, `shown` the paths read and `total` the paths asked. A path the CLI refuses answers that
+ *  refusal for the whole read. */
+function runTouchedPaths(rc, argv, mono) {
+  const files = argv.map(touchedPathOf);
+  if (files.some((f) => f === null)) return null;
+  // The history library's header line (lib.mjs#headerLine) refuses the `overlord` read kind on purpose: it is the guard that
+  // keeps that kind from ever reaching a printed scope line. runTouched builds that line only to size its reserve, and this
+  // read returns no header, so it hands runTouched a copy of the context whose kind reads as `project`, for that line alone.
+  // What the read selects (its sessions, transcripts and families) is the real context's; only ids and times leave
+  // (slug `touched-header-reads-as-project`; overlord-read.test.ts pins all three).
+  const trc = { ...rc, scope: { ...rc.scope, kind: 'project' } };
+  const started = mono();
+  const items = [];
+  for (let i = 0; i < files.length; i += 1) {
+    if (i > 0 && mono() - started >= TOUCHED_OPEN_BUDGET_MS) break;
+    const res = runTouched(trc, { arg: `./${files[i]}`, limit: TOUCHED_ROWS_READ });
+    if (res.exit !== EXIT.OK && res.exit !== EXIT.NOT_FOUND) return res;
+    items.push(touchedItem(i, files[i], res));
+  }
+  const any = items.some((it) => it.sessions.length > 0);
+  return { exit: any ? EXIT.OK : EXIT.NOT_FOUND, items, shown: items.length, total: files.length };
+}
+
 /** The CLI verb each request verb runs, with its argument parser and runner. Each run* takes `json: true`, so the op
  *  appends no `--json` to the request's arguments (review 2126 F3: a trailing value-taking option would take it as its
- *  value, and after a `--` it would be a search word). */
+ *  value, and after a `--` it would be a search word). `touched` reads one path per argument (its own parse). */
 const VERBS = Object.freeze({
   search: (rc, argv) => {
     const g = parseGrepArgs(argv, rc.nowMs);
@@ -52,8 +115,16 @@ const VERBS = Object.freeze({
     const p = expandArgsOf(parseReadArgs('expand', argv));
     return p.ok ? runExpand(rc, { ...p.args, json: true }) : null;
   },
+  touched: (rc, argv, mono) => runTouchedPaths(rc, argv, mono),
 });
-const CLI_VERB = Object.freeze({ search: 'grep', describe: 'describe', expand: 'expand' });
+const CLI_VERB = Object.freeze({ search: 'grep', describe: 'describe', expand: 'expand', touched: 'touched' });
+
+/** Whether the request's arguments parse as the CLI verb's: every verb's whole list at once, but `touched`, whose list is
+ *  one CLI read per path. */
+function argsParse(verb, argv) {
+  if (verb === 'touched') return argv.length > 0 && argv.every((a) => parseReadArgs(CLI_VERB.touched, [`./${a}`]).ok);
+  return parseReadArgs(CLI_VERB[verb], argv).ok;
+}
 
 const refused = (outcome, word) => ({ outcome, word });
 const FAILED = Object.freeze({ outcome: 'failed', word: 'internal' });
@@ -104,16 +175,17 @@ function finished(answer, idx) {
 }
 
 /** One Overlord history read. `request` is the agent reader's typed request (shared/overlordHistory.ts); `home` the
- *  agent's configured home. Never throws: every path answers an OverlordHistoryAnswer. */
-export async function overlordRead(home, request, nowMs) {
+ *  agent's configured home; `mono` the monotonic clock the `touched` budget reads (a test passes its own). Never throws:
+ *  every path answers an OverlordHistoryAnswer. */
+export async function overlordRead(home, request, nowMs, mono = () => performance.now()) {
   try {
-    return await readIn(home, request, nowMs);
+    return await readIn(home, request, nowMs, mono);
   } catch {
     return FAILED;
   }
 }
 
-async function readIn(home, request, nowMs) {
+async function readIn(home, request, nowMs, mono) {
   const sel = selectionOf(request?.target);
   const run = Object.hasOwn(VERBS, request?.verb) ? VERBS[request.verb] : null;
   // A stated re-check of the agent's reader (shared/overlordHistory.ts): its words, never a message.
@@ -123,7 +195,7 @@ async function readIn(home, request, nowMs) {
   if (request.args.some((a) => a === '--regex' || a.startsWith('--regex='))) return refused('request-refused', 'regex');
   if (request.args.includes('--')) return refused('request-refused', 'separator');
   const argv = [...request.args];
-  if (!parseReadArgs(CLI_VERB[request.verb], argv).ok) return finished(refused('verb-refused', 'bad-args'), NO_PAIRS);
+  if (!argsParse(request.verb, argv)) return finished(refused('verb-refused', 'bad-args'), NO_PAIRS);
   // The admitted store, opened by the CLI's own sequence with the empty role, no store-id fallback and the busy timeout.
   const admitted = await openAdmitted(home, '', () => null, OVERLORD_READ_BUSY_TIMEOUT_MS);
   if (!admitted.ok) {
@@ -147,7 +219,7 @@ async function readIn(home, request, nowMs) {
       scopeArgs: [],
       pairIdx: idx,
     };
-    const res = run(rc, argv);
+    const res = run(rc, argv, mono);
     return finished(res === null ? refused('verb-refused', 'bad-args') : outcomeOf(rc, res), idx);
   } catch (e) {
     const f = readFailure(e, null, null, null, idx);

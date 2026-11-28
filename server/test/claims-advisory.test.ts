@@ -81,6 +81,12 @@ describe('claims are advisory (D12)', () => {
                              // nothing, never refuses, delays or redirects any work, and holds
                              // nothing: a claim's only effect is a line on its holder's card. The
                              // call count pin below keeps a second use out.
+      'coord/requestShortlistRead.ts', // Overlord W2, request record B1: the code shortlist's reader reads the
+                             // live claims once per shortlist and hands them to a pure ranking
+                             // (`requestShortlist.ts#codeShortlist`). A claim's only effect is a
+                             // programme's place on a list of at most six candidates the Overlord
+                             // reads as a hint; it never refuses, delays or redirects any work and
+                             // holds nothing. The call count pin below keeps a second use out.
     ]);
     const holders = walk(srcRoot)
       .filter((f) => f.endsWith('.ts'))
@@ -134,5 +140,10 @@ describe('claims are advisory (D12)', () => {
     expect(shedCalls('continuity/cardFacts.ts'),
       'cardFacts.ts gained or lost an activeClaims call site — argue the D12 shape here before re-pinning')
       .toEqual(['coord.activeClaims']);
+    // The code shortlist's reader (Overlord W2), held by COUNT of CALLS the same way: ONE `coord.activeClaims()`, ranked.
+    expect(shedCalls('coord/requestShortlistRead.ts'),
+      'requestShortlistRead.ts gained or lost an activeClaims call site — argue the D12 shape here before re-pinning')
+      .toEqual(['coord.activeClaims']);
+    expect(shedCalls('coord/requestShortlist.ts'), 'the shortlist decider reads claims through its reader, never itself').toEqual([]);
   });
 });

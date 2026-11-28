@@ -2,7 +2,7 @@
  * The Overlord's history read, on the wire (Overlord W1, plan
  * `docs/superpowers/plans/2026-11-14-overlord-w1/w1-board-history.md`, Task 3; spec 2026-11-09 §3.2, C47).
  *
- * The agent op `overlord-history` runs `ccrc history`'s three read verbs (search, describe, expand) over every project,
+ * The agent op `overlord-history` runs `ccrc history`'s read verbs (search, describe, expand, and touched from W2) over every project,
  * in a worker thread of the agent's process. This file is the op's L0 vocabulary: the request, its ONE reader
  * (`readOverlordHistoryRequest`, called by the agent's `validateReq` arm and, from PR B1, the server's door), the answer,
  * and its ONE reader (`readOverlordHistoryAnswer`, called by the server's adapter).
@@ -22,11 +22,19 @@
  */
 import { utf8Bytes } from './utf8.js';
 
-/** The three read verbs the op runs. `search` is the CLI's `grep`. */
-export type OverlordHistoryVerb = 'search' | 'describe' | 'expand';
-const HISTORY_VERB_MAP: Record<OverlordHistoryVerb, true> = { search: true, describe: true, expand: true };
+/** The read verbs the op runs. `search` is the CLI's `grep`. `touched` (Overlord W2, request record B1, RQ5) is the fourth:
+ *  one read of the CLI's `touched` per path, for at most `OVERLORD_HISTORY_TOUCHED_PATHS_MAX` paths, each `args` entry one
+ *  path. An agent built before it answers it `request-refused` with `bad-verb`, the word this reader gives any verb it does
+ *  not know, which the shortlist's reader reads as "not served" (`requestShortlist.ts#touchedAnswerOf`). */
+export type OverlordHistoryVerb = 'search' | 'describe' | 'expand' | 'touched';
+const HISTORY_VERB_MAP: Record<OverlordHistoryVerb, true> = { search: true, describe: true, expand: true, touched: true };
 /** Every `OverlordHistoryVerb`, derived from the type. */
 export const HISTORY_VERBS = Object.keys(HISTORY_VERB_MAP) as OverlordHistoryVerb[];
+/** The most paths one `touched` request carries (RQ5: one history read per open, the first eight expected paths). */
+export const OVERLORD_HISTORY_TOUCHED_PATHS_MAX = 8;
+/** The most sessions one path's `touched` item names: the runner keeps each session once, newest first, and marks the item
+ *  not whole past this (`ccd/history/overlord-read.mjs` holds a hand copy, which overlord-read.test.ts checks). */
+export const OVERLORD_HISTORY_TOUCHED_SESSIONS_MAX = 32;
 
 /** What a read covers: every project, one project, or one session id's family across its generations. */
 export type OverlordHistoryTargetKind = 'all' | 'project' | 'session';
@@ -59,6 +67,9 @@ const REQUEST_REFUSAL_MAP: Record<OverlordHistoryRequestRefusal, true> = {
 };
 /** Every `OverlordHistoryRequestRefusal`, derived from the type. */
 export const OVERLORD_HISTORY_REQUEST_REFUSALS = Object.keys(REQUEST_REFUSAL_MAP) as OverlordHistoryRequestRefusal[];
+/** Whether a refused request says the agent does not know its verb: this reader's word for any verb off its list, so an agent
+ *  built before a verb (W2's `touched`) answers it this way, and a caller reads it as "not served" (request record B1). */
+export const refusedAsUnknownVerb = (word: OverlordHistoryRequestRefusal): boolean => word === 'bad-verb';
 
 /** The request's bound, in UTF-8 bytes of its body's JSON and of the typed request's JSON (the agent's body is the typed
  *  request the server sends, less the frame's envelope keys `t`, `id` and `op`). The door's route bound is this plus room
@@ -122,6 +133,9 @@ export function readOverlordHistoryRequest(raw: unknown):
   if (words.some((a) => a === '--regex' || a.startsWith('--regex='))) return no('regex');
   if (words.includes('--')) return no('separator');
   if (words.some((a) => SCOPE_ARGS.has(a))) return no('bad-args');
+  // `touched`: one path per argument, one to eight of them, and never an option (no `--limit`: the runner sets its own).
+  if (verb === 'touched' && (words.length === 0 || words.length > OVERLORD_HISTORY_TOUCHED_PATHS_MAX
+    || words.some((a) => a.startsWith('-')))) return no('bad-args');
   return { ok: true, request: { verb: verb as OverlordHistoryVerb, target, agents, args: [...words] } };
 }
 
