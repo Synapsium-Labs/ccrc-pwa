@@ -691,10 +691,10 @@ describe('ccrc rollback: by flip when the version is kept (W6 Task 4)', () => {
   });
 
   // The refusal is only for a DISAGREEMENT, and only for a bare rollback. One
-  // case per arm (issue #3528): the arms ran as one case of seven real child
-  // processes, which a slow runner could not finish inside one 20 s bound. Each
-  // title keeps the label "the refusal is only for a DISAGREEMENT, and only for
-  // a bare rollback" so a search for it finds every arm.
+  // case per arm (issue #3528): the arms ran as one case of seven runs of the
+  // verb plus the full first move's own update, which a slow runner could not
+  // finish inside one 20 s bound. Each title keeps the label "the refusal is only
+  // for a DISAGREEMENT, and only for a bare rollback" so a search finds every arm.
   it('the refusal is only for a DISAGREEMENT, and only for a bare rollback: an agreeing layout proceeds (the control — the same box with the stamp on v1.0.0 asks the release host about the never-kept v2.0.0, the common first rollback after the move onto W6) (C27)', () => {
     // The control: stamp v1.0.0 agrees with the pointed-at v1.0.0.
     const agree = staleBox('ccrc-rollback-stale-previous-agree-', 'v1.0.0');
@@ -713,8 +713,8 @@ describe('ccrc rollback: by flip when the version is kept (W6 Task 4)', () => {
   });
 
   it('the refusal is only for a DISAGREEMENT, and only for a bare rollback: an `untagged-<sha12>` name is compared with the stamp\'s sha12 — a stamp that agrees is not a disagreement, one that disagrees is refused (C27)', () => {
-    // An `untagged-<sha12>` name is compared with the stamp's sha12; an
-    // `unstamped-*` name and an unreadable stamp have no verdict.
+    // An `untagged-<sha12>` name is compared with the stamp's sha12: first a
+    // stamp whose sha12 agrees, then, on the same box, one with another sha.
     const sha = 'd'.repeat(40);
     const untagged = staleBox('ccrc-rollback-stale-previous-untagged-', 'v1.1.0');
     renameSync(join(untagged, 'ccrc-versions', 'v1.0.0'), join(untagged, 'ccrc-versions', `untagged-${sha.slice(0, 12)}`));
@@ -736,6 +736,8 @@ describe('ccrc rollback: by flip when the version is kept (W6 Task 4)', () => {
     expect(r.stderr, 'an unreadable stamp is no verdict').not.toContain('it cannot be trusted here');
   });
 
+  // It builds the same full first move (`onKeptV1`) as the file's other callers
+  // of that helper, which all carry this bound; the default bound was the outlier.
   it('the refusal is only for a DISAGREEMENT, and only for a bare rollback: the first rollback after a FULL first move onto W6, whose previous names the pre-migration tag, still proceeds (C27)', () => {
     // The commonest case, end to end (a FULL first move onto v1.0.0, whose
     // migration leaves `previous` naming the pre-migration tag — never a kept
@@ -746,7 +748,7 @@ describe('ccrc rollback: by flip when the version is kept (W6 Task 4)', () => {
     const r = rollbackRun(full);
     expect(r.stderr, 'the first rollback after the move onto W6 was refused').not.toContain('it cannot be trusted here');
     expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(2);
-  });
+  }, scaled(60_000));
 
   it('the refusal is only for a DISAGREEMENT, and only for a bare rollback: an unversioned (real-directory) layout keeps wave 4\'s behaviour, previous trusted (C27)', () => {
     // A real-directory (unversioned) box: wave 4's behaviour, previous trusted.
