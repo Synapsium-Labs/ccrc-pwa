@@ -69,6 +69,8 @@ import { decisionEgressOf, isPrivateAddress } from './coord/decisionModel.js';
 import { createHttpDecisionModel, readDecisionModelKey } from './coord/decisionModelHttp.js';
 import { decisionArmingStore, decisionAskStore, releaseDecisionReservations } from './coord/decisionModelStore.js';
 import type { DecisionEgress, DecisionFetch, DecisionStateReads, LabelledCases } from './coord/decisionModelPort.js';
+import { labelLaneReadsOf, labelledCasesOf, labelRefFactsOf } from './coord/labelQueueStore.js';
+import type { MeasuredLabels } from './coord/labelQueuePorts.js';
 import { allowAll } from './linear/policyPoint.js';
 import { LinearRateService } from './linear/rate.js';
 import { LinearRefresher } from './linear/refresher.js';
@@ -435,10 +437,15 @@ deps.limitSamples = coord;
 const egressScreen: DecisionEgress['screen'] = (texts) => decisionEgressOf(texts, readPrivateNameList(operatorModel.store, cfg.ccrcDir));
 /** Every address a host name resolves to, built once (review 2418 F9): the key door and the adapter use it. */
 const decisionResolve = async (name: string): Promise<readonly string[]> => (await lookup(name, { all: true })).map((a) => a.address);
-/** The labelled cases (question 8): none, until the label queue fills the port, so no line is admitted and every row stays in shadow. */
-const noLabelsYet: LabelledCases = { casesFor: () => [] };
+/** The measured labels (the label queue, LQ8): none until its PR B adds `operator-answer` and `routed-to`. */
+const labelMeasured: MeasuredLabels = { labelsFor: () => [] };
+/** The labelled cases (question 8): the operator's card labels and the measured ones, through the label queue's store. */
+const labelledCases: LabelledCases = labelledCasesOf(coordDb, labelMeasured);
+/** The weekly label lane's ports: coord.db, and the owners' facts reads for whether a card's refs still exist. */
+deps.labelQueue = { reads: labelLaneReadsOf(coordDb, labelMeasured), refs: labelRefFactsOf(operatorModel.store, coord) };
 /** State reads over inline fields and `programme` refs (a slug is its own text) only: a `message`, `goals-version` or `mail` ref
- *  would need a reader that arrives with the label queue, the first producer of labelled cases, so it reads `unresolvable`. */
+ *  reads `unresolvable` here. The label cards read message and mail text in their own door, behind the account gate; a message's
+ *  text is read only inside a route handler (`operator-message-readers.test.ts`). */
 const inlineStateReads: DecisionStateReads = {
   fieldsOf: (row, refs, inline) => {
     const kindOf = (name: string): string | undefined => DECISION_QUESTIONS[row].fields.find((f) => f.name === name)?.refKind;
@@ -453,7 +460,7 @@ const decisionHostNow = (): { kind: DecisionHostKind; endpoint: string; origin: 
   return h.kind === 'host' ? { kind: h.host.kind, endpoint: h.host.endpoint, origin: h.host.origin, modelId: h.host.modelId } : null;
 };
 deps.decisions = {
-  store: decisionArming, labels: noLabelsYet, states: inlineStateReads, resolve: decisionResolve,
+  store: decisionArming, labels: labelledCases, states: inlineStateReads, resolve: decisionResolve,
   ask: {
     store: decisionAskStore(coordDb), time,
     arming: (row) => decisionArming.rowSide(row),

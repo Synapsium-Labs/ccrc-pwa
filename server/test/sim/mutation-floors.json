@@ -398,5 +398,17 @@
   "server/src/coord/overlordReadiness.ts#readinessFactsOf": 1,
   "server/src/coord/overlordReadiness.ts#readinessNotices": 1,
   "server/src/coord/overlordReadiness.ts#servedReadiness": 1,
-  "server/src/coord/overlordReadiness.ts#readinessCountOf": 1
+  "server/src/coord/overlordReadiness.ts#readinessCountOf": 1,
+  "server/src/coord/labelQueue.ts#cardRowsOf": 1,
+  "server/src/coord/labelQueue.ts#labelsNeeded": 1,
+  "server/src/coord/labelQueue.ts#pickLabelCards": 1,
+  "server/src/coord/labelQueue.ts#labelFor": 1,
+  "server/src/coord/labelQueue.ts#cardShown": 1,
+  "server/src/coord/labelCards.ts#cardAnswerVerdict": 1,
+  "server/src/coord/labelCards.ts#cardView": 1,
+  "server/src/coord/labelQueue.ts#cardRefNeeds": 1,
+  "server/src/coord/labelQueue.ts#stateDrawability": 1,
+  "server/src/coord/labelQueue.ts#cardHoldsSlot": 1,
+  "server/src/coord/labelQueue.ts#pickRowFactsOf": 1,
+  "server/src/coord/labelCards.ts#cardFieldsOf": 1
 }
