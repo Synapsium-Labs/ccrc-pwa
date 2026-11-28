@@ -19,6 +19,8 @@ import type { ScopeSweepBusyRequest, ScopeSweepView } from '../../../shared/scop
 import type { DelegationAdoptRequest, DelegationAdoptView } from '../../../shared/delegation-adopt';
 import type { RotateAnswer } from '../../../shared/box-token';
 import type { RosterFactsChange } from '../../../shared/rosterFacts';
+import type { DecisionHostKind, DecisionRowId, DecisionRowSide } from '../../../shared/decisionModel';
+import type { NameListUpload } from '../../../shared/privateNames';
 import type { ResolveRead } from '../fleet/workspaceNameWords';
 import type { PaneScopeStopState } from '../fleet/paneScopeStopWords';
 import type { WitnessTuple } from '../../../shared/authorityWitness';
@@ -403,6 +405,22 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
     portfolio: () => getJsonOrAbsent<{ readonly portfolio: PortfolioView }>('/api/portfolio'),
     rankPortfolio: (body: RankWrite) => postJson<{ readonly revision: number; readonly portfolio: PortfolioView }>('/api/portfolio/rank', body),
     poolRunway: () => getJsonOrAbsent<PoolRunwayWire>('/api/pools/runway'),
+    /** Settings › Overlord (W2 Settings): the decision model's read and its five writes (each door asks its own step-up), and the
+     *  private-name list's status and upload. Each answer is `unknown`, and a 2xx whose body is not JSON is `'unreadable'`, never a
+     *  refusal: `decisionModelWords.ts` and `nameListWords.ts` read them. */
+    decisionModel: () => getJsonOrAbsent<unknown>('/api/decision-model'),
+    armDecisionRow: (id: DecisionRowId, body: { readonly mode: 'shadow' | 'armed'; readonly line?: number; readonly expected: DecisionRowSide }) =>
+      postJsonOr<unknown>(`/api/decision-model/rows/${encodeURIComponent(id)}/arm`, 'unreadable', body),
+    offDecisionRow: (id: DecisionRowId, body: { readonly expected: DecisionRowSide }) =>
+      postJsonOr<unknown>(`/api/decision-model/rows/${encodeURIComponent(id)}/off`, 'unreadable', body),
+    setDecisionCeiling: (id: DecisionRowId, body: { readonly ceiling: number; readonly expected: DecisionRowSide }) =>
+      postJsonOr<unknown>(`/api/decision-model/rows/${encodeURIComponent(id)}/ceiling`, 'unreadable', body),
+    setDecisionKey: async (body: { readonly kind: DecisionHostKind; readonly endpoint: string; readonly modelId: string; readonly key?: string }) =>
+      (await request('/api/decision-model/key', { ...jsonInit(body), method: 'PUT' })).json().catch(() => 'unreadable') as Promise<unknown>,
+    removeDecisionKey: async () => (await request('/api/decision-model/key', { method: 'DELETE' })).json().catch(() => 'unreadable') as Promise<unknown>,
+    privateNameList: () => getJsonOrAbsent<unknown>('/api/overlord/private-names'),
+    uploadPrivateNames: async (body: NameListUpload) =>
+      (await request('/api/overlord/private-names', { ...jsonInit(body), method: 'PUT' })).json().catch(() => 'unreadable') as Promise<unknown>,
     rebootFleet: () => post('/api/fleet/reboot'),
 
     /** `GET /api/updates` — the control plane read (W2 Task 13): catalogue line,

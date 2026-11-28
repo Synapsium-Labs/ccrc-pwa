@@ -41,6 +41,8 @@ beforeEach(() => {
   vi.spyOn(api, 'renewalBackstop').mockResolvedValue({ absent: true });
   vi.spyOn(api, 'responseRetention').mockResolvedValue({ absent: true });
   vi.spyOn(api, 'accountHolds').mockResolvedValue({ ok: true, holds: [] });
+  vi.spyOn(api, 'decisionModel').mockResolvedValue({ absent: true });
+  vi.spyOn(api, 'privateNameList').mockResolvedValue({ absent: true });
 });
 afterEach(() => { cleanup(); vi.restoreAllMocks(); });
 
@@ -194,6 +196,32 @@ describe('the account-hold Clear', () => {
     await waitFor(() => expect(holds).toHaveBeenCalledTimes(3));
     await settle();
     expect(row('lane-b').querySelector('[data-account-hold]')).toBeNull();
+  });
+
+  it('a Clear still in flight when another row\'s re-read drops its hold stays mounted, and its answer is drawn, never a fresh Clear (W2 Settings, carried ticket)', async () => {
+    // Two Clears in flight at once. lane-b's answers first, and its re-read already shows lane-a's clear landed (no hold). lane-a's
+    // answer arrives after that re-read: it must be drawn in lane-a's own control, not as a live Clear with no hold line.
+    const A = { lane: 'lane-a', cause: 'launch-profile-unmet', startId: 4, heldAt: AT };
+    const B = { lane: 'lane-b', cause: 'launch-profile-unmet', startId: 4, heldAt: AT };
+    const holds = vi.spyOn(api, 'accountHolds').mockResolvedValueOnce({ ok: true, holds: [A, B] }).mockResolvedValue({ ok: true, holds: [] });
+    const answers = new Map<string, (v: unknown) => void>();
+    const clear = vi.spyOn(api, 'clearAccountHold').mockImplementation((laneId: string) => new Promise((r) => { answers.set(laneId, r); }));
+    show([lane('lane-a'), lane('lane-b')]);
+    await settle();
+    fireEvent.click(row('lane-a').querySelector('[data-hold-clear="lane-a"]')!);
+    fireEvent.click(row('lane-b').querySelector('[data-hold-clear="lane-b"]')!);
+    expect(clear).toHaveBeenCalledTimes(2);
+    await act(async () => { answers.get('lane-b')!({ ok: true, lane: 'lane-b' }); });
+    await waitFor(() => expect(holds).toHaveBeenCalledTimes(2));
+    await settle();
+    // lane-a's hold is gone from the read, but its Clear is in flight: the same control stays, busy, and no hold line is drawn.
+    expect(row('lane-a').querySelector('[data-account-hold="lane-a"] .ovs-note')).toBeNull();
+    expect(row('lane-a').querySelector<HTMLButtonElement>('[data-hold-clear="lane-a"]')?.disabled).toBe(true);
+    await act(async () => { answers.get('lane-a')!({ ok: true, lane: 'lane-a' }); });
+    await settle();
+    expect(row('lane-a').querySelector('[data-hold-cleared="lane-a"]')?.textContent).toBe(FACT_WORDS.cleared);
+    expect(row('lane-a').querySelector('[data-hold-clear]')).toBeNull();
+    expect(clear).toHaveBeenCalledTimes(2);
   });
 
   it('a refused Clear latches nothing: a re-read that drops the hold leaves no Clear behind (review 4065 F2)', async () => {

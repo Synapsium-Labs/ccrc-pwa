@@ -155,6 +155,7 @@ const READ_DOOR_MAP = {
   sequence: "the sequence cursor's read",
   chat: "the operator's read of the Overlord's chat thread",
   'chat-history': "the operator's read of one page of an earlier generation",
+  'open-request': "the open door's citation read: a message's state, time and hash match, never its text (W2)",
 } as const;   // W4 adds model, feed
 export type ReadDoor = keyof typeof READ_DOOR_MAP;
 export const READ_DOORS = Object.keys(READ_DOOR_MAP) as ReadDoor[];

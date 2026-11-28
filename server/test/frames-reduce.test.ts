@@ -2,6 +2,7 @@
 // docs/superpowers/plans/2026-11-26-box-frames-recipe.md section 5.2; the capture owner's calls 1549 and 1558, and its yes to
 // packet 2 with the corrected rule 2). One case or more per rule, the owner's four rule-2 cases, the coordinator's two
 // rule-row cases, idempotence, and the over-replacement on the recorded 2.1.300 panes, pinned as measured.
+import { createHash } from 'node:crypto';
 import { readdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -11,7 +12,8 @@ import { framesScan } from '../../shared/framesScan.mjs';
 import { FRAMES_NUDGE_TEXT, FRAMES_RECIPE_VERSION, framesOurs } from '../../shared/framesCapture.js';
 import { FRAMES_PARTS, frameSize, FRAMES_VERSION_SHAPE } from '../../shared/framesResult.js';
 import {
-  FRAMES_DECORATION, FRAMES_REPLACED, FRAMES_STATUS_TEXT, PATH_LIKE, checkReducedFrame, credentialShaped, isRuleRow, reduceFrame, rowIsOurs, statusRowOf, type FramesScan,
+  FRAMES_DECORATION, FRAMES_REPLACED, FRAMES_STATUS_TEXT, FRAMES_ONE_CELL_RANGES, FRAMES_WIDE_KEPT, PATH_LIKE, checkReducedFrame, credentialShaped, frameCellWidth, isRuleRow, reduceFrame,
+  reducerFingerprint, rowIsOurs, runsToTheEdge, statusRowOf, type FramesScan,
 } from '../../shared/framesReduce.js';
 
 const ESC = '\x1b';
@@ -171,6 +173,326 @@ describe('the full-width rule counts screen cells, two for a wide character (rev
   });
 });
 
+describe('the width table is the Unicode East Asian Width data file (review 4109, R1; the coordinator\'s rulings 1 and 2 on wave 195, and on review 4133, F2)', () => {
+  const HERE = path.dirname(fileURLToPath(import.meta.url));
+  const FIXTURE_BYTES = readFileSync(path.join(HERE, 'fixtures', 'unicode-east-asian-width.txt'));
+  const FIXTURE = FIXTURE_BYTES.toString('utf8');
+  const SHARED = readFileSync(path.join(HERE, '..', '..', 'shared', 'framesReduce.ts'), 'utf8');
+  const DATA_LINE = /^([0-9A-F]{4,6})(?:\.\.([0-9A-F]{4,6}))?\s*;\s*(N|Na|H|A|W|F)\s+#/;
+  const ONE = ['N', 'Na', 'H', 'A'];
+  /** Every data line of the fixture: its range and its property. */
+  const dataLines = (): { a: number; b: number; p: string }[] =>
+    FIXTURE.split('\n').filter((l) => /^[0-9A-F]/.test(l)).map((l) => {
+      const m = DATA_LINE.exec(l);
+      if (m === null) throw new Error(`not a data line of the width file: ${l}`);
+      return { a: parseInt(m[1]!, 16), b: parseInt(m[2] ?? m[1]!, 16), p: m[3]! };
+    });
+  const merge = (ranges: [number, number][]): [number, number][] => {
+    const sorted = [...ranges].sort((x, y) => x[0] - y[0]);
+    const out: [number, number][] = [];
+    for (const [a, b] of sorted) {
+      const last = out[out.length - 1];
+      if (last !== undefined && a <= last[1] + 1) last[1] = Math.max(last[1], b);
+      else out.push([a, b]);
+    }
+    return out;
+  };
+  /** The fixture's one-cell lines (N, Na, H, A), merged: what the shared table must be. */
+  const oneCellFromFixture = (): [number, number][] => merge(dataLines().filter((l) => ONE.includes(l.p)).map((l) => [l.a, l.b]));
+  /** What the data file says of every code point, with no engine asked: 0 not listed (so unassigned in 17.0; not every unassigned one, since the file lists 56,166 of them as W), 1 one cell, 2 W or F. */
+  const BY_FILE = ((): Uint8Array => {
+    const by = new Uint8Array(0x110000);
+    for (const l of dataLines()) for (let cp = l.a; cp <= l.b; cp++) by[cp] = ONE.includes(l.p) ? 1 : 2;
+    return by;
+  })();
+  const inKept = (cp: number): boolean => FRAMES_WIDE_KEPT.some(([a, b]) => cp >= a && cp <= b);
+  /** The width the table and the stated addition give a code point, with no engine asked. */
+  const byTable = (cp: number): 1 | 2 => (inKept(cp) || BY_FILE[cp] !== 1 ? 2 : 1);
+  /** The shared file's table as source text, and as the generator writes it from the fixture: eight pairs to a line. */
+  const tableText = (): string => {
+    const open = SHARED.indexOf('export const FRAMES_ONE_CELL_RANGES');
+    const start = SHARED.indexOf('\n', open) + 1;
+    return SHARED.slice(start, SHARED.indexOf(']);', start));
+  };
+  const generated = (ranges: readonly (readonly [number, number])[]): string => {
+    const hex = (n: number): string => `0x${n.toString(16).toUpperCase().padStart(4, '0')}`;
+    const items = ranges.map(([a, b]) => `[${hex(a)}, ${hex(b)}]`);
+    const lines: string[] = [];
+    for (let i = 0; i < items.length; i += 8) lines.push(`  ${items.slice(i, i + 8).join(', ')},\n`);
+    return lines.join('');
+  };
+  /** THE RULE ON MAIN at 86b2c2d6e2, as data: its hand list's ranges, and an emoji drawn as one. */
+  const MAIN_RANGES: readonly (readonly [number, number])[] = [
+    [0x1100, 0x115f], [0x2e80, 0x303e], [0x3041, 0x33ff], [0x3400, 0x4dbf], [0x4e00, 0x9fff], [0xa000, 0xa4cf], [0xac00, 0xd7a3],
+    [0xf900, 0xfaff], [0xfe30, 0xfe4f], [0xff00, 0xff60], [0xffe0, 0xffe6], [0x20000, 0x3fffd],
+  ];
+  const inMain = (cp: number): boolean => MAIN_RANGES.some(([a, b]) => cp >= a && cp <= b);
+  const everyCodePoint = (f: (cp: number, c: string) => void): void => {
+    for (let cp = 0; cp <= 0x10ffff; cp++) if (cp < 0xd800 || cp > 0xdfff) f(cp, String.fromCodePoint(cp));
+  };
+
+  it('the fixture IS the public data file EastAsianWidth-17.0.0.txt, byte for byte, and the shared file names the same file', () => {
+    expect(createHash('sha256').update(FIXTURE_BYTES).digest('hex')).toBe('ea7ce50f3444a050333448dffef1cadd9325af55cbb764b4a2280faf52170a33');
+    expect(FIXTURE_BYTES.length).toBe(201595);
+    expect(FIXTURE.split('\n').slice(0, 2)).toEqual(['# EastAsianWidth-17.0.0.txt', '# Date: 2025-07-24, 00:12:54 GMT']);
+    expect(dataLines()).toHaveLength(2678);
+    expect(SHARED).toContain('EastAsianWidth-17.0.0.txt');
+  });
+  it('the shared table is the fixture\'s N, Na, H and A lines merged, as the generator writes them: they cannot drift', () => {
+    const want = oneCellFromFixture();
+    expect(want).toHaveLength(747);
+    expect(tableText()).toBe(generated(want));
+    expect(FRAMES_ONE_CELL_RANGES.map(([a, b]) => [a, b])).toEqual(want);
+  });
+  it('the shared table\'s source text is ASCII only, byte for byte', () => {
+    const bytes = [...new TextEncoder().encode(tableText())];
+    expect(bytes.length).toBe(14426);
+    expect(bytes.filter((b) => b > 0x7f)).toEqual([]);
+  });
+  it('the docs guard\'s allowance is one generated row: the shared file spells the selector ranges pair once, inside the table', () => {
+    // `single-definition/docs-l0.test.ts` lets this file hold the docs path's selector ranges pair because the width
+    // table has a generated row with the same range (the coordinator's ruling on the red guard). A hand-written second
+    // copy anywhere else in the file would ride that allowance, so it is held to exactly one, and that one in the table.
+    const PAIR = /0xe0100\s*,\s*0xe01ef/gi;
+    expect(SHARED.match(PAIR) ?? []).toHaveLength(1);
+    expect(tableText().match(PAIR) ?? []).toHaveLength(1);
+  });
+  it('every line of the fixture, first, last and one inside, counts what the file says; the code point just outside each one-cell range counts two', () => {
+    let outside = 0;
+    for (const l of dataLines()) {
+      for (const cp of [l.a, l.b, l.a + ((l.b - l.a) >> 1)]) {
+        const c = String.fromCodePoint(cp);
+        const want = ONE.includes(l.p) && !inKept(cp) && !/\p{Emoji_Presentation}/u.test(c) ? 1 : 2;
+        expect(frameCellWidth(c), `${cp.toString(16)} ${l.p}`).toBe(want);
+      }
+    }
+    for (const [a, b] of oneCellFromFixture()) {
+      for (const cp of [a - 1, b + 1]) {
+        if (cp < 0 || cp > 0x10ffff) continue;
+        expect(frameCellWidth(String.fromCodePoint(cp)), cp.toString(16)).toBe(2);
+        outside++;
+      }
+    }
+    expect(outside).toBe(1493);
+  });
+  it('unknown is relative to the table, never to the engine: a code point the 17.0 file does not list counts two cells, whatever the engine has assigned', () => {
+    // The reviewer's measured case (review 4133, F2): code points the next version's public data lists as Wide that this
+    // file does not list (Jurchen, Khitan, Tangut components, a small archaic Katakana YE), and ruling 2's unassigned and
+    // noncharacter samples. None is listed here; each counts two cells with no engine class asked.
+    for (const cp of [0x18e00, 0x19191, 0x191a0, 0x191d2, 0x18cd6, 0x18cda, 0x18d1f, 0x18d20, 0x1b168, 0x0378, 0xfdd0, 0x1ffff]) {
+      expect(BY_FILE[cp], cp.toString(16)).toBe(0);
+      expect(frameCellWidth(String.fromCodePoint(cp)), cp.toString(16)).toBe(2);
+    }
+    let unlisted = 0;
+    everyCodePoint((cp, c) => { if (BY_FILE[cp] === 0) { unlisted++; if (frameCellWidth(c) !== 2) throw new Error(`unlisted ${cp.toString(16)} counts one`); } });
+    expect(unlisted).toBe(758564);
+  });
+  it('the engine\'s emoji class only widens: every code point counts at least what the table gives it, and every one it counts wider is an emoji drawn as one', () => {
+    const widened: number[] = [];
+    everyCodePoint((cp, c) => {
+      const [w, t] = [frameCellWidth(c), byTable(cp)];
+      if (w < t) throw new Error(`${cp.toString(16)} counts narrower than the table`);
+      if (w > t) { widened.push(cp); if (!/\p{Emoji_Presentation}/u.test(c)) throw new Error(`${cp.toString(16)} widened by something else`); }
+    });
+    // The regional indicators, N in the data file, are emoji drawn as one: the class is what makes them two cells.
+    for (let cp = 0x1f1e6; cp <= 0x1f1ff; cp++) expect(widened, cp.toString(16)).toContain(cp);
+  });
+  it('no code point counts narrower than it did on main, with no engine asked, and on this engine too: the one stated addition keeps the eight ambiguous ones main counted wide', () => {
+    let wider = 0;
+    const narrower: string[] = [];
+    everyCodePoint((cp) => {
+      const [now, was] = [byTable(cp), inMain(cp) ? 2 : 1];
+      if (now < was) narrower.push(cp.toString(16));
+      else if (now > was) wider++;
+    });
+    expect(narrower).toEqual([]);
+    expect(wider).toBe(768240);
+    // With the engine's emoji class on both sides, as main and this function each read it.
+    const narrowerHere: string[] = [];
+    everyCodePoint((cp, c) => { const ep = /\p{Emoji_Presentation}/u.test(c); if (frameCellWidth(c) < (inMain(cp) || ep ? 2 : 1)) narrowerHere.push(cp.toString(16)); });
+    expect(narrowerHere).toEqual([]);
+    // The addition is exactly U+3248 to U+324F, A in the data file, each two cells.
+    expect(FRAMES_WIDE_KEPT.map(([a, b]) => [a, b])).toEqual([[0x3248, 0x324f]]);
+    for (let cp = 0x3248; cp <= 0x324f; cp++) {
+      expect(BY_FILE[cp], cp.toString(16)).toBe(1);
+      expect(frameCellWidth(String.fromCodePoint(cp)), cp.toString(16)).toBe(2);
+    }
+  });
+  it('the reviewer\'s and the panel\'s unlisted-before wide characters are two cells, and so is a regional indicator, which the file gives N', () => {
+    for (const cp of [0x2329, 0xfe10, 0xa960, 0x16fe0, 0x17000, 0x1b000, 0x1f200, 0xac00, 0xff01]) {
+      expect(frameCellWidth(String.fromCodePoint(cp)), cp.toString(16)).toBe(2);
+    }
+    expect(BY_FILE[0x1f1e6]).toBe(1);
+    expect(frameCellWidth(String.fromCodePoint(0x1f1e6))).toBe(2);
+  });
+  it('a private-use code point is refused by the shape gate before any width is asked; were it asked, it would count one cell', () => {
+    const P = { cols: 20, rows: 8 };
+    const boxed = (...rows: string[]): string => raw(...rows, '─'.repeat(P.cols), STATUS);
+    // Reaching the edge through an unlisted code point refuses a path going on below, on both hosts.
+    const edge = `ab/${'c'.repeat(15)}${String.fromCodePoint(0x0378)}`;
+    expect(reduceFrame(boxed(edge, 'tail rest'), P, [], [], NONE)).toEqual({ kind: 'refused', refusal: 'private-shape' });
+    expect(checkReducedFrame(boxed(edge, 'tail rest'), P, [], NONE)).toEqual({ ok: false, refusal: 'private-shape' });
+    const pua = `ab/${'c'.repeat(16)}${String.fromCodePoint(0xe000)}`;
+    expect(reduceFrame(boxed(pua, 'tail rest'), P, [], [], NONE)).toEqual({ kind: 'refused', refusal: 'not-a-frame' });
+    expect(checkReducedFrame(boxed(pua, 'tail rest'), P, [], NONE)).toEqual({ ok: false, refusal: 'not-a-frame' });
+    expect(frameCellWidth(String.fromCodePoint(0xe000))).toBe(1);
+  });
+});
+
+describe('the capture owner\'s condition: a row truly at the edge is at the edge (review 4109, R1, the coordinator\'s rulings 3 and 4 on wave 195)', () => {
+  // Pane 20 wide, the reviewer's measured frames: `ab/` and filler reach the last column, and `tail` goes on below. No
+  // private string is known, so only the full-width rule can refuse them. Each is refused whole on the box (`reduceFrame`)
+  // and by the server's check (`checkReducedFrame`): the one function.
+  const P = { cols: 20, rows: 8 };
+  const boxed = (...rows: string[]): string => raw(...rows, '─'.repeat(P.cols), STATUS);
+  const both = (f: string): unknown[] => [reduceFrame(f, P, [], [], NONE), checkReducedFrame(f, P, [], NONE)];
+  const REFUSED = [{ kind: 'refused', refusal: 'private-shape' }, { ok: false, refusal: 'private-shape' }];
+  const KEPT = (f: string): unknown[] => [{ kind: 'reduced', text: f, replaced: { cwd: 0, path: 0, model: 0, account: 0 } }, { ok: true }];
+  const WIDE = String.fromCodePoint(0x6f22);
+
+  it('a row reaching the last column through a wide character outside the old hand list, then a continued path tail, refuses on both hosts', () => {
+    for (const cp of [0x2329, 0xfe10, 0xa960, 0x16fe0, 0x17000, 0x1b000, 0x1f200]) {
+      const edge = `ab/${'c'.repeat(15)}${String.fromCodePoint(cp)}`; // 19 code points, 20 cells
+      expect(both(boxed(edge, 'tail rest')), cp.toString(16)).toEqual(REFUSED);
+    }
+  });
+  it('a straddler at the last column, then a continued tail: the row ends one cell short as drawn, with no trailing space, and refuses on both hosts', () => {
+    const short = `ab/${'c'.repeat(16)}`; // 19 cells: the wide character did not fit in the last cell and was wrapped whole
+    expect(both(boxed(short, `${WIDE}tail rest`))).toEqual(REFUSED);
+  });
+  it('the same straddle with the blank last cell read as a trailing space: measured after trailing spaces are dropped, it refuses on both hosts', () => {
+    const drawn = `ab/${'c'.repeat(16)} `; // 20 code points as drawn, 19 cells once the trailing space is dropped
+    expect(both(boxed(drawn, `${WIDE}tail rest`))).toEqual(REFUSED);
+  });
+  it('a row one cell short whose next row begins with a narrow character is a short row, not a wrap, and is kept', () => {
+    // The narrow character would have fitted in the last cell, so the terminal did not wrap there.
+    const short = `ab/${'c'.repeat(16)}`;
+    expect(both(boxed(short, 'tail rest'))).toEqual(KEPT(boxed(short, 'tail rest')));
+  });
+  it('a row two cells short, even with a wide character below, is kept', () => {
+    const short = `ab/${'c'.repeat(15)} `;
+    expect(both(boxed(short, `${WIDE}tail rest`))).toEqual(KEPT(boxed(short, `${WIDE}tail rest`)));
+  });
+
+  // Review 4133's F1, the coordinator's ruling: ONE reader of the next row. The straddle asks the first character of the
+  // same content the tail is read from, after the leading decoration, so a decorated next row cannot hide a straddle.
+  const SEL = String.fromCodePoint(0xfe0f);
+  const KEYCAP = String.fromCodePoint(0x20e3);
+  const NBSP = String.fromCodePoint(0xa0);
+  const DECORATED = [`  ${WIDE}tail rest`, `│${WIDE}tail rest`, `│ ${WIDE}tail rest`, `❯ ${WIDE}tail rest`, `⏺ ${WIDE}tail rest`, `${NBSP}${WIDE}tail rest`];
+  const SELECTED = [
+    `${String.fromCodePoint(0x2764)}${SEL}tail rest`, `${String.fromCodePoint(0x263a)}${SEL}tail rest`, `${String.fromCodePoint(0x270c)}${SEL}tail rest`,
+    `1${SEL}${KEYCAP}tail rest`, `1${KEYCAP}tail rest`, `  ${String.fromCodePoint(0x2764)}${SEL}tail rest`,
+  ];
+  // The turn marker is a decoration, so the one reader strips it and leaves the selector, the keycap or the mark first.
+  const TURN = String.fromCodePoint(0x23fa);
+  const ACUTE = String.fromCodePoint(0x0301); // a combining mark, A in the data file, so one cell by the table
+  const LEADING_SELECTOR = [
+    `${TURN}${SEL}ject rest`, `  ${TURN}${SEL}ject rest`, `│${SEL}ject rest`, `${TURN}${KEYCAP}ject rest`, `  ${TURN}${KEYCAP}ject rest`,
+  ];
+  const LEADING_MARK = [`${TURN}${ACUTE}${WIDE}ject rest`, `  ${TURN}${ACUTE}${WIDE}ject rest`, `${TURN}${ACUTE}ject rest`, `│${ACUTE}ject rest`];
+  // Review 4168's F1: the Unicode spaces off the decoration list. The ideographic space is two cells; the rest are one.
+  const IDEO = String.fromCodePoint(0x3000);
+  const EMSP = String.fromCodePoint(0x2003);
+  const OFF_LIST_SPACES = [0x3000, 0x2000, 0x2001, 0x2002, 0x2003, 0x2004, 0x2005, 0x2006, 0x2007, 0x2008, 0x2009, 0x200a, 0x202f, 0x205f, 0x1680]
+    .map((cp) => String.fromCodePoint(cp));
+  for (const cols of [20, 220]) {
+    const W = { cols, rows: 8 };
+    const at = (...rows: string[]): string => raw(...rows, '─'.repeat(cols), STATUS);
+    const on = (f: string): unknown[] => [reduceFrame(f, W, [], [], NONE), checkReducedFrame(f, W, [], NONE)];
+    const short = `ab/${'x'.repeat(cols - 4)}`; // one cell short of the pane (a filler that is no hex run)
+    it(`at ${cols} columns: a straddle whose next row begins with decoration before the wide character refuses on both hosts`, () => {
+      for (const next of DECORATED) expect(on(at(short, next)), JSON.stringify(next)).toEqual(REFUSED);
+    });
+    it(`at ${cols} columns: a straddle whose next row begins with a base character and the emoji selector or the keycap mark refuses on both hosts`, () => {
+      for (const next of SELECTED) expect(on(at(short, next)), JSON.stringify(next)).toEqual(REFUSED);
+    });
+    // Review 4161's F1, the coordinator's ruling on the class: when the decoration-stripped content begins with a code
+    // point that cannot begin a character by itself, the first character counts two cells.
+    it(`at ${cols} columns: a straddle whose next row is a decoration base, then the emoji selector or the keycap mark, refuses on both hosts (review 4161, F1)`, () => {
+      for (const next of LEADING_SELECTOR) expect(on(at(short, next)), JSON.stringify(next)).toEqual(REFUSED);
+    });
+    it(`at ${cols} columns: a straddle whose next row is a decoration base, then a combining mark, refuses on both hosts, before a wide character and, an accepted over-refusal, before a narrow one`, () => {
+      for (const next of LEADING_MARK) expect(on(at(short, next)), JSON.stringify(next)).toEqual(REFUSED);
+    });
+    const full = `ab/${'x'.repeat(cols - 3)}`; // the pane's whole width
+    const kept = (f: string): unknown[] => [{ kind: 'reduced', text: f, replaced: { cwd: 0, path: 0, model: 0, account: 0 } }, { ok: true }];
+    it(`at ${cols} columns: a full row, then a next row that begins with a Unicode space off the decoration list, then the path's tail, refuses on both hosts (review 4168, F1)`, () => {
+      for (const sp of OFF_LIST_SPACES) {
+        for (const next of [`${sp}ject rest`, `  ${sp}ject rest`, `${TURN}${sp}ject rest`]) expect(on(at(full, next)), JSON.stringify(next)).toEqual(REFUSED);
+      }
+    });
+    it(`at ${cols} columns: a row one cell short, then the ideographic space (the wide character that wrapped), then the tail, refuses on both hosts, bare and after the turn marker; a one-cell space there is no edge, and is kept`, () => {
+      for (const next of [`${IDEO}ject rest`, `${TURN}${IDEO}ject rest`]) expect(on(at(short, next)), JSON.stringify(next)).toEqual(REFUSED);
+      // The row did not reach the edge: a one-cell space does not wrap, so keeping it is the correct answer.
+      for (const next of [`${EMSP}ject rest`, `${TURN}${EMSP}ject rest`]) expect(on(at(short, next)), JSON.stringify(next)).toEqual(kept(at(short, next)));
+    });
+    it(`at ${cols} columns: a token row, then the ideographic space or the em space, then a path, refuses on both hosts; an ASCII indent then a word that is not a path is kept`, () => {
+      for (const t of Object.values(FRAMES_REPLACED).filter((t) => Array.from(t).length + 2 <= cols)) {
+        for (const next of [`${IDEO}ject/rest`, `${EMSP}ject/rest`, `  ${IDEO}ject/rest`]) expect(on(at(`  ${t}`, next)), `${t} ${JSON.stringify(next)}`).toEqual(REFUSED);
+        // Kept: the same text back and the server's ok (the account token is counted once as replaced, so counts are not pinned).
+        const f = at(`  ${t}`, '  ject rest');
+        expect(on(f), t).toMatchObject([{ kind: 'reduced', text: f }, { ok: true }]);
+      }
+      // A full row that holds no path, then such a space and a word: nothing to continue, so it is kept.
+      const plainFull = 'x'.repeat(cols);
+      for (const next of [`${IDEO}ject rest`, `${EMSP}ject rest`]) expect(on(at(plainFull, next)), JSON.stringify(next)).toEqual(kept(at(plainFull, next)));
+    });
+    it(`at ${cols} columns: decoration then a narrow character is still not a straddle, and is kept`, () => {
+      // The last two have a mark LATER in the row, not first (review 4168: the mark test is anchored to the first code point).
+      for (const next of ['  tail rest', '│ tail rest', '❯ tail rest', `${NBSP}tail rest`, `${TURN}tail rest`, `  ${TURN} tail rest`, `t${ACUTE}ail rest`, `${TURN}tail${ACUTE} rest`]) {
+        expect(on(at(short, next)), JSON.stringify(next)).toEqual([{ kind: 'reduced', text: at(short, next), replaced: { cwd: 0, path: 0, model: 0, account: 0 } }, { ok: true }]);
+      }
+    });
+  }
+  it('a row whose last character is the decoration is not run to the edge, even at the full width (review 4133, A6)', () => {
+    const bordered = `ab/${'c'.repeat(16)}│`; // 20 cells, its last a border character
+    expect(both(boxed(bordered, 'tail rest'))).toEqual(KEPT(boxed(bordered, 'tail rest')));
+  });
+});
+
+describe('what the box answers as reduced passes the server\'s check, by construction (review 4133, F3, the coordinator\'s ruling)', () => {
+  const PANES_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), 'fixtures', 'panes');
+  it('the reviewer\'s 40-column frame, a replaced row of one-code-point two-cell characters, refuses on the box with the server\'s word', () => {
+    const P = { cols: 40, rows: 6 };
+    const f = raw(`${String.fromCodePoint(0x0378).repeat(18)} /a/b`, '─'.repeat(40), STATUS);
+    expect(reduceFrame(f, P, [], [], NONE)).toEqual({ kind: 'refused', refusal: 'not-a-frame' });
+    // What the box answered before this round: the row padded to its 41 cells, 41 code points, which the server refuses.
+    const sentBefore = raw(`${FRAMES_REPLACED.cwd}${' '.repeat(41 - Array.from(FRAMES_REPLACED.cwd).length)}`, '─'.repeat(40), STATUS);
+    expect(checkReducedFrame(sentBefore, P, [], NONE)).toEqual({ ok: false, refusal: 'not-a-frame' });
+  });
+  it('over every recorded pane as the recipe meets it, and the capture owner\'s frames, a reduced answer passes the server\'s check', () => {
+    const files = [
+      ...readdirSync(PANES_DIR).filter((f) => /\.(txt|ansi)$/.test(f)).map((f) => path.join(PANES_DIR, f)),
+      ...readdirSync(path.join(PANES_DIR, 'box')).filter((f) => f.endsWith('.ansi')).map((f) => path.join(PANES_DIR, 'box', f)),
+    ];
+    let reduced = 0;
+    let checked = 0;
+    for (const f of files) {
+      const recorded = readFileSync(f, 'utf8');
+      if (!recorded.split('\n').some((l) => isRuleRow(plainOf(l))) || recorded.split('\n').findIndex((l) => isRuleRow(plainOf(l))) < 1) continue;
+      const pane = realPane(recorded);
+      const r = reduceFrame(asTheRecipeMeetsIt(recorded), pane, [], [], NONE);
+      checked++;
+      if (r.kind !== 'reduced') continue;
+      reduced++;
+      expect(checkReducedFrame(r.text, pane, [], NONE), f).toEqual({ ok: true });
+    }
+    // Pinned exactly (review 4161, A6): the panes the recipe meets, and those it reduces. While the box checks its own
+    // result this case holds by construction; the note names the mutant that makes it red.
+    expect(checked).toBe(132);
+    expect(reduced).toBe(128);
+    // The capture owner's frames (review 4109, R1): each is refused, so none reaches the store.
+    const P = { cols: 20, rows: 8 };
+    for (const cp of [0x2329, 0xfe10, 0xa960, 0x16fe0, 0x17000, 0x1b000, 0x1f200]) {
+      const f = raw(`ab/${'c'.repeat(15)}${String.fromCodePoint(cp)}`, 'tail rest', '─'.repeat(20), STATUS);
+      const r = reduceFrame(f, P, [], [], NONE);
+      if (r.kind === 'reduced') expect(checkReducedFrame(r.text, P, [], NONE)).toEqual({ ok: true });
+      else expect(r.refusal).toBe('private-shape');
+    }
+  });
+});
+
 describe('a bare quote is Claude Code\'s own glyph, and a cut token is exact (review 4086, F-A, the coordinator\'s ruling)', () => {
   const NAMES = Object.values(FRAMES_REPLACED).map((t) => Array.from(t).slice(1, -1).join(''));
   const both = (f: string): unknown[] => [reduceFrame(f, PANE, OURS, [], NONE), checkReducedFrame(f, PANE, OURS, NONE)];
@@ -210,6 +532,17 @@ describe('a bare quote is Claude Code\'s own glyph, and a cut token is exact (re
     // The whole name with its other quote missing is a cut too: it is what a row too narrow for its token would leave. (A row
     // holding the whole word `account` is rule 6's, which replaces it on the box, so that name is not among these.)
     for (const n of NAMES.filter((x) => x !== 'account')) for (const row of rows(`‹${n}`, `${n}›`)) expect(both(frame(row)), row).toEqual(REFUSED);
+  });
+  it('a cut token after an earlier bare quote of the same kind in the same row still refuses on both hosts (review 4109, F3)', () => {
+    // Every quote of a row is examined, not only its first: a bare `›` (or `‹`) before the cut does not hide it.
+    for (const n of NAMES) {
+      const cps = Array.from(n);
+      for (let k = 1; k < cps.length; k++) {
+        const tail = `${cps.slice(cps.length - k).join('')}›`;
+        const head = `‹${cps.slice(0, k).join('')}`;
+        for (const row of [`  one › two ${tail} more`, `  › x ›  ${tail}`, `  a ‹ b ${head} here`, `  ‹ ‹ ${head}`]) expect(both(frame(row)), row).toEqual(REFUSED);
+      }
+    }
   });
   it('a complete token is kept: alone, and, for the two no word rule reads, between words and twice in a row', () => {
     // `‹account›` holds the word rule 6 reads, so a row holding more than that token is that rule's, as before this round.
@@ -282,6 +615,17 @@ describe('rules 3 to 6: a row replaced keeps its width and its border', () => {
     for (const row of ['  …/projects/x', '  ~/work here', '  /a/b', '  Haiku', '  plan']) {
       expect(reduceFrame(frame(row), PANE, OURS, [], NONE), row).toEqual({ kind: 'refused', refusal: 'private-shape' });
     }
+  });
+  it('a replaced row is measured in screen cells: wide content as wide as the token is replaced, and keeps its width on screen (review 4109, F5)', () => {
+    const cells = (row: string): number => Array.from(plainOf(row)).reduce((n, c) => n + frameCellWidth(c), 0);
+    // Ten wide characters and a path: 15 code points but 25 cells, wider than the 19-cell token, so it is replaced, not refused.
+    const row = `  ${'漢'.repeat(10)} /a/b`;
+    const out = reduced(frame(row)).split('\n')[0]!;
+    expect(out.trim()).toBe(FRAMES_REPLACED.cwd);
+    expect(cells(out)).toBe(cells(row));
+    expect(checkReducedFrame(reduced(frame(row)), PANE, OURS, NONE)).toEqual({ ok: true });
+    // Four wide characters and the path are 13 cells, narrower than the token: refused, as before.
+    expect(reduceFrame(frame(`  ${'漢'.repeat(4)} /a/b`), PANE, OURS, [], NONE)).toEqual({ kind: 'refused', refusal: 'private-shape' });
   });
   it('rule 5: a model name, rule 6: an account or a plan', () => {
     expect(reduced(frame('  Haiku 9.9 · whatever')).split('\n')[0]!.trim()).toBe(FRAMES_REPLACED.model);
@@ -407,6 +751,15 @@ describe('rule 10, and the receiver\'s check', () => {
   it('the version folds in the reducer\'s probe answers', () => {
     expect(FRAMES_RECIPE_VERSION).toMatch(FRAMES_VERSION_SHAPE);
   });
+  it('the probe table answers for a bare quote, a wide character at the edge, a row at the probe\'s width, a straddle, the stated addition at the edge, a table-only wide character at the edge, a trailing-space straddle, a leading selector and a leading ideographic space (review 4109, F9; review 4133, D1; review 4161, F1; review 4168, F1)', () => {
+    // The nine probes after the eighteen of round 2, each drawn in its box: a change in what the reducer does with any of
+    // them moves the version. None asks the engine for anything (review 4133, D1; review 4161, F1; review 4168, F1).
+    const answers = JSON.parse(reducerFingerprint()) as { kind: string; refusal?: string; text?: string }[];
+    expect(answers).toHaveLength(30);
+    expect(answers[18]).toMatchObject({ kind: 'reduced' });
+    expect(answers[18]!.text).toContain('› stashed');
+    for (const i of [19, 20, 21, 22, 23, 24, 25, 26]) expect(answers[i], String(i)).toEqual({ kind: 'refused', refusal: 'private-shape' });
+  });
 });
 
 describe('over-replacement on the recorded 2.1.300 panes (the coordinator\'s condition 3, measured and pinned)', () => {
@@ -497,6 +850,42 @@ describe('over-replacement on the recorded 2.1.300 panes (the coordinator\'s con
     }
     expect(missed).toEqual([]);
     expect(pathRows).toContain('stash-after-cs.ansi');
+  });
+  it('the third stash pane: the row the path rule replaces is the stash notice row, and the notice is not in the stored text (review 4109, F8b)', () => {
+    const recorded = readFileSync(path.join(dir, 'box', 'stash-after-cs.ansi'), 'utf8');
+    const pane = realPane(recorded);
+    const text = asTheRecipeMeetsIt(recorded);
+    const r = reduceFrame(text, pane, [], [], NONE);
+    if (r.kind !== 'reduced') throw new Error(`refused: ${r.refusal}`);
+    const before = text.split('\n');
+    const after = r.text.split('\n');
+    const notice = before.findIndex((l) => plainOf(l).includes('› stashed'));
+    expect(notice).toBeGreaterThan(0);
+    // The one path row is the notice row (it shares its row with the tmux hint's `~/.tmux.conf`), replaced by the token.
+    expect(r.replaced.path).toBe(1);
+    const changed = before.map((l, i) => (after[i] !== l ? i : -1)).filter((i) => i >= 0);
+    expect(changed).toContain(notice);
+    expect(after[notice]!.trim()).toBe(FRAMES_REPLACED.cwd);
+    expect(r.text).not.toContain('stashed');
+  });
+  it('the full-width rule has a candidate row in the recorded frames at their real sizes, at least in the six where it had one before wave 195 (review 4109, F8a)', () => {
+    // A candidate row is one the rule reads as run to the edge (or to a straddle), with a row under it. Counted by frame
+    // over the 61 2.1.300 panes and the box folder's, as the recipe meets them, so a size where the rule cannot fire is noticed.
+    const all = [...files.map((f) => path.join(dir, f)), ...readdirSync(path.join(dir, 'box')).filter((f) => f.endsWith('.ansi')).map((f) => path.join(dir, 'box', f))];
+    const withCandidate: string[] = [];
+    for (const f of all) {
+      const recorded = readFileSync(f, 'utf8');
+      const pane = realPane(recorded);
+      const plains = asTheRecipeMeetsIt(recorded).split('\n').map(plainOf);
+      if (plains.some((p, i) => i + 1 < plains.length && runsToTheEdge(p, plains[i + 1]!, pane))) withCandidate.push(path.basename(f));
+    }
+    expect(all).toHaveLength(90);
+    const BEFORE = [
+      'cc300-ask-freetext-1000.txt', 'cc300-ask-review-4q-100col.txt', 'cc300-ask-wrapped-question-focused.txt', 'cc300-ask-wrapped-question.txt',
+      'box-taller-than-capture.ansi', 'stash-held-during-turn.ansi',
+    ];
+    expect(withCandidate).toEqual(expect.arrayContaining(BEFORE));
+    expect(withCandidate).toHaveLength(6);
   });
   it('the frame size of a recorded pane is measured as the reader measures it', () => {
     expect(frameSize(readFileSync(path.join(dir, files[0]!), 'utf8')).rows).toBeGreaterThan(0);

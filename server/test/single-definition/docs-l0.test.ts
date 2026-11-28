@@ -105,7 +105,11 @@ describe('docs L0 single definitions (docs reader W1a, row 48)', () => {
         "const S = 'specs|plans|product-design|conventions';", "const S = 'specs|plans';"],
       ['path categories', /(['"])Cf\1,\s*(['"])Zl\2,\s*(['"])Zp\3,\s*(['"])Co\4,\s*(['"])Cn\5/, ['shared/docs.ts'],
         'const C = ["Cf","Zl","Zp","Co","Cn"];', "const C = ['Cf', 'Zl'];"],
-      ['selector ranges', /0xe0100\s*,\s*0xe01ef/i, ['shared/docs.ts'],
+      // The second holder is one generated row of the frames reducer's width table: the public width data file's
+      // ambiguous-class range for the variation selectors supplement (desktop polish wave 195). It is a different fact
+      // from the docs path rule, and legitimately different because it is data regenerated from the pinned fixture,
+      // never hand-written; `frames-reduce.test.ts` holds that file to exactly one copy, inside the table.
+      ['selector ranges', /0xe0100\s*,\s*0xe01ef/i, ['shared/docs.ts', 'shared/framesReduce.ts'],
         'const V = [[0xFE00, 0xFE0F], [0xE0100, 0xE01EF]];', 'const V = 0xe0100;'],
     ];
 
