@@ -656,13 +656,43 @@ describe('the host card', () => {
     nowhere('after the retry');
   });
 
-  it("16. a host-only Save's step holds the key field: no key can be typed while it shows, so the retry sends the host alone and discards nothing", async () => {
-    // Review 4167 F2 (a). The field's only handler is its presence report (`onInput`), which sends nothing; the hold is its
-    // `disabled` attribute, so a browser delivers no keystroke to it while the step shows.
-    const save = vi.spyOn(api, 'setDecisionKey').mockRejectedValueOnce(stepUpRequired()).mockResolvedValue({ ok: true });
+  it('15. the key field is held from the press: in flight it is disabled with every other control, and the retry sends what the first send carried', async () => {
+    // Review 4183 F1. Between the press and the first send's answer the send in flight holds the card, the key field with it, so
+    // nothing can be typed in that window (by attribute: a disabled field takes no keystroke) and the retry reads the key the first
+    // send read. The first send is held on a deferred promise, so the window is real.
+    const first = deferred<never>();
+    const save = vi.spyOn(api, 'setDecisionKey').mockImplementationOnce(() => first.promise).mockResolvedValue({ ok: true });
+    await open();
+    typeKey();
+    fireEvent.click(hostSave());
+    await waitFor(() => expect(save).toHaveBeenCalledTimes(1));
+    expect(card('decision-host').querySelector('[data-step-up]')).toBeNull();
+    allHeld(hostHeldControls(), true, 'the first send in flight');
+    expect(keyField().value).toBe(KEY);
+    await act(async () => { first.reject(stepUpRequired()); });
+    await waitFor(() => expect(card('decision-host').querySelector('[data-step-up]')).not.toBeNull());
+    allHeld(hostHeldControls(), true, 'the step showing');
+    await confirmStep();
+    await waitFor(() => expect(save).toHaveBeenCalledTimes(2));
+    expect(save.mock.calls[1]![0]).toEqual(save.mock.calls[0]![0]);
+    expect(save.mock.calls[1]![0].key).toBe(KEY);
+    await waitFor(() => expect(keyField().value).toBe(''));
+    allHeld([...hostInputs(), keyField(), control(card('decision-host'), 'decision-key-remove')], false, 'after the retry');
+    nowhere('after the retry');
+  });
+
+  it("16. a host-only Save holds the key field from the press: no key can be typed in flight or while the step shows, so the retry sends the host alone and discards nothing", async () => {
+    // Review 4167 F2 (a), review 4183 F1. The field's only handler is its presence report (`onInput`), which sends nothing; the hold
+    // is its `disabled` attribute, so a browser delivers no keystroke to it, from the press (the send in flight) until the step is
+    // put away. The first send is held on a deferred promise, so the window before its answer is real.
+    const first = deferred<never>();
+    const save = vi.spyOn(api, 'setDecisionKey').mockImplementationOnce(() => first.promise).mockResolvedValue({ ok: true });
     await open();
     fireEvent.change(card('decision-host').querySelector('[data-settings-input="decision-model-id"]')!, { target: { value: 'model-b' } });
     fireEvent.click(hostSave());
+    await waitFor(() => expect(save).toHaveBeenCalledTimes(1));
+    expect(keyField().disabled, 'the key field in flight').toBe(true);
+    await act(async () => { first.reject(stepUpRequired()); });
     await waitFor(() => expect(card('decision-host').querySelector('[data-step-up]')).not.toBeNull());
     expect(keyField().disabled).toBe(true);
     allHeld(hostHeldControls(), true, 'a host-only step showing');

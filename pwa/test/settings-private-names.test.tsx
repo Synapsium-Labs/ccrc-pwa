@@ -244,6 +244,34 @@ describe('Upload', () => {
     expect(upload).toHaveBeenCalledTimes(2);
   });
 
+  it('the box is held from the press: in flight it is disabled with Upload and Clear, so the retry uploads the rows the first send carried', async () => {
+    // Review 4183 F1. Between the press and the first send's answer the send in flight holds the card, the box with it, so nothing
+    // can be typed in that window (by attribute: a disabled box takes no keystroke) and the retry reads the text the first send read.
+    // The first send is held on a deferred promise, so the window is real.
+    status.mockResolvedValue({ state: 'list', rows: 3, uploadedAt: AT });
+    let reject!: (e: unknown) => void;
+    upload.mockImplementationOnce(() => new Promise((_, rj) => { reject = rj; })).mockResolvedValue(OK);
+    show();
+    await settle();
+    type(TEXT);
+    press('names-upload');
+    await waitFor(() => expect(upload).toHaveBeenCalledTimes(1));
+    expect(card()!.querySelector('[data-step-up]')).toBeNull();
+    expect(box().disabled, 'the box in flight').toBe(true);
+    expect(up().disabled, 'Upload in flight').toBe(true);
+    expect(clr().disabled, 'Clear in flight').toBe(true);
+    expect(box().value).toBe(TEXT);
+    await act(async () => { reject(stepUpRequired()); });
+    await waitFor(() => expect(card()!.querySelector('[data-step-up]')).not.toBeNull());
+    expect(box().disabled, 'the box with the step showing').toBe(true);
+    await confirmStep();
+    await waitFor(() => expect(upload).toHaveBeenCalledTimes(2));
+    expect(upload.mock.calls[1]).toEqual(upload.mock.calls[0]);
+    expect(upload).toHaveBeenNthCalledWith(2, { rows: ROWS });
+    await waitFor(() => expect(box().disabled).toBe(false));
+    expect(box().value).toBe('');
+  });
+
   it('the whole card is held while Upload\'s step shows: the box, Upload and Clear, so no edit or other act reaches the retry, and the door is idle', async () => {
     // Review 4167 F2 (c) and F3. The hold is by attribute: the disabled box takes no keystroke (its only handler is its presence
     // report, which sends nothing) and a disabled button gets no click. The door is idle while the step shows, and nothing of the
@@ -283,6 +311,8 @@ describe('Upload', () => {
     expect(box().disabled).toBe(true);
     expect(up().disabled).toBe(true);
     expect(clr().disabled).toBe(true);
+    // The door is idle while Clear's step shows (review 4183 F4): Upload's label is not the in-flight one.
+    expect(up().textContent).toBe(W.upload);
     press('names-upload');
     await settle();
     expect(upload).toHaveBeenCalledTimes(1);
@@ -315,6 +345,8 @@ describe('Upload', () => {
   });
 
   it('another card\'s answer that hides this card\'s step resets it: the next press is a first send again', async () => {
+    // A list stands, so Clear is drawn and its freeing is checked too (review 4183 F4).
+    status.mockResolvedValue({ state: 'list', rows: 3, uploadedAt: AT });
     vi.spyOn(api, 'renewalBackstop').mockResolvedValue({ ok: true, hour: 4, zone: 'UTC', isDefault: true, setAt: null });
     vi.spyOn(api, 'setRenewalBackstop').mockResolvedValue({ ok: true, hour: 5, zone: 'UTC', isDefault: false, setAt: AT });
     upload.mockRejectedValueOnce(stepUpRequired()).mockRejectedValueOnce(stepUpRequired()).mockResolvedValue(OK);
@@ -328,9 +360,10 @@ describe('Upload', () => {
     await waitFor(() => expect(card()!.querySelector('[data-step-up]')).toBeNull());
     await settle();
     expect(upload).toHaveBeenCalledTimes(1);
-    // Another card's answer frees the whole card (review 4167 F2): the box and Upload are enabled, and the text is still there.
+    // Another card's answer frees the whole card (review 4167 F2): the box, Upload and Clear are enabled, and the text is still there.
     expect(box().disabled).toBe(false);
     expect(up().disabled).toBe(false);
+    expect(clr().disabled).toBe(false);
     expect(box().value).toBe(TEXT);
     press('names-upload');
     await waitFor(() => expect(upload).toHaveBeenCalledTimes(2));

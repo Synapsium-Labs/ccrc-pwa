@@ -4,16 +4,20 @@
 // that read the key, or parsed the names, keeps them reachable on the heap while the step shows, though the field has been emptied.
 //
 // No runtime check sees a closure's captured variables (the fiber walk skips functions, `helpers/fiberWalk.ts`), so this census
-// holds the shape by source, over the two card files:
+// holds a shape by source, over the two card files. The fact it guards is that NO VALUE STANDS IN A SEND'S SCOPE, the scope the
+// retry would otherwise be made in; it is a check on lines of text, not a proof about closures (review 4183 F3). It checks:
 //   - every retry is made by a MAKER declared at the component's own level, outside every send: a line of the form
 //     `const <name>Retry: StepRetry = { act: '<act>', send: () => <send>(true) };`, or, for the key's Save, which keeps one boolean,
-//     `const <name>Retry = (carried: boolean): StepRetry => ({ act: '<act>', send: () => <send>(carried, true) });`. Its only
-//     parameter is a boolean, and its only free name is the card's send function, so nothing it can reach holds a value;
-//   - no other line of the file builds a retry (a `send: () =>` anywhere else is red: the reviewer's surviving mutant, the retry
-//     arrow written again inside the send, capturing the key);
-//   - each door call hands a maker's retry, by name;
-//   - the request itself reads the field (the key's `peek`, the names' body built inside the request), so no send keeps the value
-//     in a local that a closure names.
+//     `const <name>Retry = (carried: boolean): StepRetry => ({ act: '<act>', send: () => <send>(carried, true) });`;
+//   - no other line of the file holds `send: () =>` (the reviewer's surviving mutant, the retry arrow written again inside the send,
+//     is red);
+//   - each door call hands a maker's retry, by name (a `toContain`, so a comment holding the same text would satisfy it);
+//   - the request itself reads the field: the key's `peek` inside the request, and Upload's body built from the box inside the
+//     request (`rowsBodyOf(text.current)`), so a send that keeps the rows in a local of any name is red; and no local named `typed`
+//     or `body` stands.
+// It cannot see, and nothing else here sees: a component-level `let` assigned inside a send; a retry written as `send: async () =>`,
+// in method shorthand or split over lines; a cast that passes a string as `carried`; a value kept by another means than a local of
+// the send. The code holds none of these today; a reviewer reads for them. It is not grown into a parser.
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -25,15 +29,21 @@ const sourceOf = (file: string): string => readFileSync(path.join(SETTINGS, file
 /** A maker: at the component's own level (two spaces in), its act, and the send it calls with `true` (the retry). */
 const MAKER = /^ {2}const (\w+)Retry(?:: StepRetry = | = \(carried: boolean\): StepRetry => \()\{ act: '(\w+)', send: \(\) => (\w+)\((?:carried, )?true\) \}\)?;$/;
 
-interface Card { readonly file: string; readonly makers: readonly string[]; readonly handed: string; readonly request: RegExp }
+interface Card {
+  readonly file: string; readonly makers: readonly string[]; readonly handed: string;
+  /** The request arms that read the field inside the request, each of which must stand. */
+  readonly request: readonly RegExp[];
+}
+/** Upload's send hands a body that reads the box inside the request (review 4183 F3: a local of any name is red). */
+const UPLOAD_READS_THE_BOX = /send\('upload', \(\) => rowsBodyOf\(text\.current\), /;
 const CARDS: readonly Card[] = [
   {
     file: 'DecisionHostCard.tsx', makers: ['save'], handed: 'retry ? undefined : saveRetry(carried)',
-    request: /\(\) => api\.setDecisionKey\(withKey\(to, carried \? key\.current\?\.peek\(\) \?\? '' : ''\)\)/,
+    request: [/\(\) => api\.setDecisionKey\(withKey\(to, carried \? key\.current\?\.peek\(\) \?\? '' : ''\)\)/],
   },
   {
     file: 'PrivateNamesCard.tsx', makers: ['upload', 'clear'], handed: "retry ? undefined : act === 'clear' ? clearRetry : uploadRetry",
-    request: /\(\) => api\.uploadPrivateNames\(body\(\)\)/,
+    request: [/\(\) => api\.uploadPrivateNames\(body\(\)\)/, UPLOAD_READS_THE_BOX],
   },
 ];
 
@@ -63,8 +73,20 @@ describe('the retry holds no value: it is made outside every send, by a maker th
 
   it.each(CARDS)('$file: the request reads the field itself, so no send keeps the value in a local a closure names', ({ file, request }) => {
     const src = sourceOf(file);
-    expect(src).toMatch(request);
+    for (const arm of request) expect(src).toMatch(arm);
     expect(src, `${file}: a local holding what the field held`).not.toMatch(/const (typed|body) = /);
+  });
+
+  it('the census sees the names body kept in a renamed local: Upload\'s send no longer reads the box inside the request', () => {
+    // Review 4183 F3's blind spot, closed: the rows kept in a local the name rule does not know (`rowsNow`) are red here.
+    const src = sourceOf('PrivateNamesCard.tsx');
+    const mutant = src.replace(
+      "send('upload', () => rowsBodyOf(text.current), uploadAnswerWords, retry);",
+      "const rowsNow = rowsBodyOf(text.current);\n    send('upload', () => rowsNow, uploadAnswerWords, retry);",
+    );
+    expect(mutant).not.toBe(src);
+    expect(mutant).not.toMatch(/const (typed|body) = /);
+    expect(mutant).not.toMatch(UPLOAD_READS_THE_BOX);
   });
 
   it('the census sees the reviewer\'s mutant: a retry arrow written inside the send is red', () => {
