@@ -9,8 +9,8 @@ import { utf8Bytes } from '../../shared/utf8';
 import { DOCS_RENDER_GATE_BYTES } from '../src/lib/markdownLimits';
 import { parseMarkdown } from '../src/lib/markdownParse';
 import { READER_BLOCKS_MAX_BYTES } from '../src/lib/readerLimits';
-import { answerRenderJob, type ReaderRenderReply } from '../src/lib/readerRenderJob';
-import { collectMdBlocks, MarkdownCutter, partText, splitMarkdownPartsAt, type MdPart } from '../src/docs/range/mdParts';
+import { answerRenderJob, type ReaderRenderOutcome, type ReaderRenderReply } from '../src/lib/readerRenderJob';
+import { collectMdBlocks, cutMarkdownText, MarkdownCutter, partText, splitMarkdownParts, splitMarkdownPartsAt, type BlocksJob, type MdPart, type TextBlock } from '../src/docs/range/mdParts';
 import { askLibrary, blocksOf } from './mdPartsJudge';
 
 /** The parts cover the text in order, and each part's text (its reopen and close counted) is at most `max` bytes. */
@@ -794,5 +794,100 @@ describe('a document with no comment opener is cut as before the rule (wave 64)'
     // Measured on main at 3fd477ee57, before the rule (wave 64). The digest reads the library's blocks too: a new library pin may
     // change it with no change of the cutter; then measure it again on the cutter before the change, never on the one after it.
     expect(fnv(all).toString(16), `the digest of ${docs.length} documents at six sizes`).toBe('8eb520e2');
+  });
+});
+
+// ---- Wave 64, item 2: P1's own paths, measured against the rule, and the one cure built ----------------------------------------
+// The line cutter reads no comment, and it alone cuts three paths: the unread tail (the blocks were not read from there), the whole
+// text after the block cutter throws, and the console with no render job. Each is MEASURED here against the rule's cut (logged, with
+// the fit and the cover asserted); the plan's Results carry the numbers and why only one is cured: a tail that starts at a closed
+// top-level comment, a comment unit since this wave. The console's own view shows a comment as text whole or cut (the case "a part
+// above the gate gets the gate's answer"), so on screen the cut changes nothing there.
+describe('P1\'s own paths, measured against the rule (wave 64, item 2)', { timeout: 600000 }, () => {
+  const shownParts = (text: string, parts: readonly MdPart[]): number[] => parts.map((p) => shown(partText(text, p), HIDDEN));
+  const job: BlocksJob = async (src, o) => {
+    let out: ReaderRenderOutcome | null = null;
+    answerRenderJob({ id: 1, kind: 'render', src, blocks: o.blocks }, (r) => { out = r.outcome; });
+    return out!;
+  };
+
+  it('md parts P1 paths: the line cutter alone (the fallback after a throw, no render job) and the block cutter under the rule, at 200 bytes and at the gate', async () => {
+    const shapes: [string, string, number][] = [
+      ['top-level comment', 'para\n\n<!--\n' + lines('', 40) + '-->\n\n# Next\n', 200],
+      ['list item', '- item\n  <!--\n' + lines('  ', 40) + '  -->\n- next\n', 200],
+      ['quote', '> <!--\n' + lines('> ', 40) + '> -->\n', 200],
+      ['paragraph, text after the closer', 'para\n\n<!--\n' + lines('', 40) + '--> tail\n', 200],
+      ['list item at the gate', '- item\n  <!--\n' + lines('  ', 34000) + '  -->\n- next\n', GATE],
+      ['quote at the gate', '> <!--\n' + lines('> ', 34000) + '> -->\n\nAfter.\n', GATE],
+    ];
+    for (const [name, text, max] of shapes) {
+      const p1 = splitMarkdownParts(text, max).parts;
+      checkCover(text, p1, max);
+      const rule = await cut(text, max);
+      coverByRule(text, rule, max);
+      const ruleShown = shownParts(text, rule);
+      expect(ruleShown.every((n) => n === 0), `${name}: the block cutter under the rule shows none`).toBe(true);
+      const p1Shown = shownParts(text, p1);
+      // The residual, pinned as measured: the line cutter alone shows hidden text (a cure of these paths would flip this line).
+      expect(p1Shown.some((n) => n > 0), `${name}: the line cutter alone shows hidden text`).toBe(true);
+      console.info(`md parts P1 paths: ${name}: ${utf8Bytes(text)} bytes at ${max}: the line cutter's ${p1.length} parts show hidden lines ${p1Shown.join(',')} (${p1Shown.filter((n) => n > 0).length} parts); the rule's ${rule.length} parts show none`);
+    }
+  });
+
+  it('md parts P1 paths: the unread tail, for real: a top-level comment past the blocks read\'s cap ends the read at its start, and is closed and reopened, not cut by the line cutter (item 2\'s cure)', async () => {
+    const big = 'Intro.\n\n<!--\n' + lines('', 140000) + '-->\n\n# Next\n\ntext\n';
+    const { tailFrom } = await blocksOf(big);
+    expect(tailFrom, 'the blocks read stops at the comment').toBe(8);
+    const parts = await cutMarkdownText(big, job, new AbortController().signal);
+    checkCover(big, parts, GATE);
+    expect(parts[0]!.end, 'the intro, then the comment from its opener').toBe(8);
+    expect(parts.filter((p) => p.reopen === '<!--\n').length, 'the comment is reopened in each part after its first').toBeGreaterThan(2);
+    const per = shownParts(big, parts);
+    expect(per.every((n) => n === 0), `no part shows the comment (per part: ${per.join(',')}; before the cure the line cutter showed all 140 000 lines)`).toBe(true);
+    expect(parts.reduce((n, p) => n + shown(partText(big, p), 'Next'), 0), 'the heading after it shows').toBe(1);
+  });
+
+  it('md parts P1 paths: a tail that starts at a closed top-level comment is a comment unit, the rest after it the unread tail (synthetic blocks: the read stopped there)', () => {
+    const run = (text: string, blocks: readonly TextBlock[], tailFrom: number, max: number): MdPart[] => {
+      const parts = splitMarkdownPartsAt(text, max, blocks, tailFrom).parts;
+      checkCover(text, parts, max);
+      for (const p of parts) expect(outsideComments(partText(text, p)), `max ${max}: no comment text outside a comment`).not.toContain(HIDDEN);
+      return parts;
+    };
+    // After a block, and at the text's start (the read stopped at offset 0).
+    const a = 'Intro.\n\n' + bigComment(40) + '# Next\n\ntext\n';
+    const pa = run(a, [{ start: 0, end: 6, kind: 'other' }], 8, 200);
+    expect(pa.some((p) => p.reopen === '<!--\n'), 'closed and reopened').toBe(true);
+    expect(pa.some((p) => a.startsWith('# Next', p.start) || a.startsWith('\n# Next', p.start)), 'the rest after the comment is cut on its own').toBe(true);
+    const b = bigComment(40) + 'After.\n';
+    run(b, [], 0, 200);
+    // Followed by lines of dashes: the rest begins after a blank line, never at the dashes (front matter).
+    const c = 'Intro.\n\n' + bigComment(40) + '---\nSHOWNW line\n---\n' + 'more\n'.repeat(60);
+    const pc = run(c, [{ start: 0, end: 6, kind: 'other' }], 8, 200);
+    expect(pc.reduce((n, p) => n + shown(partText(c, p), 'SHOWNW'), 0), 'the line after the dashes shows').toBe(shown(c, 'SHOWNW'));
+    // A closer line with text after it is no block comment (the library reads a paragraph): the tail is the line cutter's, as before.
+    const d = 'Intro.\n\n<!--\n' + lines('', 40) + '--> tail words\n\nEnd.\n';
+    const pd = splitMarkdownPartsAt(d, 200, [{ start: 0, end: 6, kind: 'other' }], 8).parts;
+    checkCover(d, pd, 200);
+    expect(pd.some((p) => p.reopen === '<!--\n'), 'not closed and reopened').toBe(false);
+    // CRLF line ends give the same shape.
+    const e = a.replace(/\n/g, '\r\n');
+    const pe = run(e, [{ start: 0, end: 6, kind: 'other' }], e.indexOf('<!--'), 200);
+    expect(pe.some((p) => p.reopen === '<!--\n'), 'CRLF: closed and reopened').toBe(true);
+    // `<!-->` closes on its own line (the library shows what follows): a one-line unit, the rest the line cutter's.
+    const f = 'Intro.\n\n<!-->\n' + 'SHOWNW line\n'.repeat(40) + '-->\n\nEnd.\n';
+    const pf = splitMarkdownPartsAt(f, 200, [{ start: 0, end: 6, kind: 'other' }], 8).parts;
+    checkCover(f, pf, 200);
+    expect(pf.reduce((n, p) => n + shown(partText(f, p), 'SHOWNW'), 0), '`<!-->`: every shown line shows').toBe(shown(f, 'SHOWNW'));
+    // A closer line that does not fit a part beside the reopen line: no comment unit (it would be one part as long as itself).
+    const g = 'Intro.\n\n<!--\n' + lines('', 40) + '-->' + ' '.repeat(300) + '\n\nEnd.\n';
+    const pg = splitMarkdownPartsAt(g, 200, [{ start: 0, end: 6, kind: 'other' }], 8).parts;
+    checkCover(g, pg, 200);
+    // Fed as the incremental cutter is, the cut is the one-shot cut.
+    for (const [text, tailFrom, blocks] of [[a, 8, [{ start: 0, end: 6, kind: 'other' as const }]], [b, 0, []], [c, 8, [{ start: 0, end: 6, kind: 'other' as const }]]] as const) {
+      const m = new MarkdownCutter(text, 200);
+      const got = [...m.feed(blocks, tailFrom), ...m.finish(tailFrom)];
+      expect(got, `incremental at tailFrom ${tailFrom}`).toEqual(splitMarkdownPartsAt(text, 200, blocks, tailFrom).parts);
+    }
   });
 });

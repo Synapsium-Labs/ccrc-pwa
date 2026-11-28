@@ -47,7 +47,8 @@
 // a quote is still cut between its items, each item then read by the same rule. A top-level comment unit is still closed and
 // reopened by `cutComment` where it has room, the text after its closer line in its last part; where it has none (its closer line
 // beside the reopen line, a window too small, or the text after the closer line that no part holds) it is whole too, never P1's,
-// so no part of it starts at dashes. The unread tail (`raw`) is P1's, as it was; where the blocks stop at a block that starts with
+// so no part of it starts at dashes. The unread tail (`raw`) is P1's, as it was, but for one that starts at a closed top-level
+// comment (the blocks read stops at a comment longer than its cap): that comment is a comment unit, the tail after it; where the blocks stop at a block that starts with
 // dashes (no candidate there), the unit that runs into the tail is read by the rule only up to it (`rawFrom`): when that much holds
 // an opener it is cut there, by the rule as any unit is, and the tail is P1's, a blank line before its first part (which starts at
 // dashes: no front matter); P1's later parts may still start at dashes, as the unread tail's do (its own residual); and when it
@@ -101,8 +102,11 @@
 //     continues a paragraph; a quote's lazy lines (every size from 30 to 120); a list item whose content column is past its marker
 //     and one space (60 to 170, and at the gate); a closer line longer than a part; and lines of dashes after a top-level comment
 //     whose closer line does not fit beside the reopen line (24 to 200: no part starts at the dashes). It REMAINS on P1's own paths:
-//     the unread tail, the console with no render job (whose own view shows a comment as text whole or cut, so the cut changes
-//     nothing there), and the whole-text fallback of a cutter that throws. (The shapes' history: X2 P6.1's fix rounds and wave 62,
+//     the unread tail (but for a tail that starts at a closed top-level comment, which is where the blocks read stops when such a
+//     comment is longer than its cap: since wave 64 that comment is a comment unit, closed and reopened, and the tail starts after
+//     it, `commentAt`), the console with no render job (whose own view shows a comment as text whole or cut, so the cut changes
+//     nothing on screen; its Print renders P1's parts through the library, so there a part may print what the whole would hide),
+//     and the whole-text fallback of a cutter that throws. (The shapes' history: X2 P6.1's fix rounds and wave 62,
 //     in the plan's class 10 notes; a `<!-->` or `<!--->` opener at the start of its line with only white space after it hides
 //     nothing, review 4131 A2.)
 // The line cutter's own description follows.
@@ -1145,6 +1149,27 @@ class BlockCutter {
     return out;
   }
 
+  /** The end of a closed top-level comment that starts at `off` (a line start): its opener line (up to three spaces, then `<!--`)
+   *  through the line that holds its first `-->`, with only white space after it there (`gapComments`' rule, read from the text alone,
+   *  as the library reads a block comment); null when the text at `off` is no such comment. For the unread tail (wave 64, item 2): the
+   *  blocks read stops at a comment longer than its cap, which `openComment` grew the window for. Linear in the comment. */
+  commentAt(off: number): number | null {
+    const t = this.text;
+    let o = off;
+    while (o - off < 3 && t.charCodeAt(o) === 32) o += 1;
+    if (!t.startsWith('<!--', o)) return null;
+    const p = t.indexOf('-->', o);
+    if (this.probe !== undefined) this.probe.chars += (p < 0 ? t.length : p) - off;
+    if (p < 0) return null;
+    let stop = p + 3;
+    while (stop < t.length && t.charCodeAt(stop) !== 10 && t.charCodeAt(stop) !== 13) stop += 1;
+    if (t.slice(p + 3, stop).trim() !== '') return null;
+    // A closer line that does not fit a part beside the reopen line is one `cutComment` cannot cut: such a comment would be one part
+    // as long as itself, past a window, so it is left to the unread tail (P1), as before.
+    if (COMMENT_OPEN.length + this.bytesWithin(p, stop + 2, this.max) > this.max) return null;
+    return stop >= t.length ? t.length : stop + (t.charCodeAt(stop) === 13 && t.charCodeAt(stop + 1) === 10 ? 2 : 1);
+  }
+
   /** The parts of the comment unit `[from, to)`: a closed comment that alone is larger than a part, cut as a fence is (X2 P6.1 review
    *  F3). It starts at the opener line, and ends after the line that holds its first `-->`; what is left of the unit after that line
    *  goes in its last part (below). Each part that ends inside the comment ends with `-->` on a line of its own (a newline first when the part ends in the
@@ -1317,15 +1342,21 @@ export class MarkdownCutter {
     const text = this.text;
     if (this.emitted === 0) {
       if (utf8Bytes(text) <= this.max) return [{ start: 0, end: text.length, continued: false, reopen: null, close: null }];
-      if (tailFrom === 0) return splitMarkdownParts(text, this.max, this.probe).parts;
+      if (tailFrom === 0 && this.cutter.commentAt(0) === null) return splitMarkdownParts(text, this.max, this.probe).parts;
     }
     this.gap(tailFrom ?? text.length);
     this.gapFrom = Math.max(this.gapFrom, tailFrom ?? text.length);
     const last = this.cand[this.cand.length - 1]!;
-    if (tailFrom !== null && tailFrom > last.start) {
+    // A tail that starts at a closed top-level comment (the blocks read stopped at a comment longer than its cap) is a comment unit,
+    // closed and reopened; the unread tail starts after it (wave 64, item 2).
+    const closed = tailFrom !== null && tailFrom >= last.start ? this.cutter.commentAt(tailFrom) : null;
+    if (closed !== null && tailFrom === last.start) this.cand[this.cand.length - 1] = { ...last, comment: closed };
+    else if (closed !== null) this.cand.push({ start: tailFrom!, block: undefined, raw: false, comment: closed });
+    const raw = closed ?? tailFrom;
+    if (raw !== null && raw > last.start && raw < text.length) {
       // No part starts at dashes, so a tail that does has no candidate: the last unit runs on into it, and says where it starts.
-      if (!text.startsWith('---', tailFrom)) this.cand.push({ start: tailFrom, block: undefined, raw: true });
-      else this.rawAt = tailFrom;
+      if (!text.startsWith('---', raw)) this.cand.push({ start: raw, block: undefined, raw: true });
+      else this.rawAt = raw;
     }
     this.known = text.length;
     return this.step(true);
@@ -1410,7 +1441,6 @@ export class MarkdownCutter {
 export function splitMarkdownPartsAt(text: string, maxBytes: number, blocks: readonly TextBlock[], tailFrom: number | null, probe?: Probe): { parts: MdPart[] } {
   if (probe !== undefined) probe.chars += text.length;
   if (utf8Bytes(text) <= maxBytes) return { parts: [{ start: 0, end: text.length, continued: false, reopen: null, close: null }] };
-  if (tailFrom === 0) return splitMarkdownParts(text, maxBytes, probe);
   const cutter = new MarkdownCutter(text, maxBytes, probe);
   const known = tailFrom === null ? blocks : blocks.filter((b) => b.start < tailFrom);
   const parts = cutter.feed(known, tailFrom ?? text.length);
