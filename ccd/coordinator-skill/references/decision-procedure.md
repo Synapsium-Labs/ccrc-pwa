@@ -30,6 +30,17 @@ operator's note. The note is optional: when the operator wrote one, it is in the
 `answer`; when they wrote none, the mail says so. If you need a note (who did a step, and when), ask for it in the
 item's steps; a tick that came without it goes back with what is missing.
 
+Item text is Markdown, and the console draws it. Every command the operator is to run goes alone in a fenced block,
+one command or one pasteable sequence per block, with nothing in the block that is not to be pasted, such as:
+
+```sh
+ccrc doctor
+```
+
+A path or a name inside a sentence takes inline code (backticks), except a document the operator is to open: its
+repository path stays bare, outside backticks, so the console links it to the Docs reader. A How step is one act. A title and an option take
+inline marks only, no blocks, and an option is at most 140 characters. Emphasis uses asterisks, never underscores.
+
 - **O1. Irreversible or outward-facing acts.** Acts the repository's SAFETY rules forbid to sessions, and acts on the
   live boxes: reaping, removing, expiring or reclaiming workspaces; touching units or tmux; account management;
   rolling or selecting a Claude Code build; `ccrc history` writes; deploys and rollouts; writing live box config,
