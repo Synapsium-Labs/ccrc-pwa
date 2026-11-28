@@ -7,6 +7,7 @@ import { describe, expect, it } from 'vitest';
 import type { ChainedJournalFormat, ChainedRefusal } from '../src/chainedJournal.js';
 import { DELEGATION_JOURNAL_FORMAT } from '../src/coord/delegation-journal.js';
 import { OVERLORD_AUTHORITY_FORMAT } from '../src/coord/overlordAuthority.js';
+import { OVERLORD_ACTS_FORMAT } from '../src/coord/overlordActRecords.js';
 import { PRIVACY_JOURNAL_FORMAT } from '../src/operatorModel/privacyJournal.js';
 import { PROBE_JOURNAL_FORMAT, ProbeJournalError, ProbeJsonError } from './sim/chainedJournalSets.js';
 import { walkSrc } from './rings/walkSrc.js';
@@ -41,6 +42,12 @@ const FORMATS: Record<string, Registered> = {
     format: OVERLORD_AUTHORITY_FORMAT as unknown as AnyFormat,
     binding: 'server/src/coord/overlordAuthority.ts#OVERLORD_AUTHORITY_FORMAT',
     sample: { kind: 'authority-latch-raise', opKey: 'op-1', cause: 'restore-detected', cap: 'chat' },
+  },
+  // Overlord W2, the act journal (PR A): bound through the shared file adapter by the act journal's writer.
+  overlordActs: {
+    format: OVERLORD_ACTS_FORMAT as unknown as AnyFormat,
+    binding: 'server/src/coord/overlordActRecords.ts#OVERLORD_ACTS_FORMAT',
+    sample: { kind: 'act-open-request', opKey: '0123456789abcdef0123456789abcdef', requestId: 9, actId: 8 },
   },
 };
 
@@ -158,8 +165,8 @@ function kindLeaks(registry: Record<string, Registered>): { leaks: string[]; pai
 describe('the kinds census', () => {
   const names = Object.keys(FORMATS);
 
-  it('registers the delegation format, the fixture format, the Overlord authority format and the privacy journal\'s', () => {
-    expect(names.sort()).toEqual(['delegation', 'overlordAuthority', 'privacy', 'probe']);
+  it('registers the delegation format, the fixture format, the Overlord authority format, the privacy journal\'s and the act journal\'s', () => {
+    expect(names.sort()).toEqual(['delegation', 'overlordActs', 'overlordAuthority', 'privacy', 'probe']);
     for (const n of names) expect(FORMATS[n]!.format.kinds.length, n).toBeGreaterThan(0);
   });
 
