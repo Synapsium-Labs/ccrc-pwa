@@ -1,12 +1,16 @@
 // The box frames recipe's cases (Desktop polish wave 187; plan docs/superpowers/plans/2026-11-26-box-frames-recipe.md
 // section 3; `shared/framesCapture.ts`): the drafts, the steps, the neutral mail notice held equal to the product's own,
 // the mode characters, and the version.
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { renderMailNudge } from '../src/coord/envelope.js';
 import {
-  FRAMES_LONG_LINE, FRAMES_MODE_CHARS, FRAMES_NUDGE_ID, FRAMES_NUDGE_TEXT, FRAMES_ROW_CHARS, framesCap300, framesDraftLines, framesOurs,
-  framesRecipeVersionOf, framesRow, framesSteps,
+  FRAMES_LONG_LINE, FRAMES_MODE_CHARS, FRAMES_NUDGE_ID, FRAMES_NUDGE_TEXT, FRAMES_RECIPE_COMPLETE, FRAMES_RECIPE_VERSION, FRAMES_ROW_CHARS, framesCap300,
+  framesDraftLines, framesOurs, framesRecipeVersionOf, framesRow, framesSteps,
 } from '../../shared/framesCapture.js';
+import { reducerFingerprint } from '../../shared/framesReduce.js';
 import { FRAMES_CASE_IDS, FRAMES_PANES, FRAMES_PARTS, FRAMES_VERSION_SHAPE } from '../../shared/framesResult.js';
 
 const P50 = FRAMES_PANES[0]!;
@@ -87,5 +91,19 @@ describe('the version', () => {
     expect(v).toMatch(FRAMES_VERSION_SHAPE);
     expect(framesRecipeVersionOf()).toBe(v);
     expect(framesRecipeVersionOf('another reducer')).not.toBe(v);
+  });
+});
+
+// Wave 198, the recipe's hold (packet 4, the capture owner's call 1966): the constant is outside the version, so flipping it
+// changes no stored frame's currency. The version function reads only what it lists; the case holds that the constant is not
+// among them, by the function's own text and by its answer with the constant read either way.
+describe('the recipe\'s hold is not part of the version', () => {
+  it('true on main, and the version function never names it: the version is the same with it up or down', () => {
+    expect(FRAMES_RECIPE_COMPLETE).toBe(true);
+    const src = readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..', 'shared', 'framesCapture.ts'), 'utf8');
+    const body = /export function framesRecipeVersionOf[\s\S]*?\n}\n/.exec(src)?.[0] ?? '';
+    expect(body).toContain('JSON.stringify');
+    expect(body).not.toContain('FRAMES_RECIPE_COMPLETE');
+    expect(FRAMES_RECIPE_VERSION).toBe(framesRecipeVersionOf(reducerFingerprint()));
   });
 });

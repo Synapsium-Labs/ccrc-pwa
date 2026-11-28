@@ -63,6 +63,24 @@ describe('framesListOf: the list answer carries no text', () => {
     expect(list.unmeasured).toHaveLength(FRAMES_PART_COUNT - 2);
     expect(JSON.stringify(list)).not.toContain('"text"');
   });
+  it('(wave 198, the recipe\'s hold) held, the decider names no job in any state where it would; up, its answer is the default\'s', () => {
+    const built = ['2.1.330', '2.1.331', '2.1.332'];
+    const recordSets: ClaudeBuildRecord[][] = [[], [rec('2.1.332', 'fail')], built.map((b) => rec(b, 'pass')), [rec('2.1.331', 'pass'), rec('2.1.332', 'fail')]];
+    const rowSets: FramesRow[][] = [
+      [], FRAMES_PARTS.map((_, i) => row('2.1.332', i)), FRAMES_PARTS.slice(0, 7).map((_, i) => row('2.1.332', i)),
+      [row('2.1.332', 0, { version: null, word: null, record: null, at: null, lastAttemptAt: AT - 1 })],
+      [row('2.1.332', 0, { version: '0123456789abcdef' })],
+    ];
+    let sends = 0;
+    for (const records of recordSets) for (const rows of rowSets) for (const at of [0, AT, 3 * AT]) {
+      const up = nextFramesJob(records, rows, at, true);
+      expect(nextFramesJob(records, rows, at)).toEqual(up);
+      expect(nextFramesJob(records, rows, at, false)).toBeNull();
+      if (up !== null) sends++;
+    }
+    expect(sends, 'the walk covers states where the decider sends').toBeGreaterThan(5);
+  });
+
   it('a frame the server refused at store time lists as refused, with its word, the gaps word, no counts and no text', () => {
     // A text beside a store-time refusal is never listed as held, whatever the row carries. Review 4069's A1: the word and
     // the counts are the word reader's for a refused frame, not the box's for the drawn frame it sent.

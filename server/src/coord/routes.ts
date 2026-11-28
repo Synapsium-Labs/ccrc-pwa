@@ -167,7 +167,7 @@ import {
 } from '../../../shared/api.js';
 import { deliveryStandingAnswerOf, deliveryViewsOf } from '../../../shared/deliveryLane.js';
 import type { DeliveryStandingAnswer } from '../../../shared/deliveryResult.js';
-import { framesStandingAnswerOf, framesStandingBuilds, type FramesStandingAnswer } from '../../../shared/framesStanding.js';
+import { framesStandingReadOf, type FramesStandingAnswer } from '../../../shared/framesStanding.js';
 import { CLAUDE_ROLL_TARGETS, CLAUDE_ROLL_TARGETS_DEFAULT, isClaudeRollTargets, isClaudeVersion, type ClaudeRollTargets } from '../../../shared/claudeVersion.js';
 import { rollTargetsOf } from './rollTarget.js';
 import { plainAutoMemoryOf } from '../continuity/profileFor.js';
@@ -2465,11 +2465,11 @@ export function registerCoordRoutes(
   };
   /** Desktop polish wave 198, the new-form alarm (the capture owner's yes to packet 3, call 1963): the newest trusted build's
    *  frames standing, decided by `framesStanding.ts#framesStandingAnswerOf` over the text-free rows of the builds
-   *  `framesStandingBuilds` bounds the read to (change B). Only fixed words, build names and frame ids. */
+   *  `framesStandingBuilds` bounds the read to (change B). Only fixed words, build names and frame ids. A held recipe
+   *  (packet 4, call 1966) is answered `held` by the decider before it asks either read. */
   const framesStandingRead = (coord: NonNullable<typeof deps.coord>): FramesStandingAnswer => {
     try {
-      const records = coord.claudeBuilds();
-      return framesStandingAnswerOf(records, coord.claudeBuildFrameShapes(framesStandingBuilds(records)));
+      return framesStandingReadOf({ records: () => coord.claudeBuilds(), rows: (builds) => coord.claudeBuildFrameShapes(builds) });
     } catch (err) {
       console.warn(`ccrc-server: GET /api/testbox: the frames standing could not be read (${err instanceof Error ? err.message : String(err)})`);
       return { kind: 'unreadable' };

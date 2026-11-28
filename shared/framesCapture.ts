@@ -138,6 +138,16 @@ export function framesOurs(c: FramesCaseId, pane: FramesPane): readonly string[]
   return [...framesDraftLines(c, pane), ...turns, ...held, FRAMES_REPLY_TEXT];
 }
 
+// ── the hold ─────────────────────────────────────────────────────────────────────────────────────────────────────
+
+/** THE RECIPE'S HOLD (wave 198: the coordinator's ruling on its 40919, the capture owner's yes to packet 4, call 1966). `true`:
+ *  the lane frames. A change to this recipe that its own review or its coordinator ruled must not meet a real capture yet
+ *  lands with it `false` ("with the hold down"), and the follow-up that lifts that ruling sets it `true`. False, the lane's
+ *  decider (`framesLane.ts#nextFramesJob`) names no frames job, and the status read answers `held` without reading the store.
+ *  It is a fact about the code, never a switch on a box, and NOT part of the recipe's version: flipping it changes no answer
+ *  of the reducer and must not make stored frames incomparable (pinned). */
+export const FRAMES_RECIPE_COMPLETE: boolean = true;
+
 /** The first characters Claude Code's box reads as a mode switch. No frames text starts with one (pinned). */
 export const FRAMES_MODE_CHARS: readonly string[] = Object.freeze(['/', '!', '#', '@']);
 
@@ -204,8 +214,9 @@ export const framesViewKeys = (c: FramesCaseId): readonly FramesViewKey[] => fra
 // ── the version ──────────────────────────────────────────────────────────────────────────────────────────────────
 
 /** FNV-1a over a string's UTF-16 code units, from `seed`: 32 bits. Pure and the same on every engine (the delivery
- *  recipe's rule, kept beside its own version as that one is). */
-function fnv1a(text: string, seed: number): number {
+ *  recipe's rule, kept beside its own version as that one is). Exported for the frames files' other hash, the shape rule's
+ *  (`framesShape.ts`, wave 198), so they keep one copy. */
+export function fnv1a(text: string, seed: number): number {
   let h = seed >>> 0;
   for (let i = 0; i < text.length; i++) { h ^= text.charCodeAt(i); h = Math.imul(h, 0x01000193) >>> 0; }
   return h >>> 0;

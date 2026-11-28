@@ -55,6 +55,7 @@ import { FRAMES_RECIPE_VERSION, framesOurs } from '../../shared/framesCapture.js
 import { framesTextToDrop, nextFramesJob } from '../../shared/framesLane.js';
 import { checkReducedFrame } from '../../shared/framesReduce.js';
 import { FRAMES_PARTS, readFramesCaptureResult } from '../../shared/framesResult.js';
+import { framesShapeToStore } from '../../shared/framesStanding.js';
 import { framesScan } from '../../shared/framesScan.mjs';
 import type { SecretMasker } from './accounts/mask.js';
 import type { WatcherCoordPort } from './coord/ports.js';
@@ -248,7 +249,13 @@ export class BuildCaptureLane {
       console.warn(`ccrc-server: frames capture: the answer for ${build} part ${part} is not a frames result — no row is stored`);
       return;
     }
-    if (result.version !== FRAMES_RECIPE_VERSION) return;
+    // Wave 198 (carried from #3487's reviews): another recipe version is not stored, and now says so. The two sides stand at
+    // different releases for hours during a rollout (the capture owner's measurement), so this is one line per attempt and
+    // no louder. Both versions are 16 hex by the one reader's own check.
+    if (result.version !== FRAMES_RECIPE_VERSION) {
+      console.warn(`ccrc-server: frames capture: ${build} part ${part}: the test box ran frames recipe version ${result.version}, this server's is ${FRAMES_RECIPE_VERSION}; no row is stored, asked again after the spacing`);
+      return;
+    }
     // The receiver checks again (the capture owner's condition 1): the reducer's own check, and the live masker beside it.
     const p = FRAMES_PARTS[part]!;
     const text = result.frame.text;
@@ -257,7 +264,8 @@ export class BuildCaptureLane {
       : checkReducedFrame(text, p.pane, framesOurs(p.case, p.pane), framesScan, mk === undefined ? undefined : (t) => mk.maskText(t, { rows: true }) !== t);
     const checked = check.ok ? 'clear' as const : check.refusal;
     if (!check.ok) console.warn(`ccrc-server: frames capture: ${build} frame ${part} refused by the server's check (${check.refusal}); its text is not stored`);
-    if (!coord.recordFrames(result, checked, this.now(), framesTextToDrop(rows, build))) {
+    // Wave 198: the shape, decided by the standing's one rule (a drawn frame the check cleared), stored with the row.
+    if (!coord.recordFrames(result, checked, this.now(), framesTextToDrop(rows, build), framesShapeToStore(result, checked))) {
       console.warn(`ccrc-server: frames capture: the result for ${build} part ${part} could not be stored — asked again after the spacing`);
     }
   }

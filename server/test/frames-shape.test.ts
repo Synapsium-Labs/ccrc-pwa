@@ -5,6 +5,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { framesOurs } from '../../shared/framesCapture.js';
+import { isRuleRow, oursSquashed, rowIsOurs } from '../../shared/framesReduce.js';
 import { FRAMES_PARTS } from '../../shared/framesResult.js';
 import {
   FRAME_CHIP_LABEL, FRAME_SHAPE_HEX, FRAME_SHAPE_VERSION, dimAfter, frameShape, frameShapeVersionOf, rowIsDim,
@@ -96,6 +97,29 @@ describe('the collapse above the box\'s top rule, and its anchor (plan 2.2)', ()
   });
   it('a frame with one rule row anchors on it', () => {
     expect(shapeOf(['zz', 'qq', RULE, STATUS])).toEqual(['X+', 'R:', 'X2|', '@-']);
+  });
+  // The coordinator's ruling 1 on step 1: a probe and a case each for ONE rule row and for THREE (a separator inside the
+  // box), showing what collapses and that each differs from the two-rule form.
+  it('one rule row, two and three: what collapses, and the three forms differ', () => {
+    const one = ['zz', 'qq', '❯ frames row 001 of 003 abcdefghij', RULE, STATUS];
+    const two = ['zz', 'qq', RULE, '❯ frames row 001 of 003 abcdefghij', RULE, STATUS];
+    const three = ['zz', 'qq', RULE, '❯ frames row 001 of 003 abcdefghij', RULE, 'hint words', RULE, STATUS];
+    expect(shapeOf(one)).toEqual(['X+', 'G', 'R:', 'X2|', '@-']);
+    expect(shapeOf(two)).toEqual(['X+', 'R:', 'G', 'R:', 'X2|', '@-']);
+    // The top rule is the separator (the rule above the lowest one), so the X rows above the box's first rule collapse,
+    // the glyph row between the first rule and the separator keeps its token, and the hint row under the separator too.
+    expect(shapeOf(three)).toEqual(['X+', 'R:', 'G', 'R:', 'X0|', 'R:', 'X2|', '@-']);
+    const hashes = [one, two, three].map((r) => frameShape(r.join('\n'), null, OURS).hash);
+    expect(new Set(hashes).size).toBe(3);
+  });
+  it('what a wrong anchor costs: X and B runs between two rules lose their counts, rows of our text never do', () => {
+    // Three rules: the anchor is the separator, so rows between the first rule and it are "above the box".
+    const three = (rows: string[]): string[] => [RULE, ...rows, RULE, '❯', RULE, STATUS];
+    expect(shapeOf(three(['hint words']))).toEqual(shapeOf(three(['hint words', 'more words'])));
+    expect(shapeOf(three(['', '']))).toEqual(shapeOf(three([''])));
+    const t = '  frames row 002 of 003 abcdefghij';
+    expect(shapeOf(three([t]))).not.toEqual(shapeOf(three([t, t])));
+    expect(shapeOf(three(['❯ frames row 001 of 003 abcdefghij']))).not.toEqual(shapeOf(three(['❯', '❯'])));
   });
 });
 
@@ -201,6 +225,25 @@ describe('what the tokens keep: no word of our text or of another row (plan sect
       const ours = framesOurs(p.case, p.pane);
       const last = ours[ours.length - 1]!;
       expect(frameShape(box(`  ${last}`).join('\n'), null, ours).tokens[1]).toBe('T');
+    }
+  });
+});
+
+// The coordinator's ruling 3 on step 1: the shape's our-text class and the reducer's rule 2 are the one function.
+describe('the our-text class is the reducer\'s rule 2, by the reducer\'s own exports', () => {
+  const here = path.dirname(fileURLToPath(import.meta.url));
+  it('the shape file takes rowIsOurs, oursSquashed and spans from the reducer and spells no squash or decoration walk of its own', () => {
+    const src = readFileSync(path.join(here, '..', '..', 'shared', 'framesShape.ts'), 'utf8');
+    expect(src).toMatch(/import \{[^}]*\boursSquashed\b[^}]*\browIsOurs\b[^}]*\bspans\b[^}]*\} from '\.\/framesReduce\.js';/);
+    expect(src).not.toMatch(/replace\(\/\\s\+\/g, ''\)/);
+    expect(src).not.toMatch(/function (squash|spans|edgesOf)\b/);
+  });
+  it('over a mixed set of rows, a row is T exactly when it is not a rule, chip or glyph row and rule 2 calls it ours', () => {
+    const rows = ['  frames row 002 of 003 abcdefghij', '⏺ frames earlier turn ZQX-END-turn', '  frames row 002', '  hint words', 'abc', '│ frames row 003 of 003 abcdefghij │',
+      '  frames row 002 of 003 abcdefghij and more', '   ', '⎿', '  ccrc frames', 'ZQX'];
+    for (const r of rows) {
+      const isT = inBox(box(r))[1]!.startsWith('T');
+      expect(isT, r).toBe(!isRuleRow(r) && !r.includes(FRAME_CHIP_LABEL) && !/^[\s│]*[❯>]/.test(r) && rowIsOurs(r, oursSquashed(OURS)));
     }
   });
 });

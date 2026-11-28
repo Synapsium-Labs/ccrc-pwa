@@ -10,7 +10,7 @@ import { compareClaudeVersions, isClaudeVersion } from './claudeVersion.js';
 import { BUILD_CAPTURE_RETRY_MS, type ClaudeBuildRecord } from './claudeBuildTrust.js';
 import { newestTrustedBuild } from './deliveryLane.js';
 import type { DeliveryNotSent } from './deliveryResult.js';
-import { FRAMES_RECIPE_VERSION } from './framesCapture.js';
+import { FRAMES_RECIPE_COMPLETE, FRAMES_RECIPE_VERSION } from './framesCapture.js';
 import { FRAMES_PARTS, framesFrameId, framesWord, type FramesCaptureResult, type FramesRefusal, type FramesWord } from './framesResult.js';
 
 /** One (build, part) row of `claude_build_frames`, as the store reads it. `record` is the stored result with its frame text
@@ -31,14 +31,19 @@ export interface FramesRow {
   readonly notSent: DeliveryNotSent | null;
 }
 
-/** A row holds a CURRENT result: this recipe's version, a word, a record and a time. */
-export const isCurrentFrames = (r: FramesRow): boolean => r.version === FRAMES_RECIPE_VERSION && r.word !== null && r.record !== null && r.at !== null;
+/** A row holds a CURRENT result: this recipe's version, a word, a record and a time. It reads those four fields only, so
+ *  the standing's text-free rows (`framesStanding.ts#FramesShapeRow`) are judged by the same rule (wave 198). */
+export const isCurrentFrames = (r: Pick<FramesRow, 'version' | 'word' | 'record' | 'at'>): boolean => r.version === FRAMES_RECIPE_VERSION && r.word !== null && r.record !== null && r.at !== null;
 
 /** The frames job to send next, or null: only the NEWEST build whose trust capture passed (the delivery lane's same
  *  decider, so the two never name different builds), and its first part, in list order, with no current row. When that
  *  part's last try is within {@link BUILD_CAPTURE_RETRY_MS}, null: the lane waits and never skips ahead. Asked only on a
- *  pass that sent neither a trust job nor a delivery job (the lane's rule). */
-export function nextFramesJob(records: readonly ClaudeBuildRecord[], rows: readonly FramesRow[], at: number): { readonly build: string; readonly part: number } | null {
+ *  pass that sent neither a trust job nor a delivery job (the lane's rule). `complete` is the recipe's hold
+ *  (`framesCapture.ts#FRAMES_RECIPE_COMPLETE`, wave 198): false, null before anything else. */
+export function nextFramesJob(
+  records: readonly ClaudeBuildRecord[], rows: readonly FramesRow[], at: number, complete: boolean = FRAMES_RECIPE_COMPLETE,
+): { readonly build: string; readonly part: number } | null {
+  if (!complete) return null;
   const build = newestTrustedBuild(records);
   if (build === null) return null;
   const mine = rows.filter((r) => r.build === build);

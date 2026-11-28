@@ -7,7 +7,8 @@
 // two builds that draw the box in the same form give the same tokens for the same part, whatever their banners and hints
 // say. The tokens and the hash are the server's own: nothing here is ever served (the status read carries words, build
 // names and frame ids only, `framesStanding.ts`).
-import { FRAMES_DECORATION, isRuleRow, rowIsOurs } from './framesReduce.js';
+import { fnv1a } from './framesCapture.js';
+import { FRAMES_DECORATION, isRuleRow, oursSquashed, rowIsOurs, spans } from './framesReduce.js';
 import { stripFrameSgr } from './framesResult.js';
 
 /** The prompt glyph, and its older form, as a row of the box starts with it. */
@@ -22,21 +23,6 @@ export const FRAME_CHIP_LABEL = '[Pasted text #';
 
 const DECOR = new Set(FRAMES_DECORATION);
 const BORDER = new Set(FRAME_BORDERS);
-
-// ── the helpers the reducer keeps private (plan 2.7, question 2: to come from `framesReduce.ts` by export) ──────────
-
-/** Whitespace erased: the reducer's `squash`, over `ours`, as its `reduceOnce` builds the list `rowIsOurs` reads. */
-const oursSquashed = (ours: readonly string[]): string[] => ours.map((o) => o.replace(/\s+/g, '')).filter((o) => o !== '');
-
-/** A row's leading and trailing decoration spans, by code point: the reducer's `spans` less its content. */
-function edgesOf(row: string): { readonly lead: string; readonly tail: string } {
-  const cps = Array.from(row);
-  let a = 0;
-  while (a < cps.length && DECOR.has(cps[a]!)) a++;
-  let b = cps.length;
-  while (b > a && DECOR.has(cps[b - 1]!)) b--;
-  return { lead: cps.slice(0, a).join(''), tail: cps.slice(b).join('') };
-}
 
 // ── the skeletons ───────────────────────────────────────────────────────────────────────────────────────────────
 
@@ -113,7 +99,7 @@ function rowToken(row: string, oursSq: readonly string[]): { readonly cls: Frame
   if (rowIsOurs(plain, oursSq)) return { cls: 'T', token: `T${dim()}` };
   const rest = Array.from(plain).filter((c) => !/\s/u.test(c) && !BORDER.has(c));
   if (rest.length === 0) return { cls: 'B', token: Array.from(plain).some((c) => BORDER.has(c)) ? 'B|' : 'B' };
-  const { lead, tail } = edgesOf(plain);
+  const { lead, tail } = spans(plain);
   const indent = /^ */.exec(plain)![0].length;
   return { cls: 'X', token: `X${indent}|${(lead + tail).replace(/\s/gu, '')}` };
 }
@@ -123,14 +109,8 @@ function rowToken(row: string, oursSq: readonly string[]): { readonly cls: Frame
 /** A frame's shape: its tokens and their hash. */
 export interface FrameShape { readonly tokens: readonly string[]; readonly hash: string }
 
-/** FNV-1a over a string's UTF-16 code units, from `seed`: 32 bits (the recipes' rule; plan 2.7: to come from
- *  `framesCapture.ts` by export). */
-function fnv1a(text: string, seed: number): number {
-  let h = seed >>> 0;
-  for (let i = 0; i < text.length; i++) { h ^= text.charCodeAt(i); h = Math.imul(h, 0x01000193) >>> 0; }
-  return h >>> 0;
-}
-/** 16 lowercase hex over `text`, the recipes' two seeds. */
+/** 16 lowercase hex over `text`: the recipes' FNV-1a (`framesCapture.ts#fnv1a`, the frames files' one copy) at their
+ *  two seeds. */
 const hex16 = (text: string): string => [0x811c9dc5, 0x9e3779b9].map((s) => fnv1a(text, s).toString(16).padStart(8, '0')).join('');
 
 /** The 16 hex shape a hash and a shape version have. */
@@ -182,6 +162,9 @@ export function frameShapeVersionOf(shape: typeof frameShape): string {
       '\x1b[38:5:2m  earlier turn ZQX', '\x1b[2m❯\x1b[22m frames row 001 of 003 abc'), null],
     // A cursor above the box's top rule.
     [boxed('x', rule, '❯ frames row 001 of 003 abc'), [5, 0]],
+    // The anchor (the coordinator's ruling 1 on step 1): one rule row, and three (a separator inside the box).
+    [['zz', 'qq', '❯ frames row 001 of 003 abc', rule, status].join('\n'), null],
+    [['zz', rule, 'hint words', '❯ frames row 001 of 003 abc', rule, 'more words', rule, status].join('\n'), [1, 3]],
   ];
   return hex16(JSON.stringify(probes.map(([t, c]) => shape(t, c, ours))));
 }
