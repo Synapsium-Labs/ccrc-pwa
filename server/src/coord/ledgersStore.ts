@@ -437,22 +437,28 @@ export function setDoneWhen(db: DatabaseSync, program: string, doneWhen: readonl
   db.prepare('UPDATE programs SET doneWhen = ?, doneWhenBy = ? WHERE slug = ?').run(JSON.stringify(doneWhen), `mod:${modId}`, program);
 }
 
-/** Records one change since approval, with what it rests on, derived here from the row's own `itemId`
- *  (`modificationSource`: the cited item, else the coordinator that wrote it; review 2240 F6); `mergedAt` stays NULL until
+/** Records one change since approval, with what it rests on, derived here from the row's own `requestId` and `itemId`
+ *  (`modificationSource`: the request it is made for, else the cited item, else the coordinator that wrote it; review 2240 F6,
+ *  request ids A); `mergedAt` stays NULL until
  *  `markModificationsMerged`. Returns the id. */
 export function addModification(
-  db: DatabaseSync, program: string, m: { text: string; ruling: string | null; itemId: number | null; pr: number | null; doneWhen?: readonly string[] | null },
+  db: DatabaseSync, program: string, m: { text: string; ruling: string | null; itemId: number | null; pr: number | null; doneWhen?: readonly string[] | null; requestId?: number | null },
   now: number,
 ): number {
   const insert = (): number => {
-    const res = db.prepare('INSERT INTO programme_modifications (program, at, text, ruling, itemId, pr, ratifiedBy, ratifiedAt) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
-      .run(program, now, m.text, m.ruling, m.itemId, m.pr, ratifiedByText(modificationSource(m.itemId)), now);
+    const res = db.prepare('INSERT INTO programme_modifications (program, at, text, ruling, itemId, pr, ratifiedBy, ratifiedAt, requestId) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)')
+      .run(program, now, m.text, m.ruling, m.itemId, m.pr, ratifiedByText(modificationSource(m.itemId, m.requestId ?? null)), now, m.requestId ?? null);
     return Number(res.lastInsertRowid);
   };
   if (m.doneWhen === undefined || m.doneWhen === null) return insert();
   const doneWhen = m.doneWhen;
   // D-8126: the row and the new list are one act; `setDoneWhen` is the list's writer.
   return tx(db, () => { const id = insert(); setDoneWhen(db, program, doneWhen, now, id); return id; });
+}
+
+/** How many of this programme's modifications name `requestId` (Overlord W2, request ids A); 0 for none. Does not catch. */
+export function modificationsForRequest(db: DatabaseSync, requestId: number, program: string): number {
+  return (db.prepare('SELECT COUNT(*) AS n FROM programme_modifications WHERE requestId = ? AND program = ?').get(requestId, program) as { n: number }).n;
 }
 
 /** The spec PR merged: marks this programme's still-pending modifications of that PR, once (a marked one keeps its first
@@ -477,14 +483,14 @@ function storedDoneWhen(raw: string | null): string[] | null {
 type PinRow = { specPath: string | null; inShort: string | null; inShortAt: number | null; doneWhen: string | null; ratifiedBy: string | null; ratifiedAt: number | null; doneWhenBy: string | null };
 type ModRow = {
   id: number; at: number; text: string; ruling: string | null; itemId: number | null; pr: number | null; mergedAt: number | null;
-  ratifiedBy: string | null; iProgram: string | null; iState: string | null; iTickedAt: number | null;
+  ratifiedBy: string | null; requestId: number | null; iProgram: string | null; iState: string | null; iTickedAt: number | null;
 };
 const PIN_SQL = 'SELECT specPath, inShort, inShortAt, doneWhen, ratifiedBy, ratifiedAt, doneWhenBy FROM programs WHERE slug = ?';
 /** Each modification with the item it cites, joined by the row's own `itemId` (never a copy of the item). */
-const MODS_SQL = 'SELECT m.id, m.at, m.text, m.ruling, m.itemId, m.pr, m.mergedAt, m.ratifiedBy, i.program AS iProgram, ' +
+const MODS_SQL = 'SELECT m.id, m.at, m.text, m.ruling, m.itemId, m.pr, m.mergedAt, m.ratifiedBy, m.requestId, i.program AS iProgram, ' +
   'i.state AS iState, i.tickedAt AS iTickedAt FROM programme_modifications m LEFT JOIN operator_items i ON i.id = m.itemId';
 
-const modVerdict = (m: ModRow, program: string): Ratification => goalRatification(parseRatifiedBy(m.ratifiedBy),
+const modVerdict = (m: ModRow, program: string): Ratification => goalRatification(parseRatifiedBy(m.ratifiedBy, m.requestId),
   m.iProgram === null || m.iState === null ? null : { program: m.iProgram, state: m.iState, tickedAt: m.iTickedAt }, program, 'modification');
 /** The pin's source counts only when stamped at or after its text (`pinSource`, review 2240 F2). */
 const pinVerdict = (pin: PinRow | undefined, program: string): Ratification =>

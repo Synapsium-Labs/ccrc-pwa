@@ -4832,6 +4832,27 @@ export const MIGRATIONS: readonly string[] = [
   );
   CREATE INDEX overlord_request_moves_by_request ON overlord_request_moves (requestId, id);
   `,
+
+  // ── 136: user_version 135 -> 136 ──────────────────────────────────────────
+  // The Overlord's request ids (spec §5.5, H22; plan `docs/superpowers/plans/2026-11-16-overlord-w2/w2-request-ids.md` Task
+  // A1): `runs.requestId`, `mail.requestId` and `programme_modifications.requestId`, the request a run, a mail or a goals
+  // change was made for, and `runs_request` for the reads of a request's runs (`CoordStore.runsForRequest`). ONE writer per
+  // column, each in the insert it already makes: `openRun`, `insertMail` and `addModification`. NULL = names no request,
+  // which is every row written before this entry and every row an older client writes.
+  //
+  // THREE NULLABLE COLUMNS ON EXISTING TABLES AND ONE PARTIAL INDEX, nothing else (entry 65's shape): an older build opening
+  // a file at this entry's version takes rule 3 (it warns, reads as-is and migrates nothing); its INSERTs name their columns
+  // and never these, so a row it writes names no request. The slot is the next free one by position on `main` at this
+  // branch's merge base (135 was taken first, by the request record). RE-MEASURE the slot before the PR and before merge
+  // (it must print 135 before this entry is counted):
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  ALTER TABLE runs ADD COLUMN requestId INTEGER REFERENCES overlord_requests(id);
+  ALTER TABLE mail ADD COLUMN requestId INTEGER REFERENCES overlord_requests(id);
+  ALTER TABLE programme_modifications ADD COLUMN requestId INTEGER REFERENCES overlord_requests(id);
+  CREATE INDEX runs_request ON runs(requestId) WHERE requestId IS NOT NULL;
+  `,
 ];
 
 /** The version this build writes. `MIGRATIONS.length` and nothing else: a

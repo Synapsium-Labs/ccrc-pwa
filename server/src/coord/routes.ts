@@ -17,7 +17,9 @@ import { workerFactsFor } from '../turnverdict.js';
 import type { TurnVerdict } from './archiveDoor.js';
 import { configDirFor } from '../config.js';
 import { peerDeliverable, archiveContradicted } from './peers.js';
-import { peerMailVerdict } from './peerBound.js';
+import { peerMailVerdict, reportMailVerdict } from './peerBound.js';
+import { stampRequestNewsInTx } from './overlordRequestStore.js';
+import { mailDesignationOf, requestMailVerdict, type RequestRefusal } from './requestMail.js';
 import { mailKeyVerdict, type MailKeyVerdict } from './mailKey.js';
 import { claimLivenessProbe, claimMailHint, lapseWindowStart, normalizeClaimPath, rechainTargets, recentlyLapsedClaims, type LivenessVerdict } from './claims.js';
 import { CCD_ARGV, ccdCan, deviceActor, sweepDec } from '../ccdargv.js';
@@ -806,7 +808,8 @@ export function registerCoordRoutes(
    *  accidentally supply a stale one. */
   // `extra` (#2726 (c)): fields for the answer body beside `detail`, such as a peer-quota refusal's `retry`; never
   // recorded in the rejection row, whose shape is unchanged.
-  const refuse = (reply: FastifyReply, code: MailRouteRefusal,   // D-5381: the status is REFUSAL_STATUS's
+  // Request ids A (ruling F1): the request rule's one word is recorded too, from its one home, the Overlord's refusal table.
+  const refuse = (reply: FastifyReply, code: MailRouteRefusal | RequestRefusal,   // D-5381: the status is REFUSAL_STATUS's
     ctx: Omit<Parameters<CoordStore['recordRejection']>[0], 'code' | 'detail'>,
     detail: string, extra: { readonly retry?: PeerRetry } = {}) => {
     deps.coord!.recordRejection({ ...ctx, code, detail });
@@ -953,6 +956,15 @@ export function registerCoordRoutes(
 
     // `urgent` (mid-turn mail, plan Task 2.4): optional and additive. Absent, null or false is an ordinary mail, answered
     // as before; any other value than a boolean is a shape error. Who may mark a mail urgent is check 8.5's.
+    // Overlord W2, request ids A: the request this mail is about. Absent or null names none, as an older client's mail does;
+    // anything else is refused as the neighbouring fields are.
+    const requestIdRaw = body['requestId'];
+    const requestId = requestIdRaw === undefined || requestIdRaw === null ? null
+      : typeof requestIdRaw === 'number' && Number.isSafeInteger(requestIdRaw) && requestIdRaw >= 1 ? requestIdRaw : undefined;
+    if (requestId === undefined) {
+      return refuse(reply, 'bad-kind', { fromId, toId, subject, runId }, 'requestId must be a positive integer (a request id) when given');
+    }
+
     const urgentRaw = body['urgent'];
     if (urgentRaw !== undefined && urgentRaw !== null && typeof urgentRaw !== 'boolean') {
       return refuse(reply, 'bad-kind', { fromId, toId, subject, runId }, 'urgent must be a boolean when given');
@@ -1089,12 +1101,12 @@ export function registerCoordRoutes(
     //
     // Raw session-id addressing is untouched and stays the ad-hoc lane: a role
     // follows the chair, a session id names a session.
-    // The Overlord's identity word is reserved (Overlord W1, the Overlord's timers, question 4): only the timer lane writes
-    // mail to it, so a session's mail to it is refused by rule, before the registry is asked, whatever row exists.
-    if (toId === OVERLORD_IDENTITY) {
-      return refuse(reply, 'unknown-recipient', { fromId, fromUuid, toId, kind, subject, runId }, "the Overlord's role takes no mail in W1");
-    }
-    if (toId !== 'coordinator' && toId !== 'worker' && !registry.some((r) => r.id === toId)) {
+    // The Overlord's identity word is reserved (Overlord W1, the Overlord's timers, question 4), and never asks the registry,
+    // whatever row exists. Request ids A (ruling F3, call 1938) lifts it for one sender only: the owner of the open request the
+    // mail names, while an Overlord is designated. `requestMailVerdict` decides that and the request rule of every other
+    // mail that names one; a refusal is recorded, an unreadable fact is a plain reply (D-2545).
+    const toOverlord = toId === OVERLORD_IDENTITY;
+    if (!toOverlord && toId !== 'coordinator' && toId !== 'worker' && !registry.some((r) => r.id === toId)) {
       if (names.includes(`${toId}.uuid`)) {
         return refuse(reply, 'registry-unmeasurable', { fromId, fromUuid, toId, kind, subject, runId },
           `registry row for ${toId} is listed but unreadable — transient, not a fact about the recipient`);
@@ -1102,6 +1114,15 @@ export function registerCoordRoutes(
       return refuse(reply, 'unknown-recipient', { fromId, fromUuid, toId, kind, subject, runId },
         `no registry row for ${toId}`);
     }
+    const asked = toOverlord || requestId !== null ? requestMailVerdict({ toOverlord, requestId,
+      request: () => { try { return coord.requestOwner(requestId!); } catch { return 'unmeasured'; } },
+      senderOwns: (owner) => { try { return coord.claimsProgramme(fromId, owner, senderIdentity.uuid); } catch { return 'unmeasured'; } },
+      designation: () => mailDesignationOf(coord.designationRead()) }) : null;
+    if (asked !== null && !asked.ok) {
+      return 'refuse' in asked ? refuse(reply, asked.refuse, { fromId, fromUuid, toId, kind, subject, runId }, asked.detail)
+        : refuseRoute(reply, asked.reply, { detail: asked.detail });
+    }
+    const request = asked ?? { ok: true as const, deliverTo: null, stampNews: false, report: false, requestId: null };
 
     // 8: runId, when given, must name a run that exists. One lookup, reused
     // below for the envelope's program/wave — a second `coord.run(runId)`
@@ -1135,9 +1156,11 @@ export function registerCoordRoutes(
     // Ambiguous or absent → unknown-recipient, recorded — no guessing: an
     // agent-to-agent message delivered to the wrong session is worse than one
     // refused with a reason.
-    const resolvedToId = toId === 'coordinator' ? (runId === null ? coord.soleActiveCoordinator() : coordinatorOfRun(coord, runId))
+    // A report to the Overlord is delivered to the bound session the verdict named (the timers' `deliverTo`), the mail row
+    // keeping `overlord`; with no session bound, to the role's own identity, where it is held, never typed (call 1938).
+    const resolvedToId = request.deliverTo ?? (toId === 'coordinator' ? (runId === null ? coord.soleActiveCoordinator() : coordinatorOfRun(coord, runId))
       : toId === 'worker' ? (runId === null ? null : workerOfRun(coord, runId))
-      : toId;
+      : toId);
     if (resolvedToId === null) {
       // ONE SHAPE, TWO SENTENCES. The status and code are the coordinator
       // role's exactly — from the server's side an unresolvable role is an
@@ -1193,8 +1216,12 @@ export function registerCoordRoutes(
     // sender, of a mail from its recipient, not yet answered) is admitted outside every arm, and the insert below
     // records which mail it answers, so it holds no slot and the mail buys no second one.
     let answersMail: number | null = null;
-    if (runId === null) {
-      const now = Date.now();
+    const now = Date.now();
+    // A report to the Overlord meets the reports' quota in place of the peer bound, whether or not it names a run (RI8).
+    if (request.report) {
+      const v = reportMailVerdict({ fromId, hourAts: coord.reportAtsInLastHour(fromId, now), now });
+      if (v.verdict === 'peer-quota') return refuse(reply, v.verdict, { fromId, fromUuid, toId, kind, subject, runId }, v.detail, { retry: v.retry });
+    } else if (runId === null) {
       const v = peerMailVerdict({
         fromId, toId: resolvedToId, kind, inReplyTo,
         invitation: inReplyTo === null ? null : coord.invitation(inReplyTo),
@@ -1222,11 +1249,14 @@ export function registerCoordRoutes(
     // re-rendered"; `setDeliveryEnvelope` is the second half of the same
     // INSERT, not a second render.
     const artifactPaths = artifacts as string[];
+    // The request's line of news is the subject, masked by the product's one masker before the transaction (RI5).
+    const news = request.stampNews ? (deps.masker ?? SHAPE_ONLY_MASKER).maskText(subject) : null;
     let id: number;
     try {
       ({ id } = tx(coord.db, () => {
         const inserted = coord.insertMail({ fromId, fromUuid, toId, runId, kind, subject, body: msgBody,
-          artifacts: artifactPaths, answersMail, clientKey, inReplyTo, urgentAs });
+          artifacts: artifactPaths, answersMail, clientKey, inReplyTo, urgentAs, requestId: request.requestId });
+        if (news !== null) stampRequestNewsInTx(coord.db, request.requestId!, news, now);
         const delivery = coord.queueDelivery(inserted.id, resolvedToId, '');
         const envelope = renderEnvelope({
           id: delivery.id, fromId, toId: resolvedToId, runId,
@@ -1725,6 +1755,7 @@ export function registerCoordRoutes(
       sessionMark: (s) => sessionMarkOf(s),
       // D-8181: the plan facts (`planGate`), read through the plan port, or over the coord handle where a build has none.
       plan: (slug) => planFactsOf(deps.plan ?? planStorePort(coord.db), coord, slug, String(body.claimedBy)),
+      requestOwner: (id) => { try { return coord.requestOwner(id); } catch { return 'unmeasured'; } },
     });
     if (!pre.ok) return sendOpenRunRefusal(reply, pre.refusal);
     const { open, home: homeVerdict } = pre;
@@ -1766,7 +1797,7 @@ export function registerCoordRoutes(
       kind: open.kind, reviews: open.reviews,
       ...(open.homeProject !== undefined ? { homeProject: open.homeProject } : {}),
       ...(open.programmeTitle !== undefined ? { programmeTitle: open.programmeTitle } : {}),
-      coordProject, unattributed: open.unattributed, claimedByUuid: open.claimedByUuid, ticket: open.ticket });
+      coordProject, unattributed: open.unattributed, claimedByUuid: open.claimedByUuid, ticket: open.ticket, requestId: open.requestId });
     if ('kind' in opened) {
       return reply.code(opened.kind === 'hold-oversize' ? 413 : 400).send({
         ok: false,

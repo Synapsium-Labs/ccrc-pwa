@@ -191,3 +191,8 @@ export const ROOT_FOUND_WINDOW_MS = 24 * 3_600_000;
 export const REQUEST_NEXT_MOVE_MS = 3_600_000;
 /** At most this many candidate programmes in the code shortlist (§5.3). */
 export const SHORTLIST_MAX = 6;
+/** A coordinator's reports to the Overlord in one hour (C14, Table 11.5b; request ids A, RI8): mail to the role skips the peer
+ *  quotas and meets this one instead. */
+export const REPORTS_TO_OVERLORD_HOURLY = 60;
+/** The one line of news a request keeps (H22; request ids A, RI5): the mail's subject, masked, cut at this many characters. */
+export const REQUEST_NEWS_CHARS = 200;

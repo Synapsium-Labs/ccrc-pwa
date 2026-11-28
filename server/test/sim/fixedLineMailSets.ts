@@ -45,12 +45,50 @@ export function fixedLineMailOfCases(m: EnvelopeModule): Record<string, SuiteCas
 
     'the timer row (Overlord W1): a mail from timer whose MAIL ROW is to overlord, delivered to the designated session; never a session-keyed timer mail': () => {
       const role = (deliveredTo: string, mailToId: string) => ({ fromId: 'timer', subject: 'timer: 2 due (4, 5)', toId: deliveredTo, mailToId });
-      expect(m.fixedLineMailOf(role(OVERLORD, 'overlord'), designated)).toMatchObject({ name: 'timer', firstDelivery: 'none', waitsForCard: true, designatedOnly: true });
+      expect(m.fixedLineMailOf(role(OVERLORD, 'overlord'), designated)).toMatchObject({ name: 'timer', firstDelivery: 'none', hold: 'card', designatedOnly: true });
       expect(m.fixedLineMailOf(role(OVERLORD, OVERLORD), designated), 'a session-keyed timer mail to the designated session').toBe('generic');
       expect(m.fixedLineMailOf(role(OTHER, 'overlord'), designated), 'delivered to another session').toBe('generic');
       expect(m.fixedLineMailOf(role(OTHER, OTHER), designated)).toBe('generic');
       expect(m.fixedLineMailOf({ ...role(OVERLORD, 'overlord'), fromId: 'operator' }, designated), 'another sender').toBe('generic');
       expect(m.fixedLineMailOf({ fromId: 'timer', subject: 'timer: 1 due (4)', toId: OVERLORD }, designated), 'no mail row recipient').toBe('generic');
+    },
+
+    'the report row (W2, request ids A): a session\'s mail whose MAIL ROW is to overlord, held until acked and record-only, to whatever session it is delivered': () => {
+      const report = (deliveredTo: string, mailToId: string, fromId = 'coord-a') => ({ fromId, subject: 'progress on 7', toId: deliveredTo, mailToId });
+      for (const d of [designated, { kind: 'not-designated' } as const, { kind: 'designated', sessionId: OTHER } as const]) {
+        expect(m.fixedLineMailOf(report(OVERLORD, 'overlord'), d), 'delivered to the bound session, or a body retired since').toMatchObject({ name: 'overlord-report', hold: 'acked', push: 'record-only', designatedOnly: false });
+        expect(m.fixedLineMailOf(report('overlord', 'overlord'), d), 'delivered to the role, no body bound').toMatchObject({ name: 'overlord-report' });
+      }
+      expect(m.fixedLineMailOf(report(OVERLORD, OVERLORD), designated), 'raw session-id mail to the bound body (RI19)').toBe('generic');
+      expect(m.fixedLineMailOf(report(OTHER, OTHER), designated), 'a peer mail').toBe('generic');
+      for (const role of ['timer', 'operator', 'coordinator']) {
+        expect(m.FIXED_LINE_MAIL.filter((r) => r.matches({ fromId: role, subject: 'x', mailToId: 'overlord' })).map((r) => r.name), role).not.toContain('overlord-report');
+      }
+      const origin = { fromId: 'coord-a', subject: 'progress on 7', toId: 'overlord' };
+      expect(m.heldUntilAcked(OVERLORD, origin, designated)).toBe(true);
+      expect(m.heldUntilAcked(OTHER, origin, { kind: 'unmeasured' })).toBe(true);
+      expect(m.heldUntilAcked(OVERLORD, { ...origin, fromId: 'timer', subject: 'timer: 1 due (4)' }, designated), 'the timer line holds for the card, not here').toBe(false);
+      expect(m.heldUntilAcked(OVERLORD, { ...origin, toId: OVERLORD }, designated)).toBe(false);
+      expect(m.heldUntilAcked(OVERLORD, null, designated)).toBe(false);
+      // the stall watch's read of the same hold: delivery ids, each found by its mail id; a delivery whose mail is not read holds nothing
+      const heldMail = [{ id: 10, ...origin }, { id: 11, fromId: 'coord-a', subject: 'peer news', toId: OTHER }];
+      const heldDeliveries = [{ id: 100, mailId: 11, toId: OTHER }, { id: 101, mailId: 10, toId: OVERLORD }, { id: 102, mailId: 99, toId: OVERLORD }];
+      expect([...m.heldDeliveryIdsOf(heldMail, heldDeliveries)]).toEqual([101]);
+      expect([...m.heldDeliveryIdsOf([], heldDeliveries)]).toEqual([]);
+      // the mail sweep's due list less the held: a held report is left out, every other row passes in its order, a row whose mail
+      // is not found is kept (no report), an empty list is empty, and the rows are the caller's own objects
+      const origins = { mailOrigin: (mailId: number) => heldMail.find((x) => x.id === mailId) ?? null };
+      const due = [{ id: 103, mailId: 99, toId: OVERLORD, extra: 'c' }, { id: 101, mailId: 10, toId: OVERLORD, extra: 'a' },
+        { id: 100, mailId: 11, toId: OTHER, extra: 'b' }];
+      const kept = m.notHeldUntilAcked(due, origins);
+      expect(kept.map((d) => d.id)).toEqual([103, 100]);
+      expect(kept[0]).toBe(due[0]);
+      expect(m.notHeldUntilAcked([], origins)).toEqual([]);
+      expect(m.notHeldUntilAcked(due.filter((d) => d.id !== 101), origins).map((d) => d.id)).toEqual([103, 100]);
+      expect(m.fixedLinePushOf({ fromId: 'coord-a', subject: 'x', mailToId: 'overlord' })).toBe('record-only');
+      for (const x of [{ fromId: 'timer', subject: 'timer: 1 due (4)', mailToId: 'overlord' }, { fromId: 'coord-a', subject: 'x', mailToId: OTHER },
+        { fromId: 'operator', subject: operatorMessageSubject(1), mailToId: OVERLORD }]) expect(m.fixedLinePushOf(x)).toBeUndefined();
+      expect(m.renderReportHeldLine().startsWith('ccrc-mail: you have new mail. ')).toBe(true);
     },
 
     'answers generic for every other mail': () => {
@@ -86,10 +124,14 @@ export function fixedLineMailOfCases(m: EnvelopeModule): Record<string, SuiteCas
     },
 
     'names each row once, and a row that matches a mail is the only one that does': () => {
-      expect(m.FIXED_LINE_MAIL.map((r) => r.name)).toEqual(['operator-message', 'spot-probe', 'inbox-wake', 'provider-retry', 'timer']);
+      expect(m.FIXED_LINE_MAIL.map((r) => r.name)).toEqual(['operator-message', 'spot-probe', 'inbox-wake', 'provider-retry', 'timer', 'overlord-report']);
       expect(m.FIXED_LINE_MAIL.filter((r) => r.matches({ fromId: 'timer', subject: 'timer: 1 due (4)', mailToId: 'overlord' })).map((r) => r.name)).toStrictEqual(['timer']);
-      // Only the timer row waits for the card (C62): the other rows each name a door that itself refuses card-unread.
-      expect(m.FIXED_LINE_MAIL.filter((r) => r.waitsForCard).map((r) => r.name)).toStrictEqual(['timer']);
+      // Only the timer row waits for the card (C62): the other rows each name a door that itself refuses card-unread. Only the
+      // report row holds until acked and says record-only (request ids A); every other row reads both as absent, today's.
+      expect(m.FIXED_LINE_MAIL.filter((r) => r.hold === 'card').map((r) => r.name)).toStrictEqual(['timer']);
+      expect(m.FIXED_LINE_MAIL.filter((r) => r.hold === 'acked').map((r) => r.name)).toStrictEqual(['overlord-report']);
+      expect(m.FIXED_LINE_MAIL.filter((r) => r.push !== undefined).map((r) => [r.name, r.push])).toStrictEqual([['overlord-report', 'record-only']]);
+      expect(m.FIXED_LINE_MAIL.filter((r) => r.hold !== undefined).map((r) => r.name)).toStrictEqual(['timer', 'overlord-report']);
       for (const x of [{ fromId: 'operator', subject: providerRetrySubject(1_800_000_000_000) }, { fromId: 'operator', subject: operatorMessageSubject(1) }, { fromId: 'operator', subject: SPOT_PROBE_SUBJECT }, { fromId: 'operator', subject: INBOX_WAKE_SUBJECT }]) {
         expect(m.FIXED_LINE_MAIL.filter((r) => r.matches(x))).toHaveLength(1);
       }
@@ -173,7 +215,29 @@ const FIXED_LINE_MAIL_OF_SET: MutantSet<EnvelopeModule> = {
     // Overlord W1, the Overlord's timers (question 3): the timer row.
     { id: 'F20 the timer row matched on the sender alone', old: "m.fromId === TIMER_MAIL_SENDER && m.mailToId === OVERLORD_IDENTITY", new: 'm.fromId === TIMER_MAIL_SENDER' },
     { id: 'F21 the timer row open to every session', old: "m.mailToId === OVERLORD_IDENTITY, designatedOnly: true,", new: 'm.mailToId === OVERLORD_IDENTITY, designatedOnly: false,' },
-    { id: 'F22 the timer row types before the card', old: "firstDelivery: 'none', waitsForCard: true,", new: "firstDelivery: 'none', waitsForCard: false," },
+    { id: 'F22 the timer row types before the card', old: "firstDelivery: 'none', hold: 'card',", new: "firstDelivery: 'none'," },
+    // Overlord W2, request ids A: the report row.
+    { id: 'F25 the report row types its line', old: "firstDelivery: 'none', hold: 'acked',", new: "firstDelivery: 'none'," },
+    { id: 'F26 the report row pushes', old: "hold: 'acked', push: 'record-only',", new: "hold: 'acked'," },
+    { id: 'F27 the report row only for the designated session', old: "!MAIL_ROLE_IDS.has(m.fromId), designatedOnly: false,", new: "!MAIL_ROLE_IDS.has(m.fromId), designatedOnly: true," },
+    { id: 'F28 the report row takes a role sender', old: "m.mailToId === OVERLORD_IDENTITY && !MAIL_ROLE_IDS.has(m.fromId)", new: 'm.mailToId === OVERLORD_IDENTITY' },
+    { id: 'F29 the report row matched on the delivery', old: "m.mailToId === OVERLORD_IDENTITY && !MAIL_ROLE_IDS.has(m.fromId)", new: '!MAIL_ROLE_IDS.has(m.fromId)' },
+    { id: 'F30 the report row holds until the card', old: "hold: 'acked', push:", new: "hold: 'card', push:" },
+    { id: 'F31 the sweep holds nothing', old: "return row !== 'generic' && row.hold === 'acked';", new: 'return false;' },
+    { id: 'F32 the sweep holds the card row too', old: "return row !== 'generic' && row.hold === 'acked';", new: "return row !== 'generic' && row.hold !== undefined;" },
+    { id: 'F33 the sweep holds every fixed line', old: "return row !== 'generic' && row.hold === 'acked';", new: "return row !== 'generic';" },
+    { id: 'F34 no mail held as the report', old: '  if (origin === null) return false;\n', new: '  if (origin === null) return true;\n' },
+    { id: 'F35 the hold read off the delivery', old: "subject: origin.subject, toId, mailToId: origin.toId }", new: 'subject: origin.subject, toId, mailToId: toId }' },
+    { id: 'F36 no push word', old: 'return FIXED_LINE_MAIL.find((r) => r.matches(m))?.push;', new: 'return undefined;' },
+    { id: 'F37 the stall read holds every delivery', old: ".filter((d) => heldUntilAcked(d.toId, mail.find((m) => m.id === d.mailId) ?? null, { kind: 'not-designated' }))", new: '.filter(() => true)' },
+    { id: 'F38 the stall read finds the mail by the delivery id', old: 'mail.find((m) => m.id === d.mailId) ?? null', new: 'mail.find((m) => m.id === d.id) ?? null' },
+    { id: 'F39 the stall read holds a delivery whose mail is unread', old: 'mail.find((m) => m.id === d.mailId) ?? null', new: 'mail.find((m) => m.id === d.mailId) ?? mail[0] ?? null' },
+    { id: 'F40 the stall read names the mail id', old: '    .map((d) => d.id));', new: '    .map((d) => d.mailId));' },
+    { id: 'F41 the sweep filter keeps the held', old: "return due.filter((d) => !heldUntilAcked(d.toId, origins.mailOrigin(d.mailId), { kind: 'not-designated' }));", new: 'return [...due];' },
+    { id: 'F42 the sweep filter keeps only the held', old: "return due.filter((d) => !heldUntilAcked(d.toId, origins.mailOrigin(d.mailId),", new: "return due.filter((d) => heldUntilAcked(d.toId, origins.mailOrigin(d.mailId)," },
+    { id: 'F43 the sweep filter reads the delivery id as the mail id', old: 'origins.mailOrigin(d.mailId), { kind', new: 'origins.mailOrigin((d as unknown as { id: number }).id), { kind' },
+    { id: 'F44 the sweep filter drops a row whose mail is not found', old: "return due.filter((d) => !heldUntilAcked(d.toId, origins.mailOrigin(d.mailId), { kind: 'not-designated' }));", new: "return due.filter((d) => origins.mailOrigin(d.mailId) !== null && !heldUntilAcked(d.toId, origins.mailOrigin(d.mailId), { kind: 'not-designated' }));" },
+    { id: 'F45 the sweep filter reorders', old: "return due.filter((d) => !heldUntilAcked(", new: "return [...due].reverse().filter((d) => !heldUntilAcked(" },
     { id: 'F24 the timer row never matched', old: "m.fromId === TIMER_MAIL_SENDER && m.mailToId === OVERLORD_IDENTITY", new: 'false' },
   ],
   suite: fixedLineMailOfCases,
@@ -247,10 +311,10 @@ export function timerLineCases(m: EnvelopeModule): Record<string, SuiteCase> {
       expect(nudge('timer: 1 due (4)').line).not.toContain('the notes');
     },
     'the role\'s timer mail types its own line, acked on first delivery, waiting for the card; a session-keyed one keeps the generic nudge': () => {
-      expect(nudge('timer: 1 due (4)')).toStrictEqual({ line: m.renderTimerFiredLine('timer: 1 due (4)'), operatorMessageId: null, firstDelivery: 'none', waitsForCard: true });
+      expect(nudge('timer: 1 due (4)')).toStrictEqual({ line: m.renderTimerFiredLine('timer: 1 due (4)'), operatorMessageId: null, firstDelivery: 'none', hold: 'card' });
       const keyed = m.mailNudgeOf(OVERLORD, { fromId: 'timer', subject: 'timer: 1 due (4)', body: '', toId: OVERLORD }, designated, 0);
       expect(keyed).toStrictEqual({ line: m.renderMailNudge(OVERLORD), operatorMessageId: null });
-      expect(m.mailNudgeOf(OVERLORD, { fromId: 'operator', subject: SPOT_PROBE_SUBJECT, body: '' }, designated, 0).waitsForCard).toBeUndefined();
+      expect(m.mailNudgeOf(OVERLORD, { fromId: 'operator', subject: SPOT_PROBE_SUBJECT, body: '' }, designated, 0).hold).toBeUndefined();
     },
   };
 }
@@ -272,7 +336,7 @@ const TIMER_LINE_SET: MutantSet<EnvelopeModule> = {
     { id: 'T1 no count', old: "${n === undefined ? 'Your timers' : `${n} of your timers`}", new: 'Your timers' },
     { id: 'T2 a zero counted', old: '/^timer: ([1-9][0-9]*) due/', new: '/^timer: ([0-9]+) due/' },
     { id: 'T3 the generic head lost', old: "return `${INJECTED_PROMPTS['mail-nudge'].text} ${n === undefined", new: "return `${n === undefined" },
-    { id: 'T4 the hold not carried', old: "...(row.waitsForCard ? { waitsForCard: true as const } : {})", new: '' },
+    { id: 'T4 the hold not carried', old: "...(row.hold === undefined ? {} : { hold: row.hold })", new: '' },
     { id: 'T5 the timer row matched on the delivery', old: "mailToId: origin.toId, toId }", new: 'mailToId: toId, toId }' },
   ],
   suite: timerLineCases,

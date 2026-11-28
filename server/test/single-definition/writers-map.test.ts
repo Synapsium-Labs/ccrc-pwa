@@ -469,8 +469,9 @@ describe(TABLES_PIN, () => {
       overlord_account_holds: ['clearAccountHold', 'holdAccount'].map((f) => `server/src/continuity/accountHolds.ts#${f}`),
       // The Overlord's request record (W2 request record A, §5.1): one module owns the three tables. The insert writes the row; the
       // move writer moves it with its one revision raise; the parent's clock is the one bookkeeping writer (F2). The citations are
-      // the insert's alone, and the move rows `appendMove`'s alone, for both appliers (F7).
-      overlord_requests: ['applyRequestInsertInTx', 'applyRequestMoveInTx', 'setParentClockInTx'].map((f) => `server/src/coord/overlordRequestStore.ts#${f}`),
+      // the insert's alone, and the move rows `appendMove`'s alone, for both appliers (F7). Request ids A adds the second
+      // bookkeeping writer, a request's line of news from the mail door (RI5).
+      overlord_requests: ['applyRequestInsertInTx', 'applyRequestMoveInTx', 'setParentClockInTx', 'stampRequestNewsInTx'].map((f) => `server/src/coord/overlordRequestStore.ts#${f}`),
       overlord_request_messages: ['server/src/coord/overlordRequestStore.ts#applyRequestInsertInTx'],
       overlord_request_moves: ['server/src/coord/overlordRequestStore.ts#appendMove'],
       // The daily backstop (Overlord W1 renewal readings A): its seed row, and its door's one writer.
@@ -924,6 +925,17 @@ describe('operator_messages.offRecord and .sendKey: each written only in recordM
     const only = ['server/src/operatorModel/store.ts#OperatorModelStore.recordMessage INSERT'];
     expect(columnWrites(files, 'operator_messages', 'offRecord')).toEqual(only);
     expect(columnWrites(files, 'operator_messages', 'sendKey')).toEqual(only);
+  });
+  // Overlord W2, request ids A (Task A1, RI5): the three `requestId` columns, each written by the insert it rides in alone, and a
+  // request's line of news (`lastNewsAt`, `news`) by the news writer alone, never by a move. MAY ONLY SHRINK.
+  it('the request ids\' three columns are each written by their one insert, and a request\'s news by its one writer', () => {
+    const files = ALL.filter((f) => !rel(f).startsWith('pwa/'));
+    expect(columnWrites(files, 'runs', 'requestId')).toEqual(['server/src/coord/store.ts#CoordStore.openRun INSERT']);
+    expect(columnWrites(files, 'mail', 'requestId')).toEqual(['server/src/coord/store.ts#CoordStore.insertMail INSERT']);
+    expect(columnWrites(files, 'programme_modifications', 'requestId')).toEqual(['server/src/coord/ledgersStore.ts#addModification.insert INSERT']);
+    for (const col of ['lastNewsAt', 'news']) {
+      expect(columnWrites(files, 'overlord_requests', col), col).toEqual(['server/src/coord/overlordRequestStore.ts#stampRequestNewsInTx SET']);
+    }
   });
 });
 

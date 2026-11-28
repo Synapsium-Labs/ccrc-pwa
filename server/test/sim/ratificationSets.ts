@@ -15,6 +15,7 @@ export const GOAL_RATIFICATION_KEY = 'shared/ledgers.ts#goalRatification';
 export const ITEM_ANSWERED_KEY = 'shared/ledgers.ts#itemAnswered';
 export const PIN_SOURCE_KEY = 'shared/ledgers.ts#pinSource';
 export const MODIFICATION_SOURCE_KEY = 'shared/ledgers.ts#modificationSource';
+export const PARSE_RATIFIED_BY_KEY = 'shared/ledgers.ts#parseRatifiedBy';
 
 const suite = (m: RatificationModule): Record<string, SuiteCase> =>
   Object.fromEntries(ALL_RATIFICATION_CASES.map((c) => [c.name, () => c.run(m)]));
@@ -37,6 +38,9 @@ export const GOAL_RATIFICATION_SET = set([
   { id: 'R-7', old: "item.program !== program) return { ratified: false, why: 'unreadable', source };", new: "item.program !== program) return { ratified: false, why: 'item-not-answered', source };" },
   { id: 'R-8', old: 'export const COORDINATOR_SOURCE_RATIFIES: boolean = true;', new: 'export const COORDINATOR_SOURCE_RATIFIES: boolean = false;' },
   { id: 'R-9', old: "=> r ?? { ratified: false, why: 'absent', source: null };", new: "=> r ?? { ratified: false, why: 'unrecorded', source: null };" },
+  // Request ids A: the request arm answers not-opened, never ratified and never another word.
+  { id: 'R-11', old: "return { ratified: false, why: 'not-opened', source };", new: 'return { ratified: true, source };' },
+  { id: 'R-12', old: "return { ratified: false, why: 'not-opened', source };", new: "return { ratified: false, why: 'effect-unmeasured', source };" },
 ]);
 
 export const ITEM_ANSWERED_SET = set([
@@ -59,8 +63,21 @@ export const PIN_SOURCE_SET = set([
 
 export const MODIFICATION_SOURCE_SET = set([
   // Review 2240 F6's red check: an item-cited row recorded as the coordinator's, or an uncited one as an item's.
-  { id: 'M-1', old: "(itemId === null ? { kind: 'coordinator' } : { kind: 'item' })", new: "(itemId === null ? { kind: 'item' } : { kind: 'coordinator' })" },
-  { id: 'M-2', old: "(itemId === null ? { kind: 'coordinator' } : { kind: 'item' })", new: "({ kind: 'coordinator' })" },
+  { id: 'M-1', old: "itemId === null ? { kind: 'coordinator' } : { kind: 'item' }", new: "itemId === null ? { kind: 'item' } : { kind: 'coordinator' }" },
+  { id: 'M-2', old: "itemId === null ? { kind: 'coordinator' } : { kind: 'item' }", new: "{ kind: 'coordinator' }" },
+  // Request ids A: a request is the first source, ahead of an item.
+  { id: 'M-3', old: "requestId !== null ? { kind: 'request', requestId } : itemId === null", new: 'itemId === null' },
+  { id: 'M-4', old: "requestId !== null ? { kind: 'request', requestId } : itemId === null ? { kind: 'coordinator' } : { kind: 'item' }",
+    new: "itemId !== null ? { kind: 'item' } : requestId !== null ? { kind: 'request', requestId } : { kind: 'coordinator' }" },
+]);
+
+// Request ids A: the parser's request arm, which takes its id from the row. Keyed apart from the four above because
+// `parseRatifiedBy` is its own decider; its floor is in mutation-floors.json.
+export const PARSE_RATIFIED_BY_SET = set([
+  { id: 'B-1', old: "requestId === null ? 'unreadable' : { kind: 'request', requestId }", new: "{ kind: 'request', requestId: requestId as number }" },
+  { id: 'B-2', old: "requestId === null ? 'unreadable' : { kind: 'request', requestId }", new: "'unreadable'" },
+  { id: 'B-3', old: "return { kind: raw };", new: "return requestId === null ? { kind: raw } : { kind: 'request', requestId };" },
+  { id: 'B-4', old: "if (!isRatifiedByKind(raw)) return 'unreadable';", new: 'if (raw === "") return \'unreadable\';' },
 ]);
 
 export const RATIFICATION_MUTANT_SETS: Record<string, MutantSet<never>> = {
@@ -68,4 +85,5 @@ export const RATIFICATION_MUTANT_SETS: Record<string, MutantSet<never>> = {
   [ITEM_ANSWERED_KEY]: ITEM_ANSWERED_SET as MutantSet<never>,
   [PIN_SOURCE_KEY]: PIN_SOURCE_SET as MutantSet<never>,
   [MODIFICATION_SOURCE_KEY]: MODIFICATION_SOURCE_SET as MutantSet<never>,
+  [PARSE_RATIFIED_BY_KEY]: PARSE_RATIFIED_BY_SET as MutantSet<never>,
 };

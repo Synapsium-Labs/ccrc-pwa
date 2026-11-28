@@ -193,6 +193,9 @@ function mailSections(f: CardFacts): readonly CardSection[] {
  *  session-written text it describes; a word this build cannot name reads as not known. */
 const RATIFIER_WORDS: Readonly<Record<RatifiedByKind, string>> = {
   coordinator: 'ratified by the coordinator', operator: 'ratified by the operator', item: 'ratified by the answer to an item',
+  // Never printed on this build: a version made for a request reads `not-opened` and is not ratified (request ids A), because
+  // nothing records the operator's opening yet. The words are what will be true once a later piece lets that opening ratify.
+  request: 'ratified by the operator opening the request it rests on',
 };
 const ratifiedGoalLine = (g: CardGoal): string =>
   `${g.ratifiedBy !== undefined && Object.hasOwn(RATIFIER_WORDS, g.ratifiedBy) ? RATIFIER_WORDS[g.ratifiedBy] : 'ratified by an unknown source'}: ${g.text}`;

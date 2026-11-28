@@ -4,6 +4,7 @@ import { LINEAR_SYNC_PROGRAMME, type EpicState, type TicketState } from '../../.
 import { epicAdmitsRun, epicForOpen, runMustNameTicket, ticketIsHeld } from './planPolicy.js';
 import type { OpenRunTicket } from './planStore.js';
 import { decideOtherLane, type OtherLaneReads } from './otherLanes.js';
+import { programmeRequestVerdict, type RequestOwnerRead, type RequestRefusal } from './requestMail.js';
 
 /**
  * `POST /api/runs`' synchronous preconditions, decided (D-5384, audit ticket
@@ -90,6 +91,9 @@ export interface OpenRunFacts {
   readonly plan: (slug: string) => OpenRunPlanFacts;
   /** Overlord W1 other lanes (C48): the designation and the claimant's launch profile, read by `overlordClaimant`. */
   readonly otherLaneReads: OtherLaneReads;
+  /** Overlord W2, request ids A: the request record's row as the owner rule reads it (`requestOwnerReadOf` over
+   *  `requestById`), read only by the `request` gate; `unmeasured` when the read threw. */
+  readonly requestOwner: (requestId: number) => RequestOwnerRead | 'unmeasured';
 }
 
 export interface OpenRunPlanFacts {
@@ -212,7 +216,7 @@ export type OpenRunConflictCode = Extract<RunRefuseCode,
  *  the bare shape refusal has NO `detail` key, every other `error` has one. */
 export type OpenRunRefusal =
   | { gate: OpenRunGate; error: 'bad-request'; detail?: string }
-  | { gate: OpenRunGate; error: 'run-unreadable' | 'bad-session-id' | AttributionRefusal | OverlordClaimantRefusal; detail: string }
+  | { gate: OpenRunGate; error: 'run-unreadable' | 'bad-session-id' | AttributionRefusal | OverlordClaimantRefusal | RequestRefusal; detail: string }
   | { gate: OpenRunGate; refused: OpenRunConflictCode; by?: string; detail?: string };
 
 /** The admitted open, shaped: what `CoordStore.openRun` and the route's later
@@ -235,6 +239,9 @@ export interface OpenRunPlan {
   /** D-8181: the ticket the run attaches to in the same transaction that inserts it; null for a review run and for a
    *  programme that declares no plan and does not require one. */
   ticket: OpenRunTicket | null;
+  /** Overlord W2, request ids A: the request this run is made for, which its programme owns (the `request` gate); null names
+   *  none, as an older client's open does. */
+  requestId: number | null;
 }
 
 export type OpenRunVerdict =
@@ -258,7 +265,7 @@ interface Ctx {
 /** C48's two words at `overlordClaimant`, `error` words sent by `refuseRoute` (slug `overlord-run-refusal-is-an-error-word`). */
 type OverlordClaimantRefusal = 'overlord-not-a-coordinator' | 'unmeasured';
 type GateResult = { error: 'bad-request'; detail?: string }
-  | { error: 'run-unreadable' | 'bad-session-id' | AttributionRefusal | OverlordClaimantRefusal; detail: string }
+  | { error: 'run-unreadable' | 'bad-session-id' | AttributionRefusal | OverlordClaimantRefusal | RequestRefusal; detail: string }
   | { refused: OpenRunConflictCode; by?: string; detail?: string } | undefined;
 type Gate = (c: Ctx) => GateResult | Promise<GateResult>;
 
@@ -293,7 +300,9 @@ const GATES = [
       !(b.claimedByUuid === undefined || (typeof b.claimedByUuid === 'string' && b.claimedByUuid.trim() !== '')) ||
       !(homeProject === undefined || typeof homeProject === 'string') ||
       // D-8071: an optional programme name, a non-blank string when sent.
-      !(b.programmeTitle === undefined || (typeof b.programmeTitle === 'string' && b.programmeTitle.trim() !== '')))
+      !(b.programmeTitle === undefined || (typeof b.programmeTitle === 'string' && b.programmeTitle.trim() !== '')) ||
+      // Overlord W2, request ids A: an optional request id, a positive safe integer when sent; absent or null names none.
+      !(b.requestId === undefined || b.requestId === null || isPositiveDecimalSafeInteger(b.requestId)))
       ? { error: 'bad-request' } : undefined;
   }],
   // D-8181 (design 2026-11-10 §4.4): the reserved `linear-sync` slug is never a run's programme. Body-only, so it asks
@@ -447,6 +456,19 @@ const GATES = [
     const workerOf = c.f.openClaimantsOf(c.b.claimedBy as string).find((x) => x !== c.b.claimedBy);
     return workerOf !== undefined ? { refused: 'claimant-is-a-worker', by: workerOf } : undefined;
   }],
+  // Overlord W2, request ids A (H22, RI4): a run that names a request opens only for the programme that owns it. After
+  // `program`, `attribution` and `claimantWorker` (fix round 1, F11), so an unattributed caller or a worker learns nothing
+  // about any request, and before the registry reads, a DB read being the cheaper one. An unknown, unowned or foreign
+  // request is one word with one detail (F12, H23); a record that could not be read is the store's `run-unreadable`. Its
+  // state is not read: a run made for a request that has just closed is harmless.
+  ['request', (c) => {
+    if (c.b.requestId === undefined || c.b.requestId === null) return undefined;
+    const id = c.b.requestId as number;
+    const read = c.f.requestOwner(id);
+    if (read === 'unmeasured') return { error: 'run-unreadable', detail: 'the request record could not be read' };
+    const v = programmeRequestVerdict(read, id, c.slug!);
+    return v.ok ? undefined : { error: v.refuse, detail: v.detail };
+  }],
   // D-5298 (spec §4, §6.4), D-5388, D-5523: the claimant's OWN registry
   // project, MEASURED and stamped (`coordProject`) — never compared. Since the
   // operator's ruling of 2026-10-18 (#601) a coordinator may sit in ANY project
@@ -540,6 +562,7 @@ export async function openRunPreconditions(f: OpenRunFacts): Promise<OpenRunVerd
       unattributed: c.unattributed === true, coordProject: c.coordProject!,
       claimedByUuid: typeof b.claimedByUuid === 'string' ? b.claimedByUuid : null,
       ticket: c.ticket ?? null,
+      requestId: typeof b.requestId === 'number' ? b.requestId : null,
     },
   };
 }

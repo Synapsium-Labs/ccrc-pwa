@@ -68,9 +68,13 @@ function facts(body: Record<string, unknown>, over: Partial<OpenRunFacts> = {}):
     sessionMark: async () => ({ kind: 'absent' }),
     plan: () => ({ required: false, ended: false, phased: false, epics: [], ticket: () => null, tickets: () => [] }),
     otherLaneReads: NOT_DESIGNATED_READS,
+    requestOwner: () => ({ kind: 'absent' }),
     ...over,
   };
 }
+/** Overlord W2, request ids A: a request another programme owns, and its one refusal (no oracle). */
+const FOREIGN_REQUEST = { requestOwner: () => ({ kind: 'owned' as const, owner: 'other-program', open: true }) };
+const NOT_YOURS = { error: 'request-not-yours', detail: "request 7 is not this programme's" } as const;
 
 /** D-8181: a stored plan with one epic listing waves 1 to 3, and tickets by key. */
 const planOf = (over: Partial<OpenRunPlanFacts> = {}, tickets: Record<string, ReturnType<OpenRunPlanFacts['ticket']>> = {}): ((s: string) => OpenRunPlanFacts) =>
@@ -191,6 +195,7 @@ const SINGLE: Row[] = [
   { name: "a claimant that is somebody else's worker", gate: 'claimantWorker',
     f: facts({ ...WORK }, { openClaimantsOf: () => ['coord-1', 'coord-9', 'coord-8'] }),
     refusal: { refused: 'claimant-is-a-worker', by: 'coord-9' } },
+  { name: "a request another programme owns", gate: 'request', f: facts({ ...WORK, requestId: 7 }, FOREIGN_REQUEST), refusal: NOT_YOURS },
   { name: 'a claimant whose row records no project', gate: 'claimantProject',
     f: facts({ ...WORK }, { claimantProject: async () => ({ kind: 'none' }) }),
     refusal: { refused: 'project-mismatch', detail: NO_PROJECT_DETAIL } },
@@ -309,9 +314,12 @@ const PAIRS: (Row & { pair: [OpenRunGate, OpenRunGate] })[] = [
   // D-5523: a claimant of another project no longer trips `claimantProject`,
   // so its two order rows trip it with the one measured refusal it keeps — a
   // row that records no project.
-  { name: 'claimant a worker + claimant row with no project', pair: ['claimantWorker', 'claimantProject'], gate: 'claimantWorker',
-    f: facts({ ...WORK }, { openClaimantsOf: () => ['coord-9'], claimantProject: async () => ({ kind: 'none' }) }),
+  { name: 'claimant a worker + a foreign request', pair: ['claimantWorker', 'request'], gate: 'claimantWorker',
+    f: facts({ ...WORK, requestId: 7 }, { openClaimantsOf: () => ['coord-9'], ...FOREIGN_REQUEST }),
     refusal: { refused: 'claimant-is-a-worker', by: 'coord-9' } },
+  { name: 'a foreign request + claimant row with no project', pair: ['request', 'claimantProject'], gate: 'request',
+    f: facts({ ...WORK, requestId: 7 }, { ...FOREIGN_REQUEST, claimantProject: async () => ({ kind: 'none' }) }),
+    refusal: NOT_YOURS },
   { name: 'claimant row with no project + a root named as the child', pair: ['claimantProject', 'notAChild'], gate: 'claimantProject',
     f: facts({ ...WORK, sessionId: 'ws-1' }, {
       claimantProject: async () => ({ kind: 'none' }), sessionMark: async () => ({ kind: 'root' }) }),
@@ -531,9 +539,38 @@ describe('openRunPreconditions — the admitted opens (D-5384)', () => {
       open: {
         program: 'demo-program', title: 'Wave two', project: 'demo', wave: 2, waveOf: 3,
         claimedBy: 'coord-1', kind: 'work', reviews: null, homeProject: 'demo', sessionId: 'ws-1',
-        unattributed: false, coordProject: 'demo', claimedByUuid: 'u-coord-1', ticket: null,
+        unattributed: false, coordProject: 'demo', claimedByUuid: 'u-coord-1', ticket: null, requestId: null,
       },
     });
+  });
+
+  it('a work open naming a request its programme owns carries the id; absent and null name none (request ids A)', async () => {
+    const owned = { requestOwner: () => ({ kind: 'owned' as const, owner: 'demo-program', open: false }) };
+    const v = await openRunPreconditions(facts({ ...WORK, requestId: 7 }, owned));
+    expect(v.ok && v.open.requestId).toBe(7);
+    for (const requestId of [undefined, null]) {
+      const n = await openRunPreconditions(facts({ ...WORK, requestId }));
+      expect(n.ok && n.open.requestId).toBeNull();
+    }
+  });
+
+  it('the request gate: unknown, unowned and foreign answer one refusal; an unreadable record is run-unreadable; a bad id is bad-request', async () => {
+    const reads = [() => ({ kind: 'absent' as const }), () => ({ kind: 'unowned' as const }), FOREIGN_REQUEST.requestOwner];
+    const answers = await Promise.all(reads.map((requestOwner) => openRunPreconditions(facts({ ...WORK, requestId: 7 }, { requestOwner }))));
+    for (const a of answers) expect(a).toStrictEqual({ ok: false, refusal: { gate: 'request', ...NOT_YOURS } });
+    expect(await openRunPreconditions(facts({ ...WORK, requestId: 7 }, { requestOwner: () => 'unmeasured' })))
+      .toStrictEqual({ ok: false, refusal: { gate: 'request', error: 'run-unreadable', detail: 'the request record could not be read' } });
+    for (const requestId of [0, -1, 1.5, '7', true]) {
+      const r = await openRunPreconditions(facts({ ...WORK, requestId }));
+      expect(r).toStrictEqual({ ok: false, refusal: { gate: 'shape', error: 'bad-request' } });
+    }
+  });
+
+  it('the request gate reads nothing for a worker caller or an unattributed one (fix round 1, F11)', async () => {
+    const requestOwner = vi.fn(() => ({ kind: 'absent' as const }));
+    await openRunPreconditions(facts({ ...WORK, requestId: 7 }, { requestOwner, openClaimantsOf: () => ['coord-9'] }));
+    await openRunPreconditions(facts({ ...WORK, requestId: 7 }, { requestOwner, attribute: async () => STALE }));
+    expect(requestOwner).not.toHaveBeenCalled();
   });
 
   it('a review open takes project, wave and waveOf off the reviewed run, never the body', async () => {
@@ -545,7 +582,7 @@ describe('openRunPreconditions — the admitted opens (D-5384)', () => {
       open: {
         program: 'demo-program', title: 'Review wave two', project: 'demo-2', wave: 4, waveOf: null,
         claimedBy: 'coord-1', kind: 'review', reviews: 7, homeProject: 'demo',
-        unattributed: false, coordProject: 'demo-2', claimedByUuid: 'u-coord-1', ticket: null,
+        unattributed: false, coordProject: 'demo-2', claimedByUuid: 'u-coord-1', ticket: null, requestId: null,
       },
     });
   });

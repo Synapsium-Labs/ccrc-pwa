@@ -231,7 +231,7 @@ import {
   toRunSummary, type MarkReleaseNotifiedResult,
   type OpenSibling, type RunRow,
 } from './coord/store.js';
-import { mailNudgeOf, sweepDesignationOf } from './coord/envelope.js';
+import { fixedLinePushOf, heldDeliveryIdsOf, mailNudgeOf, notHeldUntilAcked, sweepDesignationOf } from './coord/envelope.js';
 import { operatorNudgeFor } from './operatorModel/operatorNudge.js';
 import { finishFixedLineAck, settleNudge } from './operatorModel/nudgeLane.js';
 import { createInboxWakeLane } from './coord/overlordInboxWake.js';
@@ -3536,8 +3536,9 @@ export class FleetWatcher {
         tag: `mail-${m.toId}-${m.mailId}`,
         recordAlways: true,
         // A fired timer is the session's own reminder, never news for the operator (review 2053 F2): recorded, never pushed. A
-        // provider retry is another: the outage has one notice of its own (`providerRetryLane.ts`).
-        ...(isAskNudgeMail(m) || isApprovalNudgeMail(m) || isOperatorMessageMail(m) || isInboxWakeMail(m) || isProviderRetryMail(m) || stall === 'check' || stall === 'reply' || stall === 'self-wake' || isUntoldNotice(m.subject) || isRunCloseWarning(m.subject) || isSkillRolloutMail(m) || m.fromId === TIMER_MAIL_SENDER ? { recordOnly: true } : {}),
+        // provider retry is another: the outage has one notice of its own (`providerRetryLane.ts`). A row of the fixed-line table
+        // that says `record-only` (a report to the Overlord, request ids A, C16) is read from that row, the one rule its hold reads.
+        ...(isAskNudgeMail(m) || isApprovalNudgeMail(m) || isOperatorMessageMail(m) || isInboxWakeMail(m) || isProviderRetryMail(m) || stall === 'check' || stall === 'reply' || stall === 'self-wake' || isUntoldNotice(m.subject) || isRunCloseWarning(m.subject) || isSkillRolloutMail(m) || m.fromId === TIMER_MAIL_SENDER || fixedLinePushOf(m) === 'record-only' ? { recordOnly: true } : {}),
       }, projects);
       this.lastMailNotifyId = m.deliveryId;
     }
@@ -7397,6 +7398,7 @@ export class FleetWatcher {
     const si: StallSessionInput = {
       sessionId: id, role: 'worker', run: primary, worker, mark, liveStartedAt: lr?.startedAt ?? null,
       markUnreadableSince, mail: read.mail, deliveries: read.deliveries, notices, arming, coordinationPaused: paused,
+      heldDeliveryIds: heldDeliveryIdsOf(read.mail, read.deliveries),
     };
     for (const sv of [...stallRestartedVerdicts(si, now), stallOrphanEVerdict(si, now), stallFailedVerdict(si, now), ...stallMailStuckVerdicts(si, now), stallOrphanDVerdict(si, now)]) {
       this.applyStallSession(store, si, primary.project, sv, now);
@@ -7450,6 +7452,7 @@ export class FleetWatcher {
       sessionId: id, role: 'coordinator', run: null, worker, mark, liveStartedAt: lr?.startedAt ?? null,
       markUnreadableSince: this.stallMarkUnreadableSince.get(id) ?? null,
       mail: read.mail, deliveries: read.deliveries, notices: [], arming, coordinationPaused: paused,
+      heldDeliveryIds: heldDeliveryIdsOf(read.mail, read.deliveries),
       longLived: role !== null && longLivedOf(role, false) === true,
     };
     const project = s?.project ?? c.runs[0]?.project ?? '';
@@ -8607,8 +8610,11 @@ export class FleetWatcher {
       woke = true;
     }
 
-    // A row the ceiling rejected above may still sit in `dueBefore`: re-read.
-    const due = unacked.length === 0 && !woke && !ceilinged ? dueBefore : store.dueDeliveries(now, MAIL_REPLAY_MS);
+    // A row the ceiling rejected above may still sit in `dueBefore`: re-read. A delivery the fixed-line table holds until acked
+    // (a report to the Overlord, request ids A) is left out HERE, before the ladder: it is no refusal, so it names no gate, and it
+    // gets no gate stamp, no attempt, no wake, no park, nothing typed, and is read again next sweep (ruling call 1937). Its row
+    // is never `designatedOnly` (the table's census), so no designation is read for it (`notHeldUntilAcked`, envelope.ts).
+    const due = notHeldUntilAcked(unacked.length === 0 && !woke && !ceilinged ? dueBefore : store.dueDeliveries(now, MAIL_REPLAY_MS), store);
     if (due.length === 0) return;
     // WHO IS COORDINATING SOMETHING LIVE — one read for the whole sweep, for
     // every row in it. The same bargain `hsCache` strikes one field over
@@ -9012,7 +9018,7 @@ export class FleetWatcher {
         const nudge = await operatorNudgeFor((id) => readBoxText({ tmux: this.deps.tmux, queue: this.deps.queue }, id), d.toId, origin, sweepDesignationOf(designation), now);
         // A fixed line delivered once whose ack never landed is acked, never typed twice (review 3389 F1). The Overlord's timer
         // line waits until its live generation has read its card (W1, C62): no attempt is spent while it holds.
-        if (finishFixedLineAck({ coord: store, now, warn: (l) => { console.warn(l); } }, d, nudge) || (nudge.waitsForCard === true && !timerLineHold(gens, identityOf(d.toId, designation), (id) => store.cardReadOfStart(id), (l) => { console.warn(l); }))) continue;
+        if (finishFixedLineAck({ coord: store, now, warn: (l) => { console.warn(l); } }, d, nudge) || (nudge.hold === 'card' && !timerLineHold(gens, identityOf(d.toId, designation), (id) => store.cardReadOfStart(id), (l) => { console.warn(l); }))) continue;
         // `seen` is added only HERE, once every gate above has passed, the nudge is chosen and neither the ack-once nor the card
         // hold took the row, so the send is actually about to be attempted. It means "one message per session per sweep", not
         // "one row considered per sweep": a row that types nothing claims nothing (review 3841 F1), and moving the claim

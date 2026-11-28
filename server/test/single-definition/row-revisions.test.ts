@@ -42,6 +42,8 @@ const REVISION_CLASSES: readonly { table: RevisedTable; writer: string; cls: Rev
   { table: 'operator_items', writer: REACH, cls: 'bookkeeping' },
   { table: 'overlord_requests', writer: `${REQUESTS}applyRequestMoveInTx`, cls: 'raises' },
   { table: 'overlord_requests', writer: `${REQUESTS}setParentClockInTx`, cls: 'bookkeeping' },
+  // Overlord W2, request ids A (RI5): a request's line of news is no move, so it raises no revision (the request record's RQ7).
+  { table: 'overlord_requests', writer: `${REQUESTS}stampRequestNewsInTx`, cls: 'bookkeeping' },
 ];
 
 /** The one raise, and the re-stamp's conditional raise (question 2: only when `askAt` moves), whitespace folded. */
