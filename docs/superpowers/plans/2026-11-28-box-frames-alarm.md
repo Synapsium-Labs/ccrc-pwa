@@ -38,8 +38,10 @@ case). Nothing in this plan ran Claude Code, and nothing will. No real test box 
   newest trusted build, the build it was compared against (or null), the form word (`same-form`, `new-form`, `first-form`,
   `incomplete`), the differing frame ids, a second word for refusals (`none`, `refused`, `over-cap`,
   `refused-and-over-cap`) and the refused and over-cap frame ids.
-- **Storage.** One additive column, `shape`, on `claude_build_frames`, by its own migration. It is bound to the row's
-  `at`, so a row an older server re-records reads as unshaped, never as the old shape.
+- **Storage.** One additive column, `shape`, on `claude_build_frames`, by its own migration: the shape version, the hash
+  and the row's `at`, never the tokens (the capture owner's change A, call 1963). It is bound to the row's `at`, so a row
+  an older server re-records reads as unshaped, never as the old shape. The status read's store read is text-free and
+  bounded by builds (change B).
 - **Carried from the reviews of #3487.** A warn line when the box's frames recipe version and the server's differ (today
   the lane returns silently). A case that reads the `settings.json` the runner writes.
 - **Not in this wave.** No console surface. No change to the reducer, the send, the delivery recipe (its version still
@@ -166,7 +168,7 @@ part starts `R:`, `G`, `T`... instead, so its hash differs and `rows-180@220x50`
   ccrc capture                            X2|
 ```
 
-Tokens: `R:`, `G~`, `R:`, `X2|`, `@0,2`. A build whose hint says `Try "fix the build"` has the same shape: words are not
+Cursor `[2, 1]`. Tokens: `R:`, `G~`, `R:`, `X2|`, `@1,2`. A build whose hint says `Try "fix the build"` has the same shape: words are not
 seen. The chip part's box row `❯ [Pasted text #1 +0 lines]` is `Cg:[Pasted text #9 +9 lines]`; a build that renamed the
 label to `[Pasted content #1]` would give `G` instead, a new form.
 
@@ -196,7 +198,7 @@ so the read and the lanes never name different builds (pinned for every order of
   `framesLane.ts#isCurrentFrames` reads it.
 - **A build is complete** when all 52 parts are current.
 - **The build it is compared against** (`against`) is the newest build older than the newest trusted one that is
-  complete, or null.
+  complete, among the builds the read is bounded to (4.2), or null.
 - **A frame is comparable** in a build when its part is current, its outcome is `drawn`, the receiver's check at store
   time was `clear`, and its stored shape is at this side's `FRAME_SHAPE_VERSION`.
 - **Compared** frames are the frame ids comparable in both builds. **Differing** frames are the compared ones whose hashes
@@ -214,6 +216,11 @@ so the read and the lanes never name different builds (pinned for every order of
 
 - **`new-form` wins over `incomplete`.** The first differing part says so at once, before the other 51 are framed (about
   an hour of lane passes). That is the alarm's point. The differing list then holds what is measured so far.
+- **The first three answers come first.** The capture owner measured, on 2026-11-28, no frame at all on record yet, so the
+  status read meets `no-trusted-build`, `incomplete` and `first-form` long before two full sets. Each is cased as
+  carefully as `new-form`: no row at all for the newest trusted build; rows that hold attempts only; rows at another
+  recipe version; frames rows for a build that is not trusted; a complete newest build with no older one; one whose only
+  older complete build is past the read's bound; one whose older complete build compares nothing.
 - **`first-form` means nothing could be compared**: no earlier complete build, or one whose frames compare to none of the
   newest build's (another shape version, or every frame of one side refused). `against` says which: null, or the build.
   `same-form` never stands on zero compared frames. **Your ruling, if you want a fifth word for the second case.**
@@ -266,7 +273,11 @@ otherwise. An unsettled, over-cap or refused frame, or one the server's check re
 
 - **One additive column**, by its own migration at the next free slot when I push:
   `ALTER TABLE claude_build_frames ADD COLUMN shape TEXT;`. Its value is JSON written by the store,
-  `{"version": <16 hex>, "hash": <16 hex>, "tokens": [<token>...], "at": <the row's at>}`, or null.
+  `{"version": <16 hex>, "hash": <16 hex>, "at": <the row's at>}`, or null. **No tokens** (the capture owner's change A,
+  call 1963): no reader in this wave takes them, and a rule label's and a chip's words would stay in the database after
+  that build's text is set aside, past the four-build bound. A later surface that wants a row-by-row difference computes
+  the tokens again from the kept text with the pure rule. A case plants a marker in a rule label and finds it in no stored
+  shape.
 - **The slot.** `main` has 135 entries today (measured: `git show origin/main:server/src/coord/schema.ts | grep -c '^  //
   ── [0-9]*: user_version'` printed 135), so 136 is free on `main`, but another open PR names 136. I re-measure at the
   push, mail the number to the coordinator before it, and re-derive the count suites on that merged tree.
@@ -281,9 +292,15 @@ otherwise. An unsettled, over-cap or refused frame, or one the server's check re
 
 - `recordFrames(db, r, checked, now, drop, shape)`: the one upsert sets `shape` from the decider's answer (`null` writes
   null), with `at = now` inside it. Still the table's one writer, the capture lane its one caller.
-- **A new text-free read**, `claudeBuildFrameShapes(db)`: `build, part, version, word, record, checked, at, shape`, never
-  `text`, parsed by the same helpers as `claudeBuildFrames` (the record by the one result reader, the words by their
-  maps), and the shape read as `{version, hash}` only when its JSON reads whole and its `at` is the row's. It returns
+- **A new text-free read, bounded by builds** (the capture owner's change B, call 1963), `claudeBuildFrameShapes(db,
+  builds)`: `build, part, version, word, record, checked, at, shape` of the named builds' rows only (the primary key leads
+  with the build), never `text`, parsed by the same helpers as `claudeBuildFrames` (the record by the one result reader,
+  the words by their maps), and the shape read as `{version, hash}` only when its JSON reads whole and its `at` is the
+  row's. The builds come from a pure step in `framesStanding.ts`, `framesStandingBuilds(records)`: the newest trusted build
+  and the `FRAMES_STANDING_OLDER` (4) newest trusted builds older than it, only trusted builds ever being framed. A
+  complete build older than that is not read, and the standing then says `first-form` with `against` null. Cases: a row
+  of a build past the bound is not returned, and the standing over a table of many builds equals the standing over the
+  bounded rows. The note gives the read's cost at the bound. It returns
   `FramesShapeRow[]`, a type of its own in `framesStanding.ts`, so "no text" is never spelled as `text: null`, which
   already means "set aside" (no overloaded null). The status read runs every 30 seconds while the console's test box card
   is open, so it must not read up to 14 MiB of text each time; this read is why the store changes.
@@ -306,13 +323,32 @@ otherwise. An unsettled, over-cap or refused frame, or one the server's check re
 ### 5.2 The status read (`server/src/coord/routes.ts`, packet 3)
 
 - `GET /api/testbox` answers `frames` beside `delivery`, by the same pattern: with a coordination store,
-  `framesStandingAnswerOf(coord.claudeBuilds(), coord.claudeBuildFrameShapes())` inside a try; a throw answers
+  `framesStandingAnswerOf(records, coord.claudeBuildFrameShapes(framesStandingBuilds(records)))`, with
+  `records = coord.claudeBuilds()`, inside a try; a throw answers
   `{kind: 'unreadable'}` with one log line naming the read and the error message, never on the wire; with no store the
   key is absent. The block and `delivery` are answered either way.
 - No new route, no new credential, no gate row, no client verb: the census and the gate's counts do not move (re-run to
   show it). The answer passes the one answer hook as the read does today.
 - Cases: the standing through the route with a session and with the box token; no store, key absent; a throwing store,
   `unreadable` with one log line and the block still answered; the marker case through the route.
+
+### 5.3 Would the warn line, or a hold beside it, have kept an unfinished recipe from running? (the coordinator's 40919)
+
+**No, neither.** Between the recipe's release and its width follow-up, the server and the test box held the SAME recipe
+version, so `result.version !== FRAMES_RECIPE_VERSION` was false: the warn line would have stayed silent, and a hold that
+declines parts from a box whose version is not the server's would have declined nothing. What kept that recipe from
+running was only the build's absence on the box.
+- **What the mismatch already does.** A result at another version is not stored today; the lane drops it. So a mismatch
+  hold would add only that the job is not SENT, which needs the box's version before the send (a new field on the
+  capture path), and would save test box time during a rollout, when the two stand apart for hours (the owner's
+  measurement). It buys no safety the drop does not already give.
+- **What would cover the case.** A hold of the recipe's own, independent of the versions. The cheapest is a constant in
+  the recipe's case file, `FRAMES_RECIPE_COMPLETE`, read by `framesLane.ts#nextFramesJob`, which a pull request that ships
+  an unfinished recipe sets false and its follow-up sets true: one constant, one decider line, one case, no runtime
+  switch and no operator act; but it is a request a reviewer must catch, not a mechanism. The other is a lane arm
+  (the Shadow lanes card's switch), a runtime mechanism that costs the operator an act per recipe, which the standing
+  directives argue against. **Not built**: the coordinator rules first, and either one touches the owner's lane and goes
+  to it as a packet.
 
 ## 6. The settings case (agent)
 
@@ -332,6 +368,8 @@ It says "changed", never "fine".
 - Anything outside the 52 frames: other sizes and drafts, macOS, a real model or account.
 - Colour, except dim on chip, glyph and our-text rows.
 - A change inside a row the reducer replaced: it keeps its class.
+- A short other row whose text, spaces removed, happens to be a run of one of our texts reads as `T`, by the reducer's own
+  rule 2 test (measured: a lone `a` is a run of the drafts' filler). Two builds that draw such a row alike still agree.
 - An unsettled, refused or over-cap frame is not compared (the refusals word reports the last two).
 - Two builds wrong in the same way.
 - Across a recipe version change: older builds are never framed again (no back-fill), so the first build framed at a new
@@ -378,6 +416,8 @@ None yet. A deviation found is mailed to the coordinator, who issues its number.
 ## Where things stand
 
 - **Agreed:** section 7 of the recipe plan, in substance (the capture owner); the brief's scope and limits.
-- **Waiting on you:** the coordinator's rulings on 2.2's anchor, 2.7's two questions and 3.2's `first-form` row; the
-  capture owner's yes to packets 1, 2 and 3 (sections 4, 5.1 and 5.2).
+- **Agreed by the capture owner** (call 1963): packets 2 and 3 as sent; packet 1 with its two changes, no stored tokens
+  and a read bounded by builds, both written into section 4.
+- **Waiting on you:** the coordinator's rulings on 2.2's anchor, 2.7's two questions, 3.2's `first-form` row and 5.3's
+  hold.
 - **Later:** a console surface for frames; a generated mark table for the reducer (wave 197's).
