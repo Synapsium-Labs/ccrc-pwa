@@ -8,14 +8,18 @@
 // retry is made outside the send (`saveRetry`), from one boolean, so the closure the section keeps while the step shows reaches no
 // key (review 4167 F1, held by `settings-retry-census.test.ts`). The field is emptied on the door's answer and on every refusal,
 // never on a first `step-up-required`. That Save hands the section its retry, which the confirm sends (review 4139 F1, ruled call
-// 1876). While the step shows the WHOLE CARD is held (review 4167 F2, F3, ruled call 1930): the kind, the endpoint, the model id,
-// the key field, Save and Remove, so nothing typed or pressed meets the retry, which sends the host as it was pressed; another
-// card's answer frees it. A press is always a first send; the retry's own `step-up-required` is final: worded for what was refused
-// (a key, or the host alone, A4) and the field emptied (the coordinator's condition 4). The retry never sends less than the first
-// send carried (F2): the Save keeps one boolean, whether a key was typed (never the key), and a retry that finds the field emptied
-// (with the card held, only the page hide empties it) sends nothing and says so. The key is sent only when the field holds one, so a
-// host change with no new key reaches the door's own `key-required`. The read never carries any part of the key: only when it was
-// set, and whether the egress masker catches it.
+// 1876). From the press to the end of the step the card's inputs and acts are held (review 4167 F2, F3, ruled call 1930; review
+// 4183 F1): the kind, the endpoint, the model id, the key field, Save and Remove, by the send in flight and then by the step, so
+// nothing typed or pressed meets the retry, which sends the host as it was pressed. The key field's Show toggle is not held: it
+// sends nothing. The step is put away by its confirm, by another card's answered act or step, or by leaving Settings; Remove (a
+// narrowing) is held with the card while a Save's step shows, so a step that cannot be confirmed on this device holds it until one
+// of those (the rows' Off sits on another card, which the hold never touches). A press is always a first send; the retry's own
+// `step-up-required` is final: worded for what was refused (a key, or the host alone, A4) and the field emptied (the
+// coordinator's condition 4). The retry never sends less than the first send carried (F2): the Save keeps one boolean, whether a
+// key was typed (never the key), and a retry that finds the field emptied (held, the field is emptied only by its own rule, on a
+// page hide or a route change) sends nothing and says so. The key is sent only when the field holds one, so a host change with no
+// new key reaches the door's own `key-required`. The read never carries any part of the key: only when it was set, and whether the
+// egress masker catches it.
 //
 // THE HOST. The kind, the endpoint and the model id are filled from the read (`host.endpoint`, ruled F4, so a change of the model
 // id alone sends the endpoint as stored, path included), and an edit is kept until the door answers. A hosted kind says that each
@@ -109,7 +113,7 @@ export function DecisionHostCard({ ctx, view, reread, children }: {
             <CardField label={W.modelIdLabel}>
               <TextInput value={m} disabled={busy || held} data-settings-input="decision-model-id" onChange={(ev) => setModelId(ev.currentTarget.value)} />
             </CardField>
-            <SecretField label={W.keyLabel} handle={key} onPresence={setHasKey} held={held} />
+            <SecretField label={W.keyLabel} handle={key} onPresence={setHasKey} held={busy || held} />
           </div>
           <div className="ovs-actions">
             <Button

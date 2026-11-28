@@ -18,12 +18,14 @@
 //
 // THE CONFIRM STARTS THE RETRY (review 4139 F1, ruled call 1876). Upload and Clear the list each hand the section their own retry
 // with a `step-up-required`, so the mark is per act: the retry's answer is worded for its act. Each retry is made outside every send
-// (`uploadRetry`, `clearRetry`), from the act alone, so the closure the section keeps reaches no name (review 4167 F1). While the
-// step shows the WHOLE CARD is held (F2, F3, ruled call 1930): the box, Upload and Clear, so no edit meets the retry and no other
-// act of the card is in flight when the confirm lands; another card's answer frees it. The confirm sends the retry, which reads the
-// box again; the retry's own `step-up-required` is final: worded for its act (A4) and the box emptied (the coordinator's condition
-// 4). A retry that finds the box emptied (with the card held, only the page hide empties it) sends nothing and says so: it never
-// sends less than the first send carried (F2). A press by the operator is always a first send.
+// (`uploadRetry`, `clearRetry`), from the act alone, so no value stands in the scope the retry is made in (review 4167 F1). From
+// the press to the end of the step the box, Upload and Clear are held (F2, F3, ruled call 1930; review 4183 F1), by the send in
+// flight and then by the step, so no edit meets the retry and no other act of the card is in flight when the confirm lands; the
+// step's confirm, another card's answered act or step, or leaving Settings puts it away. Read again is not held: it sends nothing.
+// The confirm sends the retry, which reads the box again; the retry's own `step-up-required` is final: worded for its act (A4) and
+// the box emptied (the coordinator's condition 4). A retry that finds the box emptied (held, the box is emptied only by its own
+// rule, on a page hide or a route change) sends nothing and says so: it never sends less than the first send carried (F2). A press
+// by the operator is always a first send.
 //
 // NEVER EMPTY BY ACCIDENT (the brief's ruling 4). Text with no name in it sends nothing and says so. "Clear the list", drawn only
 // while a list with names is stored, asks first and sends the door's own clear flag (`{ rows: [], clear: true }`), the only empty
@@ -122,7 +124,7 @@ export function PrivateNamesCard({ ctx }: { readonly ctx: SectionCtx }): ReactNo
           <p className="ovs-note" role="status" data-names-state={shownState(v)}>{statusLine(v)}</p>
           <p className="ovs-note">{W.replaces}</p>
           <p className="ovs-note">{W.format}</p>
-          <SecretField label={W.textLabel} handle={text} onPresence={NO_PRESENCE} multiline held={held} />
+          <SecretField label={W.textLabel} handle={text} onPresence={NO_PRESENCE} multiline held={door.busy || held} />
           <div className="ovs-actions">
             <Button
               variant="primary" size="fit" data-settings-control="names-upload" disabled={door.busy || held}
