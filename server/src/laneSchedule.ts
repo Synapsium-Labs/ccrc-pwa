@@ -47,6 +47,9 @@ export const INVARIANT_TABLE_SWEEP_MS = 10 * 60_000;
  *  reference. The anchors are re-asked daily because drift is counted in days (question 10: 4 of 20 moved against the line's
  *  baseline), and the maintenance cap that bounds a pass is a UTC day's, so a pass that runs short resumes the next day. */
 export const DECISION_ANCHOR_PERIOD_MS = QUIZ_LANE_PERIOD_MS;
+/** The label lane's look (Overlord W2, the label queue, LQ1): once a day, the quiz lane's period by reference. The pick is keyed
+ *  on the UTC ISO week, so a daily look keeps a restart from skipping one, and a case recorded mid-week is carded that week. */
+export const LABEL_LANE_PERIOD_MS = QUIZ_LANE_PERIOD_MS;
 
 /** The server's own server-caps beat: once a minute, a third of `SERVER_CAPS_LEASE_S`, so one missed write never turns
  *  an arm off. The fleet node's writer (`ccd-update-sync.timer`, `OnUnitActiveSec=60s`) keeps the same period.
@@ -221,7 +224,7 @@ export type LaneName =
   | 'claimRenew' | 'claimLapse' | 'stalls' | 'blockWakes' | 'admissionWake' | 'idleNudge' | 'mail' | 'mailHold' | 'inboxWake' | 'asks' | 'approvalPrune' | 'digestBeat' | 'pushOutbox'
   | 'childReclaim' | 'collect' | 'archivedExpiry' | 'deadCoordinator' | 'orphanTrees' | 'delegation'
   | 'sleepRunDone' | 'sleepIdleHours' | 'rollIdle' | 'diskAlarm' | 'diskLaneStall' | 'tmpCensus' | 'staleArchive' | 'runStuck' | 'runUntold' | 'runClose' | 'cases' | 'overlaps' | 'generations'
-  | 'launchProfile' | 'advisorCount' | 'timers' | 'sequenceRetention' | 'quiz' | 'responses' | 'linearPlanSync' | 'linearDrift' | 'linearMigration' | 'forecasts' | 'decisionAnchors' | 'skillInstall' | 'skillRollout' | 'limitSamples' | 'authorityWitness' | 'invariants' | 'overlordReadiness';
+  | 'launchProfile' | 'advisorCount' | 'timers' | 'sequenceRetention' | 'quiz' | 'responses' | 'linearPlanSync' | 'linearDrift' | 'linearMigration' | 'forecasts' | 'labelQueue' | 'decisionAnchors' | 'skillInstall' | 'skillRollout' | 'limitSamples' | 'authorityWitness' | 'invariants' | 'overlordReadiness';
 
 export interface LaneRow {
   readonly name: LaneName | (string & {});
@@ -479,6 +482,14 @@ export const LANE_SCHEDULE: readonly LaneRow[] = [
   // once a minute, on the monotonic clock (no row is on the wall clock; review 2265, F4). It seals each closed work run at its
   // boundary and scores each seal at its 85% date (`coord/forecastLane.ts`); a thrown pass is caught here.
   { name: 'forecasts', cadenceMs: FORECAST_LANE_PERIOD_MS, clock: 'mono', flight: 'skip', warnKey: 'ccrc-server: the forecast lane failed', derivedFrom: null },
+  // The label lane (Overlord W2, plan `w2-label-queue.md` Task 4, Q16, LQ1): once a day on the quiz lane's period by reference,
+  // due at boot, it picks at most ten cards a UTC ISO week for the operator (`coord/labelQueueLane.ts`). It sends no mail and
+  // pushes nothing, and every row ships `off`, so it picks nothing until the operator switches a row to shadow. A thrown pass is
+  // caught here.
+  {
+    name: 'labelQueue', cadenceMs: LABEL_LANE_PERIOD_MS, clock: 'mono', flight: 'skip', warnKey: 'ccrc-server: the label lane failed', startsDue: true,
+    derivedFrom: { name: 'QUIZ_LANE_PERIOD_MS', reason: 'the pick is keyed on the week, and a daily look keeps a restart from skipping one' },
+  },
   // The limit sampler (Overlord W1 serviceability PR B, `limitSampler.ts`; index question 8): every five minutes, the tick's own
   // reading of every Anthropic account into `limit_samples`, one row per reading; it adds no read. A thrown pass is caught here.
   { name: 'limitSamples', cadenceMs: LIMIT_SAMPLE_MS, derivedFrom: null, clock: 'mono', flight: 'skip', warnKey: 'ccrc-server: the limit sampler failed' },

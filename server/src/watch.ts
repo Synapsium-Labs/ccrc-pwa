@@ -196,6 +196,7 @@ import { runSequenceRetentionLane } from './coord/sequenceRetentionLane.js';
 import { runForecastLane, spendReadingOf } from './coord/forecastLane.js';
 import { limitSamplePass } from './limitSampler.js';
 import { runDecisionAnchorLane } from './coord/decisionModelLane.js';
+import { runLabelQueueLane } from './coord/labelQueueLane.js';
 import { TIMER_MAIL_SENDER } from '../../shared/continuity-timers.js';
 import { LAUNCH_PROFILE_LANE_ROW, profilePass, steerMarkerOf, type ProfileLaneMemory } from './continuity/profileLane.js';
 import { skewRunningOf } from './continuity/sandboxCheck.js';
@@ -3005,6 +3006,7 @@ export class FleetWatcher {
       void this.sweepForecasts().catch(() => { /* one bad sweep must not kill the poll */ });
       // NEVER awaited, the same reasons: the decision model's ANCHOR-SET lane (Overlord W2): a daily pass of asks, each on the 2 s deadline.
       void this.sweepDecisionAnchors().catch(() => { /* one bad sweep must not kill the poll */ });
+      void this.sweepLabelQueue().catch(() => { /* one bad sweep must not kill the poll */ }); // the label lane: at most ten cards a week
       // NEVER awaited, the same reasons: the AUTHORITY WITNESS lane (Overlord W1 §7.6): a nudge of the exchange, which keeps its one flight.
       void this.runLane('authorityWitness', () => this.deps.overlordAuthorityExchange?.nudge())?.catch(() => { /* one bad nudge must not kill the poll */ });
       // NEVER awaited, the same reasons: the LINEAR PLAN SYNC (D-8182): one tick of due programmes, joining any pass in flight.
@@ -6563,6 +6565,12 @@ export class FleetWatcher {
   async sweepDecisionAnchors(): Promise<void> {
     const d = this.deps.decisions;
     if (d) await this.runLane('decisionAnchors', () => runDecisionAnchorLane({ ...d, time: this.deps.time, log: (line) => console.warn(line) }));
+  }
+
+  /** The weekly label lane (Overlord W2, the label queue, `coord/labelQueueLane.ts`): one pick pass on the wall clock's week. */
+  async sweepLabelQueue(): Promise<void> {
+    const d = this.deps.labelQueue;
+    if (d) await this.runLane('labelQueue', () => { runLabelQueueLane({ ...d, wall: () => this.deps.time.clock.wall(), warn: (line) => console.warn(line) }); });
   }
 
   /** The push outbox lane (Overlord W1, `pushSender.ts`): the held items' reach, every due row sent once per claim, the purge. */

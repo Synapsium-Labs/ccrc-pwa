@@ -73,6 +73,8 @@ import { MAIL_TOKEN_HEADER, checkMailToken } from './coord/token.js';
 import { registerCoordRoutes, sendCloseOutcome, type OperatorDoorWiring } from './coord/routes.js';
 import { registerLedgerOperatorRoutes, waitingViewOf } from './coord/ledgersRoutes.js';
 import { registerDecisionModelRoutes } from './coord/decisionModelRoutes.js';
+import { registerLabelCardRoutes } from './coord/labelCardRoutes.js';
+import { labelCardStoreOf } from './coord/labelQueueStore.js';
 import { registerNameListRoutes } from './operatorModel/nameListRoutes.js';
 import { promptTargetVerdict, type PromptTargetVerdict } from './operatorModel/messages.js';
 import { NO_DESIGNATION, promptRecheck, recordOperatorPrompt } from './operatorModel/promptRecord.js';
@@ -340,6 +342,8 @@ export const MASKED_GET_ROUTES: ReadonlySet<string> = new Set([
   '/api/overlord/board',
   // The chat's thread and an earlier generation's page (W1 chat): the operator's words, and the Overlord's text from its transcript.
   '/api/overlord/chat', '/api/overlord/chat/earlier',
+  // The label cards (Overlord W2 label queue): a card may carry the operator's own cited words and a mail body a session wrote.
+  '/api/labels',
   // The operator's read of the invariant monitor (sequence C): findings' messages and unmeasured reasons carry composed text, a
   // producer's error detail among it, as the ladder's and the readiness word's `why` do.
   '/api/overlord/invariants',
@@ -2993,6 +2997,8 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   });
 
   registerNameListRoutes(app, { store: () => deps.operatorModel, ccrcDir: deps.cfg.ccrcDir, gate: accountGate, identity, time: deps.time, registerSecret: (l, v, o) => deps.masker?.ingestSecret(l, v, o) ?? 'unregistered' });
+  registerLabelCardRoutes(app, { gate: accountGate, store: () => (deps.coord ? labelCardStoreOf(deps.coord.db) : undefined),
+    messages: () => deps.operatorModel, mail: () => deps.coord, now: () => deps.time.clock.wall() });
   registerDecisionModelRoutes(app, {
     store: () => deps.decisions?.store, ccrcDir: deps.cfg.ccrcDir, gate: accountGate, time: deps.time, notice,
     actorOf: consoleActor,

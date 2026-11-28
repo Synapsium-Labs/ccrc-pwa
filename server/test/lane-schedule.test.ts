@@ -12,7 +12,7 @@ import { INVARIANT_TABLE_SWEEP_MS, LANE_SCHEDULE, OUTBOX_LANE_PERIOD_MS, RESPONS
 import { LaneRunner } from '../src/laneRunner.js';
 import { callsIn, symbolOf } from './scan/symbols.js';
 import { CATALOGUE_POLL_INTERVAL_MS, SERVER_CAPS_WRITE_MS, CHILD_RECLAIM_SWEEP_MS } from '../src/laneSchedule.js';
-import { HIBERNATE_SWEEP_MS, STOP_DONE_SWEEP_MS, DRIFT_SWEEP_MS, USAGE_SWEEP_MS, DECISION_ANCHOR_PERIOD_MS, QUIZ_LANE_PERIOD_MS } from '../src/laneSchedule.js';
+import { HIBERNATE_SWEEP_MS, STOP_DONE_SWEEP_MS, DRIFT_SWEEP_MS, USAGE_SWEEP_MS, DECISION_ANCHOR_PERIOD_MS, LABEL_LANE_PERIOD_MS, QUIZ_LANE_PERIOD_MS } from '../src/laneSchedule.js';
 import { LAUNCH_PROFILE_LANE_ROW } from '../src/continuity/profileLane.js';
 import { MAIL_HOLD_LANE_ROW } from '../src/coord/mailHoldLane.js';
 import { ADVISOR_COUNT_LANE_ROW } from '../src/continuity/advisorLane.js';
@@ -524,9 +524,9 @@ describe('the four reclaim lanes (D-5862, PR 3)', () => {
 });
 
 describe('every throttle is on the monotonic clock (OA-C4, ruled (a) on #803)', () => {
-  it('no row of LANE_SCHEDULE is on the wall clock: 66 of 66 are monotonic (the Overlord readiness lane, Overlord §6.4; the authority witness lane, Overlord W1 §7.6; the limit sampler, Overlord W1 serviceability B; the sequence retention lane, Overlord §10.4; the Overlord inbox wake, W1 inbox Task 4; the coordinator advisor count lane, D-8971; the disk-lane stall alert, D-8955; the coordinator skill rollout mail, D-8126 A9-3; the block-wake lane, D-8126; the Linear plan sync, D-8182; the Linear drift pass, D-8183; the Linear migration, D-8186; the disk alarm, the tmp census and the stale-archive arm are rows, D-7895; the stuck verdict pass, D-8071; the run-close lane, D-8077; the case lane, Overlord §10.5; the generations lane, Overlord §3.3.11; the launch-profile lane, Overlord §3.6; the timers lane, Overlord §3.3.12; the quiz lane, Overlord §3.3.9; the push outbox lane, Overlord §6.7; the response lane, Overlord §4.3; the overlaps arm, Overlord §5.5; the forecast lane, Overlord §5.6; the decision anchors lane, Overlord W2; the skill self-install lane, D-8126; the mailhold projection, mid-turn mail PR 4; the admission wake, D-6095)', () => {
+  it('no row of LANE_SCHEDULE is on the wall clock: 67 of 67 are monotonic (the label lane, Overlord W2 label queue; the Overlord readiness lane, Overlord §6.4; the authority witness lane, Overlord W1 §7.6; the limit sampler, Overlord W1 serviceability B; the sequence retention lane, Overlord §10.4; the Overlord inbox wake, W1 inbox Task 4; the coordinator advisor count lane, D-8971; the disk-lane stall alert, D-8955; the coordinator skill rollout mail, D-8126 A9-3; the block-wake lane, D-8126; the Linear plan sync, D-8182; the Linear drift pass, D-8183; the Linear migration, D-8186; the disk alarm, the tmp census and the stale-archive arm are rows, D-7895; the stuck verdict pass, D-8071; the run-close lane, D-8077; the case lane, Overlord §10.5; the generations lane, Overlord §3.3.11; the launch-profile lane, Overlord §3.6; the timers lane, Overlord §3.3.12; the quiz lane, Overlord §3.3.9; the push outbox lane, Overlord §6.7; the response lane, Overlord §4.3; the overlaps arm, Overlord §5.5; the forecast lane, Overlord §5.6; the decision anchors lane, Overlord W2; the skill self-install lane, D-8126; the mailhold projection, mid-turn mail PR 4; the admission wake, D-6095)', () => {
     expect(LANE_SCHEDULE.filter((r) => r.clock === 'wall').map((r) => r.name), 'a throttle on Date.now()').toEqual([]);
-    expect(LANE_SCHEDULE.filter((r) => r.clock === 'mono')).toHaveLength(66);
+    expect(LANE_SCHEDULE.filter((r) => r.clock === 'mono')).toHaveLength(67);
   });
 
   it('the runner throttles a monotonic row on the monotonic reading: a wall step back runs it at its cadence, a step forward never early', () => {
@@ -741,6 +741,19 @@ describe('the decision anchors lane row (Overlord W2, plan w2-decision-model.md 
   });
   it('ends the lane table with limitSamples, decisionAnchors and authorityWitness in that order', () => {
     expect(LANE_SCHEDULE.slice(-3).map((row) => row.name)).toEqual(['limitSamples', 'decisionAnchors', 'authorityWitness']);
+  });
+});
+
+describe('the label lane row (Overlord W2, plan w2-label-queue.md Task 4, LQ1)', () => {
+  it('looks once a day on the quiz lane\'s period by reference, due at boot, skips an overlap and names its warning', () => {
+    expect(laneRow('labelQueue')).toEqual({
+      name: 'labelQueue', cadenceMs: LABEL_LANE_PERIOD_MS, clock: 'mono', flight: 'skip', startsDue: true,
+      warnKey: 'ccrc-server: the label lane failed',
+      derivedFrom: { name: 'QUIZ_LANE_PERIOD_MS', reason: 'the pick is keyed on the week, and a daily look keeps a restart from skipping one' },
+    });
+    // The day as a literal, as the anchors row does: a test reading the constant would move with a mutation of it.
+    expect(LABEL_LANE_PERIOD_MS).toBe(86_400_000);
+    expect(LABEL_LANE_PERIOD_MS).toBe(QUIZ_LANE_PERIOD_MS);
   });
 });
 

@@ -17,6 +17,7 @@ import { ANCHOR_SLOT_LANE, CONTINUITY_LANE, LAUNCH_PROFILE_LANE, QUIZ_BOOTSTRAP,
 import { QUIZ_RECORD_REFUSALS, type QuizRecordRefusal } from '../../../shared/refusal.js';
 import { OVERLORD_ITEM_PROGRAMME } from '../../../shared/overlord-sequence.js';
 import type { LaneArmBaseline, LaneArmRead } from '../coord/laneArm.js';
+import { utcIsoWeek } from '../time/rules.js';
 
 /** The W1a lane-arm rows the baseline guards, in the card's order: an arm of any of them changes what a session recalls,
  *  so none goes live before the baseline is taken. A later W1a row joins here. */
@@ -258,7 +259,7 @@ export function quizStatusMailOf(i: { readonly status: LaneArmQuizTick; readonly
   const stops = t.word !== null
     && (t.outcome === 'refused' || t.outcome === 'failed' || (QUIZ_STATUS_MAIL_WAITING_WORDS as readonly string[]).includes(t.word));
   // A setup-phase stop has no week of its own: its key carries the week it happened in, so it mails once a week (review 3232).
-  const key = stops ? `${t.week ?? `setup ${quizWeek(t.at).key}`} ${t.word}` : null;
+  const key = stops ? `${t.week ?? `setup ${utcIsoWeek(t.at).key}`} ${t.word}` : null;
   if (key === null || key === i.mailedKey || i.coordinator === null) return { mail: null, key: i.mailedKey };
   return { key, mail: { toId: i.coordinator, subject: `${QUIZ_STATUS_MAIL_SUBJECT} ${key}`,
     body: `The weekly unattended replay quiz stopped (${t.week ?? 'its setup'}): at ${t.act}, ${t.outcome}, word ${t.word}`
@@ -455,20 +456,6 @@ export const QUIZ_ITEM_PROGRAMME = OVERLORD_ITEM_PROGRAMME;
  *  now (`quizRoutes.ts`, plan `2026-11-17-overlord-quiz-record.md` Task 8), so this is true, and
  *  `continuity-quiz-lane.test.ts` pins the two together. */
 export const QUIZ_RECORD_READY: boolean = true;
-
-/** The ISO week a wall time falls in, in UTC (slug quiz-week-is-utc: the Settings time zone ships in W1), as `YYYY-Www`, and
- *  the ms of its Monday 00:00 UTC. */
-export function quizWeek(now: number): { readonly key: string; readonly start: number } {
-  const d = new Date(now);
-  const midnight = Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate());
-  const dow = (d.getUTCDay() + 6) % 7;                      // Monday 0 .. Sunday 6
-  const start = midnight - dow * 86_400_000;
-  const thursday = new Date(start + 3 * 86_400_000);        // the ISO year is the year of the week's Thursday
-  const year = thursday.getUTCFullYear();
-  const dayOfYear = (thursday.getTime() - Date.UTC(year, 0, 1)) / 86_400_000;   // whole days: both are UTC midnights
-  const week = 1 + Math.floor(dayOfYear / 7);
-  return { key: `${year}-W${String(week).padStart(2, '0')}`, start };
-}
 
 /** The days the weekly item waits into the week before it is raised (run 3212): the unattended run ticks every 6 hours from
  *  the week's start, so a week with no confirmed run by then is one it could not finish on its own. */

@@ -3,7 +3,7 @@
 //   1. a reader that returns text (`messageById`, `unsettledMessages`, `settledRows`, `unnudged`) is called only inside a route
 //      handler whose registration names an `OVERLORD_DOORS` row of group `overlord` with `others: 'refuse'` (a door only the
 //      designated session holding the live key passes), or whose `METHOD path` is in the hand-kept `OPERATOR_MESSAGE_DOORS`
-//      (the operator's own doors, behind the account gate: the chat's thread since W1 chat; the card adds its own when it ships);
+//      (the operator's own doors, behind the account gate: the chat's thread since W1 chat; the label cards' read since W2);
 //   2. BOTH WAYS: every handler found that reads text is listed in `TEXT_READING_DOORS` (`['messages']` in W1), and every listed
 //      door reads;
 //   3. no string or template literal names the private store's tables (`operator_messages`, `read_ledger`), so no SQL on them
@@ -33,10 +33,11 @@ const PRIVATE_TABLES = /\b(?:operator_messages|read_ledger)\b/;
 const VERBS = new Set(['get', 'post', 'put', 'delete']);
 
 /** The hand-kept operator doors (`METHOD path`, each with the file that registers it and its reason) that may read text: the
- *  operator's own, behind the account gate: the chat's thread (W1 chat), which reads `messagesPage`; the card adds its own when it
- *  ships. The chat's door is an operator door, not a refusing Overlord door, so it is here and not in `TEXT_READING_DOORS`. */
+ *  operator's own, behind the account gate: the chat's thread (W1 chat), which reads `messagesPage`, and the label cards' read (W2
+ *  label queue), which reads `messageById` for a card's cited message. The chat's door is an operator door, not a refusing Overlord door, so it is here and not in `TEXT_READING_DOORS`. */
 const OPERATOR_MESSAGE_DOORS: Readonly<Record<string, { readonly file: string; readonly why: string }>> = {
   'GET /api/overlord/chat': { file: 'server/src/coord/overlordRoutes.ts', why: 'the chat\'s thread (Overlord W1 chat): the operator\'s own words, read back to the operator behind the account gate' },
+  'GET /api/labels': { file: 'server/src/coord/labelCardRoutes.ts', why: 'the label cards (Overlord W2 label queue): a card\'s cited message, the operator\'s own words, shown to the operator behind the account gate (LQ10)' },
 };
 /** The doors (OVERLORD_DOORS keys) that read a message's text, and no others (both ways). */
 const TEXT_READING_DOORS = ['messages'];
@@ -129,12 +130,12 @@ describe('the operator\'s words are read in one place', () => {
     }
   });
 
-  it('the operator door list names the chat\'s thread alone (W1 chat), the allowlist is empty, and each names a registered door', () => {
+  it('the operator door list names the chat\'s thread (W1 chat) and the label cards\' read (W2 label queue), the allowlist is empty, and each names a registered door', () => {
     for (const [reg, e] of Object.entries(OPERATOR_MESSAGE_DOORS)) {
       expect(textOf(e.file), reg).toContain(`'${reg.split(' ')[1]!}'`);
       expect(e.why.length, reg).toBeGreaterThan(10);
     }
-    expect(Object.keys(OPERATOR_MESSAGE_DOORS)).toEqual(['GET /api/overlord/chat']);
+    expect(Object.keys(OPERATOR_MESSAGE_DOORS)).toEqual(['GET /api/overlord/chat', 'GET /api/labels']);
     expect(Object.keys(TEXT_READER_ALLOWLIST)).toEqual([]);
   });
 

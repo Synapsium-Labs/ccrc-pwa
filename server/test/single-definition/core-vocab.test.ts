@@ -329,6 +329,21 @@ describe('one decision-model catalogue (Overlord W2, decision model A, Task 1)',
   });
 });
 
+describe('one label-queue vocabulary (Overlord W2, label queue A, Task 1)', () => {
+  // The queue's numbers and a card's answer words have one home in L0, so the lane, the doors and the console share them.
+  const DEF = /\b(?:export\s+)?const\s+(?:LABEL_CARDS_PER_WEEK|LABEL_ROW_MAX_GAP_WEEKS|LABELS_NEEDED_CAP|LABEL_ANSWER_WORDS|LABEL_DOOR_REFUSALS)\b/;
+
+  it('is defined in exactly one file, shared/labelQueue.ts', () => {
+    expect(ALL.filter((f) => DEF.test(readFileSync(f, 'utf8'))).map(rel)).toEqual(['shared/labelQueue.ts']);
+  });
+
+  it('CONTROL: the pattern sees a definition and passes an import', () => {
+    expect(DEF.test('export const LABEL_CARDS_PER_WEEK = 10;')).toBe(true);
+    expect(DEF.test('const LABEL_ANSWER_WORDS = [];')).toBe(true);
+    expect(DEF.test("import { LABEL_CARDS_PER_WEEK } from '../../shared/labelQueue.js';")).toBe(false);
+  });
+});
+
 
 describe('one repoLabel (board-placement wave 2, Task 1)', () => {
   // The three-state `ProjectRepoWire` switch. The card row and the session
@@ -885,6 +900,9 @@ describe('Build 7 nouns', () => {
       // carries it from the composition root (`overlordReadinessWiring.ts` passes the one it is given); each names it by
       // `import type`.
       'overlordReadinessStore.ts', 'overlordReadinessLane.ts',
+      // The label queue (Overlord W2, plan w2-label-queue.md Task 3): `labelQueueStore.ts` is `label_cards`' and
+      // `decision_labels`' SQL, in `decisionModelStore.ts`' idiom; the lane and the doors reach it through their own ports.
+      'labelQueueStore.ts',
       // The Overlord's request record (W2 request record A, §5.1): the three tables' SQL takes the caller's handle inside its
       // transaction, and names it by `import type`.
       'overlordRequestStore.ts',
