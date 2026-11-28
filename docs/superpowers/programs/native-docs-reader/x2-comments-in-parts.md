@@ -26,7 +26,11 @@ plan's Results section "Follow-up wave, comments in parts (the conservative rule
 | `2cbf2897b4` | item 4, `x6-fu-record-precision` |
 | `3780c7a430` | item 1, the rule |
 | `3731252157` | item 2, P1's paths measured, and the tail comment's cure |
-| (this one) | the records: the parity plan and this note |
+| `18c4d38398` | the records: the parity plan and this note |
+| `9f93bc0946` | the gate's lines in the Results |
+| `66e9cacdcf` | the coordinator's rulings recorded (the fence, the plain-source Print, the dashes run) |
+| `3a579d9dc8` | fix round 1, code: review 4221 F1 (a comment opened in a footnote definition), F2 (the no-opener tail pinned), A4 (the closer-line bound) |
+| (this one) | fix round 1, records: the Results "Fix round 1, review 4221", class 10's note, and this note |
 
 ## Choices inside the ruling, for the ledger
 
@@ -44,6 +48,15 @@ plan's Results section "Follow-up wave, comments in parts (the conservative rule
   text bounds it, so in practice the range ceiling (67 108 864 bytes) bounds it; above the gate it gets the gate's answer.
 
 ## What is left (class 10 after the rule)
+
+- **A known leak on the block cutter** (fix round 1, review 4221 F1; ticket `x2-fu-footnote-item-block-start`, the
+  coordinator's; older than wave 64): a named footnote definition whose first line draws no block (empty, a closed comment or a
+  link reference definition), then any block indented under it (a paragraph, a list, a quote), then an opener. The render's tree
+  starts the definition's block at its first drawn line, indented four columns, which is a cut candidate that a part starting there
+  reads as code, and where a window's cap lands: every part size measured (400, 700, 2 000 bytes and the gate) shows the comment,
+  with the whole text read in one window too. Pinned by the case "md parts footnote: KNOWN LEAK, …". The cure is the block's start
+  (`renderTree.ts`), not a second cut rule in the cutter. Closed in the round: a comment opened on a definition's first line, or on
+  a later indented line that holds only the opener (`    <!--`) where the definition draws no block before it.
 
 - P1's own paths: the unread tail (cured only where it starts at a closed top-level comment), the whole-text fallback after the
   cutter throws (P1 alone), and the console with no render job, whose own view shows a comment as text whole or cut, so on screen
