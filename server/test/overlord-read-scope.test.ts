@@ -107,6 +107,17 @@ function readPathViolations(p: ParsedFile, allowed: ReadonlySet<string>): string
   return out;
 }
 
+describe("overlord-read.mjs's import set (W2 request record B1, F4): what it takes from recall and lib", () => {
+  it('recall.mjs: the scope readers and the four read runners, touched among them; lib.mjs: its parsers and the touched query', () => {
+    const p = parsedFile(path.join(HIST, 'overlord-read.mjs'));
+    const from = (spec: string): string[] => p.imports.filter((e) => e.specifier === spec).flatMap((e) => e.names).sort();
+    expect(from('./recall.mjs')).toEqual(['familiesOf', 'runDescribe', 'runExpand', 'runGrep', 'runTouched', 'scopeJsonOf', 'transcriptsOf']);
+    expect(from('./lib.mjs')).toEqual(['EXIT', 'SCHEMA_ADDED', 'expandArgsOf', 'idOk', 'makePairIndex', 'parseDescribeArgs', 'parseGrepArgs',
+      'parseReadArgs', 'redactFinalJson', 'touchedQuery']);
+    expect(p.imports.map((e) => e.specifier).sort()).toEqual(['./lib.mjs', './read-context.mjs', './recall.mjs']);
+  });
+});
+
 describe("the read path's calls (review 2126 F2): read-only store names, no writing operation, no exec but the busy timeout", () => {
   for (const file of Object.keys(STORE_READS)) {
     it(`${file} imports and calls only read-only store names, and execs only the busy timeout`, () => {

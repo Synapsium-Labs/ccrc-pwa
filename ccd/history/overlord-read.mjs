@@ -79,11 +79,16 @@ function touchedItem(asked, file, res) {
 function runTouchedPaths(rc, argv, mono) {
   const files = argv.map(touchedPathOf);
   if (files.some((f) => f === null)) return null;
+  // runTouched always builds the CLI's human header, and lib.mjs#headerLine refuses the `overlord` scope kind (it prints
+  // the three CLI kinds only). The header is discarded here (only the items leave), so touched reads a copy of the context
+  // whose kind is `project`, the kind with no family or workdir of its own; nothing else in runTouched reads the kind.
+  // A lib.mjs change is a gate-code change, which is not this piece's (slug `touched-header-reads-as-project`).
+  const trc = { ...rc, scope: { ...rc.scope, kind: 'project' } };
   const started = mono();
   const items = [];
   for (let i = 0; i < files.length; i += 1) {
     if (i > 0 && mono() - started >= TOUCHED_OPEN_BUDGET_MS) break;
-    const res = runTouched(rc, { arg: `./${files[i]}`, limit: TOUCHED_ROWS_READ });
+    const res = runTouched(trc, { arg: `./${files[i]}`, limit: TOUCHED_ROWS_READ });
     if (res.exit !== EXIT.OK && res.exit !== EXIT.NOT_FOUND) return res;
     items.push(touchedItem(i, files[i], res));
   }

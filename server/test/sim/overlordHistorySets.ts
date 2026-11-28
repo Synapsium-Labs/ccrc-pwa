@@ -62,7 +62,20 @@ export function requestReaderCases(m: OverlordHistoryModule): Record<string, Sui
     'refuses a verb off the list': () => {
       expect(read(null)).toBe('not-object');
       expect(read([base])).toBe('not-object');
-      for (const verb of ['tree', 'grep', 'touched', 'status', '', 7]) expect(read({ ...base, verb }), String(verb)).toBe('bad-verb');
+      for (const verb of ['tree', 'grep', 'Touched', 'status', '', 7]) expect(read({ ...base, verb }), String(verb)).toBe('bad-verb');
+    },
+    'touched (W2 request record B1): one to eight paths, one per argument, never an option': () => {
+      const t = { ...base, verb: 'touched' };
+      const eight = ['a/1', 'a/2', 'a/3', 'a/4', 'a/5', 'a/6', 'a/7', 'a/8'];
+      expect(read({ ...t, args: ['a/x.ts'] })).toEqual({ verb: 'touched', target: { kind: 'all' }, agents: false, args: ['a/x.ts'] });
+      expect(read({ ...t, args: eight })).toEqual({ verb: 'touched', target: { kind: 'all' }, agents: false, args: eight });
+      expect(read({ ...t, args: [...eight, 'a/9'] }), 'a ninth path').toBe('bad-args');
+      expect(read({ ...t, args: [] }), 'no path').toBe('bad-args');
+      expect(read({ ...t, args: ['a/x.ts', '--limit'] }), 'an option').toBe('bad-args');
+      expect(read({ ...t, args: ['-a'] }), 'a leading dash').toBe('bad-args');
+      expect(read({ ...t, args: ['--regex', 'x'] }), 'regex, as before').toBe('regex');
+      expect(read({ ...t, args: ['a/x.ts', '--'] }), 'a separator, as before').toBe('separator');
+      expect(read({ ...base, args: [] }), 'CONTROL: search still takes no argument').toEqual({ verb: 'search', target: { kind: 'all' }, agents: false, args: [] });
     },
     'refuses a target off the grammar, and reads each arm by its own field': () => {
       expect(read({ ...base, target: { kind: 'workspace' } })).toBe('bad-target');
@@ -303,6 +316,10 @@ export const OVERLORD_HISTORY_MUTANT_SETS: Record<string, MutantSet<never>> = {
       { id: 'R6 a looser bound', old: 'if (utf8Bytes(text) > OVERLORD_HISTORY_REQUEST_MAX_BYTES)', new: 'if (utf8Bytes(text) > OVERLORD_HISTORY_REQUEST_MAX_BYTES + 1)' },
       { id: 'R7 scope flags pass', old: "if (words.some((a) => SCOPE_ARGS.has(a))) return no('bad-args');", new: '' },
       { id: 'R8 accept a bare --', old: "if (words.includes('--')) return no('separator');", new: '' },
+      { id: 'R9 touched takes any number of paths', old: 'words.length === 0 || words.length > OVERLORD_HISTORY_TOUCHED_PATHS_MAX\n    || ', new: '' },
+      { id: 'R10 touched takes nine paths', old: 'words.length > OVERLORD_HISTORY_TOUCHED_PATHS_MAX', new: 'words.length > OVERLORD_HISTORY_TOUCHED_PATHS_MAX + 1' },
+      { id: 'R11 touched takes an option', old: "\n    || words.some((a) => a.startsWith('-'))", new: '' },
+      { id: 'R12 touched takes no path', old: "words.length === 0 || ", new: '' },
     ],
     suite: requestReaderCases,
   } as MutantSet<OverlordHistoryModule> as MutantSet<never>,
