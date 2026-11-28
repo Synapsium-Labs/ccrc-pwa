@@ -113,8 +113,9 @@ const CELL_MAP = new RegExp(String.raw`\{\s*chat:\s*${CELL}\s*,\s*advise:\s*${CE
 const CLASS_COVERS_MAP = /\bO[1-6]\s*:\s*\[\s*(?:\]|['"](?:grant|command|operator-request|stated-entry)['"])/;
 /** The catalogue's kinds that are not plain words, so a list of three of them is a list of act kinds. */
 const DISTINCT_KINDS = new Set<string>(OVERLORD_ACT_KIND_LIST.filter((k) => k.includes('-')));
-/** A group's ceiling spelled as values (Table 5): a per-programme number or null beside an all number. */
-const CEILING_VALUE = /\bperProgramme\s*:\s*(?:\d+|null)\s*,\s*all\s*:\s*\d+/;
+/** A group's ceiling spelled as values (Table 5): a per-programme number or null beside an all number, in either order (act rows
+ *  A, the coordinator's item 6: a copy with its fields swapped is still a copy). */
+const CEILING_VALUE = /\bperProgramme\s*:\s*(?:\d+|null)\s*,\s*all\s*:\s*\d+|\ball\s*:\s*\d+\s*,\s*perProgramme\s*:\s*(?:\d+|null)/;
 /** A map keyed by the five cell words: every one of them as a key within one stretch of text around a `by-grant` key. */
 const CELL_WORD_KEYS = ['allow', 'refuse', 'proposal', 'armed'].map((w) => new RegExp(String.raw`(?:^|[\s{,])['"]?${w}['"]?\s*:`));
 const hasCellWordMap = (text: string): boolean =>
@@ -135,6 +136,9 @@ describe('one home for the act catalogue (W2 act catalogue A3)', () => {
     expect(hasKindList(`const K = ['drop-request', 'read', 'acknowledge'];`)).toBe(false);
     expect(CEILING_VALUE.test(`const G = { relay: { perProgramme: 6, all: 30 } };`)).toBe(true);
     expect(CEILING_VALUE.test(`const G = { 'own-record': { perProgramme: null, all: 60 } };`)).toBe(true);
+    expect(CEILING_VALUE.test(`const G = { relay: { all: 30, perProgramme: 6 } };`)).toBe(true);
+    expect(CEILING_VALUE.test(`const G = { 'own-record': { all: 60, perProgramme: null } };`)).toBe(true);
+    expect(CEILING_VALUE.test('if (count.all >= ceiling.all && ceiling.perProgramme !== null)')).toBe(false);
     expect(CEILING_VALUE.test('if (ceiling.perProgramme !== null && count.all >= ceiling.all)')).toBe(false);
     expect(hasCellWordMap(`const W = {\n  allow: 'a',\n  refuse: 'b',\n  proposal: 'c',\n  armed: 'd',\n  'by-grant': 'e',\n};`)).toBe(true);
     expect(hasCellWordMap(`const W = { refuse: 'b', proposal: 'c', armed: 'd', 'by-grant': 'e' };`)).toBe(false);

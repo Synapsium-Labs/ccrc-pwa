@@ -140,6 +140,30 @@ export function actSettleVerdictCases(m: M): Record<string, SuiteCase> {
   };
 }
 
+export type CeilingModule = typeof import('../src/coord/overlordActCeiling.js');
+
+/** The wired count's guard (A6; the coordinator's item 6b): a count is a non-negative safe integer, else it could not be
+ *  measured, at every count the step reads. */
+export function countReadableCases(c: CeilingModule): Record<string, SuiteCase> {
+  const counted = (all: number, programme: number | null = null) => ({ kind: 'counted', programme, all }) as const;
+  const refusedAs = (group: string) => ({ pass: false, word: 'unavailable', group, why: c.UNREADABLE_COUNT, latch: null });
+  return {
+    'a count is a non-negative safe integer, and a programme count null only where none was named': () => {
+      for (const ok of [counted(0), counted(5), counted(7, 0), counted(30, 6)]) expect(c.countReadable(ok), JSON.stringify(ok)).toBe(true);
+      for (const bad of [-1, 0.5, Number.NaN, Number.POSITIVE_INFINITY, Number.MAX_SAFE_INTEGER + 2]) {
+        expect(c.countReadable(counted(bad)), `all ${bad}`).toBe(false);
+        expect(c.countReadable(counted(0, bad)), `programme ${bad}`).toBe(false);
+      }
+    },
+    'the step refuses unavailable on an unreadable count of the act\'s group or the effect\'s, never a pass': () => {
+      expect(c.actCeilingStep('relay', null, { act: counted(-1), effect: 'not-asked' })).toEqual(refusedAs('relay'));
+      expect(c.actCeilingStep('relay', null, { act: counted(0, 1.5), effect: 'not-asked' })).toEqual(refusedAs('relay'));
+      expect(c.actCeilingStep('relay', 'widen-scope', { act: counted(0), effect: counted(Number.NaN) })).toEqual(refusedAs('o3-effect'));
+      expect(c.actCeilingStep('relay', 'widen-scope', { act: counted(0, 0), effect: counted(0, 0) })).toEqual({ pass: true });
+    },
+  };
+}
+
 export function writeCountGroupsCases(m: M): Record<string, SuiteCase> {
   return {
     'a group counts every catalogue kind counted in it': () => {

@@ -17,6 +17,10 @@ import {
 } from '../src/coord/overlordGateRun.js';
 import type { DesignationRead } from '../../shared/overlord-designation.js';
 import { HELD_BY, TABLE_5, actCeilingStepCases, ceilingLatchDueCases } from './sim/actCatalogueSets.js';
+import path from 'node:path';
+import { openCoordDb } from '../src/coord/db.js';
+import { actCountPort } from '../src/coord/overlordCeilingWiring.js';
+import { mkTmp } from './tmpHelpers.js';
 
 describe('Table 5 and Table 6 against the catalogue', () => {
   it('each group\'s values are Table 5\'s, and its kinds are the rows counted in it', () => {
@@ -113,7 +117,7 @@ async function callRunner(deps: OverlordGateDeps, key: string): Promise<{ status
   } finally { await app.close(); }
 }
 const spyReader = (answer: ReturnType<ActCountReader['count']>) => {
-  const calls: { group: string; programme: number | null; since: number }[] = [];
+  const calls: { group: string; programme: string | null; since: number }[] = [];
   const reader: ActCountReader = { count: (group, programme, since) => { calls.push({ group, programme, since }); return answer; } };
   return { reader, calls };
 };
@@ -224,5 +228,70 @@ describe('the coordinator\'s item 5: no door of today reaches the count reader',
       expect(v, k).toEqual({ kind: 'pass' });
     }
     expect(s.calls).toEqual([]);
+  });
+});
+
+// --------------------------------------------------------------------------------- act rows A: the count wired (Task A6)
+
+describe('act rows A: the wired count at gate step 10', () => {
+  const counted = (all: number, programme: number | null = null) => ({ kind: 'counted', programme, all }) as const;
+  it('a wired count that is not a non-negative safe integer could not be measured: unavailable, never read as zero', () => {
+    for (const bad of [-1, 1.5, Number.NaN, Number.POSITIVE_INFINITY, Number.MAX_SAFE_INTEGER + 2]) {
+      expect(ceiling.actCeilingStep('relay', null, { act: counted(bad), effect: 'not-asked' }), String(bad))
+        .toEqual({ pass: false, word: 'unavailable', group: 'relay', why: ceiling.UNREADABLE_COUNT, latch: null });
+      expect(ceiling.actCeilingStep('relay', null, { act: counted(0, bad), effect: 'not-asked' }), `programme ${bad}`)
+        .toEqual({ pass: false, word: 'unavailable', group: 'relay', why: ceiling.UNREADABLE_COUNT, latch: null });
+      expect(ceiling.actCeilingStep('relay', 'widen-scope', { act: counted(0), effect: counted(bad) }), `effect ${bad}`)
+        .toEqual({ pass: false, word: 'unavailable', group: 'o3-effect', why: ceiling.UNREADABLE_COUNT, latch: null });
+    }
+    expect(ceiling.actCeilingStep('relay', null, { act: { kind: 'counted', programme: null, all: '0' as never }, effect: 'not-asked' }))
+      .toMatchObject({ pass: false, word: 'unavailable' });
+    expect(ceiling.countReadable(counted(0))).toBe(true);
+    expect(ceiling.countReadable(counted(29, 5))).toBe(true);
+    expect(ceiling.actCeilingStep('relay', null, { act: counted(29, 5), effect: 'not-asked' })).toEqual({ pass: true });
+    expect(ceiling.actCeilingStep('relay', null, { act: counted(30), effect: 'not-asked' })).toMatchObject({ pass: false, word: 'act-ceiling' });
+  });
+
+  it('an effect carrier that is not itself counted is held by its effect\'s group alone', () => {
+    expect(OVERLORD_ACT_KINDS.acknowledge.ceiling.kind).toBe('held-by');
+    expect(ceiling.actCeilingStep('acknowledge', 'relay', { act: 'not-asked', effect: counted(30) }))
+      .toEqual({ pass: false, word: 'act-ceiling', group: 'relay', scope: 'all', limit: 30, latch: 'act-ceiling-hit' });
+    expect(ceiling.actCeilingStep('acknowledge', 'relay', { act: 'not-asked', effect: counted(29, 5) })).toEqual({ pass: true });
+    expect(ceiling.actCeilingStep('acknowledge', 'relay', { act: 'not-asked', effect: 'not-asked' })).toEqual({ pass: true });
+    expect(ceiling.actCeilingStep('acknowledge', 'relay', { act: 'not-asked', effect: { kind: 'unmeasured', why: 'u' } }))
+      .toMatchObject({ pass: false, word: 'unavailable', group: 'relay' });
+  });
+
+  it('the composed count is the act store\'s reader over the open database, or the stated default where none is open', () => {
+    expect(actCountPort(undefined)).toBe(NOT_WIRED_ACT_COUNT);
+    const db = openCoordDb(path.join(mkTmp('ccrc-act-count-'), 'coord.db'));
+    try {
+      expect(actCountPort({ db }).count('relay', null, 0)).toEqual({ kind: 'counted', programme: null, all: 0 });
+      expect(actCountPort({ db }).count('relay', 'prog-a', 0)).toEqual({ kind: 'counted', programme: 0, all: 0 });
+    } finally { db.close(); }
+  });
+
+  it('with the real reader bound, every Overlord door row answers as before through the read gate, and none reaches it', async () => {
+    const db = openCoordDb(path.join(mkTmp('ccrc-act-count-'), 'coord.db'));
+    try {
+      const real = actCountPort({ db });
+      const calls: string[] = [];
+      const read = overlordReadGate(depsOf({ actCount: { count: (g, p, s) => { calls.push(g); return real.count(g, p, s); } } }));
+      const rows = Object.entries(OVERLORD_DOORS).filter(([, r]) => r.group === 'overlord');
+      for (const [k] of rows) expect(await read(BODY, k), k).toEqual({ kind: 'pass' });
+      expect(calls).toEqual([]);
+    } finally { db.close(); }
+  });
+
+  it('a counted door reads the real table: an empty one passes, a dropped one refuses unavailable at step 10', async () => {
+    const db = openCoordDb(path.join(mkTmp('ccrc-act-count-'), 'coord.db'));
+    try {
+      await withDoor('zz-relay', 'relay', async () => {
+        expect((await callRunner(depsOf({ actCount: actCountPort({ db }) }), 'zz-relay')).body).toEqual({ ok: true, gate: 'pass' });
+        db.exec('DROP TABLE overlord_acts');
+        const r = await callRunner(depsOf({ actCount: actCountPort({ db }) }), 'zz-relay');
+        expect([r.status, r.body.error, r.body.step]).toEqual([503, 'unavailable', '10']);
+      });
+    } finally { db.close(); }
   });
 });

@@ -6,7 +6,8 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { MutantSet, SuiteCase } from './mutate.js';
 import {
-  actNaturalKeyCases, actSettleVerdictCases, actWriteVerdictCases, nextActIdCases, writeCountGroupsCases, type ActsModule,
+  actNaturalKeyCases, actSettleVerdictCases, actWriteVerdictCases, countReadableCases, nextActIdCases, writeCountGroupsCases,
+  type ActsModule, type CeilingModule,
 } from '../actCases.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');
@@ -84,6 +85,20 @@ const GROUPS_SET = set(writeCountGroupsCases, [
   { id: 'G4 the effect read as the act', old: "const theirs = effect === null ? undefined : actRow(effect)?.ceiling;", new: 'const theirs = own;' },
 ]);
 
+const CEILING_KEY = 'server/src/coord/overlordActCeiling.ts';
+const GUARD_LINE = "    if (!countReadable(n.count)) return { pass: false, word: 'unavailable', group: n.group, why: UNREADABLE_COUNT, latch: null };\n";
+const COUNT_GUARD_SET: MutantSet<CeilingModule> = {
+  modulePath: path.join(ROOT, CEILING_KEY), suite: countReadableCases,
+  mutants: [
+    { id: 'C1 a negative count reads', old: 'Number.isSafeInteger(n) && n >= 0', new: 'Number.isSafeInteger(n)' },
+    { id: 'C2 a fraction reads', old: 'Number.isSafeInteger(n) && n >= 0', new: '!Number.isNaN(n) && n >= 0' },
+    { id: 'C3 the programme count not read', old: 'return isCount(c.all) && (c.programme === null || isCount(c.programme));', new: 'return isCount(c.all);' },
+    { id: 'C4 the count in all not read', old: 'return isCount(c.all) && (c.programme === null || isCount(c.programme));', new: 'return c.programme === null || isCount(c.programme);' },
+    { id: 'C5 the step never asks the guard', old: GUARD_LINE, new: '' },
+    { id: 'C6 an unreadable count passes', old: GUARD_LINE, new: '    if (!countReadable(n.count)) return { pass: true };\n' },
+  ],
+};
+
 /** One entry per decider, keyed `<path>#<function>`; `mutation-floors.test.ts` spreads it into `MUTANT_SETS`. */
 export const ACT_ROWS_MUTANT_SETS: Record<string, MutantSet<never>> = {
   [`${KEY}#actNaturalKey`]: KEY_SET as MutantSet<never>,
@@ -91,4 +106,5 @@ export const ACT_ROWS_MUTANT_SETS: Record<string, MutantSet<never>> = {
   [`${KEY}#actWriteVerdict`]: WRITE_SET as MutantSet<never>,
   [`${KEY}#actSettleVerdict`]: SETTLE_SET as MutantSet<never>,
   [`${KEY}#writeCountGroups`]: GROUPS_SET as MutantSet<never>,
+  [`${CEILING_KEY}#countReadable`]: COUNT_GUARD_SET as MutantSet<never>,
 };

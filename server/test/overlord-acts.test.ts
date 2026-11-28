@@ -2,7 +2,10 @@
 // `actCases.ts`, shared with the mutant sets; this file runs them against the real module and holds the kebab guard.
 import { describe, expect, it } from 'vitest';
 import * as acts from '../src/coord/overlordActs.js';
-import { actNaturalKeyCases, actSettleVerdictCases, actWriteVerdictCases, nextActIdCases, writeCountGroupsCases } from './actCases.js';
+import * as ceiling from '../src/coord/overlordActCeiling.js';
+import {
+  actNaturalKeyCases, actSettleVerdictCases, actWriteVerdictCases, countReadableCases, nextActIdCases, writeCountGroupsCases,
+} from './actCases.js';
 
 const run = (name: string, cases: Record<string, () => void>): void => {
   describe(name, () => { for (const [title, fn] of Object.entries(cases)) it(title, fn); });
@@ -12,6 +15,7 @@ run('nextActId', nextActIdCases(acts));
 run('actWriteVerdict', actWriteVerdictCases(acts));
 run('actSettleVerdict', actSettleVerdictCases(acts));
 run('the count groups a write reads', writeCountGroupsCases(acts));
+run('the wired count\'s guard (actCeilingStep)', countReadableCases(ceiling));
 
 describe('the act words', () => {
   it('admits the states, movers, target kinds, record kinds and refusals, and nothing else', () => {
