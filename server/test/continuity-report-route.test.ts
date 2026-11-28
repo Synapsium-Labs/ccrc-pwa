@@ -19,6 +19,7 @@ import path from 'node:path';
 import { SecretMasker } from '../src/accounts/mask.js';
 import { openCoordDb } from '../src/coord/db.js';
 import type { DesignationRead } from '../../shared/overlord-designation.js';
+import { MESSAGE_TEXT_MAX_BYTES, REPLY_REPORT_MAX_BYTES } from '../../shared/operatorMessages.js';
 import type { ResponseStamp } from '../../shared/responses.js';
 
 const STAMP: ResponseStamp = { boot: { kind: 'measured', epoch: 1 }, restore: { kind: 'measured', n: 0 } };
@@ -240,7 +241,7 @@ describe('POST /api/sessions/:id/report: a reply is recorded in the private stor
   const TEXT = 'Done: project-a is green.';
   const VIEW = {} as never;
   const designated = (sessionId: string, term: number): DesignationRead => ({ kind: 'designated', sessionId, term, row: VIEW });
-  const body = (over: Record<string, unknown> = {}) => ({ kind: 'reply', entryUuid: ENTRY, turnAt: 900, text: TEXT, truncated: false, ...over });
+  const body = (over: Record<string, unknown> = {}) => ({ kind: 'reply', entryUuid: ENTRY, turnAt: 900, text: TEXT, truncated: false, answers: [], ...over });
   let pmDb: DatabaseSync | undefined;
   afterEach(() => { if (pmDb?.isOpen) pmDb.close(); pmDb = undefined; });
 
@@ -302,6 +303,36 @@ describe('POST /api/sessions/:id/report: a reply is recorded in the private stor
       expect(row!.text).not.toContain(SECRET);
       expect(row!.text).toContain('the key is');
     } finally { mdb.close(); }
+  });
+
+  // Review 4173's cut-before-the-mask point (call 1952): the hook cuts a reply at REPLY_REPORT_MAX_BYTES before this door masks it, so a
+  // secret straddling that cut arrives as a fragment the masker may not know. The store keeps only its first MESSAGE_TEXT_MAX_BYTES,
+  // below the cut, so no fragment reaches the record (REPLY_STORE_CAP_BELOW_REPORT_BOUND).
+  it('a secret straddling the hook\'s cut never reaches the record: the store keeps only text well before the cut', async () => {
+    const SECRET = 'Zq7'.repeat(12);
+    const mdb = openCoordDb(path.join(mkTmp('ccrc-report-route-straddle-'), 'coord.db'));
+    const masker = new SecretMasker({ db: mdb, token: () => ID_GATE_TOKEN, log: () => {} });
+    try {
+      expect(masker.ingestSecret('lane-a', SECRET)).toBe('masked');
+      const { db } = await replyRig({ masker });
+      const fragment = SECRET.slice(0, 20);   // what the hook's cut leaves of it: its head, at the very end of the report
+      const text = `${'a'.repeat(REPLY_REPORT_MAX_BYTES - fragment.length)}${fragment}`;
+      expect(Buffer.byteLength(text)).toBe(REPLY_REPORT_MAX_BYTES);
+      expect((await report(app!, body({ text, truncated: true }))).statusCode).toBe(200);
+      const [row] = replyRows(db) as Array<{ text: string }>;
+      expect(row!.text).not.toContain(fragment);
+      expect(row!.text).not.toContain(SECRET.slice(0, 8));
+      expect(Buffer.byteLength(row!.text.replace(/ \[cut: \d+ more bytes\]$/, ''))).toBeLessThanOrEqual(MESSAGE_TEXT_MAX_BYTES);
+    } finally { mdb.close(); }
+  });
+
+  it('the ids the turn names reach the store: an id it cannot verify records the reply off the record and unlinked (F2)', async () => {
+    const { db } = await replyRig();
+    expect((await report(app!, body({ answers: [77] }))).statusCode).toBe(200);
+    expect(db.prepare('SELECT inReplyTo, offRecord FROM overlord_replies').all().map((x) => ({ ...x }))).toEqual([{ inReplyTo: null, offRecord: 1 }]);
+    const res = await report(app!, body({ entryUuid: '0f1e2d3c-4b5a-4968-8776-000000000099', answers: 'all' }));
+    expect([res.statusCode, err(res)], 'a bad list is a bad request, naming the field').toEqual([400, 'bad-request']);
+    expect(res.json()).toMatchObject({ detail: 'answers' });
   });
 
   it('a response row that cannot be written still answers 200: the record holds, and the log names no text', async () => {

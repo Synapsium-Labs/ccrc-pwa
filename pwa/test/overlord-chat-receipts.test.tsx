@@ -76,6 +76,23 @@ describe('a reply seen for a second posts one opened receipt', () => {
     expect(post, 'once').toHaveBeenCalledTimes(1);
   });
 
+  // Review 4173 F11: the server can attach a receipt only to a reply that has a response row.
+  it('a reply with no response row, or one not read, is not watched; once a read shows its row, it is, and posts once', async () => {
+    for (const response of [{ kind: 'no-row' }, { kind: 'unmeasured' }] as const) {
+      const { unmount } = render(<ChatReply entry={{ ...entry(8), response }} />);
+      expect(live(), `${response.kind}: nothing observed`).toEqual([]);
+      await tick(5_000);
+      unmount();
+    }
+    expect(post).not.toHaveBeenCalled();
+    const { rerender } = render(<ChatReply entry={{ ...entry(8), response: { kind: 'no-row' } }} />);
+    rerender(<ChatReply entry={entry(8)} />);
+    seeNow(live()[0]!, 0.5);
+    await tick(1_100);
+    expect(post).toHaveBeenCalledTimes(1);
+    expect(post).toHaveBeenCalledWith([opened(8)]);
+  });
+
   it('less than half visible never posts; a reply taller than the viewport counts when it fills half of it', async () => {
     render(<><ChatReply entry={entry(8)} /><ChatReply entry={entry(9)} /></>);
     const [a, b] = live();

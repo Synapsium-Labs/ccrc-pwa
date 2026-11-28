@@ -17,7 +17,7 @@ import { api } from '../lib/api';
 import { onPageHidden, onPageVisible } from '../lib/pageClock';
 import { HANDLED_WORDS } from '../responses/responseWords';
 import {
-  CUT_WORDS, OFF_RECORD_WORDS, REPLY_DWELL_MS, REPLY_SEEN_STEPS, nextReceiptAt, nextReceiptBatch, replyHandledOffer, replySeenEnough,
+  CUT_WORDS, OFF_RECORD_WORDS, REPLY_DWELL_MS, REPLY_SEEN_STEPS, nextReceiptAt, nextReceiptBatch, replyHandledOffer, replyReceiptWatched, replySeenEnough,
   type ReplyEntry,
 } from './chatWords';
 
@@ -76,11 +76,12 @@ export function resetReplyReceipts(): void {
 }
 
 /** Watches `ref` and queues the reply's receipt once half of it has been visible for `REPLY_DWELL_MS` with the document
- *  visible. Nothing is watched for a reply that already posted. A hidden document pauses the second; shown again, it starts over. */
-function useReplySeen(id: number, ref: RefObject<HTMLElement | null>): void {
+ *  visible. Nothing is watched for a reply that already posted, nor for one with no response row (`watched` false: F11), which a
+ *  later read showing its row starts watching. A hidden document pauses the second; shown again, it starts over. */
+function useReplySeen(id: number, ref: RefObject<HTMLElement | null>, watched: boolean): void {
   useEffect(() => {
     const el = ref.current;
-    if (el === null || typeof IntersectionObserver === 'undefined' || posted.has(id)) return;
+    if (!watched || el === null || typeof IntersectionObserver === 'undefined' || posted.has(id)) return;
     let inView = false;
     let dwell: ReturnType<typeof setTimeout> | null = null;
     const stop = (): void => { if (dwell !== null) clearTimeout(dwell); dwell = null; };
@@ -103,7 +104,7 @@ function useReplySeen(id: number, ref: RefObject<HTMLElement | null>): void {
     const offHidden = onPageHidden(stop);
     const offVisible = onPageVisible(start);
     return () => { io.disconnect(); offHidden(); offVisible(); stop(); };
-  }, [id, ref]);
+  }, [id, ref, watched]);
 }
 
 // ── the handled control ─────────────────────────────────────────────────────────────────────────────────────────────────────
@@ -138,7 +139,7 @@ function ReplyHandled({ response }: { response: ReplyEntry['response'] }): React
 export function ChatReply({ entry }: { entry: ReplyEntry }): ReactNode {
   const { row, response } = entry;
   const ref = useRef<HTMLDivElement>(null);
-  useReplySeen(row.id, ref);
+  useReplySeen(row.id, ref, replyReceiptWatched(response));
   return (
     <div className="oc-reply" role="group" aria-label={`Overlord reply ${row.id}`} ref={ref}>
       <p className="oc-reply-text">{row.text}</p>

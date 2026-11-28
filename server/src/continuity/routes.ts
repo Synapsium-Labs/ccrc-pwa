@@ -515,7 +515,7 @@ export function registerContinuityRoutes(app: FastifyInstance, deps: ContinuityR
       const target = replyTargetVerdict(port.designation(), id);
       if (target.kind === 'refuse') return refuseRoute(reply, target.word, { detail: target.detail });
       const recorded = port.record({ at: deps.wall(), turnAt: report.turnAt, sessionId: id, term: target.term, entryUuid: report.entryUuid,
-        text: port.mask(report.text) });
+        text: port.mask(report.text), answers: report.answers, answersCut: report.answersCut });
       if (!recorded.ok) {
         console.warn(`ccrc-server: reply report: ${id}'s reply was not recorded (${recorded.error})`);
         return refuseRoute(reply, recorded.error === 'refused' ? 'conflict' : recorded.error, { detail: 'the reply could not be recorded' });

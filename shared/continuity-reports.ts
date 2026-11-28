@@ -52,7 +52,12 @@ export type HookReport =
    *  hook dropped before this one, or null for none. `text` names nothing of the harness that wrote it: everything behind the door
    *  reads the body alone, so another harness's adapter can send the same report. */
   | { readonly kind: 'reply'; readonly entryUuid: string; readonly turnAt: number; readonly text: string; readonly truncated: boolean;
-      readonly droppedBefore: number | null; readonly at: number };
+      readonly droppedBefore: number | null;
+      /** The message ids the turn's own prompt rows name (call 1953), required and possibly empty; `answersCut` when the hook named
+       *  more than it may send and sent the newest (an absent flag reads false). They say what the reply answered; the server
+       *  verifies each, and its own window only widens off the record (`replyLinks`). */
+      readonly answers: readonly number[]; readonly answersCut: boolean;
+      readonly at: number };
 
 /** The witness key (plan question 6, slug `witness-key-is-the-call-digest`): the sha256, as 64 lowercase hex, of the tool's full
  *  name (`mcp__door__<name>`), one newline, and the tool input printed by `jq -cS` with its trailing newline removed (`{}` for

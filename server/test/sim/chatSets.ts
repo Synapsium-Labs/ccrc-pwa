@@ -443,6 +443,13 @@ export function mergeLiveCases(m: ChatWordsModule): Record<string, SuiteCase> {
       expect(rowShape(m.mergeLive([replyEntry(8, T0 + 15_000, { entryUuid: 'a3' })], live))).toEqual(['live:message', 'pane-turn', 'live:tool', 'r8']);
       expect(rowShape(m.mergeLive([replyEntry(8, T0 + 15_000, { entryUuid: 'a3' })], [liveReply('a1', 1), liveReply('a3', 15)]))).toEqual(['r8']);
     },
+    // Review 4173 F10: the key is the turn's last assistant row whether or not it has text, so a turn that ends on a tool call keys its
+    // reply on the tool row. The reply takes that row's place, once; the tool row stays drawn after it; the turn's text rows go.
+    'a reply keyed on the turn\'s last tool row is drawn once, in that row\'s place, the tool row kept and the turn\'s text rows dropped': () => {
+      const tool: LiveItem = { kind: 'tool', key: 't1', use: { uuid: 'k9', ts: iso(13), toolId: 't1', name: 'Bash', input: '{}' } } as never;
+      const live = [userTurn('u1', 10, 'typed'), liveReply('a1', 11), liveReply('a2', 12), tool];
+      expect(rowShape(m.mergeLive([replyEntry(8, T0 + 60_000, { entryUuid: 'k9' })], live))).toEqual(['pane-turn', 'r8', 'live:tool']);
+    },
     'a reply with no live row sits by time; a reply id is drawn once; one an earlier page drew is not drawn': () => {
       const thread: ChatEntry[] = [replyEntry(9, T0 + 2_000, { entryUuid: 'gone' }), replyEntry(8, T0 + 20_000, { entryUuid: 'gone-too' }), replyEntry(8, T0 + 20_000, { entryUuid: 'gone-too' })];
       const live = [liveReply('a1', 5), liveReply('a2', 10), liveReply('a3', 40)];
@@ -636,7 +643,9 @@ export const CHAT_MUTANT_SETS: Record<string, MutantSet<never>> = {
     { id: 'M4 a nudge outside the page dropped', old: "rows.push({ kind: 'message-link', key: `link-${o.id}`, id: o.id }); continue;", new: 'continue;' },
     // PR B: the recorded replies.
     { id: 'M5 a recorded reply drawn beside its live row', old: 'const recorded = uuid === null ? undefined : byEntry.get(uuid);', new: 'const recorded = undefined as Unit | undefined;' },
-    { id: 'M6 the record\'s other live blocks drawn too', old: '        if (!placed.has(recorded)) { placed.add(recorded); out.push({ at: liveAt(item), rows: recorded.rows }); }', new: '        placed.add(recorded); out.push({ at: liveAt(item), rows: recorded.rows });' },
+    { id: 'M6 the record\'s other live blocks drawn too', old: '        if (!placed.has(recorded)) { placed.add(recorded); out.push({ at: liveAt(item), rows: [...recorded.rows, ...tool] }); }', new: '        if (true) { placed.add(recorded); out.push({ at: liveAt(item), rows: [...recorded.rows, ...tool] }); }' },
+    { id: 'M13 a reply keyed on a tool row is not matched (F10)', old: "assistantUuidOf(item) ?? (item.kind === 'tool' ? item.use.uuid : null)", new: 'assistantUuidOf(item)' },
+    { id: 'M14 the tool row the reply is keyed on is not drawn (F10)', old: "item.kind === 'tool' ? [{ kind: 'live', key: item.key, item }] : []", new: '[] as ChatRow[]' },
     { id: 'M7 a repeated reply id drawn twice', old: '      if (skip.has(e.row.id) || replies.has(e.row.id)) continue;', new: '      if (skip.has(e.row.id)) continue;' },
     { id: 'M8 a reply an earlier page drew drawn again', old: '      if (skip.has(e.row.id) || replies.has(e.row.id)) continue;', new: '      if (replies.has(e.row.id)) continue;' },
     { id: 'M10 the turn\'s earlier text rows drawn beside the reply', old: 'if (assistantUuidOf(live[i]!) !== null) dropped.add(i);', new: 'if (false) dropped.add(i);' },

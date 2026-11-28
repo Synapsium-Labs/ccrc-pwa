@@ -57,9 +57,10 @@ const pickUp = (o: OperatorModelOpen, id: number, at: number): void => {
   const r = o.store.moveMessage(id, 'pick-up', 'hook', at);
   if (!r.ok) throw new Error(`pick-up ${id}: ${r.error} ${r.detail}`);
 };
-const recordReply = (o: OperatorModelOpen, n: number, over: { at?: number; text?: string; sessionId?: string } = {}) =>
+const recordReply = (o: OperatorModelOpen, n: number,
+  over: { at?: number; text?: string; sessionId?: string; answers?: readonly number[]; answersCut?: boolean } = {}) =>
   o.store.recordReply({ at: over.at ?? NOW, turnAt: (over.at ?? NOW) - 5, sessionId: over.sessionId ?? SID, term: 1, entryUuid: uuidOf(n),
-    text: over.text ?? `fixture reply ${n}` });
+    text: over.text ?? `fixture reply ${n}`, answers: over.answers ?? [], answersCut: over.answersCut ?? false });
 const replyId = (r: ReturnType<typeof recordReply>): number => { if (!r.ok) throw new Error(`${r.error}: ${r.detail}`); return r.value.id; };
 const journalEntries = (dir: string): Record<string, unknown>[] => {
   const p = path.join(dir, PRIVACY_JOURNAL_BASENAME);
@@ -130,6 +131,93 @@ describe('recordReply: one issued-id sequence, through the privacy journal\'s ex
       messages: { kind: 'read', value: { more: false } }, generations: { kind: 'read', value: { count: 0 } }, readiness: { kind: 'read', value: { oldest: null } },
       replies: { kind: 'read', value: { more: false } }, older: null })));
     expect(wire.ok && wire.thread.entries.map((e) => e.kind === 'reply' && e.row.offRecord)).toEqual([false, true, false]);
+  });
+
+  // THE ANSWERED IDS (review 4173 F2, call 1953): the ids the turn's own prompts name say what was answered, each verified here; the
+  // window only widens off the record. A MISTAKE FALLS TOWARD OFF THE RECORD.
+  describe('the ids the turn names, verified (F2)', () => {
+    it('THE REVIEW\'S CASE: a body recorded late after an off-the-record message comes out off the record; the true answer names it and is off the record too', () => {
+      const o = open(dirIn());
+      const m1 = message(o); pickUp(o, m1, NOW + 10);
+      // Stop 1's body (it answered M1) is spooled; meanwhile the operator sends M2 off the record and the Overlord picks it up.
+      const m2 = message(o, { offRecord: true }); pickUp(o, m2, NOW + 30);
+      // Stop 2 resends the spooled body first: it is recorded now, late. Its window takes in M2, so it is the more private side.
+      const late = recordReply(o, 1, { at: NOW + 40, answers: [m1] });
+      expect(late.ok && [late.value.inReplyTo, late.value.offRecord], 'linked to what it named, off the record by the window').toEqual([m1, true]);
+      // Stop 2's own body names M2: its window is empty now, but the named id carries the fact.
+      const own = recordReply(o, 2, { at: NOW + 41, answers: [m2] });
+      expect(own.ok && [own.value.inReplyTo, own.value.offRecord]).toEqual([m2, true]);
+    });
+
+    it('a named id that is another session\'s, or unknown, makes the reply off the record and is never its link (condition 1)', () => {
+      const o = open(dirIn());
+      const mine = message(o); pickUp(o, mine, NOW + 10);
+      const theirs = message(o, { sessionId: 'lane-b-overlord' });
+      const other = recordReply(o, 1, { at: NOW + 20, answers: [theirs] });
+      expect(other.ok && [other.value.inReplyTo, other.value.offRecord], 'the window links, the bad id does not').toEqual([mine, true]);
+      const unknown = recordReply(o, 2, { at: NOW + 30, answers: [9_999] });
+      expect(unknown.ok && [unknown.value.inReplyTo, unknown.value.offRecord]).toEqual([null, true]);
+    });
+
+    it('a turn that answers no message, an empty list and an empty window, is on the record with no link (condition 2)', () => {
+      const o = open(dirIn());
+      const r = recordReply(o, 1, { at: NOW + 20, answers: [] });
+      expect(r.ok && [r.value.inReplyTo, r.value.offRecord]).toEqual([null, false]);
+    });
+
+    it('A LINE INSIDE A MESSAGE (condition 4): the worst a nudge-shaped line can do is link another of the session\'s own messages or make the reply more private', () => {
+      const o = open(dirIn());
+      const own = message(o); pickUp(o, own, NOW + 10);
+      const older = message(o, { at: NOW - 1000 });   // another of this session's messages, on the record, never picked up
+      const offOld = message(o, { at: NOW - 900, offRecord: true });
+      // A prompt that pastes a nudge line naming `older` (the reader names it beside the real one).
+      const a = recordReply(o, 1, { at: NOW + 20, answers: [older] });
+      expect(a.ok && [a.value.inReplyTo, a.value.offRecord], 'linked to the session\'s own message, still on the record').toEqual([older, false]);
+      const b = recordReply(o, 2, { at: NOW + 30, answers: [offOld] });
+      expect(b.ok && [b.value.inReplyTo, b.value.offRecord], 'naming an off-the-record one only makes it more private').toEqual([offOld, true]);
+      const theirs = message(o, { sessionId: 'lane-b-overlord' });
+      const c = recordReply(o, 3, { at: NOW + 40, answers: [theirs] });
+      expect(c.ok && [c.value.inReplyTo, c.value.offRecord], 'another session\'s id is never linked, and the reply goes off the record').toEqual([null, true]);
+    });
+
+    it('a cut list makes the reply off the record (condition 5)', () => {
+      const o = open(dirIn());
+      const m = message(o);
+      const r = recordReply(o, 1, { at: NOW + 20, answers: [m], answersCut: true });
+      expect(r.ok && [r.value.inReplyTo, r.value.offRecord]).toEqual([m, true]);
+    });
+
+    it('a bad list is refused, naming the field, writing nothing', () => {
+      const o = open(dirIn());
+      for (const answers of [Array.from({ length: operatorMessages.REPLY_ANSWERS_MAX + 1 }, (_v, i) => i + 1), [0], [1.5], [-2]]) {
+        expect(recordReply(o, 1, { answers }), JSON.stringify(answers).slice(0, 20)).toMatchObject({ ok: false, error: 'refused', detail: expect.stringMatching(/^answers:/) });
+      }
+      expect(o.store.recordReply({ at: NOW, turnAt: NOW, sessionId: SID, term: 1, entryUuid: uuidOf(1), text: 't', answers: [], answersCut: 'yes' as never }))
+        .toMatchObject({ ok: false, error: 'refused', detail: 'answersCut: not a boolean' });
+      expect(replyRows(o)).toEqual([]);
+    });
+  });
+
+  it('THE STORE\'S CAP IS BELOW THE REPORT\'S BOUND, where both are declared (the cut-before-the-mask point, call 1952)', () => {
+    expect(operatorMessages.REPLY_STORE_CAP_BELOW_REPORT_BOUND).toBe(true);
+    expect(MESSAGE_TEXT_MAX_BYTES).toBeLessThan(operatorMessages.REPLY_REPORT_MAX_BYTES);
+  });
+
+  it('F7: a journal moved back while the store is open still issues above every id either table holds (the writers\' own reads)', () => {
+    const dir = dirIn();
+    const o = open(dir);
+    const journal = path.join(dir, PRIVACY_JOURNAL_BASENAME);
+    message(o);                                            // id 1
+    const early = readFileSync(journal);                   // the journal as it stood at id 1
+    expect(replyId(recordReply(o, 1))).toBe(2);            // a reply: id 2
+    message(o); message(o); message(o);                    // ids 3 to 5: the MESSAGE table holds the highest
+    writeFileSync(journal, early);                         // the journal moves back to id 1 while the store stays open
+    expect(replyId(recordReply(o, 2)), 'the reply writer reads the highest over BOTH tables, not only its own (2)').toBe(6);
+    expect(replyId(recordReply(o, 3))).toBe(7);
+    expect(replyId(recordReply(o, 4))).toBe(8);            // now the REPLY table holds the highest
+    writeFileSync(journal, early);
+    const m = message(o);
+    expect(m, 'the message writer the same, over the replies too (not its own 5)').toBe(9);
   });
 
   it('a text over the cap is cut with the one mark; a closed store answers not-open and writes nothing', () => {

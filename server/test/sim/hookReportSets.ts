@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { expect } from 'vitest';
 import type { MutantSet, SuiteCase } from './mutate.js';
 import { AGENT_TYPE_MAX, DOOR_TOOL_PREFIX, REPORT_MODEL_MAX } from '../../../shared/continuity-reports.js';
-import { REPLY_REPORT_MAX_BYTES } from '../../../shared/operatorMessages.js';
+import { REPLY_ANSWERS_MAX, REPLY_REPORT_MAX_BYTES } from '../../../shared/operatorMessages.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');
 
@@ -21,7 +21,8 @@ const MS = { kind: 'model-switch', how: 'switched', from: 'model-a', to: 'model-
 const PU = { kind: 'picked-up', messageId: 12, at: 5 };
 /** The reply report (Overlord W1 chat, PR B): a fixture text, never one that looks like a secret. */
 const RE_UUID = '0f1e2d3c-4b5a-4968-8776-a5b4c3d2e1f0';
-const RE = { kind: 'reply', entryUuid: RE_UUID, turnAt: 7, text: 'Done: project-a is green.', truncated: false, droppedBefore: null, at: 8 };
+const RE = { kind: 'reply', entryUuid: RE_UUID, turnAt: 7, text: 'Done: project-a is green.', truncated: false, droppedBefore: null,
+  answers: [3, 9], answersCut: false, at: 8 };
 
 export function hookReportCases(m: HookReportsModule): Record<string, SuiteCase> {
   const f = (b: Record<string, unknown>): string | null => { const v = m.hookReportOf(b); return v.ok ? null : v.field; };
@@ -84,6 +85,20 @@ export function hookReportCases(m: HookReportsModule): Record<string, SuiteCase>
     'a reply droppedBefore that is not a positive integer': () => {
       each(RE, 'droppedBefore', [0, -1, 1.5, '1'], 'droppedBefore');
     },
+    // The answered ids (call 1953 condition 2): required, possibly empty, each a positive safe integer, at most REPLY_ANSWERS_MAX.
+    'a reply\'s answers are required, may be empty, and are each a positive safe integer within the bound': () => {
+      expect(m.hookReportOf({ ...RE, answers: [] })).toEqual({ ok: true, report: { ...RE, answers: [] } });
+      const full = Array.from({ length: REPLY_ANSWERS_MAX }, (_v, i) => i + 1);
+      expect(f({ ...RE, answers: full })).toBeNull();
+      expect(f({ ...RE, answers: [...full, REPLY_ANSWERS_MAX + 1] })).toBe('answers');
+      each(RE, 'answers', [undefined, null, 3, '3', [0], [-1], [1.5], ['3'], [Number.MAX_SAFE_INTEGER + 2]], 'answers');
+    },
+    'a reply\'s answersCut is a boolean; absent it reads false': () => {
+      const { answersCut: _c, ...noCut } = RE;
+      expect(m.hookReportOf(noCut)).toEqual({ ok: true, report: { ...RE, answersCut: false } });
+      expect(m.hookReportOf({ ...RE, answersCut: true })).toEqual({ ok: true, report: { ...RE, answersCut: true } });
+      each(RE, 'answersCut', ['true', 1, 0], 'answersCut');
+    },
   };
 }
 
@@ -118,6 +133,11 @@ const MUTANTS = [
   { id: 'R26 reply: an empty text admitted', old: "typeof v === 'string' && v !== '' && utf8Bytes(v)", new: "typeof v === 'string' && utf8Bytes(v)" },
   { id: 'R27 reply: the truncated check removed', old: "      if (typeof truncated !== 'boolean') return no('truncated');\n", new: '' },
   { id: 'R28 reply: the droppedBefore check removed', old: "      if (droppedBefore === undefined) return no('droppedBefore');\n", new: '' },
+  { id: 'R30 reply: the answers check removed', old: "      if (!Array.isArray(answers) || answers.length > REPLY_ANSWERS_MAX || !answers.every(isPos)) return no('answers');\n", new: '' },
+  { id: 'R31 reply: the answers bound dropped', old: ' || answers.length > REPLY_ANSWERS_MAX', new: '' },
+  { id: 'R32 reply: an answer of 0 admitted', old: '!answers.every(isPos)', new: '!answers.every(isCount)' },
+  { id: 'R33 reply: the answersCut check removed', old: "      if (answersCut === undefined) return no('answersCut');\n", new: '' },
+  { id: 'R34 reply: an absent answersCut read as cut', old: 'answersCut: answersCut === true', new: 'answersCut: answersCut !== false' },
   { id: 'R29 reply: the uuid shape loosened to any case', old: 'const ENTRY_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;', new: 'const ENTRY_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;' },
 ] as const;
 

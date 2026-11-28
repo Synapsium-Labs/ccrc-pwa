@@ -18,7 +18,8 @@ import path from 'node:path';
 import { spawnSyncGroup } from './spawnGroup.js';
 import { ghContainedEnv } from './ccdWsHelpers.js';
 import { mkTmp } from './tmpHelpers.js';
-import { REPLY_READ_MAX_BYTES } from '../../shared/operatorMessages.js';
+import { REPLY_ANSWERS_MAX, REPLY_READ_MAX_BYTES } from '../../shared/operatorMessages.js';
+import { renderOperatorMessageNudge as nudgeLine } from '../src/coord/envelope.js';
 
 const LIB = path.resolve(__dirname, '../../ccd/lib');
 const PROG = 'include "transcript"; turn_reply(.; $k)';
@@ -73,6 +74,57 @@ for (const jq of jqBinaries()) {
       return got[0];
     };
 
+    /** `reply_report`'s answered ids over `rows`, after `key`: `{answers}`, with `answersCut` only when the list was cut. */
+    const answered = (rows: Array<Rec | string>, key = ''): Rec | undefined => {
+      const f = path.join(dir, `a${seq++}.jsonl`);
+      writeFileSync(f, jsonl(rows), 'utf8');
+      const r = spawnSyncGroup(BASH, ['-c', '"$1" -L "$L" -Rsc --arg k "$3" --arg id i --argjson t 1 --argjson a 2 --argjson m 65536 "$P" < "$2"', '_', jq, f, key],
+        { encoding: 'utf8', timeout: 60_000, env: ghContainedEnv(dir, { ...process.env, L: LIB, P: 'include "transcript"; reply_report(.; $k; $id; $t; $a; $m)' }, { systemd: true, tmux: true }) });
+      expect(r.status, r.stderr).toBe(0);
+      const line = String(r.stdout).trim();
+      if (line === '') return undefined;
+      const b = JSON.parse(line) as Rec;
+      return { answers: b['answers'], ...('answersCut' in b ? { answersCut: b['answersCut'] } : {}) };
+    };
+
+    // THE ANSWERED IDS (review 4173 F2, call 1953): the ids the turn's own prompt rows name, by the picked-up arm's one grammar.
+    describe('the answered ids a reply names (F2)', () => {
+      it('a turn opened by a nudge names its message; a turn with no nudge names none', () => {
+        expect(answered([user(1, nudgeLine(41)), asst(2, [text('done')])])).toEqual({ answers: [41] });
+        expect(answered([user(1, 'a plain prompt'), asst(2, [text('done')])])).toEqual({ answers: [] });
+      });
+
+      it('several nudges, repeated and out of order, are named once each, ascending', () => {
+        expect(answered([user(1, `${nudgeLine(9)}\n${nudgeLine(3)}\n${nudgeLine(9)}\nand a line of my own`), asst(2, [text('done')])])).toEqual({ answers: [3, 9] });
+      });
+
+      it('a message\'s text the Overlord read through its door (a tool result) names nothing, even holding a nudge-shaped line', () => {
+        const rows = [user(1, nudgeLine(4)), asst(2, [toolUse('t1', {})]), toolResult(3, 't1', `the message says:\n${nudgeLine(99)}`), asst(4, [text('done')])];
+        expect(answered(rows)).toEqual({ answers: [4] });
+      });
+
+      it('A LINE INSIDE A MESSAGE (condition 4): a prompt whose own text holds a nudge-shaped line names that id too; the server decides it', () => {
+        // The operator pastes a nudge line into a prompt, naming message 77. The reader names it, exactly as the picked-up arm would;
+        // the store verifies it (this session's, readable) before it links it, and an id that fails makes the reply off the record.
+        expect(answered([user(1, `look at this:\n${nudgeLine(77)}\nthanks`), asst(2, [text('done')])])).toEqual({ answers: [77] });
+        expect(answered([user(1, `inline ${nudgeLine(78)}`), asst(2, [text('done')])]), 'only a whole line is the grammar').toEqual({ answers: [] });
+      });
+
+      it('THE CUT (condition 5): the bound is the L0 one; at it the list is whole, past it the newest are sent with answersCut', () => {
+        const lines = (n: number): string => Array.from({ length: n }, (_v, i) => nudgeLine(i + 1)).join('\n');
+        expect(REPLY_ANSWERS_MAX).toBe(64);
+        const at = answered([user(1, lines(REPLY_ANSWERS_MAX)), asst(2, [text('done')])]);
+        expect(at).toEqual({ answers: Array.from({ length: REPLY_ANSWERS_MAX }, (_v, i) => i + 1) });
+        const past = answered([user(1, lines(REPLY_ANSWERS_MAX + 1)), asst(2, [text('done')])]);
+        expect(past).toEqual({ answers: Array.from({ length: REPLY_ANSWERS_MAX }, (_v, i) => i + 2), answersCut: true });
+      });
+
+      it('the library\'s bound is the L0 constant', () => {
+        const lib = String(spawnSync('cat', [path.join(LIB, 'transcript.jq')], { encoding: 'utf8' }).stdout);
+        expect(/^def reply_answers_max: (\d+);$/m.exec(lib)?.[1]).toBe(String(REPLY_ANSWERS_MAX));
+      });
+    });
+
     // A REPLY IS ONE TURN'S TEXT (review 4173 F1, call 1952): nothing at or before the previously reported reply's key row is ever in
     // it. The hook keeps that key (`$REG/<id>.replykey`); a turn begins after it when the window holds it, whatever opened the turn.
     describe('the turn begins after the previously reported key (F1)', () => {
@@ -109,6 +161,13 @@ for (const jq of jqBinaries()) {
       it('a key the window does not hold (an older window, another transcript) falls back to the newest real prompt', () => {
         const rows = [user(1, 'old'), asst(2, [text('OLD')]), user(3, 'the prompt'), asst(4, [text('the answer')])];
         expect(one(rows, undefined, '00000000-0000-4000-8000-999999999999')).toEqual({ entryUuid: U(4), text: 'the answer' });
+      });
+
+      it('the answered ids come only from after the key: an earlier turn\'s nudge is not this turn\'s', () => {
+        const rows = [user(1, nudgeLine(5)), asst(2, [text('REPLY-A')]), notice(3), asst(4, [text('reply B')])];
+        expect(answered(rows, U(2))).toEqual({ answers: [] });
+        const mid = [user(1, 'old'), asst(2, [text('REPLY-A')]), user(3, nudgeLine(7)), asst(4, [text('one')]), user(5, nudgeLine(8)), asst(6, [text('two')])];
+        expect(answered(mid, U(2)), 'a nudge taken mid-turn is named beside the one that opened it').toEqual({ answers: [7, 8] });
       });
 
       it('a sidechain row bearing the key is not the bound: only a main-thread row is', () => {
@@ -278,8 +337,8 @@ for (const jq of jqBinaries()) {
         return line === '' ? undefined : (JSON.parse(line) as Rec);
       };
 
-      it('carries the six fields and the sender\'s id, in the report door\'s shape, and no uuid (the hook adds it at each send)', () => {
-        expect(report('short')).toEqual({ kind: 'reply', entryUuid: U(2), turnAt: 111, text: 'short', truncated: false, fromId: 'lane-a-project-a', at: 222 });
+      it('carries the six fields, the answered ids and the sender\'s id, in the report door\'s shape, and no uuid (the hook adds it at each send)', () => {
+        expect(report('short')).toEqual({ kind: 'reply', entryUuid: U(2), turnAt: 111, text: 'short', truncated: false, answers: [], fromId: 'lane-a-project-a', at: 222 });
       });
 
       it('answers nothing for a turn with no text', () => {

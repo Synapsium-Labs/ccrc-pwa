@@ -402,7 +402,8 @@ describe('the reply report: sent at a main Stop, spooled and resent (the one rep
     const rs = reports();
     expect(rs).toHaveLength(1);
     // `fromUuid` last: the hook adds the event's own session id at the send, never in the body it builds or spools (review 4173 F3).
-    expect(Object.keys(rs[0]!)).toEqual(['kind', 'entryUuid', 'turnAt', 'text', 'truncated', 'fromId', 'at', 'fromUuid']);
+    expect(Object.keys(rs[0]!)).toEqual(['kind', 'entryUuid', 'turnAt', 'text', 'truncated', 'answers', 'fromId', 'at', 'fromUuid']);
+    expect(rs[0]!['answers'], 'a prompt that is no nudge names no message').toEqual([]);
     expect(rs[0]).toMatchObject({ kind: 'reply', entryUuid: TU(7), text: 'the answer\n\nwith two paragraphs', truncated: false, fromId: ID, fromUuid: UUID });
     for (const k of ['turnAt', 'at']) {
       expect(Number.isInteger(rs[0]![k]), k).toBe(true);
@@ -684,6 +685,13 @@ describe('the reply report: sent at a main Stop, spooled and resent (the one rep
       fs.rmSync(path.join(home, 'reports.log'));
       run(stop({ transcript_path: f }));
       expect(reports()).toEqual([]);
+    });
+
+    it('a turn opened by a nudge prompt names that message in its answers (F2, call 1953)', () => {
+      const f = path.join(home, 'live.jsonl');
+      fs.writeFileSync(f, rows(u(1, renderOperatorMessageNudge(12)), a(2, 'the answer')));
+      run(stop({ transcript_path: f }));
+      expect(reports().map((r) => [r['entryUuid'], r['answers']])).toEqual([[TU(2), [12]]]);
     });
 
     it('a body that is kept (spooled) still moves the key: it was reported, and its text is never taken into the next turn', () => {

@@ -432,6 +432,13 @@ def loads_body($o; $x; $id; $rid; $lp; $rc; $ver; $wd; $cf; $at):
 #     Code writes one row per content block, so a turn of text, a tool call and more text is two blocks, not one.
 #   * THE KEY, `entryUuid`, is the uuid of the turn's LAST main-thread assistant row that is not an API error row, whether or not that row has text, in
 #     the 36-character lower-case shape `continued_in` reads (a row with no such uuid answers nothing, as nothing could key it).
+#   * THE ANSWERED IDS (review 4173 F2, call 1953): `answers` are the operator-message ids the turn's own prompt rows name, each line
+#     of each main-thread user row from the turn's start that is a real prompt (`prompt`) read by `nudge`, the picked-up arm's one
+#     grammar, ascending and without repeats. A tool result is never a prompt, so a message's text the Overlord read through its door
+#     names nothing. A line the operator typed or pasted that is shaped like the nudge does name its id: the server verifies each id
+#     (this session's, readable) and links only a verified one, so the worst such a line can do is make the reply more private or link
+#     it to another of the session's own messages. Past `reply_answers_max` (a copy of REPLY_ANSWERS_MAX) the newest are sent with
+#     `answersCut: true`, and the server records that reply off the record.
 # `reply_cut($max)` cuts a string to at most `$max` UTF-8 bytes at a code point, never mid-character, and says whether it did;
 # `reply_report($w; $k; $id; $turnAt; $at; $max)` is the report's body over a window: the `reply` kind's six fields and `fromId`.
 # It carries no `fromUuid`: the hook adds the event's own session id at each send (`_hook_reply_send`), so a body spooled before the
@@ -451,20 +458,25 @@ def tr_texts: (.message | if type == "object" then .content else null end) as $c
   | if ($c | type) == "string" then [$c]
     elif ($c | type) == "array" then [$c[] | select(type == "object" and .type == "text" and (.text | type) == "string") | .text]
     else [] end;
-def turn_reply($w; $k):
+def tr_turn($w; $k):
   tr_rows($w) as $rows
   | (tr_key($rows; $k; ($rows | length) - 1) // tr_find($rows; ($rows | length) - 1)) as $p
   | if $p == null then empty
     else [$rows[$p + 1:][] | select(.type == "assistant" and .isApiErrorMessage != true)] as $a
     | if ($a | length) == 0 or ($a[-1].uuid | tr_isuuid | not) then empty
       else [$a[] | tr_texts[] | select(tr_nonblank)] as $t
-      | if $t == [] then empty else {entryUuid: $a[-1].uuid, text: ($t | join("\n\n"))} end
+      | if $t == [] then empty
+        else {entryUuid: $a[-1].uuid, text: ($t | join("\n\n")),
+              answers: ([$rows[$p:][] | select(.type == "user" and prompt) | tr_texts[] | split("\n")[] | nudge] | unique)} end
       end
     end;
+def turn_reply($w; $k): tr_turn($w; $k) | {entryUuid, text};
 def reply_cut($max): if utf8bytelength <= $max then {text: ., truncated: false}
   else (.[:$max] | explode) as $c
   | [foreach $c[] as $x (0; . + (if $x < 128 then 1 elif $x < 2048 then 2 elif $x < 65536 then 3 else 4 end); .)] as $s
   | {text: ($c[:([$s[] | select(. <= $max)] | length)] | implode), truncated: true} end;
+def reply_answers_max: 64;
 def reply_report($w; $k; $id; $turnAt; $at; $max):
-  turn_reply($w; $k) | (.text | reply_cut($max)) as $c
-  | {kind: "reply", entryUuid, turnAt: $turnAt, text: $c.text, truncated: $c.truncated, fromId: $id, at: $at};
+  tr_turn($w; $k) | (.text | reply_cut($max)) as $c
+  | {kind: "reply", entryUuid, turnAt: $turnAt, text: $c.text, truncated: $c.truncated, answers: .answers[-reply_answers_max:]}
+  + (if (.answers | length) > reply_answers_max then {answersCut: true} else {} end) + {fromId: $id, at: $at};

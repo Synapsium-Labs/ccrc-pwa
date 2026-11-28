@@ -10,7 +10,7 @@ import {
   AGENT_TYPE_MAX, DOOR_TOOL_NAME_RE, DOOR_TOOL_PREFIX, REPORT_MODEL_MAX, WITNESS_KEY_SHAPE, isAgentId, isHookReportKind,
   isModelSwitchHow, READER_STALE_MS, WITNESS_WINDOW_MS, type HookReport, type ModelSwitchHow,
 } from '../../../shared/continuity-reports.js';
-import { REPLY_REPORT_MAX_BYTES } from '../../../shared/operatorMessages.js';
+import { REPLY_ANSWERS_MAX, REPLY_REPORT_MAX_BYTES } from '../../../shared/operatorMessages.js';
 import { utf8Bytes } from '../../../shared/utf8.js';
 import type { WitnessVerdict } from '../coord/overlordGate.js';
 
@@ -89,7 +89,13 @@ export function hookReportOf(body: Record<string, unknown>): HookReportVerdict {
       if (typeof truncated !== 'boolean') return no('truncated');
       const droppedBefore = opt(body['droppedBefore'], isPos);
       if (droppedBefore === undefined) return no('droppedBefore');
-      return { ok: true, report: { kind, entryUuid, turnAt, text, truncated, droppedBefore, at } };
+      // The ids the turn's own prompt rows name (call 1953 condition 2): REQUIRED, and may be empty. An adapter that cannot name ids
+      // sends `[]` and gets the server's window alone; past REPLY_ANSWERS_MAX the hook sends the newest with `answersCut: true`.
+      const answers = body['answers'];
+      if (!Array.isArray(answers) || answers.length > REPLY_ANSWERS_MAX || !answers.every(isPos)) return no('answers');
+      const answersCut = opt(body['answersCut'], (x): x is boolean => typeof x === 'boolean');
+      if (answersCut === undefined) return no('answersCut');
+      return { ok: true, report: { kind, entryUuid, turnAt, text, truncated, droppedBefore, answers: answers as number[], answersCut: answersCut === true, at } };
     }
   }
 }

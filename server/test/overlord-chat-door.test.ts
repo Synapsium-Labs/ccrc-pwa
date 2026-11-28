@@ -511,7 +511,7 @@ describe('GET /api/overlord/chat: the Overlord\'s replies, their response rows a
   const uuidOf = (n: number): string => `0f1e2d3c-4b5a-4968-8776-${String(n).padStart(12, '0')}`;
   /** A reply through the store's one writer (its id from the one issued-id sequence), with or without its response row. */
   function seedReply(r: Rig, n: number, at: number, withRow: boolean): number {
-    const w = r.store.recordReply({ at, turnAt: at, sessionId: LANE_A, term: 1, entryUuid: uuidOf(n), text: `fixture reply ${n}` });
+    const w = r.store.recordReply({ at, turnAt: at, sessionId: LANE_A, term: 1, entryUuid: uuidOf(n), text: `fixture reply ${n}`, answers: [], answersCut: false });
     if (!w.ok) throw new Error(`seed reply ${n}: ${w.error} ${w.detail}`);
     if (withRow) insertReplyResponse(r.coord.db, w.value.id, STAMP, at);
     return w.value.id;

@@ -17,10 +17,10 @@ import { isRecordedActor } from '../auth/attributionIdentity.js';
 import type { RecordedActor } from '../auth/callerIdentity.js';
 import { tx } from '../coord/tx.js';
 import {
-  MESSAGE_STATES, READ_DOORS, READ_OUTCOME_MAX_CHARS, READ_SCOPE_MAX_CHARS, isGenerationRead, isMessageState, isReadCaller, isReadDoor,
+  MESSAGE_STATES, READ_DOORS, READ_OUTCOME_MAX_CHARS, READ_SCOPE_MAX_CHARS, REPLY_ANSWERS_MAX, isGenerationRead, isMessageState, isReadCaller, isReadDoor,
   isReadTurnState, isSettledBy, replyLinks,
   type MessageActor, type MessageEvent, type MessageState, type OperatorMessageRow, type OverlordReplyRow, type ReadCaller, type ReadDoor,
-  type ReadLine,
+  type ReadLine, type ReplyNamedMessage,
 } from '../../../shared/operatorMessages.js';
 import { capMessageText, messageMove, nextMessageId } from './messages.js';
 import { READ_CEILING_OUTCOME, READ_SERVED_OUTCOME } from '../../../shared/overlordInbox.js';
@@ -101,6 +101,10 @@ export interface ReplyRecordInput {
   readonly entryUuid: string;
   /** Masked by the arm; capped here, with the same cap and mark as a message. */
   readonly text: string;
+  /** The message ids the turn's own prompt rows name (the report's `answers`, at most REPLY_ANSWERS_MAX; call 1953), and whether
+   *  the hook cut that list. They say what the reply answered once each is verified here. */
+  readonly answers: readonly number[];
+  readonly answersCut: boolean;
 }
 export interface ReplyRecorded {
   readonly id: number;
@@ -236,15 +240,20 @@ export class OperatorModelStore {
    *  this session already recorded answers that record (`replay`) and writes nothing; the same key with other text refuses
    *  `entry-reused`. Otherwise the text is capped by the one cutter, the id is issued by the privacy journal inside this
    *  transaction, before the row, from the one issued-id sequence and with its one record (`HIGHEST_ISSUED_SQL`; no words), and
-   *  `replyLinks` says what the turn answered: the
-   *  operator messages this session picked up after its previous reply's time and at or before this one's. A refusal's detail
-   *  never names the text. */
+   *  `replyLinks` says what the turn answered (review 4173 F2, call 1953): the ids the turn's own prompts name, each verified here
+   *  (it exists, is this session's, its off-the-record fact reads 0 or 1), and, only to widen off the record, the messages this
+   *  session picked up after its previous reply's record and at or before this one, both on this server's clock. A mistake falls
+   *  toward off the record. A refusal's detail never names the text. */
   recordReply(r: ReplyRecordInput): StoreWrite<ReplyRecorded> {
     if (typeof r.sessionId !== 'string' || !r.sessionId) return { ok: false, error: 'refused', detail: 'sessionId: empty' };
     if (typeof r.entryUuid !== 'string' || !r.entryUuid) return { ok: false, error: 'refused', detail: 'entryUuid: empty' };
     if (!isCount(r.term)) return { ok: false, error: 'refused', detail: 'term: not a non-negative safe integer' };
     if (!isCount(r.at) || !isCount(r.turnAt)) return { ok: false, error: 'refused', detail: 'at and turnAt: non-negative safe integers' };
     if (typeof r.text !== 'string' || r.text === '') return { ok: false, error: 'refused', detail: 'text: empty' };
+    if (!Array.isArray(r.answers) || r.answers.length > REPLY_ANSWERS_MAX || !r.answers.every((x) => Number.isSafeInteger(x) && x > 0)) {
+      return { ok: false, error: 'refused', detail: `answers: at most ${REPLY_ANSWERS_MAX} positive safe integers` };
+    }
+    if (typeof r.answersCut !== 'boolean') return { ok: false, error: 'refused', detail: 'answersCut: not a boolean' };
     if (!this.db.isOpen) return { ok: false, error: 'not-open', detail: 'the private store is not open' };
     const capped = capMessageText(r.text);
     try {
@@ -269,7 +278,16 @@ export class OperatorModelStore {
         const previous = (this.db.prepare('SELECT max(at) AS a FROM overlord_replies WHERE sessionId = ?').get(r.sessionId) as { a: number | null }).a;
         const answered = this.db.prepare('SELECT id, offRecord FROM operator_messages WHERE sessionId = ? AND pickedUpAt IS NOT NULL '
           + 'AND pickedUpAt > ? AND pickedUpAt <= ? ORDER BY id').all(r.sessionId, previous ?? -1, r.at) as { id: number; offRecord: number }[];
-        const links = replyLinks(answered.map((m) => ({ id: m.id, offRecord: m.offRecord === 1 })));
+        // What the turn's own prompts name: each id verified before it is used (this session's, readable), else `unverified`, which
+        // makes the reply off the record and is never linked (call 1953 condition 1). An off-the-record fact that reads neither 0 nor
+        // 1 counts as off, in the window too.
+        const one = this.db.prepare('SELECT sessionId, offRecord FROM operator_messages WHERE id = ?');
+        const named = r.answers.map((id): ReplyNamedMessage => {
+          const row = one.get(id) as { sessionId: unknown; offRecord: unknown } | undefined;
+          return { id, verdict: row === undefined || row.sessionId !== r.sessionId ? 'unverified'
+            : row.offRecord === 0 ? 'on' : row.offRecord === 1 ? 'off' : 'unverified' };
+        });
+        const links = replyLinks(named, answered.map((m) => ({ id: m.id, offRecord: m.offRecord !== 0 })), r.answersCut);
         this.db.prepare('INSERT INTO overlord_replies (id, at, turnAt, sessionId, term, entryUuid, sha256, text, cut, inReplyTo, offRecord) '
           + 'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
           .run(issued.id, r.at, r.turnAt, r.sessionId, r.term, r.entryUuid, capped.sha256, capped.text, capped.cut ? 1 : 0,

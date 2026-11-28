@@ -239,6 +239,15 @@ export const REPLY_READ_MAX_BYTES = 4 * 1024 * 1024;
 export const REPLY_REPORT_MAX_BYTES = 65_536;
 /** How many unsent reply reports the hook's spool keeps; past it the oldest is dropped and counted (`droppedBefore`). */
 export const REPLY_SPOOL_MAX = 8;
+/** How many message ids a reply report names (`answers`, the ids the turn's own prompt rows name): past it the hook sends the newest
+ *  this many with `answersCut`, and that reply is off the record (call 1953). ccd/lib/transcript.jq's `reply_answers_max` is a copy,
+ *  held equal by ccd-transcript-turn-reply.test.ts. */
+export const REPLY_ANSWERS_MAX = 64;
+/** THE STORE'S CAP IS BELOW THE REPORT'S BOUND, and must stay so (review 4173's cut-before-the-mask point, call 1952): the hook cuts a
+ *  reply at REPLY_REPORT_MAX_BYTES BEFORE the server masks it, so a secret straddling that cut could leave a fragment the shape masks
+ *  miss; the store keeps only the first MESSAGE_TEXT_MAX_BYTES of the masked text, so that end never reaches the record.
+ *  operator-model-replies.test.ts asserts it true and continuity-report-route.test.ts routes a straddling secret through the door. */
+export const REPLY_STORE_CAP_BELOW_REPORT_BOUND: boolean = MESSAGE_TEXT_MAX_BYTES < REPLY_REPORT_MAX_BYTES;
 
 /** One recorded reply as the chat reads it. `entryUuid` is the turn's last assistant entry, the key the live transcript merges on. */
 export interface OverlordReplyRow {
@@ -253,22 +262,39 @@ export interface OverlordReplyRow {
   readonly text: string;
   readonly cut: boolean;
   readonly sha256: string;
-  /** The newest operator message the turn answered (picked up since the previous reply), or null. */
+  /** The newest verified message id the turn's own prompts named, else the newest this session picked up since its previous reply,
+   *  or null (`replyLinks`). */
   readonly inReplyTo: number | null;
-  /** True when any message the turn answered was sent off the record (§9.4 rule 9): the reply is off the record too. */
+  /** True when any message the turn may answer was sent off the record (§9.4 rule 9), or what it answers could not be decided
+   *  exactly: the reply is off the record too (`replyLinks`). */
   readonly offRecord: boolean;
 }
 
-/** What a reply links to, from the operator messages this session picked up since its previous reply and at or before this one
- *  (total, pure): `inReplyTo` the newest of their ids, or null for none; `offRecord` true when any of them was sent off the
- *  record, because a reply to a message sent off the record is off the record too. */
-export function replyLinks(answered: readonly { readonly id: number; readonly offRecord: boolean }[]):
-  { readonly inReplyTo: number | null; readonly offRecord: boolean } {
-  let inReplyTo: number | null = null;
-  let offRecord = false;
-  for (const m of answered) {
-    if (inReplyTo === null || m.id > inReplyTo) inReplyTo = m.id;
-    if (m.offRecord) offRecord = true;
+/** A message id the turn's own prompt rows name, as the store verified it (call 1953 condition 1): `on` or `off` for a message that
+ *  exists, is this session's and can be read, by its off-the-record fact; `unverified` for any id that fails one of the three. */
+export interface ReplyNamedMessage { readonly id: number; readonly verdict: 'on' | 'off' | 'unverified' }
+
+/** What a reply links to (total, pure; review 4173 F2, call 1953). A MISTAKE FALLS TOWARD OFF THE RECORD: where what a reply answers
+ *  cannot be decided exactly, it is never made more public than the most private message it may answer.
+ *  - `named`: the ids the turn's own prompt rows name, verified. They say what was answered.
+ *  - `window`: this session's messages picked up (the server's clock) after its previous recorded reply and at or before this record.
+ *    It only WIDENS off the record, and links only when no named id is verified.
+ *  - `cut`: the hook named more than REPLY_ANSWERS_MAX ids and sent the newest.
+ *  `offRecord` is true when the cut stands, or any named id is off the record or unverified, or any window message is off the record.
+ *  `inReplyTo` is the newest VERIFIED named id, else the window's newest, else null: an unverified id is never written as what the
+ *  reply answers. */
+export function replyLinks(named: readonly ReplyNamedMessage[], window: readonly { readonly id: number; readonly offRecord: boolean }[],
+  cut: boolean): { readonly inReplyTo: number | null; readonly offRecord: boolean } {
+  let verified: number | null = null;
+  let windowNewest: number | null = null;
+  let offRecord = cut;
+  for (const m of named) {
+    if (m.verdict !== 'on') offRecord = true;
+    if (m.verdict !== 'unverified' && (verified === null || m.id > verified)) verified = m.id;
   }
-  return { inReplyTo, offRecord };
+  for (const m of window) {
+    if (m.offRecord) offRecord = true;
+    if (windowNewest === null || m.id > windowNewest) windowNewest = m.id;
+  }
+  return { inReplyTo: verified ?? windowNewest, offRecord };
 }

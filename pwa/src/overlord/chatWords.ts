@@ -173,6 +173,9 @@ function userTurnsOf(item: ChatItem): { readonly key: string; readonly text: str
 
 /** The event uuid of a live assistant text row, or null for any other row. */
 const assistantUuidOf = (item: ChatItem): string | null => (item.kind === 'message' && item.event.kind === 'assistant' ? item.event.uuid : null);
+/** The row uuid a recorded reply's `entryUuid` may name: an assistant text row's, or a tool call's (review 4173 F10: the key is the
+ *  turn's last assistant row whether or not it has text, so a turn that ends on a tool call keys its reply on that row). */
+const keyUuidOf = (item: ChatItem): string | null => assistantUuidOf(item) ?? (item.kind === 'tool' ? item.use.uuid : null);
 
 /** The live indexes a recorded reply's text stands for, besides its own row: a reply is the text of every block of its turn joined,
  *  so each live assistant text row between the turn's start (the newest user turn of any origin before the entry, or the start
@@ -182,7 +185,7 @@ function liveTurnText(live: readonly ChatItem[], entries: ReadonlySet<string>): 
   const dropped = new Set<number>();
   const done = new Set<string>();
   live.forEach((item, at) => {
-    const uuid = assistantUuidOf(item);
+    const uuid = keyUuidOf(item);
     if (uuid === null || !entries.has(uuid) || done.has(uuid)) return;
     done.add(uuid);
     for (let i = at - 1; i >= 0 && userTurnsOf(live[i]!) === null; i -= 1) if (assistantUuidOf(live[i]!) !== null) dropped.add(i);
@@ -216,10 +219,13 @@ export function mergeLive(thread: readonly ChatEntry[], live: readonly ChatItem[
     if (turnText.has(at)) continue;
     const turns = userTurnsOf(item);
     if (turns === null) {
-      const uuid = assistantUuidOf(item);
+      const uuid = keyUuidOf(item);
       const recorded = uuid === null ? undefined : byEntry.get(uuid);
       if (recorded !== undefined) {
-        if (!placed.has(recorded)) { placed.add(recorded); out.push({ at: liveAt(item), rows: recorded.rows }); }
+        // A tool row the reply is keyed on stays drawn after it: the call is no part of the reply's text (F10).
+        const tool: ChatRow[] = item.kind === 'tool' ? [{ kind: 'live', key: item.key, item }] : [];
+        if (!placed.has(recorded)) { placed.add(recorded); out.push({ at: liveAt(item), rows: [...recorded.rows, ...tool] }); }
+        else if (tool.length > 0) out.push({ at: liveAt(item), rows: tool });
         continue;
       }
       out.push({ at: liveAt(item), rows: [{ kind: 'live', key: item.key, item }] });
@@ -425,6 +431,10 @@ export function replyHandledOffer(r: ReplyResponse): ReplyHandledOffer {
   if (r.kind !== 'row') return { kind: 'none' };
   return r.handledAt === null ? { kind: 'offer', id: r.id } : { kind: 'handled' };
 }
+
+/** Whether a reply's opened receipt is watched for at all (review 4173 F11): only a reply that has a response row, since the server
+ *  can attach a receipt to nothing else. A reply whose row is missing or unread is watched once a later read shows its row. */
+export const replyReceiptWatched = (r: ReplyResponse): boolean => r.kind === 'row';
 
 // ── the words ─────────────────────────────────────────────────────────────────────────────────────────────────────────
 
