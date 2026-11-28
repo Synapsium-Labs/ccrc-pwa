@@ -7,7 +7,7 @@
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from 'vitest';
-import { Fragment, useContext, useEffect, useState, type ReactNode } from 'react';
+import { Fragment, StrictMode, useContext, useEffect, useState, type ReactNode } from 'react';
 import { act, cleanup, render, screen } from '@testing-library/react';
 import { flushSync } from 'react-dom';
 import { CommandPalette, Sheet } from '@ccrc/ui';
@@ -17,7 +17,7 @@ import {
   NO_READER_PLACES, ReaderModeContext, useReaderMode,
   type ReaderModeContextValue, type ReaderModeFrame, type ReaderModePlaces,
 } from '../src/docs/useReaderMode';
-import { READER_EXIT_SETTLE_MS, READER_WAKE_IDLE_MS } from '../src/docs/reader/readerMode';
+import { READER_EXIT_LANDING_MS, READER_EXIT_SETTLE_MS, READER_WAKE_IDLE_MS } from '../src/docs/reader/readerMode';
 import { READER_MODE_TEXT } from '../src/docs/reader/readerModeWords';
 import { DocsScreen } from '../src/screens/DocsScreen';
 import { clearAuthLost, raiseAuthLost, useAuthLost } from '../src/lib/auth';
@@ -146,9 +146,13 @@ interface PlacesFake extends ReaderModePlaces {
   readonly stepBack: ReturnType<typeof vi.fn<() => number>>;
   readonly markExitPending: ReturnType<typeof vi.fn<(on: boolean) => void>>;
   landed: boolean;
+  /** The step back's landing, as the pop dispatcher reports it: the registered host's `exitReader` (wave 62: until it comes, a
+   *  re-entry after an exit that stepped back is refused). */
+  land(): void;
 }
 
 function fakePlaces(order: string[] = []): PlacesFake {
+  let host: Parameters<ReaderModePlaces['register']>[0] | null = null;
   const p: PlacesFake = {
     landed: false,
     placeFree: () => true,
@@ -156,8 +160,9 @@ function fakePlaces(order: string[] = []): PlacesFake {
     stepBack: vi.fn(() => { order.push('step-back'); return 1; }),
     landedBelow: () => p.landed,
     markExitPending: vi.fn(),
-    register: () => () => undefined,
+    register: (h) => { host = h; return () => { host = null; }; },
     standingOnDead: () => false,
+    land: () => { if (host === null) throw new Error('no host registered'); host.exitReader(false); },
   };
   return p;
 }
@@ -1418,11 +1423,105 @@ describe('reader mode: a block exit leaves focus where the cover put it (wave 62
   });
 });
 
+describe('reader mode: a re-entry while its exit is still landing (wave 62, ticket x6-fu-reentry-flag)', () => {
+  /** A places port whose step back steps over one entry (or none, `steps: 0`); `land` delivers the step's landing as the dispatcher
+   *  does (`exitReader` while off). */
+  function landingPlaces(steps = 1): PlacesFake {
+    const p = fakePlaces();
+    p.stepBack.mockImplementation(() => steps);
+    return p;
+  }
+
+  it('reader mode: after an exit that stepped back, a re-entry is refused until that step lands, then offered again', async () => {
+    const places = landingPlaces();
+    setup({ places });
+    act(() => { latest.enter('button'); });
+    expect(latest.state.on, 'CONTROL: entered').toBe(true);
+    act(() => { latest.exit('exit-tap'); });
+    expect(places.stepBack, 'CONTROL: the exit stepped back').toHaveBeenCalledTimes(1);
+    expect(latest.offered, 'reader mode is offered while the exit\'s step back is on its way').toBe(false);
+    act(() => { latest.enter('button'); });
+    expect(latest.state.on, 'a re-entry before the landing was taken').toBe(false);
+    expect(places.push, 'a re-entry before the landing pushed a reader place').toHaveBeenCalledTimes(1);
+    // The dispatcher reports the step's landing: a crossing landing while reader mode is off.
+    act(() => { places.land(); });
+    expect(latest.offered, 'the landing did not end the wait').toBe(true);
+    act(() => { latest.enter('button'); });
+    expect(latest.state.on, 'the re-entry after the landing was refused').toBe(true);
+    expect(places.push).toHaveBeenCalledTimes(2);
+  });
+
+  it('reader mode: a step back whose landing never comes holds the entry for at most READER_EXIT_LANDING_MS', async () => {
+    vi.useFakeTimers();
+    const places = landingPlaces();
+    setup({ places });
+    act(() => { latest.enter('button'); });
+    act(() => { latest.exit('exit-tap'); });
+    expect(latest.offered, 'CONTROL: the wait stands').toBe(false);
+    await act(async () => { await vi.advanceTimersByTimeAsync(READER_EXIT_LANDING_MS - 1); });
+    expect(latest.offered, 'the wait ended before its bound').toBe(false);
+    await act(async () => { await vi.advanceTimersByTimeAsync(1); });
+    expect(latest.offered, 'the wait outlived its bound').toBe(true);
+    act(() => { latest.enter('key'); });
+    expect(latest.state.on, 'an entry after the bound was refused').toBe(true);
+  });
+
+  it('reader mode: a wait armed before StrictMode\'s simulated remount (the reload check\'s step) is still bounded after it', async () => {
+    vi.useFakeTimers();
+    installFullScreen();
+    const places = landingPlaces();
+    let dead = true;
+    places.standingOnDead = () => { const d = dead; dead = false; return d; };
+    render(<StrictMode><Harness frame={fakeFrame()} places={places} /></StrictMode>);
+    await flush();
+    expect(places.stepBack, 'CONTROL: the reload check stepped below the dead entry').toHaveBeenCalledTimes(1);
+    expect(latest.offered, 'CONTROL: the wait stands').toBe(false);
+    await act(async () => { await vi.advanceTimersByTimeAsync(READER_EXIT_LANDING_MS); });
+    expect(latest.offered, 'the remount left the wait with no bound').toBe(true);
+  });
+
+  it('reader mode: an exit that stepped over nothing (an unplaced entry, or a step of no entries) holds no re-entry', () => {
+    const places = landingPlaces(0);
+    setup({ places });
+    act(() => { latest.enter('button'); });
+    act(() => { latest.exit('exit-tap'); });
+    expect(latest.offered, 'a step of no entries held the entry').toBe(true);
+    act(() => { latest.enter('button'); });
+    expect(latest.state.on).toBe(true);
+  });
+
+  it('reader mode: the frame\'s r is refused too while the step is landing, and the screen leaving clears the bound\'s timer', async () => {
+    vi.useFakeTimers();
+    const places = landingPlaces();
+    const { frame, view } = setup({ places });
+    const base = vi.getTimerCount();
+    act(() => { latest.enter('button'); });
+    act(() => { latest.exit('exit-tap'); });
+    expect(vi.getTimerCount(), 'CONTROL: the wait\'s bound is armed').toBe(base + 1);
+    const iframe = document.createElement('iframe');
+    screen.getByTestId('host').appendChild(iframe);
+    frame.focus.mockImplementation(() => { iframe.focus(); });
+    act(() => { iframe.focus(); });
+    expect(document.activeElement, 'CONTROL: the frame holds focus').toBe(iframe);
+    act(() => { latest.frameToggle(); });
+    expect(latest.state.on, 'the frame\'s r entered while the step was landing').toBe(false);
+    // Another exit's wait, then the screen leaving with it armed.
+    act(() => { places.land(); });
+    act(() => { iframe.focus(); });
+    act(() => { latest.frameToggle(); });
+    expect(latest.state.on, 'CONTROL: the frame\'s r enters once the step has landed').toBe(true);
+    act(() => { latest.exit('exit-tap'); });
+    expect(vi.getTimerCount(), 'CONTROL: the second wait\'s bound is armed').toBe(base + 1);
+    view.unmount();
+    expect(vi.getTimerCount(), 'the wait\'s bound outlived the screen').toBe(base);
+  });
+});
+
 describe('wake lock: a refusal is remembered (X6 XR fix round 1, item 5)', () => {
   it('wake lock: a refused request is not asked again by activity, but by the page visible again and by a fresh entry', async () => {
     const wake = installWakeLock(true);
     const fire = installVisibility();
-    setup();
+    const { places } = setup();
     act(() => { latest.enter('button'); });
     await settle();
     expect(wake.request, 'entering asks once').toHaveBeenCalledTimes(1);
@@ -1439,8 +1538,9 @@ describe('wake lock: a refusal is remembered (X6 XR fix round 1, item 5)', () =>
     act(() => { latest.activity(); });
     await settle();
     expect(wake.request, 'activity asked again after the second refusal').toHaveBeenCalledTimes(2);
-    // A fresh entry into reader mode asks once more.
+    // A fresh entry into reader mode asks once more (after the exit's step back has landed, wave 62).
     act(() => { latest.exit('exit-tap'); });
+    act(() => { places.land(); });
     await settle();
     act(() => { latest.enter('button'); });
     await settle();
@@ -1477,10 +1577,11 @@ describe('wake lock: a refusal is remembered (X6 XR fix round 1, item 5)', () =>
 
   it('wake lock: a request that rejects late does not mark a fresh entry refused (exit and enter meanwhile) (review M3)', async () => {
     const wake = installPendingWakeLock();
-    setup();
+    const { places } = setup();
     act(() => { latest.enter('button'); });
     await settle();
     act(() => { latest.exit('exit-tap'); });
+    act(() => { places.land(); });   // the exit's step back lands (wave 62: a re-entry waits for it)
     act(() => { latest.enter('button'); });
     await settle();
     await act(async () => { wake.refuse(0); });

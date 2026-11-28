@@ -128,6 +128,11 @@ export const READER_WAKE_IDLE_MS = 300000;
 /** How long an exit from full screen waits for a pop that is already in flight before it steps back itself. */
 export const READER_EXIT_SETTLE_MS = 100;
 
+/** The longest an exit's own step back is waited for (wave 62, ticket x6-fu-reentry-flag): while that step's landing has not
+ *  arrived, reader mode is not offered (`readerModeOffered`'s `exitLanding`). The landing clears the wait; this bound clears it
+ *  when no landing comes (a browser that drops the step), so reader mode is never refused for longer. */
+export const READER_EXIT_LANDING_MS = 1000;
+
 type On = Extract<ReaderModeState, { on: true }>;
 
 const NOTHING = (state: ReaderModeState): ReaderModeAnswer => ({ state, acts: [] });
@@ -242,11 +247,15 @@ export function readerModeStep(state: ReaderModeState, event: ReaderModeEvent): 
  *  `modalMounted` is true while any `[role="dialog"]` is in the document, open or still animating closed, so reader mode never
  *  starts its hiding under a modal layer (spec section 4.1). `figureOpen` is whether the frame's full-screen figure is open (X6 XR
  *  fix round 1): its history entry is above the page's, and a reader place pushed over it would sit above the figure's own, so
- *  the head's button, the one bar's control and `r` alike are refused until it closes. */
+ *  the head's button, the one bar's control and `r` alike are refused until it closes. `exitLanding` is whether an exit's own step
+ *  back is still on its way (wave 62, ticket x6-fu-reentry-flag; a fact the hook keeps, from its step to that step's landing or
+ *  `READER_EXIT_LANDING_MS`): an entry then would push a new reader place while the old one's step back is still moving the tab,
+ *  and that landing would arrive under the new reading, so the entry is refused until it lands. An exit still waiting on its
+ *  settle has stepped nothing yet, so it does not hold this: a re-entry then cancels the settle, as before. */
 export function readerModeOffered(
-  input: { frameReady: boolean; plainView: boolean; modalMounted: boolean; figureOpen: boolean },
+  input: { frameReady: boolean; plainView: boolean; modalMounted: boolean; figureOpen: boolean; exitLanding: boolean },
 ): boolean {
-  return input.frameReady && !input.plainView && !input.modalMounted && !input.figureOpen;
+  return input.frameReady && !input.plainView && !input.modalMounted && !input.figureOpen && !input.exitLanding;
 }
 
 /** Whether ccrc draws its own Exit with no frame to give an overlay (X6 XR fix round 1): reader mode is on and no frame stands.

@@ -357,12 +357,13 @@ describe('reader mode: the turn (X6 XR2.2)', () => {
 
 describe('reader mode: what is offered, and the wake lock', () => {
   it('offered: only a ready frame outside the plain view, never while a modal layer is mounted or a figure is open', () => {
-    const base = { frameReady: true, plainView: false, modalMounted: false, figureOpen: false };
+    const base = { frameReady: true, plainView: false, modalMounted: false, figureOpen: false, exitLanding: false };
     expect(readerModeOffered(base)).toBe(true);
     expect(readerModeOffered({ ...base, frameReady: false })).toBe(false);
     expect(readerModeOffered({ ...base, plainView: true })).toBe(false);
     expect(readerModeOffered({ ...base, modalMounted: true })).toBe(false);
     expect(readerModeOffered({ ...base, figureOpen: true }), 'a figure is open (X6 XR fix round 1)').toBe(false);
+    expect(readerModeOffered({ ...base, exitLanding: true }), 'an exit\'s own step back is still landing (wave 62)').toBe(false);
   });
 
   it('wake: wanted at 299999 ms idle, not at 300000', () => {

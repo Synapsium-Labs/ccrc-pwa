@@ -371,15 +371,18 @@ function bodyRig(): BodyRig {
   return { reader, inputs, mounts, log };
 }
 
-function placesPort(): ReaderModePlaces & { push: Mock<() => boolean>; stepBack: Mock<() => number> } {
+function placesPort(): ReaderModePlaces & { push: Mock<() => boolean>; stepBack: Mock<() => number>; land(): void } {
+  let host: Parameters<ReaderModePlaces['register']>[0] | null = null;
   return {
     placeFree: () => true,
     push: vi.fn(() => true),
     stepBack: vi.fn(() => 1),
     landedBelow: () => false,
     markExitPending: vi.fn(),
-    register: () => () => undefined,
+    register: (h) => { host = h; return () => { host = null; }; },
     standingOnDead: () => false,
+    // The step back's landing, as the pop dispatcher reports it (wave 62: until it comes, a re-entry is refused).
+    land: () => { if (host === null) throw new Error('no host registered'); host.exitReader(false); },
   };
 }
 
@@ -618,6 +621,7 @@ describe('reader mode: the frame wiring (X6 XR1.4 with XR2.1)', () => {
     expect(latest.state.on, 'CONTROL: the toggle entered reader mode').toBe(true);
     expect(request, 'full screen was asked for without the console\'s own activation').not.toHaveBeenCalled();
     act(() => { latest.exit('exit-tap'); });
+    act(() => { places.land(); });   // the exit's step back lands (wave 62: a re-entry waits for it)
     await flush();
     expect(latest.state.on, 'CONTROL: reader mode ended').toBe(false);
     // With the console's own activation: one request.
