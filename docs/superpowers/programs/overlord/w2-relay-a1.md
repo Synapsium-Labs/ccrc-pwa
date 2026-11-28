@@ -161,8 +161,10 @@ are mutants P1, P2 and P3.
 ## 7. Known limits
 
 - **One ruled pair.** When several ruled pairs let a relay through, the go names the first in `blockingPairs`' order only.
-- **The tests' type check.** Run through the fleet test wrapper, it was killed once by the test slice's memory cap while
-  browser runs held the slice; the pull request's typecheck job is its arbiter.
+- **The tests' type check.** Run whole through the fleet test wrapper, it was killed twice by the test slice's 6 GB memory cap
+  while other heavy runs held the slice. A narrower project over this part's test files and what they import (with the same
+  compiler options) is clean, after it found one fixture word misspelt; the pull request's typecheck job is the arbiter of the
+  whole.
 - **Two floors that cannot run on the test box.** The console's mood sets fail at their baseline there (`@ccrc/ui` is not
   installed in its checkout); they touch nothing of this part.
 - **The ranks the priority reads** are the door's to build from the readable rank rows, as `portfolioOrder` reads them.

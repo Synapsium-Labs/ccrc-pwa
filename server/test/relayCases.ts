@@ -243,7 +243,7 @@ export function parseNudgeBodyCases(m: BodyModule): Record<string, SuiteCase> {
 // ------------------------------------------------------------------------------------------------------------ the verdict
 
 const evidence = (paths: readonly string[], over: Partial<PairEvidence> = {}): PairEvidence => ({
-  sources: ['claims-history'] as PairEvidence['sources'], paths, pathsCut: false, claimIds: [1, 2, 3], prs: [],
+  sources: ['claim-history'], paths, pathsCut: false, claimIds: [1, 2, 3], prs: [],
   triples: GOAL_CONFLICT_TRIPLES_MIN, hotPaths: [], ...over,
 });
 let pairIds = 0;
