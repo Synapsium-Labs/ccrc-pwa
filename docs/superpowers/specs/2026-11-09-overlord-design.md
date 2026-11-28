@@ -8075,6 +8075,7 @@ The egress refusal is the one exception, because a detailed answer there is an o
 | `operator-has-it` | The answer doors, `return-over-asked`; the Overlord's request moves | The row has already reached the operator; or the operator took the request (`takenFrom` is set); or the Overlord would drop a `needs-you` request the operator has not answered | H18, H22 |
 | `operator-only` | `overlordMayAct` | A member of the effective class is not covered | C25, C26 |
 | `identity-too-weak` | `overlordMayAct`, grants | The caller's strength is under the act's or the grant's least | H28 |
+| `policy-refused` | Every Overlord write door, after `overlordMayAct` allows | The `OverlordPolicy` port refused the allowed act, or its adapter threw or answered no check | H24 |
 | `evidence-too-weak` | The answer doors | A big answer, or one whose effect carries a class, rests only on `inferred` or `none`. An answer the server cannot place as routine reads as big | H21 |
 | `ask-is-cheaper` | The answer doors | `askOrAct` says asking costs less than a wrong act | H34 |
 | `defer` | The answer doors, under a grant | The decision model's blind check (`grant.inside`) did not answer a clear yes, so the matter goes to the operator | H6, H26 |

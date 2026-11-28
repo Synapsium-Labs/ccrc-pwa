@@ -181,7 +181,7 @@ const W1_GROUP: Readonly<Record<string, number>> = {
 /** The W2 group, as the W2 vocabulary plan's Table V1 gives it: each word with its status, chosen by the family rule. */
 const W2_GROUP: Readonly<Record<string, number>> = {
   'act-ceiling': 429, 'dependency-cycle': 409, 'egress-refused': 403, 'goal-conflict-open': 409, 'identity-too-weak': 403,
-  'operator-has-it': 409, 'operator-only': 403, 'relay-carries-method': 400, 'request-not-yours': 403,
+  'operator-has-it': 409, 'operator-only': 403, 'policy-refused': 403, 'relay-carries-method': 400, 'request-not-yours': 403,
   'said-not-operator': 409, 'server-not-isolated': 409,
 };
 

@@ -319,6 +319,9 @@ export const OVERLORD_REFUSALS = {
   'identity-too-weak': 403,
   // `overlordMayAct`: a member of the act's effective class is not covered (C25, C26; the act catalogue piece). 403.
   'operator-only': 403,
+  // Every Overlord write door, after `overlordMayAct` allowed: the `OverlordPolicy` port refused the act, or its adapter threw
+  // or answered no check (the act catalogue B, plan question 7). 403, the caller is not allowed it.
+  'policy-refused': 403,
   // Grants, commands, learning and `overlordMayAct`: the server shares a user with fleet sessions (the act catalogue
   // piece). 409, a state of the world: how the box is installed.
   'server-not-isolated': 409,
