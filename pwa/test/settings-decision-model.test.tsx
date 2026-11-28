@@ -19,6 +19,7 @@ import type { ReadState } from '../src/overlord/readState';
 import { OverlordSection } from '../src/screens/settings/OverlordSection';
 import { useFleetStore } from '../src/stores/fleet';
 import { useOverlordStore } from '../src/stores/overlord';
+import { allFibers, fiberHolds } from './helpers/fiberWalk';
 
 const AT = 1_700_000_000_000;
 /** A synthetic value that looks like no provider's key. It is never in a test name. */
@@ -141,42 +142,19 @@ const hostFinal = (): HTMLElement | null => card('decision-host').querySelector<
 const hostInputs = (): HTMLElement[] => ['decision-kind', 'decision-endpoint', 'decision-model-id']
   .map((n) => card('decision-host').querySelector<HTMLElement>(`[data-settings-input="${n}"]`)!);
 
-// The key is never in React props or state: the walk of `settings-private-names.test.tsx`, over every fiber of the tree.
-const SKIP = new Set(['return', 'child', 'sibling', 'alternate', 'stateNode', '_owner', '_debugOwner', '_debugStack', '_debugTask', '_debugInfo', '_store']);
-function holds(root: unknown, needle: string, seen = new WeakSet<object>()): boolean {
-  if (typeof root === 'string') return root.includes(needle);
-  if (typeof root !== 'object' || root === null || seen.has(root)) return false;
-  if (typeof Node !== 'undefined' && root instanceof Node) return false;
-  seen.add(root);
-  try {
-    for (const k of Object.keys(root)) {
-      if (SKIP.has(k)) continue;
-      if (k.includes(needle)) return true;
-      if (holds((root as Record<string, unknown>)[k], needle, seen)) return true;
-    }
-  } catch { /* a getter that throws holds nothing */ }
-  return false;
-}
-interface FiberLike { return: FiberLike | null; child: FiberLike | null; sibling: FiberLike | null; memoizedProps: unknown; memoizedState: unknown }
-function fiberOf(el: Element): FiberLike {
-  const key = Object.keys(el).find((k) => k.startsWith('__reactFiber'));
-  if (key === undefined) throw new Error('no React fiber on the element');
-  return (el as unknown as Record<string, FiberLike>)[key]!;
-}
-function allFibers(el: Element): FiberLike[] {
-  let root = fiberOf(el);
-  while (root.return !== null) root = root.return;
-  const out: FiberLike[] = [];
-  const stack: FiberLike[] = [root];
-  while (stack.length > 0) {
-    const f = stack.pop()!;
-    out.push(f);
-    if (f.sibling !== null) stack.push(f.sibling);
-    if (f.child !== null) stack.push(f.child);
+// The key is never in React props or state: the shared fiber walk (`helpers/fiberWalk.ts`), over every fiber of the tree. The walk
+// skips functions, so it cannot see a value kept in a closure; what the retry's closure may hold is pinned by source in
+// `settings-retry-census.test.ts` (review 4167 F1, F6).
+/** Every control of the host card a press or a keystroke reaches: the three host inputs, the key field, Save and Remove. */
+const hostHeldControls = (): HTMLElement[] => [
+  ...hostInputs(), keyField(), hostSave(), control(card('decision-host'), 'decision-key-remove'),
+];
+const allHeld = (els: readonly HTMLElement[], held: boolean, when: string): void => {
+  for (const el of els) {
+    const name = el.getAttribute('data-settings-input') ?? el.getAttribute('data-settings-control') ?? el.getAttribute('aria-label') ?? el.tagName;
+    expect((el as HTMLInputElement).disabled, `${when}: ${name}`).toBe(held);
   }
-  return out;
-}
-const fiberHolds = (el: Element, needle: string): boolean => allFibers(el).some((f) => holds(f.memoizedProps, needle) || holds(f.memoizedState, needle));
+};
 
 describe('the rows card: a row is drawn from the read', () => {
   it('1a. each row\'s checked radio is the read\'s mode: off, shadow and armed', async () => {
@@ -302,6 +280,7 @@ describe('the rows card: the console follows the door', () => {
     { name: 'shadow from off (a widening)', id: 'programme.pick', act: () => pick('programme.pick', 'Shadow'), spy: () => vi.spyOn(api, 'armDecisionRow') as unknown as Mock },
     { name: 'armed from off (a widening)', id: 'scope.widens', act: () => pick('scope.widens', 'Armed'), spy: () => vi.spyOn(api, 'armDecisionRow') as unknown as Mock },
     { name: 'off from shadow (a narrowing)', id: 'programme.any', act: () => pick('programme.any', 'Off'), spy: () => vi.spyOn(api, 'offDecisionRow') as unknown as Mock },
+    { name: 'off from armed (a widening: an armed gate switched off)', id: 'readback.omits', act: () => pick('readback.omits', 'Off'), spy: () => vi.spyOn(api, 'offDecisionRow') as unknown as Mock },
     { name: 'Resume on a held row', id: 'relay.method', act: () => fireEvent.click(control(rowEl('relay.method'), 'decision-resume')), spy: () => vi.spyOn(api, 'armDecisionRow') as unknown as Mock },
     { name: 'Approve on an armed gate offered a newer line', id: 'readback.omits', act: () => fireEvent.click(control(rowEl('readback.omits'), 'decision-approve')), spy: () => vi.spyOn(api, 'armDecisionRow') as unknown as Mock },
     { name: 'a raised ceiling', id: 'programme.pick', act: () => { typeCeiling('programme.pick', 900); fireEvent.click(ceilingSave('programme.pick')); }, spy: () => vi.spyOn(api, 'setDecisionCeiling') as unknown as Mock },
@@ -663,9 +642,8 @@ describe('the host card', () => {
     expect(save).toHaveBeenCalledTimes(1);
     expect(save.mock.calls[0]![0].key).toBe(KEY);
     expect(keyField().value).toBe(KEY);
-    expect(hostSave().disabled).toBe(true);
-    for (const el of hostInputs()) expect((el as HTMLInputElement).disabled, el.getAttribute('data-settings-input')!).toBe(true);
-    expect(control(card('decision-host'), 'decision-key-remove').disabled).toBe(false);
+    // The whole card is held while its step shows (review 4167 F2, F3): the key field and Remove as well as Save and the host.
+    allHeld(hostHeldControls(), true, 'the step showing');
     nowhere('the step showing');
     await confirmStep();
     await waitFor(() => expect(save).toHaveBeenCalledTimes(2));
@@ -674,7 +652,25 @@ describe('the host card', () => {
     await settle();
     expect(save).toHaveBeenCalledTimes(2);
     expect(document.querySelector('[data-step-up]')).toBeNull();
+    allHeld([...hostInputs(), keyField(), control(card('decision-host'), 'decision-key-remove')], false, 'after the retry');
     nowhere('after the retry');
+  });
+
+  it("16. a host-only Save's step holds the key field: no key can be typed while it shows, so the retry sends the host alone and discards nothing", async () => {
+    // Review 4167 F2 (a). The field's only handler is its presence report (`onInput`), which sends nothing; the hold is its
+    // `disabled` attribute, so a browser delivers no keystroke to it while the step shows.
+    const save = vi.spyOn(api, 'setDecisionKey').mockRejectedValueOnce(stepUpRequired()).mockResolvedValue({ ok: true });
+    await open();
+    fireEvent.change(card('decision-host').querySelector('[data-settings-input="decision-model-id"]')!, { target: { value: 'model-b' } });
+    fireEvent.click(hostSave());
+    await waitFor(() => expect(card('decision-host').querySelector('[data-step-up]')).not.toBeNull());
+    expect(keyField().disabled).toBe(true);
+    allHeld(hostHeldControls(), true, 'a host-only step showing');
+    await confirmStep();
+    await waitFor(() => expect(save).toHaveBeenCalledTimes(2));
+    expect(save.mock.calls[1]![0]).toEqual({ kind: 'local', endpoint: ENDPOINT, modelId: 'model-b' });
+    await waitFor(() => expect(keyField().disabled).toBe(false));
+    expect(hostFinal()).toBeNull();
   });
 
   it('16. a second step-up-required on the retry is final: the field is empty, no step shows and the sentence says so', async () => {
@@ -696,16 +692,22 @@ describe('the host card', () => {
     nowhere('after a final step-up');
   });
 
-  it('16. with the step showing, Save is disabled and a click on it sends nothing', async () => {
+  it('16. with the step showing, Save and Remove are disabled and a click on either sends nothing and opens nothing', async () => {
+    // The hold is by attribute: a disabled button gets no click, so neither handler is reached (no form, no key handler).
     const save = vi.spyOn(api, 'setDecisionKey').mockRejectedValue(stepUpRequired());
+    const remove = vi.spyOn(api, 'removeDecisionKey').mockResolvedValue({ ok: true, held: [] });
     await open();
     typeKey();
     fireEvent.click(hostSave());
     await waitFor(() => expect(card('decision-host').querySelector('[data-step-up]')).not.toBeNull());
     expect(hostSave().disabled).toBe(true);
+    expect(control(card('decision-host'), 'decision-key-remove').disabled).toBe(true);
     fireEvent.click(hostSave());
+    fireEvent.click(control(card('decision-host'), 'decision-key-remove'));
     await settle();
+    expect(screen.queryByRole('dialog')).toBeNull();
     expect(save).toHaveBeenCalledTimes(1);
+    expect(remove).not.toHaveBeenCalled();
   });
 
   it('16. another card\'s answer hides the step; Save again is a first send, and the confirm after it retries by itself', async () => {
@@ -715,11 +717,13 @@ describe('the host card', () => {
     typeKey();
     fireEvent.click(hostSave());
     await waitFor(() => expect(card('decision-host').querySelector('[data-step-up]')).not.toBeNull());
+    allHeld(hostHeldControls(), true, 'the step showing');
     pick('programme.any', 'Off');
     await waitFor(() => expect(off).toHaveBeenCalledTimes(1));
     await waitFor(() => expect(card('decision-host').querySelector('[data-step-up]')).toBeNull());
     expect(keyField().value).toBe(KEY);
-    expect(hostSave().disabled).toBe(false);
+    // Another card's answer frees the whole card (review 4167 F2): every control is enabled, and Save is a first send.
+    allHeld(hostHeldControls(), false, 'freed by another card');
     fireEvent.click(hostSave());
     await waitFor(() => expect(save).toHaveBeenCalledTimes(2));
     await waitFor(() => expect(card('decision-host').querySelector('[data-step-up]')).not.toBeNull());
@@ -868,23 +872,26 @@ describe('the host card', () => {
     expect(remove).toHaveBeenCalledTimes(1);
   });
 
-  it("18. another act's step drops Save's retry: Remove asked for the step after Save did, so the confirm sends no Save", async () => {
-    // Review 4139 F1 (d): any other ask drops a retry not yet sent. Remove hands no retry, so after its confirm nothing is sent.
+  it("18. another card's step drops Save's retry: a row asked for the step after Save did, so the confirm sends no Save", async () => {
+    // Review 4139 F1 (d): any other ask drops a retry not yet sent. The host card is held whole while its step shows (review 4167
+    // F2), so the other ask is a row's: the row hands no retry, so after its confirm nothing is sent, and the host card is free.
     const save = vi.spyOn(api, 'setDecisionKey').mockRejectedValueOnce(stepUpRequired()).mockResolvedValue({ ok: true });
-    const remove = vi.spyOn(api, 'removeDecisionKey').mockRejectedValueOnce(stepUpRequired()).mockResolvedValue({ ok: true, held: [] });
-    await open();
+    const arm = vi.spyOn(api, 'armDecisionRow').mockRejectedValueOnce(stepUpRequired()).mockResolvedValue(OK);
+    await open(viewOf({ rows: [rowOf('programme.pick')] }));
     typeKey();
     fireEvent.click(hostSave());
     await waitFor(() => expect(card('decision-host').querySelector('[data-step-up]')).not.toBeNull());
-    fireEvent.click(control(card('decision-host'), 'decision-key-remove'));
-    fireEvent.click(within(await screen.findByRole('dialog')).getByRole('button', { name: W.removeKey }));
-    await waitFor(() => expect(remove).toHaveBeenCalledTimes(1));
-    await settle();
+    pick('programme.pick', 'Shadow');
+    await waitFor(() => expect(arm).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(rowEl('programme.pick').querySelector('[data-step-up]')).not.toBeNull());
+    expect(card('decision-host').querySelector('[data-step-up]')).toBeNull();
+    allHeld(hostHeldControls(), false, 'the step moved to a row');
     await confirmStep();
     await waitFor(() => expect(document.querySelector('[data-step-up]')).toBeNull());
     await settle();
     expect(save).toHaveBeenCalledTimes(1);
-    expect(remove).toHaveBeenCalledTimes(1);
+    expect(arm).toHaveBeenCalledTimes(1);
+    expect(keyField().value).toBe(KEY);
   });
 
   it('18. a refused removal is worded by its own sentence', async () => {

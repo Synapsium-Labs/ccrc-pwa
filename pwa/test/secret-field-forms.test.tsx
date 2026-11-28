@@ -2,7 +2,7 @@
 // read that leaves the value in the field (`peek`), and the multiline form (an uncontrolled, unmasked text area for the private-name
 // list). The existing behaviour, `take`, `clear`, the hidden page, the route change and the markup, is pinned in
 // `secret-field-sheets.test.tsx`; this file pins what the two additions must not move, and what they add. Synthetic values only.
-import { useRef, useState, type ReactNode } from 'react';
+import { createRef, useRef, useState, type ReactNode } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { SecretField, type SecretFieldHandle } from '../src/accounts/SecretField';
@@ -159,5 +159,40 @@ describe('the multiline form', () => {
     expect(presence).toHaveBeenLastCalledWith(true);
     type('');
     expect(presence).toHaveBeenLastCalledWith(false);
+  });
+});
+
+// Review 4167 F2, ruled call 1930: a host holds the field while a step shows. The prop is additive: absent, the field is as before.
+describe('held', () => {
+  const drawn = (multiline: boolean, held?: boolean): void => {
+    const handle = createRef<SecretFieldHandle>();
+    render(<SecretField label={LABEL} handle={handle} multiline={multiline} onPresence={() => {}} {...(held === undefined ? {} : { held })} />);
+  };
+  it.each([false, true])('absent or false, the field takes input as before (multiline %s)', (multiline) => {
+    drawn(multiline);
+    expect(field().disabled).toBe(false);
+    cleanup();
+    drawn(multiline, false);
+    expect(field().disabled).toBe(false);
+  });
+  it.each([false, true])('held, the field is disabled, so no keystroke reaches it, and the value it holds is kept (multiline %s)', (multiline) => {
+    const handle = createRef<SecretFieldHandle>();
+    const { rerender } = render(<SecretField label={LABEL} handle={handle} multiline={multiline} onPresence={() => {}} />);
+    type(VALUE);
+    rerender(<SecretField label={LABEL} handle={handle} multiline={multiline} onPresence={() => {}} held />);
+    expect(field().disabled).toBe(true);
+    expect(field().value).toBe(VALUE);
+    expect(handle.current!.peek()).toBe(VALUE);
+    rerender(<SecretField label={LABEL} handle={handle} multiline={multiline} onPresence={() => {}} />);
+    expect(field().disabled).toBe(false);
+    expect(field().value).toBe(VALUE);
+  });
+  it.each([false, true])('held, the page hide still empties it (multiline %s)', (multiline) => {
+    const handle = createRef<SecretFieldHandle>();
+    const { rerender } = render(<SecretField label={LABEL} handle={handle} multiline={multiline} onPresence={() => {}} />);
+    type(VALUE);
+    rerender(<SecretField label={LABEL} handle={handle} multiline={multiline} onPresence={() => {}} held />);
+    act(() => setVisibility('hidden'));
+    expect(field().value).toBe('');
   });
 });

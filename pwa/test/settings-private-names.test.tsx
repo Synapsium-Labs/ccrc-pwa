@@ -14,6 +14,7 @@ import type { ReadState } from '../src/overlord/readState';
 import { OverlordSection } from '../src/screens/settings/OverlordSection';
 import { useFleetStore } from '../src/stores/fleet';
 import { useOverlordStore } from '../src/stores/overlord';
+import { allFibers, fiberHolds } from './helpers/fiberWalk';
 import { TEST_ROSTER } from './rosterFixture';
 
 const AT = 1_700_000_000_000;
@@ -44,6 +45,8 @@ const card = (): HTMLElement | null => document.querySelector<HTMLElement>('[dat
 const box = (): HTMLTextAreaElement => screen.getByLabelText(W.textLabel) as HTMLTextAreaElement;
 const type = (text: string): void => { fireEvent.input(box(), { target: { value: text } }); };
 const press = (control: string): void => { fireEvent.click(document.querySelector(`[data-settings-control="${control}"]`)!); };
+const up = (): HTMLButtonElement => document.querySelector<HTMLButtonElement>('[data-settings-control="names-upload"]')!;
+const clr = (): HTMLButtonElement => document.querySelector<HTMLButtonElement>('[data-settings-control="names-clear"]')!;
 const confirmStep = async (): Promise<void> => {
   fireEvent.change(await screen.findByLabelText('Passphrase'), { target: { value: 'a passphrase' } });
   fireEvent.click(screen.getByRole('button', { name: 'Confirm with passphrase' }));
@@ -208,9 +211,9 @@ describe('Upload', () => {
     expect(document.querySelectorAll('[data-step-up]')).toHaveLength(1);
     expect(upload).toHaveBeenCalledTimes(1);
     expect(box().value).toBe(TEXT);
-    // While the step shows, Upload is disabled and a click sends nothing.
-    const up = document.querySelector<HTMLButtonElement>('[data-settings-control="names-upload"]')!;
-    expect(up.disabled).toBe(true);
+    // While the step shows, Upload and the box are held, and a click sends nothing.
+    expect(up().disabled).toBe(true);
+    expect(box().disabled).toBe(true);
     press('names-upload');
     await settle();
     expect(upload).toHaveBeenCalledTimes(1);
@@ -241,35 +244,56 @@ describe('Upload', () => {
     expect(upload).toHaveBeenCalledTimes(2);
   });
 
-  it('a press is always a first send, and the mark is per act: Clear after Upload\'s step shows its own step, then retries its own body', async () => {
+  it('the whole card is held while Upload\'s step shows: the box, Upload and Clear, so no edit or other act reaches the retry, and the door is idle', async () => {
+    // Review 4167 F2 (c) and F3. The hold is by attribute: the disabled box takes no keystroke (its only handler is its presence
+    // report, which sends nothing) and a disabled button gets no click. The door is idle while the step shows, and nothing of the
+    // card can start a send, so the confirm's retry always finds the door free (the in-flight guard is unreachable for it).
     status.mockResolvedValue({ state: 'list', rows: 3, uploadedAt: AT });
-    upload.mockRejectedValueOnce(stepUpRequired()).mockRejectedValueOnce(stepUpRequired()).mockResolvedValue({ ok: true, rows: 0, entries: 0, uploadedAt: AT });
+    upload.mockRejectedValueOnce(stepUpRequired()).mockResolvedValue(OK);
     show();
     await settle();
     type(TEXT);
     press('names-upload');
     await waitFor(() => expect(card()!.querySelector('[data-step-up]')).not.toBeNull());
-    const up = (): HTMLButtonElement => document.querySelector<HTMLButtonElement>('[data-settings-control="names-upload"]')!;
-    const clr = (): HTMLButtonElement => document.querySelector<HTMLButtonElement>('[data-settings-control="names-clear"]')!;
+    expect(box().disabled).toBe(true);
     expect(up().disabled).toBe(true);
+    expect(clr().disabled).toBe(true);
+    expect(up().textContent).toBe(W.upload);
+    press('names-clear');
+    await settle();
+    expect(screen.queryByText(W.clearTitle(3))).toBeNull();
+    expect(upload).toHaveBeenCalledTimes(1);
+    await confirmStep();
+    await waitFor(() => expect(upload).toHaveBeenCalledTimes(2));
+    expect(upload).toHaveBeenNthCalledWith(2, { rows: ROWS });
+    await waitFor(() => expect(box().disabled).toBe(false));
     expect(clr().disabled).toBe(false);
+  });
+
+  it('the whole card is held while Clear\'s step shows: Upload and the box too; the confirm retries Clear\'s own body (the mark is per act)', async () => {
+    status.mockResolvedValue({ state: 'list', rows: 3, uploadedAt: AT });
+    upload.mockRejectedValueOnce(stepUpRequired()).mockResolvedValue({ ok: true, rows: 0, entries: 0, uploadedAt: AT });
+    show();
+    await settle();
+    type(TEXT);
     press('names-clear');
     expect(await screen.findByText(W.clearTitle(3))).toBeTruthy();
     fireEvent.click(document.querySelector('.qc-actions .btn-danger')!);
-    await waitFor(() => expect(upload).toHaveBeenCalledTimes(2));
-    expect(upload).toHaveBeenNthCalledWith(2, { rows: [], clear: true });
-    // Clear's first send: the step shows again, and no final sentence.
-    await waitFor(() => expect(clr().disabled).toBe(true));
-    expect(card()!.querySelector('[data-step-up]')).not.toBeNull();
+    await waitFor(() => expect(card()!.querySelector('[data-step-up]')).not.toBeNull());
+    expect(box().disabled).toBe(true);
+    expect(up().disabled).toBe(true);
+    expect(clr().disabled).toBe(true);
+    press('names-upload');
+    await settle();
+    expect(upload).toHaveBeenCalledTimes(1);
     expect(refusalText('private-names-local')).toBeUndefined();
-    expect(card()!.textContent).not.toContain(W.stepUpFinal);
-    expect(card()!.textContent).not.toContain(W.clearFinal);
     await confirmStep();
-    await waitFor(() => expect(upload).toHaveBeenCalledTimes(3));
-    expect(upload).toHaveBeenNthCalledWith(3, { rows: [], clear: true });
+    await waitFor(() => expect(upload).toHaveBeenCalledTimes(2));
+    expect(upload).toHaveBeenNthCalledWith(1, { rows: [], clear: true });
+    expect(upload).toHaveBeenNthCalledWith(2, { rows: [], clear: true });
     expect(await screen.findByText(W.cleared)).toBeTruthy();
-    expect(upload).toHaveBeenCalledTimes(3);
-    expect(upload.mock.calls.filter((c) => (c[0] as { clear?: boolean }).clear !== true)).toHaveLength(1);
+    await settle();
+    expect(upload).toHaveBeenCalledTimes(2);
   });
 
   it('Clear\'s step-up on the automatic retry is final, in Clear\'s own words', async () => {
@@ -304,6 +328,10 @@ describe('Upload', () => {
     await waitFor(() => expect(card()!.querySelector('[data-step-up]')).toBeNull());
     await settle();
     expect(upload).toHaveBeenCalledTimes(1);
+    // Another card's answer frees the whole card (review 4167 F2): the box and Upload are enabled, and the text is still there.
+    expect(box().disabled).toBe(false);
+    expect(up().disabled).toBe(false);
+    expect(box().value).toBe(TEXT);
     press('names-upload');
     await waitFor(() => expect(upload).toHaveBeenCalledTimes(2));
     await waitFor(() => expect(card()!.querySelector('[data-step-up]')).not.toBeNull());
@@ -501,45 +529,10 @@ describe('the names are nowhere but the box', () => {
 });
 
 // ── The text never lives in React props or state ─────────────────────────────────────────────────────────────────────
-// Walks every fiber of the tree and every value reachable from its props and hook state. It skips what is not data: the fiber's own
-// links, a DOM node, a function. A text mirrored into a hook's state, or passed as a controlled `value`, is found.
-const SKIP = new Set(['return', 'child', 'sibling', 'alternate', 'stateNode', '_owner', '_debugOwner', '_debugStack', '_debugTask', '_debugInfo', '_store']);
-function holds(root: unknown, needle: string, seen = new WeakSet<object>()): boolean {
-  if (typeof root === 'string') return root.includes(needle);
-  if (typeof root !== 'object' || root === null || seen.has(root)) return false;
-  if (typeof Node !== 'undefined' && root instanceof Node) return false;
-  seen.add(root);
-  try {
-    for (const k of Object.keys(root)) {
-      if (SKIP.has(k)) continue;
-      if (k.includes(needle)) return true;
-      if (holds((root as Record<string, unknown>)[k], needle, seen)) return true;
-    }
-  } catch { /* a getter that throws holds nothing */ }
-  return false;
-}
-interface FiberLike { return: FiberLike | null; child: FiberLike | null; sibling: FiberLike | null; memoizedProps: unknown; memoizedState: unknown }
-function fiberOf(el: Element): FiberLike {
-  const key = Object.keys(el).find((k) => k.startsWith('__reactFiber'));
-  if (key === undefined) throw new Error('no React fiber on the element');
-  return (el as unknown as Record<string, FiberLike>)[key]!;
-}
-/** Every fiber of the tree the element is in: up to the root, then down through every child and sibling. */
-function allFibers(el: Element): FiberLike[] {
-  let root = fiberOf(el);
-  while (root.return !== null) root = root.return;
-  const out: FiberLike[] = [];
-  const stack: FiberLike[] = [root];
-  while (stack.length > 0) {
-    const f = stack.pop()!;
-    out.push(f);
-    if (f.sibling !== null) stack.push(f.sibling);
-    if (f.child !== null) stack.push(f.child);
-  }
-  return out;
-}
-const fiberHolds = (el: Element, needle: string): boolean =>
-  allFibers(el).some((f) => holds(f.memoizedProps, needle) || holds(f.memoizedState, needle));
+// The shared fiber walk (`helpers/fiberWalk.ts`, review 4167 F5): every fiber of the tree and every value reachable from its props
+// and hook state. It skips what is not data: the fiber's own links, a DOM node, a function, so a text kept only in a closure is not
+// seen; what the retry's closure may hold is pinned by source in `settings-retry-census.test.ts` (F1, F6). A text mirrored into a
+// hook's state, or passed as a controlled `value`, is found.
 
 describe('the text is never in React props or state', () => {
   it('after typing, no fiber of the tree holds a name in its props or its state', async () => {
