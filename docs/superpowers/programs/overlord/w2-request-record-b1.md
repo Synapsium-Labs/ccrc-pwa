@@ -113,10 +113,14 @@ Measured at `ac09ad60da` (2026-11-28). The brief's scout findings were checked, 
   with `isRegistryId`, so the id census's gate list names it, with its reason; it composes no argv.
 - **`touched-is-not-on-the-read-tool-yet`** (found by the fast run). The door process's history row (`ccd/door-process.mjs`)
   and the client's history grammar (`ccd/ccrc-api`) still carry three verbs: the brief adds no client row, and the client
-  is another run's claim. `door-tools.test.ts` held the row's verbs equal to the shared list; it now names `touched` as the
-  server's own verb and holds the row's verbs equal to the rest. So RQ5's "serves `touched` to the Overlord too" holds at the
-  history door only: the client refuses `touched` before any request leaves the box, and the Overlord's read tool does not
-  offer it.
+  is another run's claim (ruled (B), call 2037). `door-tools.test.ts` held the row's verbs equal to the shared list. It now
+  classifies every verb of the shared list exactly once, as the read tool's or the server's own (`touched`), holds the row's
+  verbs equal to the read tool's, and a control case shows a verb added to the shared list and placed nowhere goes red. So
+  RQ5's "serves `touched` to the Overlord too" is not reached in this part: the HTTP history door accepts the verb, but the
+  read tool and the client refuse it before a request leaves the box. **Where it joins:** the verb joins the read tool's
+  row (`ccd/door-process.mjs#HISTORY_VERBS` and its description) and the client's history grammar (`ccd/ccrc-api`, its verb
+  check and help lines) with the request record's doors, B5 or later, moving `touched` to the read tool's place in the pin.
+  The coordinator tickets it.
 - **Process.** The tests and the code were written in one pass rather than red first; each test's power is shown by its
   mutants instead (§5). One early edit to `requestShortlistRead.ts` was made with a script, against the brief's first sentence;
   the file was then rewritten whole with the Write tool, and every later edit used the Edit and Write tools.
@@ -148,12 +152,13 @@ expected paths first (RQ3, F12); the reader asks touched only for paths on the C
 `programme.pick` takes the candidates. The door waits at most 5 s; the runner's budget is 4 s and the agent's deadline 20 s
 (pinned in that order).
 
-**Reach at merge.** The shortlist's reader has no caller. The history door, `POST /api/overlord/history`, answers one more
-verb from merge (RQ5), to the callers and under the gate it already has (its gate, routes and censuses are untouched, and its
-suites are green), with ids and times only, within the one-slot budget (the budget cases). An agent that predates the verb
-answers it refused with `bad-verb`: the door answers that as `bad-request`, and the shortlist reads it as `not-served` (the
-older-agent cases). The client's history grammar and the Overlord's read tool do not carry `touched` yet
-(`touched-is-not-on-the-read-tool-yet`), so no caller on `main` asks it at merge.
+**Reach at merge.** The shortlist's reader has no caller. The HTTP history door, `POST /api/overlord/history`, accepts one
+more verb under the gate it already has (its gate, routes and censuses are untouched). But the Overlord's read tool and the
+client still know three verbs and refuse the fourth before a request leaves, so no caller on `main` can ask it at merge
+(`touched-is-not-on-the-read-tool-yet`). Its first asker is the shortlist's reader, on the server, with the open door of the
+next part. A `touched` answer holds ids and times only, within the one-slot budget (the budget cases). An agent that predates
+the verb answers it refused with `bad-verb`: the door answers that as `bad-request`, and the shortlist reads it as
+`not-served` (the older-agent cases).
 
 ## 7. Known limits
 

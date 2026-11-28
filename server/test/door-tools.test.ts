@@ -7,7 +7,7 @@ import {
   DOOR_TOOLS, DOOR_TOOL_PREFIX as PROGRAM_PREFIX, DOOR_ONLY_TOOLS, ATTRIBUTION_FIELDS, CLAIM_RETRY_MIN_MS, CLAIM_RETRY_MAX_MS, DELTA_REFRESH_MS, DELTA_LEASE_MS, TEAM_KEY_SHAPE,
   SEQUENCE_PAGE_MAX as PROGRAM_PAGE_MAX, HISTORY_VERBS as PROGRAM_HISTORY_VERBS, readableDoorRow,
 } from '../../ccd/door-process.mjs';
-import { HISTORY_VERBS } from '../../shared/overlordHistory.js';
+import { HISTORY_VERBS, type OverlordHistoryVerb } from '../../shared/overlordHistory.js';
 import { OVERLORD_DOORS } from '../src/coord/overlordDoors.js';
 import { SEQUENCE_PAGE_MAX } from '../../shared/overlord-sequence.js';
 import * as shared from '../../shared/continuity-door.js';
@@ -17,6 +17,17 @@ import { LINEAR_TEAM_KEY_SHAPE } from '../../shared/linear.js';
 type Row = { name: string; verb: string | null; class: 'view' | 'operate'; fenced: boolean; reader: boolean; input: unknown };
 const ROWS = DOOR_TOOLS as unknown as Row[];
 const ROOT = path.resolve(__dirname, '../..');
+
+/** Every verb of shared/overlordHistory.ts's list, placed exactly once (one key each): the Overlord's read tool's (this
+ *  row, and the client's history grammar), or the server's own. `touched` (Overlord W2, request record B1) is the server's
+ *  own: the shortlist's reader asks it over the agent link, and it joins the tool and the client with the request record's
+ *  doors (B5 or later; slug touched-is-not-on-the-read-tool-yet). */
+const HISTORY_VERB_PLACES: Readonly<Record<OverlordHistoryVerb, 'read-tool' | 'server-own'>> = {
+  search: 'read-tool', describe: 'read-tool', expand: 'read-tool', touched: 'server-own',
+};
+/** The verbs of `verbs` that `places` does not place. */
+const unplacedHistoryVerbs = (verbs: readonly string[], places: Readonly<Record<string, string>>): string[] =>
+  verbs.filter((v) => !Object.prototype.hasOwnProperty.call(places, v));
 
 /** The keys of ccrc-api's ROUTES array, read from the file's text. */
 function routeKeys(): string[] {
@@ -111,15 +122,17 @@ describe('DOOR_TOOLS', () => {
   });
 
   it('the history row: a view, unfenced (slug history-and-board-reads-attributed-not-proven), a reader\'s door; its verbs are shared/overlordHistory.ts\'s', () => {
-    // `touched` (Overlord W2, request record B1) is asked only by the server's own shortlist reader over the agent link. The
-    // client's history grammar and this tool do not carry it yet: every other shared verb is the tool's, and nothing more.
-    const SERVER_ONLY: readonly string[] = ['touched'];
-    const TOOL_VERBS = HISTORY_VERBS.filter((v) => !SERVER_ONLY.includes(v));
     const r = ROWS.find((x) => x.name === 'history')!;
     expect([r.verb, r.class, r.fenced, r.reader]).toEqual(['overlord.history', 'view', false, true]);
-    expect(SERVER_ONLY.every((v) => (HISTORY_VERBS as readonly string[]).includes(v))).toBe(true);
-    expect([...PROGRAM_HISTORY_VERBS]).toEqual(TOOL_VERBS);
-    expect(r.input).toMatchObject({ type: 'object', additionalProperties: false, required: ['verb'], properties: { verb: { enum: TOOL_VERBS } } });
+    expect(unplacedHistoryVerbs(HISTORY_VERBS, HISTORY_VERB_PLACES)).toEqual([]);
+    expect(Object.keys(HISTORY_VERB_PLACES).filter((v) => !(HISTORY_VERBS as readonly string[]).includes(v))).toEqual([]);
+    const toolVerbs = HISTORY_VERBS.filter((v) => HISTORY_VERB_PLACES[v] === 'read-tool');
+    expect([...PROGRAM_HISTORY_VERBS]).toEqual(toolVerbs);
+    expect(r.input).toMatchObject({ type: 'object', additionalProperties: false, required: ['verb'], properties: { verb: { enum: toolVerbs } } });
+  });
+
+  it('CONTROL: a history verb added to the shared list and placed nowhere is named unplaced', () => {
+    expect(unplacedHistoryVerbs([...HISTORY_VERBS, 'later-verb'], HISTORY_VERB_PLACES)).toEqual(['later-verb']);
   });
 
   it('the sequence row: a view, unfenced (its door row is not a write), never a reader\'s door, its page bound shared/overlord-sequence.ts\'s', () => {
