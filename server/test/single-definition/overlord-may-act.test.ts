@@ -2,7 +2,7 @@
 // `docs/superpowers/plans/2026-11-16-overlord-w2/w2-act-catalogue.md` Tasks B3 and B4, F5, F9; the coordinator's items 3 and 4).
 //
 // - The importer census: no `server/src` file but `overlordMayActW2.ts` imports the decider, `grantCovers`, `GrantFact` or
-//   `CommandFact`, or re-exports the module whole; the decider's file is imported by exactly the files `MAY_ACT_IMPORTERS` names,
+//   `CommandFact`, or re-exports the module whole; no file, the wrapper included, re-exports anything of it; the decider's file is imported by exactly the files `MAY_ACT_IMPORTERS` names,
 //   each for the names its row allows; and `overlordMayActW2.ts` is imported by exactly `W2_IMPORTERS` (none yet: its callers
 //   come with later pieces, each adding its row in its own pull request). W3 lifts the census when it replaces the wrapper.
 // - The allow's census: a `MayActAllow` is made only by `mintMayActAllow` in the decider's file. Outside that function no
@@ -44,6 +44,9 @@ export function importerProblems(file: string, imports: readonly ImportEdge[]): 
     if (t === W2) w2 = true;
     if (t !== DECIDER) continue;
     decider = true;
+    // No file re-exports the decider, the wrapper included: a door importing the wrapper (matched by file) would otherwise reach
+    // the decider through it (review 4213 F8).
+    if (e.kind === 'export-from') problems.push(`${file} re-exports ${e.names.length === 0 ? 'the whole module' : e.names.join(', ')} from the decider; no file may`);
     const row = MAY_ACT_IMPORTERS[file];
     if (row === 'any') continue;
     const names = e.names.length === 0 || e.kind === 'dynamic' || e.kind === 'type-query' ? ['*'] : e.names;
@@ -124,6 +127,13 @@ describe('overlordMayAct has one door (the coordinator\'s items 3 and 4)', () =>
     const { problems, decider } = importerProblems(F, parseSource(src, 'planted.ts').imports);
     if (red === null) { expect(problems).toEqual([]); expect(decider).toBe(false); }
     else expect(problems.some((p) => red.test(p)), problems.join('\n')).toBe(true);
+  });
+  it('CONTROL: the wrapper re-exports nothing of the decider: a planted re-export in its own file is refused (review 4213 F8)', () => {
+    for (const src of ["export { overlordMayAct } from './overlordMayAct.js';", "export type { GrantFact } from './overlordMayAct.js';",
+      "export * from './overlordMayAct.js';"]) {
+      const { problems } = importerProblems(W2, parseSource(src, 'overlordMayActW2.ts').imports);
+      expect(problems.some((p) => /re-exports .* from the decider/.test(p)), `${src}\n${problems.join('\n')}`).toBe(true);
+    }
   });
   it('CONTROL: a planted importer of the wrapper is seen', () => {
     expect(importerProblems(F, parseSource("import { mayActW2 } from './overlordMayActW2.js';", 'planted.ts').imports).w2).toBe(true);

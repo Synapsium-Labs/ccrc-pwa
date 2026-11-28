@@ -1,14 +1,17 @@
 // `mayActW2`, W2's one door into `overlordMayAct` (Overlord W2, the act catalogue B; plan
 // `docs/superpowers/plans/2026-11-16-overlord-w2/w2-act-catalogue.md` §6 "What W2 feeds it", F9, the index's question 27). Ring
-// L1, context C5: pure. It is the only `server/src` file that imports the decider (held by
-// `server/test/single-definition/overlord-may-act.test.ts`), and nothing imports it yet: the doors that call it come with later
-// pieces (act rows B's own-record doors, request record B, the relay). W3 replaces it and lifts that census.
+// L1, context C5: pure. It is the only `server/src` file that imports the decider's function (`overlordPolicy.ts` imports the
+// allow's type alone; both held by `server/test/single-definition/overlord-may-act.test.ts`), it re-exports nothing of it, and
+// nothing imports it yet: the doors that call it come with later pieces (act rows B's own-record doors, request record B, the
+// relay). W3 replaces it and lifts that census.
 //
 // DORMANT BRANCHES STAY DORMANT. Whatever the gathered object holds, the decider is given no grant, no command, no stated entry,
-// no answer verdicts, no grant facts and an arming that is unmeasured: every field is named here, never spread from the input, so
-// a caller cannot pass a grant through. On the catalogue's real rows W2 can then answer `allow` (class none, and a relay carrying
-// a widening an operator request names), `operator-only`, `unmeasured` (an answer kind, or a request whose naming is unread)
-// and the ceiling's two words; `identity-too-weak` only on synthetic rows.
+// no answer verdicts, no grant facts, an arming that is unmeasured and no row lookup (six arguments, so the catalogue's rows
+// answer): every field is named here, never spread from the input, so a caller cannot pass a grant through. On the catalogue's
+// real rows W2 can then answer `allow` (class none, and a relay carrying a widening an operator request names), `staged` with
+// mode `proposal` (the same, under a `proposal` cell), `operator-only`, `unmeasured` (an answer kind, or a request whose naming
+// is unread) and, from a refusing verdict it was given, the ceiling's two words; never `identity-too-weak`, because every row a
+// door performs needs `attributed`, the weakest strength.
 import { overlordMayAct, type ActTarget, type MayActAnswer, type MayActFacts } from './overlordMayAct.js';
 import type { OverlordActKind } from '../../../shared/overlord.js';
 

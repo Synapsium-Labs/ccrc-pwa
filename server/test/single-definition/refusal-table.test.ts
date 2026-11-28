@@ -178,7 +178,8 @@ const W1_GROUP: Readonly<Record<string, number>> = {
   'overlord-uses-its-doors': 403, 'overlord-not-a-coordinator': 403, 'history-unreachable': 503, 'read-ceiling': 429,
 };
 
-/** The W2 group, as the W2 vocabulary plan's Table V1 gives it: each word with its status, chosen by the family rule. */
+/** The W2 group, as the W2 vocabulary plan's Table V1 gives it, with the policy port's `policy-refused` from the spec's
+ *  Table 11.6 (the act catalogue, PR B): each word with its status, chosen by the family rule. */
 const W2_GROUP: Readonly<Record<string, number>> = {
   'act-ceiling': 429, 'dependency-cycle': 409, 'egress-refused': 403, 'goal-conflict-open': 409, 'identity-too-weak': 403,
   'operator-has-it': 409, 'operator-only': 403, 'policy-refused': 403, 'relay-carries-method': 400, 'request-not-yours': 403,
@@ -287,7 +288,7 @@ describe('Table 11.6 and the code agree, both ways (spec §11.6, Appendix B)', (
 });
 
 describe('OVERLORD_REFUSALS: complete, alone, and each status by the family rule', () => {
-  it('its words are exactly the W1 rows of the plan\'s Task 3 table and read-ceiling, and the W2 rows of Table V1, each with its status', () => {
+  it('its words are exactly the W1 rows of the plan\'s Task 3 table and read-ceiling, and the W2 rows of Table V1 and Table 11.6, each with its status', () => {
     expect({ ...OVERLORD_REFUSALS }).toEqual({ ...W1_GROUP, ...W2_GROUP });
   });
 

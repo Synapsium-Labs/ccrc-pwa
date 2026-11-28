@@ -25,8 +25,9 @@ export type MayActModule = typeof import('../../src/coord/overlordMayAct.js');
 
 // -------------------------------------------------------------------------------------------------------------- the oracle
 
-/** What the oracle answers: the answer's shape, word, mode and authority (`none` or `kind:id`), the ceiling verdict, and the
- *  step that answered. */
+/** What the oracle answers: the answer's shape, word, mode and authority (`none` or `kind:id`), the ceiling verdict, the
+ *  step that answered, and the evidence path (`null` when the answer is decided before any path is chosen, else `none` or
+ *  the candidate's `kind:id` with its cover kind word). */
 export interface Expected {
   readonly kind: 'allowed' | 'refused' | 'ceiling';
   readonly word: string;
@@ -34,12 +35,16 @@ export interface Expected {
   readonly authority: string | null;
   readonly verdict: CeilingVerdict | null;
   readonly step: string;
+  readonly path: string | null;
 }
 
 const STRENGTH_ORDER: readonly CallerStrength[] = ['attributed', 'workload', 'operator'];
 const strengthRank = (s: CallerStrength): number => STRENGTH_ORDER.indexOf(s);
 
-const refusal = (word: string, step: string): Expected => ({ kind: 'refused', word, mode: null, authority: null, verdict: null, step });
+const refusalAt = (word: string, step: string, path: string | null): Expected =>
+  ({ kind: 'refused', word, mode: null, authority: null, verdict: null, step, path });
+/** A refusal decided before any path is chosen, so it names none. */
+const refusal = (word: string, step: string): Expected => refusalAt(word, step, null);
 
 /** The rule list's rank: a refusal 0 (`defer` 1); an allow `(staged ? 2 : 3) * 2 + (shadow or proposal ? 0 : 1)`. */
 export function rankOfExpected(e: { readonly kind: string; readonly word: string; readonly mode: string | null }): number {
@@ -81,10 +86,16 @@ function oracleGrant(g: GrantFact, kind: string, target: ActTarget, f: MayActFac
       const mc = gf === null ? 'unmeasured' : gf.modelClass;
       if (mc === 'unmeasured') unread = true;
       else if (mc !== c.modelClass) no = true;
-    } else {
+    } else if (c.kind === 'only-when-recommended-by-coordinator') {
       const rec = gf === null ? 'unmeasured' : gf.recommendedByCoordinator;
       if (rec === 'unmeasured') unread = true;
       else if (rec === false) no = true;
+    } else {
+      // A kind this build does not know (cast in by a test, so the type calls it unreachable): an unread fact, never a pass
+      // and never a `no` by itself. The kind is read through a widened type, which `never` would not allow.
+      const unknown: { readonly kind: string } = c;
+      void unknown.kind;
+      unread = true;
     }
   }
   return no ? 'no' : unread ? 'unmeasured' : 'covers';
@@ -94,6 +105,9 @@ function oracleGrant(g: GrantFact, kind: string, target: ActTarget, f: MayActFac
 function oraclePath(c: Candidate, row: OverlordActRow, effRow: OverlordActRow | null, members: readonly ClassMember[], f: MayActFacts): Expected {
   const onGrant = c.kind === 'grant';
   const onCommand = c.kind === 'command';
+  // The evidence path this candidate answers on: `none`, or the cover kind word and the id.
+  const pathText = c.kind === 'none' ? 'none' : `${c.kind}:${c.id}`;
+  const refusal = (word: string, step: string): Expected => refusalAt(word, step, pathText);
   // 4
   let need = strengthRank(row.leastStrength);
   if (effRow !== null) need = Math.max(need, strengthRank(effRow.leastStrength));
@@ -111,9 +125,10 @@ function oraclePath(c: Candidate, row: OverlordActRow, effRow: OverlordActRow | 
   if (f.cell === 'armed' && f.armedLive === 'unmeasured') return refusal('unmeasured', 'arming');
   // 15, the mode of every allow below
   const mint = (word: string, step: string, authority: string): Expected => {
-    if (f.cell === 'armed') return { kind: 'allowed', word, mode: f.armedLive ? 'live' : 'shadow', authority, verdict: null, step };
-    if (f.cell === 'proposal') return { kind: 'allowed', word: 'staged', mode: 'proposal', authority, verdict: null, step };
-    return { kind: 'allowed', word, mode: 'act', authority, verdict: null, step };
+    const at = pathText;
+    if (f.cell === 'armed') return { kind: 'allowed', word, mode: f.armedLive ? 'live' : 'shadow', authority, verdict: null, step, path: at };
+    if (f.cell === 'proposal') return { kind: 'allowed', word: 'staged', mode: 'proposal', authority, verdict: null, step, path: at };
+    return { kind: 'allowed', word, mode: 'act', authority, verdict: null, step, path: at };
   };
   // 7
   if (onCommand) return mint('allow', 'command', `command:${c.id}`);
@@ -137,7 +152,11 @@ function oraclePath(c: Candidate, row: OverlordActRow, effRow: OverlordActRow | 
   if (c.kind === 'stated-entry') return mint('allow', 'by-cover', `entry:${c.id}`);
   if (c.kind === 'operator-request') return mint('allow', 'by-cover', `request:${c.id}`);
   // 12
-  if (a.kind === 'answer' && (a.blindCheck === 'not-clear' || a.blindCheck === 'shadow')) return refusal('defer', 'blind-check');
+  // The check goes on only for a passing word; any other value, one outside the declared type included, defers.
+  if (a.kind === 'answer') {
+    const bc: string = a.blindCheck;
+    if (bc !== 'clear-yes' && bc !== 'not-armed') return refusal('defer', 'blind-check');
+  }
   // 13, 14
   if (members.some((m) => m.member === 'O3') && f.caller === 'attributed') return mint('staged', 'staging', `grant:${c.id}`);
   return mint('allow-by-grant', 'by-grant', `grant:${c.id}`);
@@ -161,11 +180,11 @@ export function mayActOracle(act: string, effect: string | null, target: ActTarg
   const ec = f.effectCeiling;
   if (ec === 'not-asked') {
     if (effRow !== null && effRow.ceiling.kind === 'counted') {
-      return { kind: 'ceiling', word: 'ceiling', mode: null, authority: null, step: 'effect-ceiling',
+      return { kind: 'ceiling', word: 'ceiling', mode: null, authority: null, step: 'effect-ceiling', path: null,
         verdict: { pass: false, word: 'unavailable', group: effRow.ceiling.group, why: "the effect's ceiling was not asked", latch: null } };
     }
   } else if (!ec.pass) {
-    return { kind: 'ceiling', word: 'ceiling', mode: null, authority: null, verdict: ec, step: 'effect-ceiling' };
+    return { kind: 'ceiling', word: 'ceiling', mode: null, authority: null, verdict: ec, step: 'effect-ceiling', path: null };
   }
   // 3
   const members = effectiveClasses(act, effect, lookup);
@@ -242,6 +261,11 @@ export function diffAnswer(e: Expected, a: MayActAnswer): string | null {
     if (a.word !== e.word) return `word ${a.word}, oracle ${e.word}`;
   } else if (!shallowSame(a.verdict, e.verdict!)) return `verdict ${JSON.stringify(a.verdict)}, oracle ${JSON.stringify(e.verdict)}`;
   if (step !== e.step) return `step ${step}, oracle ${e.step}`;
+  // The evidence at value level (review 4213 F5): the path that answered, and a read that says something.
+  const { path: p, read } = a.evidence as { readonly path: { readonly cover: string; readonly id?: number } | null; readonly read: unknown };
+  const pt = p === null ? null : p.cover === 'none' ? 'none' : `${p.cover}:${p.id}`;
+  if (pt !== e.path) return `evidence path ${pt}, oracle ${e.path}`;
+  if (typeof read !== 'string' || read.trim() === '') return 'the answer carries an empty evidence read';
   return null;
 }
 
@@ -826,6 +850,16 @@ function namedCases(m: MayActModule): Record<string, SuiteCase> {
         isAllowed(go(m, 'approve-spec', null, { ...GRANT_FACTS, answer: { ...ANS, blindCheck: b } }, [grant('approve-spec')]), 'allow-by-grant', 'act', 'grant:21');
       }
     },
+    'the blind check is read in the positive form: a value outside its type defers, never the grant allow (review 4213 F1)': () => {
+      for (const b of ['unmeasured', 'no-such-word', '']) {
+        const answer = { ...ANS, blindCheck: b } as unknown as typeof ANS;
+        isRefused(go(m, 'approve-spec', null, { ...GRANT_FACTS, answer }, [grant('approve-spec')]), 'defer', 'blind-check');
+      }
+    },
+    "isMayActKebab admits the decider's own words and refuses a foreign one (review 4213 F6)": () => {
+      for (const w of ['allow-by-grant', 'not-an-answer', 'clear-yes', 'operator-started-only', 'not-asked', 'question-effect']) expect(m.isMayActKebab(w), w).toBe(true);
+      for (const w of ['policy-refused', 'mail-disabled', 'no-such-word', 'allow-by']) expect(m.isMayActKebab(w), w).toBe(false);
+    },
     'an O3 effect under an attributed caller by a grant is staged; under workload or operator it is allow-by-grant': () => {
       isAllowed(go(m, 'approve-spec', null, { ...GRANT_FACTS, caller: 'attributed' }, [grant('approve-spec')]), 'staged', 'act', 'grant:21', 'staging');
       for (const caller of ['workload', 'operator'] as const) {
@@ -972,6 +1006,12 @@ export function grantCoversCases(m: MayActModule): Record<string, SuiteCase> {
       expect(gc(m, c, { gf: { ...GF, recommendedByCoordinator: false } })).toBe('no');
       expect(gc(m, c, { gf: { ...GF, recommendedByCoordinator: 'unmeasured' } })).toBe('unmeasured');
     },
+    'a condition of a kind this build does not know cannot say: unmeasured, never a cover, whatever the recommendation (review 4213 F2)': () => {
+      const c = g({ conditions: [{ kind: 'suspend-on-holiday' } as unknown as GrantFact['conditions'][number]] });
+      expect(gc(m, c, { gf: { ...GF, recommendedByCoordinator: true } })).toBe('unmeasured');
+      expect(gc(m, c, { gf: { ...GF, recommendedByCoordinator: false } })).toBe('unmeasured');
+      expect(gc(m, g({ conditions: [...c.conditions], state: 'revoked' }))).toBe('no');
+    },
     'every condition must hold: one that fails among holding ones is no': () => {
       const c = g({ conditions: [{ kind: 'operator-started-only' }, { kind: 'model-class', modelClass: 'class-a' }, { kind: 'only-when-recommended-by-coordinator' }, { kind: 'max-per-day', n: 2 }] });
       const gf = { ...GF, usesToday: { 21: 1 } };
@@ -1050,8 +1090,12 @@ export const MAY_ACT_SET: MutantSet<MayActModule> = {
     { id: 'D37 an unmeasured askOrAct is ask-is-cheaper', old: "    if (a.askOrAct === 'unmeasured') return", new: '    if (false) return' },
     { id: 'D38 ask passes', old: "    if (a.askOrAct !== 'act') return", new: '    if (false) return' },
     { id: 'D39 an entry runs on to the grant steps', old: "  if (path.cover === 'stated-entry') return", new: '  if (false) return' },
-    { id: 'D40 a not-armed blind check defers', old: "(a.blindCheck === 'not-clear' || a.blindCheck === 'shadow')", new: "(a.blindCheck !== 'clear-yes')" },
-    { id: 'D41 a shadow blind check passes', old: "(a.blindCheck === 'not-clear' || a.blindCheck === 'shadow')", new: "(a.blindCheck === 'not-clear')" },
+    { id: 'D40 a not-armed blind check defers', old: "= ['clear-yes', 'not-armed'];", new: "= ['clear-yes'];" },
+    { id: 'D41 a shadow blind check passes', old: "= ['clear-yes', 'not-armed'];", new: "= ['clear-yes', 'not-armed', 'shadow'];" },
+    { id: 'D65 the blind check read in the negative form', old: '!BLIND_CHECK_PASSES.includes(a.blindCheck)', new: "(a.blindCheck === 'not-clear' || a.blindCheck === 'shadow')" },
+    // the evidence and the kebab guard (review 4213 F5, F6)
+    { id: 'D66 the evidence emptied', old: '({ step, path, read });', new: "({ step, path: null, read: '' });" },
+    { id: 'D67 the kebab guard admits every word', old: 'export const isMayActKebab = (word: string): boolean =>', new: 'export const isMayActKebab = (word: string): boolean => true ||' },
     { id: 'D42 an O3 effect is staged under operator', old: "members.some((m) => m.member === 'O3') && facts.caller === 'attributed'", new: "members.some((m) => m.member === 'O3')" },
     // Measured equivalent and left out: staging without the O3 test ("a classless grant is staged"), because `CLASS_COVERS` gives a
     // grant to O3 alone, so every grant path holds an O3 member.
@@ -1104,5 +1148,7 @@ export const GRANT_COVERS_SET: MutantSet<MayActModule> = {
     { id: 'G17 an unread recommendation reads as yes', old: "checks.push(r === 'unmeasured' ? unread(", new: 'checks.push(false ? unread(' },
     { id: 'G18 an unread check beats a failing one', old: "return vs.find((v) => v.kind === 'no') ?? vs.find((v) => v.kind === 'unmeasured') ?? COVERS;", new: "return vs.find((v) => v.kind === 'unmeasured') ?? vs.find((v) => v.kind === 'no') ?? COVERS;" },
     { id: 'G19 an unread check covers', old: "?? vs.find((v) => v.kind === 'unmeasured') ?? COVERS;", new: '?? COVERS;' },
+    { id: 'G20 an unknown kind read as the recommendation (review 4213 F2)', old: "} else if (c.kind === 'only-when-recommended-by-coordinator') {", new: '} else if (true) {' },
+    { id: 'G21 an unknown kind covers', old: "checks.push(unread(`grant ${g.id}'s condition of kind", new: "checks.push(COVERS); void ((`grant ${g.id}'s condition of kind" },
   ],
 };

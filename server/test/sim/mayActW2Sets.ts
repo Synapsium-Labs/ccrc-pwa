@@ -6,7 +6,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { expect } from 'vitest';
 import type { MutantSet, SuiteCase } from './mutate.js';
-import { OVERLORD_ACT_KIND_LIST, type OverlordActKind } from '../../../shared/overlord.js';
+import { OVERLORD_ACT_KIND_LIST, actRow, type ActRowLookup, type OverlordActKind } from '../../../shared/overlord.js';
 import type { ActTarget, MayActAnswer } from '../../src/coord/overlordMayAct.js';
 import { mayActW2 as realMayActW2 } from '../../src/coord/overlordMayActW2.js';
 import type { OverlordPolicy, PolicyQuestion } from '../../src/coord/overlordPolicy.js';
@@ -56,6 +56,13 @@ export function mayActW2Cases(m: W2Module): Record<string, SuiteCase> {
     'a grant in the gathered object is not seen: a by-grant approval is operator-only': () => {
       expect(said(m.mayActW2('approve-spec', null, W2_TARGET, smuggled({ caller: 'operator', cell: 'by-grant' }), 1))).toBe('operator-only');
     },
+    'a row lookup in the gathered object is not seen: the decider reads the catalogue, and a start is operator-only (review 4213 F8)': () => {
+      // The lookup reads every row as class none, under which the decider would allow a start by itself; the wrapper passes six
+      // arguments and no lookup, so the catalogue's row answers.
+      const lookup: ActRowLookup = (k) => { const r = actRow(k); return r && { ...r, classes: [] }; };
+      const g = { ...W2_BASE, caller: 'operator', lookup } as unknown as Gathered;
+      expect(said(m.mayActW2('start-programme', null, W2_TARGET, g, 1))).toBe('operator-only');
+    },
     'the arming is unmeasured whatever is gathered: an armed cell refuses unmeasured': () => {
       expect(said(m.mayActW2('read', null, W2_TARGET, smuggled({ cell: 'armed' }), 1))).toBe('unmeasured');
     },
@@ -70,7 +77,7 @@ export function mayActW2Cases(m: W2Module): Record<string, SuiteCase> {
       expect(c.kind === 'ceiling' && c.verdict).toBe(verdict);
       expect(said(m.mayActW2('relay', 'widen-scope', W2_TARGET, { ...W2_BASE, request: { ...OPERATOR_REQUEST, namesTarget: 'unmeasured' } }, 1))).toBe('unmeasured');
     },
-    'on the real rows W2 answers allow and staged (a proposal), operator-only, unmeasured and the ceiling\'s words, never identity-too-weak': () => {
+    'on the real rows, under a passing ceiling, W2 answers allow and staged (a proposal), operator-only and unmeasured, never identity-too-weak': () => {
       const seen = new Set<string>();
       const effects: (string | null)[] = [null, ...OVERLORD_ACT_KIND_LIST, 'no-such-kind'];
       for (const act of OVERLORD_ACT_KIND_LIST) for (const effect of effects) for (const cell of ['allow', 'proposal', 'armed', 'by-grant'] as const) {
@@ -100,15 +107,36 @@ export function askPolicyCases(m: AskModule): Record<string, SuiteCase> {
       expect(m.askPolicy(policyOf(() => ({ ok: false, why: 'outside hours' })), question()))
         .toEqual({ ok: false, word: 'policy-refused', cause: 'refused', why: 'outside hours' });
     },
-    'a throw is policy-refused, never a pass and never a rethrow (F15)': () => {
-      const v = m.askPolicy(policyOf(() => { throw new Error('authoriser down'); }), question());
-      expect(v).toEqual({ ok: false, word: 'policy-refused', cause: 'threw', why: 'the policy threw: authoriser down' });
-      expect(m.askPolicy(policyOf(() => { throw 'a string'; }), question())).toMatchObject({ ok: false, cause: 'threw', why: 'the policy threw: a string' });
+    'a throw is policy-refused with the fixed reason, never a pass, never a rethrow (F15), and its text is not forwarded (review 4213 F3)': () => {
+      for (const thrown of [new Error('a secret the adapter held'), 'a secret string', 42, undefined]) {
+        expect(m.askPolicy(policyOf(() => { throw thrown; }), question()), String(thrown))
+          .toEqual({ ok: false, word: 'policy-refused', cause: 'threw', why: 'the policy threw' });
+      }
     },
-    'an answer that is not a check is policy-refused, malformed': () => {
+    'an answer or a thrown value that throws when read is policy-refused, never an escape (review 4213 F3)': () => {
+      const THREW = { ok: false, word: 'policy-refused', cause: 'threw', why: 'the policy threw' };
+      const getterOk = Object.defineProperty({}, 'ok', { get() { throw new Error('ok getter'); } });
+      const getterWhy = Object.defineProperty({ ok: false }, 'why', { get() { throw new Error('why getter'); } });
+      const proxy = new Proxy({}, { get() { throw new Error('proxy trap'); } });
+      const bareThrown = Object.create(null) as object;
+      const badMessage = Object.defineProperty(new Error('x'), 'message', { get() { throw new Error('message getter'); } });
+      const cases: readonly [string, OverlordPolicy['check']][] = [
+        ['an answer whose ok getter throws', () => getterOk as never],
+        ['an answer whose why getter throws', () => getterWhy as never],
+        ['a Proxy answer whose trap throws', () => proxy as never],
+        ['a thrown object with no prototype', () => { throw bareThrown; }],
+        ['a thrown error whose message getter throws', () => { throw badMessage; }],
+      ];
+      for (const [name, check] of cases) {
+        let v: unknown;
+        expect(() => { v = m.askPolicy(policyOf(check), question()); }, name).not.toThrow();
+        expect(v, name).toEqual(THREW);
+      }
+    },
+    'an answer that is not a check is policy-refused, malformed, with the fixed reason': () => {
       for (const bad of [undefined, null, 'ok', { ok: 'true' }, { ok: false }, { ok: false, why: 3 }, { ok: 1 }, []]) {
         expect(m.askPolicy(policyOf(() => bad as never), question()), JSON.stringify(bad)).toEqual({
-          ok: false, word: 'policy-refused', cause: 'malformed', why: 'the policy answered something that is not a check',
+          ok: false, word: 'policy-refused', cause: 'malformed', why: 'the policy answered no check',
         });
       }
     },
@@ -163,20 +191,31 @@ export const MAY_ACT_W2_SET: MutantSet<W2Module> = {
     { id: 'W8 the effect ceiling dropped', old: 'effectCeiling: g.effectCeiling,', new: 'effectCeiling: { pass: true },' },
     { id: 'W9 the natural key dropped', old: 'naturalKey: g.naturalKey,', new: "naturalKey: ''," },
     { id: 'W10 the generation dropped', old: 'generation: g.generation,', new: 'generation: 0,' },
+    { id: 'W11 a lookup passed', old: '  }, now);', new: '  }, now, (g as unknown as { lookup?: never }).lookup);' },
   ],
 };
+
+const THREW_LINE = "    verdict = { ok: false, word: 'policy-refused', cause: 'threw', why: THREW };";
+/** The ask's body as it stands, and the shape review 4213 F3 found: only the call inside the try, the answer read after it. */
+const ASK_BODY = ['  let verdict: PolicyVerdict;', '  try {', '    verdict = readCheck(p.check(q));', '  } catch {', THREW_LINE, '  }',
+  '  return verdict;'].join('\n');
+const ASK_BODY_READ_OUTSIDE = ['  let answer: unknown;', '  try {', '    answer = p.check(q);', '  } catch {',
+  "    return { ok: false, word: 'policy-refused', cause: 'threw', why: THREW };", '  }', '  return readCheck(answer);'].join('\n');
 
 export const ASK_POLICY_SET: MutantSet<AskModule> = {
   modulePath: ASK_TS, suite: askPolicyCases,
   mutants: [
-    { id: 'P1 a throw rethrown', old: "    return { ok: false, word: 'policy-refused', cause: 'threw', why: `the policy threw: ${whyOf(e)}` };", new: '    throw e;' },
-    { id: 'P2 a throw passes', old: "    return { ok: false, word: 'policy-refused', cause: 'threw', why: `the policy threw: ${whyOf(e)}` };", new: '    return { ok: true };' },
-    { id: 'P3 a malformed answer passes', old: "  return { ok: false, word: 'policy-refused', cause: 'malformed', why: 'the policy answered something that is not a check' };", new: '  return { ok: true };' },
-    { id: 'P4 the reason dropped', old: "cause: 'refused', why: a.why };", new: "cause: 'refused', why: '' };" },
-    { id: 'P5 a truthy ok passes', old: 'if (a.ok === true) return { ok: true };', new: 'if (a.ok) return { ok: true };' },
-    { id: 'P6 a refusal with no reason read as one', old: "if (a.ok === false && typeof a.why === 'string')", new: 'if (a.ok === false)' },
-    { id: 'P7 a refusal named a throw', old: "cause: 'refused', why: a.why", new: "cause: 'threw', why: a.why" },
-    { id: 'P8 the adapter asked twice', old: '    answer = p.check(q);', new: '    answer = (p.check(q), p.check(q));' },
+    { id: 'P1 a throw rethrown', old: THREW_LINE, new: "    throw new Error('rethrown');" },
+    { id: 'P2 a throw passes', old: THREW_LINE, new: '    verdict = { ok: true };' },
+    { id: 'P3 a malformed answer passes', old: "\n  return { ok: false, word: 'policy-refused', cause: 'malformed', why: NO_CHECK };", new: '\n  return { ok: true };' },
+    { id: 'P4 the reason dropped', old: "cause: 'refused', why };", new: "cause: 'refused', why: '' };" },
+    { id: 'P5 a truthy ok passes', old: 'if (ok === true) return { ok: true };', new: 'if (ok) return { ok: true };' },
+    { id: 'P6 a refusal with no reason read as one', old: "if (typeof why === 'string') return", new: 'if (why !== null || why === null) return' },
+    { id: 'P7 a refusal named a throw', old: "cause: 'refused', why };", new: "cause: 'threw', why };" },
+    { id: 'P8 the adapter asked twice', old: '    verdict = readCheck(p.check(q));', new: '    verdict = readCheck((p.check(q), p.check(q)));' },
+    { id: 'P9 the thrown text forwarded', old: `  } catch {\n${THREW_LINE}`, new: "  } catch (e) {\n    verdict = { ok: false, word: 'policy-refused', cause: 'threw', why: `${THREW}: ${String(e)}` };" },
+    { id: 'P10 the answer read outside the try', old: ASK_BODY, new: ASK_BODY_READ_OUTSIDE },
+    { id: 'P11 a non-object answer passes', old: "answer === null) return { ok: false, word: 'policy-refused', cause: 'malformed', why: NO_CHECK };", new: 'answer === null) return { ok: true };' },
   ],
 };
 

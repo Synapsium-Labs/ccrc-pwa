@@ -5,8 +5,9 @@
 //
 // FAILURE CONTRACT. `check` is synchronous: the door is inside its transaction, so an adapter answers from what it holds and
 // makes no I/O in the call. It cannot widen: its only input is an allow the decider minted, and its only other answer is a
-// refusal, which the door sends as `policy-refused`. A throw, and an answer of any other shape, is read as that refusal (fail
-// closed, review 2271 F15). The target is the allow's own (F5).
+// refusal, which the door sends as `policy-refused`. A throw, an answer that throws when read, and an answer of any other shape
+// are read as that refusal (fail closed, review 2271 F15, review 4213 F3), with a fixed reason: a thrown value's text is never
+// forwarded. The target is the allow's own (F5).
 import type { MayActAllow } from './overlordMayAct.js';
 import type { VerbClass } from '../../../shared/overlord-identity.js';
 import type { RecordedActor } from '../auth/callerIdentity.js';
@@ -22,7 +23,7 @@ export interface OverlordPolicy {
 }
 
 /** The door's one reading of the port: pass, or `policy-refused` with what refused it (the adapter, a throw, or an answer
- *  that is not a check) and its evidence. */
+ *  that is not a check) and its evidence: the adapter's own reason for a refusal, a fixed reason otherwise. */
 export type PolicyVerdict =
   | { readonly ok: true }
   | { readonly ok: false; readonly word: 'policy-refused'; readonly cause: 'refused' | 'threw' | 'malformed'; readonly why: string };

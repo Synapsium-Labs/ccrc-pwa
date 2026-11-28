@@ -14,7 +14,9 @@
 //
 // AN UNREAD FACT IS ITS OWN WORD (the coordinator's item 5). Every fact with an `unmeasured` arm, and every fact the decider
 // needed that was not gathered (an answer's verdicts, the grant facts), answers `unmeasured`, naming the fact: never an allow,
-// and never another refusal's word. Every answer carries its evidence, by its type.
+// and never another refusal's word. One exception, by the row and not by the facts (review 4213 F4): on the grant path, an act
+// that is not an answer and carries no verdicts answers `evidence-too-weak`, because it has no answer facts to gather (the plan's
+// F2); W3 may split that value. Every answer carries its evidence, by its type and by value: the step, the path and the read.
 import {
   CLASS_COVERS, COVER_KINDS, MAY_ACT_WORDS, actRow, effectiveClasses, isRungCellWord,
   type ActAuthority, type ActRowLookup, type AllowMode, type ClassMember, type CoverKind, type MayActAllowWord, type MayActWord,
@@ -42,9 +44,15 @@ const GRANT_CONDITION_KIND_MAP = {
 } as const;
 export type GrantConditionKind = keyof typeof GRANT_CONDITION_KIND_MAP;
 export const GRANT_CONDITION_KINDS = Object.keys(GRANT_CONDITION_KIND_MAP) as GrantConditionKind[];
-export type GrantCondition =
-  | { readonly kind: 'operator-started-only' } | { readonly kind: 'max-per-day'; readonly n: number }
-  | { readonly kind: 'model-class'; readonly modelClass: string } | { readonly kind: 'only-when-recommended-by-coordinator' };
+/** `T` when its keys are exactly `K`: a missing kind fails the constraint, and an extra one makes it `never` (review 4213 F10). */
+type KeyedExactly<T extends Record<K, object>, K extends PropertyKey> = Exclude<keyof T, K> extends never ? T : never;
+/** Each condition kind's own fields, keyed by the map's kinds both ways. */
+type GrantConditionFields = KeyedExactly<{
+  'operator-started-only': Record<never, never>; 'max-per-day': { readonly n: number };
+  'model-class': { readonly modelClass: string }; 'only-when-recommended-by-coordinator': Record<never, never>;
+}, GrantConditionKind>;
+/** A grant condition, derived from the map: one arm per kind, with that kind's fields. */
+export type GrantCondition = { [K in GrantConditionKind]: { readonly kind: K } & GrantConditionFields[K] }[GrantConditionKind];
 /** One grant row the door read (C26). Dormant in W2: `mayActW2` passes none (index question 27). */
 export interface GrantFact {
   readonly id: number; readonly effect: string; readonly scope: { readonly programme: number; readonly incarnation: number };
@@ -65,6 +73,9 @@ const BLIND_CHECK_MAP = {
   'not-armed': 'the blind check is not armed', 'clear-yes': 'the blind check agrees', 'not-clear': 'the blind check does not agree',
   shadow: 'the blind check runs in shadow',
 } as const;
+/** The blind check's two words that let the grant path go on: it agrees, or it is not armed (the spec's skipped word). The
+ *  unread word and its arm come with W3's gatherer. */
+const BLIND_CHECK_PASSES: readonly (keyof typeof BLIND_CHECK_MAP)[] = ['clear-yes', 'not-armed'];
 /** The effect's ceiling verdict when the door did not ask the ceiling step. */
 const CEILING_NOT_ASKED = 'not-asked';
 /** The one may-carry word that is not a list of effects (`OverlordActRow['mayCarry']`, `shared/overlord.ts`). */
@@ -80,7 +91,8 @@ export interface MayActFacts {
   readonly statedEntry: { readonly kind: 'none' } | { readonly kind: 'cited'; readonly id: number;
     readonly active: boolean; readonly stated: boolean; readonly restsOnOperatorMessage: boolean;
     readonly confirmedOrWhole: boolean; readonly subjectMatches: boolean };
-  /** An answer's verdicts; `not-an-answer` when none were gathered. */
+  /** An answer's verdicts; `not-an-answer` when none were gathered. The decider reads whether the act is an answer from its row:
+   *  an answer row with none is unread (`unmeasured`), and a row that is not an answer on the grant path is `evidence-too-weak`. */
   readonly answer: { readonly kind: 'not-an-answer' } | { readonly kind: 'answer';
     readonly evidence: keyof typeof ANSWER_EVIDENCE_MAP; readonly askOrAct: 'act' | 'ask' | 'unmeasured';
     readonly blindCheck: keyof typeof BLIND_CHECK_MAP };
@@ -235,9 +247,12 @@ export function grantCovers(g: GrantFact, kind: string, target: ActTarget, facts
     } else if (c.kind === 'model-class') {
       const mc = gf === null ? 'unmeasured' : gf.modelClass;
       checks.push(mc === 'unmeasured' ? unread("the generation's model class") : mc === c.modelClass ? COVERS : no(`the model class is ${mc}, not ${c.modelClass}`));
-    } else {
+    } else if (c.kind === 'only-when-recommended-by-coordinator') {
       const r = gf === null ? 'unmeasured' : gf.recommendedByCoordinator;
       checks.push(r === 'unmeasured' ? unread("the coordinator's recommendation") : r ? COVERS : no('the coordinator did not recommend it'));
+    } else {
+      // A kind this build does not know cannot say (review 4213 F2): never a cover. W3's reader refuses one first.
+      checks.push(unread(`grant ${g.id}'s condition of kind ${(c as { readonly kind: string }).kind}`));
     }
   }
   return combine(checks);
@@ -352,8 +367,9 @@ function runPath(path: MayActPath, row: OverlordActRow, effRow: OverlordActRow |
   if (path.cover === 'none') return mint('allow', 'by-cover', { kind: 'none', id: null }, 'class none');
   if (path.cover === 'stated-entry') return mint('allow', 'by-cover', { kind: 'entry', id: path.id }, `entry ${path.id} covers every member`);
   if (path.cover === 'operator-request') return mint('allow', 'by-cover', { kind: 'request', id: path.id }, `request ${path.id} covers every member`);
-  // 13. The blind check, by grant: armed and not a clear yes (a check in shadow included) defers.
-  if (a.kind === 'answer' && (a.blindCheck === 'not-clear' || a.blindCheck === 'shadow')) {
+  // 13. The blind check, by grant, read in the positive form (review 4213 F1): only a passing word goes on; every other value,
+  //     `not-clear`, `shadow` or one this build does not know, defers.
+  if (a.kind === 'answer' && !BLIND_CHECK_PASSES.includes(a.blindCheck)) {
     return no('defer', 'blind-check', `the blind check is ${a.blindCheck}`);
   }
   const authority: ActAuthority = { kind: 'grant', id: path.id };
