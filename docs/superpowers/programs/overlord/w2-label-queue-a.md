@@ -24,7 +24,7 @@ what the ledger should learn; no plan, spec or ledger text is edited here.
 | `quizWeek`'s importers | Five: `quiz.ts` itself (the status mail's key), `quizLane.ts`, `continuity-quiz-lane.test.ts`, `history-quiz-unattended.test.ts`, `sim/quizSets.ts`. The plan named three (point 1). |
 | Migrations | 134, so this piece's was slot 135. Request record A (#3609) landed 135 first, so after one merge of main (below) this piece's is slot 136. |
 | `LANE_SCHEDULE`'s `mono` rows | 66 (the plan said 46); 67 with the label lane. |
-| Route counts (auth-gate) | 34 route files, 345 routes, 342 HTTP, 120 exempt. Now 35, 347, 344, 120. |
+| Route counts (auth-gate) | 34 route files, 345 routes scanned, 342 HTTP, 222 gated, 120 exempt. Now 35 route files, 347 scanned, 344 HTTP, 224 gated, 120 exempt. |
 | Card rows | `scope.widens`, `relay.method`, `readback.omits`, `readback.adds` (LQ3, derived from the catalogue). |
 | Which card rows resolve today | `relay.method` only (inline). `readback.*` cite a message and a mail. `scope.widens` cites a message and a goals version. |
 
@@ -55,10 +55,12 @@ what the ledger should learn; no plan, spec or ledger text is edited here.
 - **Goals version.** No reader, no parse and no spelling here (ticket `label-card-goals-version-reader`). Its cards count under
   `no-reader`.
 - **Counts.** All three words are counted on the read's answer (`skipped`) and in the lane's one log line a pass.
-- **Point a, the budget.** The lane asks whether each ref still exists through facts reads that return no text: the private
-  store's `messageFactsById`, and `mailOrigin`. It never picks a state that is proven absent, unmeasured or has no reader. An
-  open card proven absent or with no reader holds no slot (`cardHoldsSlot`, `openSlotsHeld`). A read never closes or writes a
-  card.
+- **Point a, the budget.** The lane asks whether each ref still exists. A message is asked through the private store's
+  `messageFactsById`, which returns no text. A mail is asked through `mailOrigin`, the ruled mail reader, which reads the mail
+  row with its subject and body: the adapter keeps only whether a row came back and discards the text at once, so no text reaches
+  the lane, a log line or a table. The lane never picks a state that is proven absent, unmeasured or has no reader. An open card
+  proven absent or with no reader holds no slot (`cardHoldsSlot`, `openSlotsHeld`); an unmeasured card keeps its slot until a
+  read measures it. A read never closes or writes a card.
 - **Point b.** A secret-shaped value in a mail body is masked on the card (`label-card-routes`, the masker control).
 
 ## Departures, by slug
@@ -78,14 +80,23 @@ what the ledger should learn; no plan, spec or ledger text is edited here.
   - on an answer, it refuses 503 `write-failed` with the detail "the row cannot be read".
 - `label-lane-quiet-until-asked`: the lane logs one line only when a non-off row has a waiting state, it picked a card, or a
   row's read failed.
-- `cross-context-pure-import`: `labelCards.ts` (C6, L1) imports `cardRefNeeds` and `refKey` from `labelQueue.ts` (C5, L1).
-  These are pure functions over the decision model's ref vocabulary, and no store is reached across the boundary. The C5 store
-  meets the doors' port by shape and imports nothing from C6 (F13).
+- `cross-context-pure-import`: two C6 files import from `labelQueue.ts` (C5, L1), each a pure function or a type, pointing
+  inward, and no store is reached across the boundary:
+  - `labelCards.ts` (C6, L1) imports `cardRefNeeds`, `refKey` and the type `LabelCardRow`;
+  - `labelCardRoutes.ts` (C6, L4) imports `cardRefNeeds`, `cardShown`, `handOverOrder`, `readDraws`, `refKey` and the type
+    `LabelCardRow`.
+
+  The C5 store meets the doors' port by shape and imports nothing from C6 (F13). `labelQueue.ts`'s header says this.
+- `door-port-as-built`: the plan's Task 5 port is `openCards`, `cardFacts` (a card with its row's mode and revision) and
+  `close`. As built, `LabelCardStore` is `openCards`, `card`, `rowMode`, `record`, `pickedThisWeek` and `close`: the row's mode
+  is read on its own because the read filters every open card by it and counts an unreadable row; the record is read because
+  each card is rebuilt from it; `pickedThisWeek` feeds the read's answer. The row's revision is the catalogue constant, read
+  in the handler.
 - `departures-in-the-task-note`: the plan put departures under `plans/`; they are here, by the brief.
 - `console-split`: call 1919.
 - `file-edits-by-script`: the move commit's importer edits, one export and three agreed packet applications went through a
-  script or `patch`, not the editor tools the brief names. Each was a verified exact replacement. Everything after that went
-  through the editor tools.
+  script or `patch`, not the editor tools the brief names. Each was a verified exact replacement. In fix round 1, one edit, the
+  new decider cases in `label-queue-refs.test.ts`, went through a script too. Everything else went through the editor tools.
 
 ## Mutation rows
 
@@ -95,6 +106,10 @@ what the ledger should learn; no plan, spec or ledger text is edited here.
 | `labelQueueSets.ts`: `cardRowsOf`, `labelsNeeded`, `pickLabelCards`, `labelFor`, `cardShown`, `cardRefNeeds`, `stateDrawability`, `cardHoldsSlot` (with `openSlotsHeld`), `pickRowFactsOf`; `cardAnswerVerdict`, `cardView`, `cardFieldsOf` | 63 | none (new) | 63/63 killed, each set 1.0 |
 | Store, by hand: the budget re-read dropped, the label written on not-sure, the newest record keyed by model, the close's compare dropped | 4 | none (new) | 4/4 killed |
 | Doors, by hand: the gate dropped from the read, a verdict leaked onto a card, the revision check skipped | 3 | none (new) | 3/3 killed |
+| Fix round 1, R1, the lane's budget closure, by hand: it reuses the pass's first counts (both); only the picked count; only the open count | 3 | both: survived the old case (review 4185's mutant 4b, all 11 lane cases green) | 3/3 killed: both by the two new race cases (ten picked, so fifteen in all), the picked count by the answered race, the open count by the other week's open race |
+| Fix round 1, C1, the read's cap, by hand: the cap dropped at the read; the order made the store's (no sort); ties by id descending | 3 | the cap absent: the read drew all twenty | 3/3 killed: the cap by both sequences; no sort by the decider case and the rollback sequence; the tie order by the decider case, both sequences and the order-picked case |
+| Fix round 1, C6, C7, R5, by hand: the read asks the store before its gate; a message read's unmeasured made absent (review 4185's mutant 5b); a throwing mail read made absent; the newest record keyed by host kind; keyed by line generation | 5 | unpinned by the old cases (review 4185's C6, C7 and R5; its mutant 5b survived all 14 door cases) | 5/5 killed, each by its new case |
+| Fix round 1, C3: an unreadable waiting record counted absent; a bad inline part judged drawable | 2 | the code as it was | both cases red on the old code, green on the fix |
 
 ## What PR B reads
 
@@ -111,7 +126,7 @@ Both doors are session-gated, behind the account gate (`{ cap: null }`, no step-
 **`GET /api/labels`** answers `LabelCardsAnswer` (`shared/labelQueue.ts`):
 
 ```
-{ ok: true, cards: CardView[], open: number, pickedThisWeek: number, week: 'YYYY-Www',
+{ ok: true, cards: CardView[], open: number, heldBack: number, pickedThisWeek: number, week: 'YYYY-Www',
   skipped: { absent: number, unmeasured: number, noReader: number } }
 ```
 
@@ -120,7 +135,10 @@ Both doors are session-gated, behind the account gate (`{ cap: null }`, no step-
 - **`answers`:** a yes-or-no row answers `['yes', 'no', 'not-sure']`. A choice row answers each `{ option }`, then `'none'`,
   then `'not-sure'`.
 - **No model answer.** No card carries a verdict, probability, band or line.
-- **`open`:** the cards `cardShown` shows. Skipped cards are counted in it.
+- **`open`:** the cards `cardShown` shows. Skipped and held-back cards are counted in it.
+- **At most ten cards.** The read draws the shown cards oldest pick week first, then by id, and stops after ten drawn
+  (`LABEL_CARDS_PER_WEEK`). **`heldBack`** counts the shown cards past those, whose records were not read this time. A skipped
+  card takes none of the ten. An answer for a held-back card is accepted like any other.
 
 **`POST /api/labels/:id`**, body `{ answer }`. `answer` is `'yes'`, `'no'`, `'none'`, `'not-sure'` or `{ option }`. It answers
 200 `{ ok: true, changed }`, where `changed` is false when the card was already closed.
@@ -161,8 +179,36 @@ was built at. On the coordinator's go, this branch took one merge of `main` at `
     directory;
   - the floors suite (429 of 429, locally) and the source type check.
 
+## Fix round 1 (review 4185, the coordinator's call 1975)
+
+- **R1:** the lane's case that says the budget is re-read inside the pick now races five states outside the outer pick's set,
+  twice: once answered at once (the picked count binds) and once left open under another week's key (the open count binds).
+  Each keeps the total at ten; a stale closure reaches fifteen (mutation rows).
+- **C1:** the plan's sentence "the operator is never handed more than ten open cards" is kept at the read. The budget
+  (`labelBudget`) is a pick-time cap: a hidden card holds no slot, so a row going off and back on, or a build rolled back across
+  a revision, can bring twenty cards back, and the budget then reads zero (clamped, never negative), so nothing new is picked
+  until fewer than ten are open. The read's cap is what keeps the plan's sentence: `handOverOrder` (oldest pick week first, then
+  the card's id) and `readDraws` (the weekly constant, never a second number), and `heldBack` on the answer. The answer door is
+  unchanged. The cap counts drawn cards: a card skipped as absent never closes, so if it took one of the ten it would hold the
+  read short for good.
+- **C3:** one word for a record this build cannot read. The store's one reader of a record's refs and inline part
+  (`recordPartsOf`) serves the waiting arm, a card's rebuild and the labelled cases, and the lane counts an unreadable waiting
+  record `unmeasured`, as the open-card arm and the read do.
+- **C6, C7, R5:** the cases named in the mutation rows.
+- **S2:** the lane, the store, the ports, the routes file and the shared vocabulary join the time-ports census by name.
+- **S7:** the unattended quiz script's comment cites `server/src/time/rules.ts#utcIsoWeek`.
+- **Words:** C5 (point a above and the two comments), S4 (`cross-context-pure-import`, `door-port-as-built`), S6 (the four
+  counts in Step 0).
+
 ## Known limits
 
+- **The readback rows' labels admit nothing yet** (review 4185, C2, a known limit by the coordinator's ruling). A label on the
+  two readback rows is stored and lowers what the queue asks for, but admission rebuilds no case from a message or mail
+  reference in this build, so those two rows admit nothing yet, and once such labels exist the decision lane says so on each
+  pass. The labels are not lost: they are used when the decision model's state reads gain a message and a mail reader (ticket
+  `decision-model-state-reads-for-message-and-mail`).
+- **The budget is a pick-time cap.** It reads zero while ten or more shown cards hold slots, so the open count can pass ten
+  only when hidden cards come back; the read's cap is what keeps the operator to ten cards at a time.
 - **An unmeasured card holds its slot.** It holds one of the ten until a facts read measures it, so at most ten can be held. A
   read that answers again frees them, and so does the operator's answer or the row going off.
 - **An absent card stays open in the table.** A picked card whose message or mail later disappears holds no slot and is

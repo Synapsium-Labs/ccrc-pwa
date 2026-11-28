@@ -51,12 +51,14 @@ export interface CardView {
   readonly week: string;
 }
 
-/** `GET /api/labels`. `skipped` counts the open cards left out because their state did not resolve, one count per
- *  `LABEL_SKIP_WORDS` word: never drawn empty and never from a stored copy. */
+/** `GET /api/labels`. `open` counts the shown open cards. At most `LABEL_CARDS_PER_WEEK` are drawn, oldest pick week first;
+ *  `heldBack` counts the shown cards past those, not read this time. `skipped` counts the cards left out because their state
+ *  did not resolve, one count per `LABEL_SKIP_WORDS` word: never drawn empty and never from a stored copy. */
 export interface LabelCardsAnswer {
   readonly ok: true;
   readonly cards: readonly CardView[];
   readonly open: number;
+  readonly heldBack: number;
   readonly pickedThisWeek: number;
   readonly week: string;
   readonly skipped: { readonly absent: number; readonly unmeasured: number; readonly noReader: number };

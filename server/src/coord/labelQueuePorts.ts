@@ -24,13 +24,16 @@ export interface LabelStateRecord {
   /** The record's verdict, or null for a word this build cannot read (such a record is never marked). */
   readonly verdict: LabelledAnswer['verdict'] | null;
   readonly p: number;
-  /** The record's refs, or null when this build cannot read them (the state is then never drawn). */
+  /** The record's refs, or null when this build cannot read its refs or its inline part (the state is then unmeasured, never
+   *  absent, and never picked: review 4185, C3). */
   readonly refs: Readonly<Record<string, string | readonly string[]>> | null;
 }
 
-/** Whether a ref an open card or a waiting state names still exists, through an owner's read that returns facts and never text
- *  (the private store's message facts, the coordination store's mail row): the lane never picks a state proven absent, and a
- *  card proven absent holds no slot (the coordinator's ruling on the gap, point a). Never throws. */
+/** Whether a ref an open card or a waiting state names still exists, answered as a fact and never as text: the private store's
+ *  message facts read returns none; the coordination store's mail row read (`mailOrigin`) returns the mail's subject and body,
+ *  which the adapter discards inside itself, keeping only whether the row exists. The lane never picks a state proven absent or
+ *  unmeasured; a card proven absent holds no slot, and an unmeasured card keeps its slot until a read measures it (the
+ *  coordinator's ruling on the gap, point a). Never throws. */
 export interface LabelRefFacts {
   found(refKind: CardRefKind, id: number): RefFound;
 }

@@ -14,6 +14,10 @@
 // operator-message readers holds that), and a mail body through the coordination store's one-row read. A card whose state does
 // not resolve is skipped and counted under one word (absent, unmeasured, no-reader), never drawn empty and never from a copy.
 //
+// AT MOST TEN HANDED OVER (LQ2; the coordinator's ruling C1, call 1975). The read draws the shown cards in `handOverOrder` while
+// `readDraws` allows, the weekly budget's own constant, and answers the rest as `heldBack`, a count, never silently. The answer
+// door is unchanged: an answer for a held-back card is accepted as for any open card.
+//
 // DECIDE IN C6 (F13). The handlers read through `LabelCardStore`, the port this file declares as its consumer, ask
 // `labelCards.ts` and `labelQueue.ts`, and pass the verdict to the store's close, which re-checks and writes and decides
 // nothing else.
@@ -26,7 +30,7 @@ import { refuseRoute } from '../refuse.js';
 import { utcIsoWeek } from '../time/rules.js';
 import type { LabelledAnswer } from './decisionLines.js';
 import { cardAnswerVerdict, cardFieldsOf, cardOptionsOf, cardView, type CardRefText } from './labelCards.js';
-import { cardRefNeeds, cardShown, refKey, type LabelCardRow } from './labelQueue.js';
+import { cardRefNeeds, cardShown, handOverOrder, readDraws, refKey, type LabelCardRow } from './labelQueue.js';
 
 type Refs = Readonly<Record<string, string | readonly string[]>>;
 
@@ -75,15 +79,19 @@ export function registerLabelCardRoutes(app: FastifyInstance, deps: LabelCardRou
     const week = utcIsoWeek(deps.now()).key;
     const skipped: Record<LabelSkipWord, number> = { absent: 0, unmeasured: 0, 'no-reader': 0 };
     const cards: CardView[] = [];
-    let open = 0;
+    const shown: LabelCardRow[] = [];
+    let heldBack = 0;
     const messages = deps.messages();
     const mail = deps.mail();
     for (const card of store.openCards()) {
-      const q = DECISION_QUESTIONS[card.row];
       const mode = store.rowMode(card.row);
       if (mode === 'unreadable') { skipped.unmeasured++; continue; }
-      if (cardShown(card, { mode, revision: q.revision }) === 'hidden') continue;
-      open++;
+      if (cardShown(card, { mode, revision: DECISION_QUESTIONS[card.row].revision }) === 'shown') shown.push(card);
+    }
+    for (const card of handOverOrder(shown)) {
+      // Past the tenth drawn card the rest are held back unread: their records and texts are not read (the ruling C1).
+      if (!readDraws(cards.length)) { heldBack++; continue; }
+      const q = DECISION_QUESTIONS[card.row];
       const rec = store.record(card.recordId);
       if (rec === 'absent') { skipped.absent++; continue; }
       if (rec === 'unreadable') { skipped.unmeasured++; continue; }
@@ -110,7 +118,7 @@ export function registerLabelCardRoutes(app: FastifyInstance, deps: LabelCardRou
       cards.push(cardView(card, q, f.fields, cardOptionsOf(q, rec.refs)));
     }
     const answer: LabelCardsAnswer = {
-      ok: true, cards, open, pickedThisWeek: store.pickedThisWeek(week), week,
+      ok: true, cards, open: shown.length, heldBack, pickedThisWeek: store.pickedThisWeek(week), week,
       skipped: { absent: skipped.absent, unmeasured: skipped.unmeasured, noReader: skipped['no-reader'] },
     };
     return answer;

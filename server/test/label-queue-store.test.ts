@@ -4,7 +4,7 @@
 import path from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
 import { afterAll, describe, expect, it } from 'vitest';
-import { DECISION_QUESTIONS, type DecisionRowId } from '../../shared/decisionModel.js';
+import { DECISION_QUESTIONS, type DecisionHostKind, type DecisionRowId } from '../../shared/decisionModel.js';
 import { openCoordDb } from '../src/coord/db.js';
 import { recordDecision } from '../src/coord/decisionModelStore.js';
 import {
@@ -28,11 +28,12 @@ function freshDb(): DatabaseSync {
 }
 let at = MON;
 function record(db: DatabaseSync, stateHash: string, o: { row?: DecisionRowId; revision?: string; modelId?: string; origin?: string;
-  verdict?: 'yes' | 'no'; p?: number; refs?: Record<string, string>; inline?: Record<string, string> | null } = {}): number {
+  hostKind?: DecisionHostKind; lineGen?: number; verdict?: 'yes' | 'no'; p?: number; refs?: Record<string, string>;
+  inline?: Record<string, string> | null } = {}): number {
   const row = o.row ?? ROW;
   const r = recordDecision(db, {
-    row, revision: o.revision ?? DECISION_QUESTIONS[row].revision, modelId: o.modelId ?? 'model-a', hostKind: 'local',
-    origin: o.origin ?? 'http://127.0.0.1:1', stateHash, lineGen: 0, verdict: o.verdict ?? 'yes', p: o.p ?? 0.97, band: 'very-likely',
+    row, revision: o.revision ?? DECISION_QUESTIONS[row].revision, modelId: o.modelId ?? 'model-a', hostKind: o.hostKind ?? 'local',
+    origin: o.origin ?? 'http://127.0.0.1:1', stateHash, lineGen: o.lineGen ?? 0, verdict: o.verdict ?? 'yes', p: o.p ?? 0.97, band: 'very-likely',
     ms: 5, refs: o.refs ?? {}, inline: o.inline === undefined ? (DECISION_QUESTIONS[row].privateState ? null : { part: `text of ${stateHash}` }) : o.inline,
     at: (at += 1000),
   });
@@ -153,6 +154,26 @@ describe('the reads', () => {
     record(db, 's1', { origin: 'http://127.0.0.1:1', verdict: 'yes', p: 0.99 });
     const second = record(db, 's1', { origin: 'http://127.0.0.1:2', verdict: 'no', p: 0.2 });
     expect(waitingStates(db, NONE, ROW, REV)).toEqual([expect.objectContaining({ stateHash: 's1', recordId: second, verdict: 'no', p: 0.2 })]);
+  });
+
+  it('the newest record is the store order whatever the host kind or line generation (review 4185, R5)', () => {
+    const db = freshDb();
+    record(db, 's1', { hostKind: 'hosted', lineGen: 3, verdict: 'yes', p: 0.99 });
+    record(db, 's1', { hostKind: 'zero-retention', lineGen: 0, verdict: 'yes', p: 0.98 });
+    const newest = record(db, 's1', { hostKind: 'local', lineGen: 1, verdict: 'no', p: 0.3 });
+    record(db, 's2', { hostKind: 'local', lineGen: 7, verdict: 'yes', p: 0.91 });
+    const s2 = record(db, 's2', { hostKind: 'hosted', lineGen: 2, verdict: 'no', p: 0.1 });
+    expect(waitingStates(db, NONE, ROW, REV)).toEqual([
+      expect.objectContaining({ stateHash: 's1', recordId: newest, verdict: 'no', p: 0.3 }),
+      expect.objectContaining({ stateHash: 's2', recordId: s2, verdict: 'no', p: 0.1 }),
+    ]);
+    setMode(db, ROW, 'shadow');
+    pick(db, ['s1', 's2']);
+    for (const c of openLabelCards(db)) closeLabelCardInTx(db, c.id, { outcome: 'labelled', label: 'yes', actor: 'a', at: 5, expect: SHADOW });
+    expect(labelledAnswersOf(db, NONE, ROW, REV)).toEqual([
+      { p: 0.3, verdict: 'no', label: 'yes' },
+      { p: 0.1, verdict: 'no', label: 'yes' },
+    ]);
   });
 });
 

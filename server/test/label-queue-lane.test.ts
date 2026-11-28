@@ -1,6 +1,7 @@
 // Overlord W2, the weekly label lane (plan w2-label-queue.md Task 4, LQ1, LQ2, LQ13; the coordinator's ruling on the gap, point a,
 // and point 7): the week's budget, the open cap, an off row, a hidden card, a failed read, a restart, the states that cannot be
-// drawn, and the quiet of a fleet with no row in shadow. The lane runs over a real coord.db and the real store.
+// drawn, a record this build cannot read, and the quiet of a fleet with no row in shadow. The lane runs over a real coord.db and
+// the real store.
 import path from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
 import { afterAll, describe, expect, it } from 'vitest';
@@ -178,18 +179,67 @@ describe('states that cannot be drawn (the coordinator\'s ruling on the gap, poi
     expect(open(db)).toHaveLength(12);
   });
 
-  it('the budget is re-read inside the pick: a card closed and re-picked elsewhere is never over ten', () => {
+  // Between the pass's read and its pick, another pass picks the five states this pass did NOT choose, so the unique key cannot
+  // hide a stale budget: only the lane's closure re-reading both counts inside the transaction keeps the total at ten. A closure
+  // that reuses the pass's first count (either half, or both) lets the outer pick insert all ten of its own: fifteen.
+  const raceOutside = (db: DatabaseSync, o: { week?: string; closeThem: boolean }): LabelLaneReads => {
+    const real = labelLaneReadsOf(db, NONE);
+    let raced = false;
+    return { ...real, pick: (week, picks, at, budget) => {
+      if (!raced) {
+        raced = true;
+        const mine = new Set(picks.map((p) => p.stateHash));
+        const rev = DECISION_QUESTIONS['relay.method'].revision;
+        const others = real.waiting('relay.method', rev).filter((w) => !mine.has(w.stateHash))
+          .map((w) => ({ row: 'relay.method' as const, revision: rev, stateHash: w.stateHash, recordId: w.recordId }));
+        expect(others).toHaveLength(5);
+        expect(real.pick(o.week ?? week, others, at, () => 5).picked).toBe(5);
+        if (o.closeThem) answerAll(db);
+      }
+      return real.pick(week, picks, at, budget);
+    } };
+  };
+
+  it('the budget is re-read inside the pick: five raced picks this week, answered at once, leave room for five, never fifteen', () => {
     const db = freshDb();
     setMode(db, 'relay.method', 'shadow');
     relay(db, 15);
-    const real = labelLaneReadsOf(db, NONE);
-    // Between the pass's read and the pick, another pass picks five.
-    let raced = false;
-    const reads: LabelLaneReads = { ...real, pick: (week, picks, at, budget) => {
-      if (!raced) { raced = true; real.pick(week, picks.slice(5, 10), at, () => 5); }
-      return real.pick(week, picks, at, budget);
-    } };
-    lane(db, MON, { reads });
+    const { pass } = lane(db, MON, { reads: raceOutside(db, { closeThem: true }) });
+    expect(pass.picked).toBe(5);
+    expect(db.prepare('SELECT COUNT(*) AS n FROM label_cards').get()).toEqual({ n: 10 });
+    expect(open(db)).toHaveLength(5);
+  });
+
+  it('the open count is re-read inside the pick: five raced open cards from another week leave room for five, never fifteen open', () => {
+    const db = freshDb();
+    setMode(db, 'relay.method', 'shadow');
+    relay(db, 15);
+    const { pass } = lane(db, MON, { reads: raceOutside(db, { week: '2026-W47', closeThem: false }) });
+    expect(pass.picked).toBe(5);
     expect(open(db)).toHaveLength(10);
+  });
+});
+
+describe('a record this build cannot read is unmeasured, never absent (review 4185, C3)', () => {
+  it('a waiting state whose refs cannot be read is counted unmeasured and not picked', () => {
+    const db = freshDb();
+    setMode(db, 'readback.omits', 'shadow');
+    readback(db, 'torn', '1', '10');
+    db.prepare("UPDATE decision_records SET refs = 'not json' WHERE stateHash = 'torn'").run();
+    const { pass } = lane(db, MON);
+    expect(pass.picked).toBe(0);
+    expect(pass.undrawn).toEqual({ absent: 0, unmeasured: 1, 'no-reader': 0 });
+  });
+
+  it('a waiting state whose inline part cannot be read is not judged drawable: not picked, counted unmeasured, holding no slot', () => {
+    const db = freshDb();
+    setMode(db, 'relay.method', 'shadow');
+    record(db, 'relay.method', 'badinline');
+    db.prepare(`UPDATE decision_records SET inline = '{"part":5}' WHERE stateHash = 'badinline'`).run();
+    relay(db, 3);
+    const { pass } = lane(db, MON);
+    expect(pass.picked).toBe(3);
+    expect(open(db).map((c) => c.stateHash)).not.toContain('badinline');
+    expect(pass.undrawn).toEqual({ absent: 0, unmeasured: 1, 'no-reader': 0 });
   });
 });

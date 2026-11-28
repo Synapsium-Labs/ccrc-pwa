@@ -18,8 +18,10 @@ import { Bus } from '../src/bus.js';
 import { loadConfig } from '../src/config.js';
 import { openCoordDb } from '../src/coord/db.js';
 import { recordDecision } from '../src/coord/decisionModelStore.js';
-import { registerLabelCardRoutes, type LabelCardStore } from '../src/coord/labelCardRoutes.js';
-import { openLabelCards, pickLabelCardsInTx } from '../src/coord/labelQueueStore.js';
+import { registerLabelCardRoutes, type LabelCardMail, type LabelCardMessages, type LabelCardStore } from '../src/coord/labelCardRoutes.js';
+import { runLabelQueueLane } from '../src/coord/labelQueueLane.js';
+import type { LabelRefFacts, MeasuredLabels } from '../src/coord/labelQueuePorts.js';
+import { labelLaneReadsOf, openLabelCards, pickLabelCardsInTx } from '../src/coord/labelQueueStore.js';
 import { CoordStore } from '../src/coord/store.js';
 import { Tmux, type Runner } from '../src/exec.js';
 import { KeyedQueue } from '../src/inject/queue.js';
@@ -122,7 +124,8 @@ describe('the gate (index F14, LQ9)', () => {
   it('no session answers unauthenticated, and the box token alone is refused', async () => {
     const r = await rig();
     const anon = { ...r, cookie: '' };
-    for (const res of [await get(anon), await post(anon, 1, 'yes'), await get(anon, { 'x-ccrc-mail-token': BOX_TOKEN })]) {
+    for (const res of [await get(anon), await post(anon, 1, 'yes'), await get(anon, { 'x-ccrc-mail-token': BOX_TOKEN }),
+      await post(anon, 1, 'yes', { 'x-ccrc-mail-token': BOX_TOKEN })]) {
       expect(res.statusCode, res.body).toBe(401);
       expect(res.json()).toMatchObject({ ok: false, error: 'unauthenticated' });
     }
@@ -132,6 +135,26 @@ describe('the gate (index F14, LQ9)', () => {
     const r = await rig({ origin: 'http://ccrc.example.invalid:7788' });
     for (const res of [await get(r), await post(r, 1, 'yes')]) expect(res.json()).toMatchObject({ ok: false, error: 'insecure-origin' });
   });
+
+  it('each door asks its own gate before any read: a refusing gate leaves the store, the messages and the mail untouched', async () => {
+    // Through the routes file alone, so the app-level gate cannot answer first (review 4185, C6 and mutant 1).
+    const refuse: AccountGate = (_req, reply) => { void reply.code(501).send({ ok: false, error: 'auth-off' }); return { pass: false }; };
+    const store = vi.fn(() => undefined);
+    const messages = vi.fn(() => undefined);
+    const mailRead = vi.fn(() => undefined);
+    const app = Fastify({ logger: false });
+    registerLabelCardRoutes(app, { gate: refuse, store, messages, mail: mailRead, now: () => 5 });
+    await app.ready();
+    apps.push(app);
+    for (const res of [await app.inject({ method: 'GET', url: '/api/labels' }),
+      await app.inject({ method: 'POST', url: '/api/labels/1', payload: { answer: 'yes' } })]) {
+      expect(res.statusCode, res.body).toBe(501);
+      expect(res.json()).toMatchObject({ ok: false, error: 'auth-off' });
+    }
+    expect(store).not.toHaveBeenCalled();
+    expect(messages).not.toHaveBeenCalled();
+    expect(mailRead).not.toHaveBeenCalled();
+  });
 });
 
 describe('GET /api/labels', () => {
@@ -139,7 +162,7 @@ describe('GET /api/labels', () => {
     const r = await rig();
     const res = await get(r);
     expect(res.statusCode, res.body).toBe(200);
-    expect(res.json()).toEqual({ ok: true, cards: [], open: 0, pickedThisWeek: 0, week: expect.stringMatching(/^\d{4}-W\d{2}$/),
+    expect(res.json()).toEqual({ ok: true, cards: [], open: 0, heldBack: 0, pickedThisWeek: 0, week: expect.stringMatching(/^\d{4}-W\d{2}$/),
       skipped: { absent: 0, unmeasured: 0, noReader: 0 } });
   });
 
@@ -210,6 +233,78 @@ describe('GET /api/labels', () => {
       expect(res.body).not.toContain(SECRET);
       expect(res.body).toContain('I will use the key');
     } finally { mdb.close(); }
+  });
+});
+
+describe('at most ten cards are handed over (the coordinator\'s ruling C1, call 1975)', () => {
+  const MON = Date.UTC(2026, 10, 23, 9);   // Monday of 2026-W48
+  const DAY = 86_400_000;
+  const NO_MEASURED: MeasuredLabels = { labelsFor: () => [] };
+  const ALL_PRESENT: LabelRefFacts = { found: () => 'present' };
+  const recordOnly = (db: DatabaseSync, row: DecisionRowId, stateHash: string, refs: Record<string, string>, inline: Record<string, string> | null): number =>
+    recordDecision(db, { row, revision: DECISION_QUESTIONS[row].revision, modelId: 'model-a', hostKind: 'local', origin: 'http://127.0.0.1:1',
+      stateHash, lineGen: 0, verdict: 'yes', p: MARK_P, band: 'very-likely', ms: 5, refs, inline, at: (seq += 1000) }).id;
+  const lanePass = (db: DatabaseSync, at: number) =>
+    runLabelQueueLane({ reads: labelLaneReadsOf(db, NO_MEASURED), refs: ALL_PRESENT, wall: () => at, warn: () => {} });
+  const idsOf = (db: DatabaseSync, row: DecisionRowId): number[] => openLabelCards(db).filter((c) => c.row === row).map((c) => c.id);
+
+  it('ten of A, A off, ten of B, A back: ten drawn, ten held back, the budget zero; one answered draws the next', async () => {
+    const r = await rig();
+    setMode(r.db, 'relay.method', 'shadow');
+    for (let i = 0; i < 10; i++) recordOnly(r.db, 'relay.method', `a${i}`, {}, { part: `Part ${i}.` });
+    expect(lanePass(r.db, MON).picked).toBe(10);
+    setMode(r.db, 'relay.method', 'off');
+    setMode(r.db, 'readback.omits', 'shadow');
+    const m = message(r.store, 'Add the button.');
+    const ml = mail(r.db, 'I will add the button.');
+    for (let i = 0; i < 10; i++) recordOnly(r.db, 'readback.omits', `b${i}`, { request: String(m), readback: String(ml) }, null);
+    expect(lanePass(r.db, MON + 7 * DAY).picked).toBe(10);
+    setMode(r.db, 'relay.method', 'shadow');
+    const a = idsOf(r.db, 'relay.method');
+    const b = idsOf(r.db, 'readback.omits');
+    let body = (await get(r)).json() as LabelCardsAnswer;
+    expect(body.cards.map((c) => c.id)).toEqual(a);
+    expect(body).toMatchObject({ open: 20, heldBack: 10, skipped: { absent: 0, unmeasured: 0, noReader: 0 } });
+    recordOnly(r.db, 'relay.method', 'late', {}, { part: 'Late.' });
+    expect(lanePass(r.db, MON + 14 * DAY).picked).toBe(0);
+    expect((await post(r, a[0]!, 'yes')).json()).toEqual({ ok: true, changed: true });
+    body = (await get(r)).json() as LabelCardsAnswer;
+    expect(body.cards.map((c) => c.id)).toEqual([...a.slice(1), b[0]]);
+    expect(body).toMatchObject({ open: 19, heldBack: 9 });
+  });
+
+  it('the same after a revision rollback: the returning revision\'s cards show again, and only the ten oldest are drawn', async () => {
+    const r = await rig();
+    setMode(r.db, 'relay.method', 'shadow');
+    setMode(r.db, 'readback.omits', 'shadow');
+    const m = message(r.store, 'Add the button.');
+    const ml = mail(r.db, 'I will add the button.');
+    // While a build at another relay.method revision ran (this revision's cards hidden then), ten readback.omits cards were picked
+    // in W49, and three at that other revision. Back on this build: this revision's ten W48 cards show again, the other's are
+    // hidden. Inserted newest week first, so the store's id order is not the order the read hands them over in.
+    for (let i = 0; i < 10; i++) {
+      const rec = recordOnly(r.db, 'readback.omits', `b${i}`, { request: String(m), readback: String(ml) }, null);
+      pickLabelCardsInTx(r.db, '2026-W49', [{ row: 'readback.omits', revision: DECISION_QUESTIONS['readback.omits'].revision, stateHash: `b${i}`, recordId: rec }], 1, () => 1);
+    }
+    for (let i = 0; i < 3; i++) {
+      pickLabelCardsInTx(r.db, '2026-W49', [{ row: 'relay.method', revision: 'ffffffffffffffff', stateHash: `x${i}`, recordId: 1 }], 1, () => 1);
+    }
+    for (let i = 0; i < 10; i++) {
+      const rec = recordOnly(r.db, 'relay.method', `a${i}`, {}, { part: `Part ${i}.` });
+      pickLabelCardsInTx(r.db, '2026-W48', [{ row: 'relay.method', revision: DECISION_QUESTIONS['relay.method'].revision, stateHash: `a${i}`, recordId: rec }], 1, () => 1);
+    }
+    const a = idsOf(r.db, 'relay.method').filter((id) => openLabelCards(r.db).find((c) => c.id === id)!.revision !== 'ffffffffffffffff');
+    const b = idsOf(r.db, 'readback.omits');
+    expect(Math.max(...b)).toBeLessThan(Math.min(...a));
+    let body = (await get(r)).json() as LabelCardsAnswer;
+    expect(body.cards.map((c) => c.id)).toEqual(a);
+    expect(body).toMatchObject({ open: 20, heldBack: 10 });
+    recordOnly(r.db, 'relay.method', 'late', {}, { part: 'Late.' });
+    expect(lanePass(r.db, MON + 14 * DAY).picked).toBe(0);
+    expect((await post(r, a[0]!, 'not-sure')).json()).toEqual({ ok: true, changed: true });
+    body = (await get(r)).json() as LabelCardsAnswer;
+    expect(body.cards.map((c) => c.id)).toEqual([...a.slice(1), b[0]]);
+    expect(body).toMatchObject({ open: 19, heldBack: 9 });
   });
 });
 
@@ -297,5 +392,43 @@ describe('the answer\'s compare-and-set retry (F13), through the routes file wit
     const res = await app.inject({ method: 'POST', url: '/api/labels/1', payload: { answer: 'yes' } });
     expect(res.statusCode).toBe(503);
     expect(res.json()).toMatchObject({ ok: false, error: 'write-failed' });
+  });
+});
+
+describe('the read\'s own unmeasured mappings for a ref, through the routes file with doubles (review 4185, C7)', () => {
+  const passGate: AccountGate = () => ({ pass: true, actor: gateActorOf('Fixture browser', 'abcdef0123456789'), sessionIdHash: 'h' });
+  const rb = DECISION_QUESTIONS['readback.omits'];
+  const rbCard = { id: 2, week: WEEK, row: 'readback.omits' as DecisionRowId, revision: rb.revision, stateHash: 'r', recordId: 2, pickedAt: 1,
+    closedAt: null, closedBy: null, outcome: null };
+  const store: LabelCardStore = {
+    openCards: () => [rbCard], card: () => rbCard, rowMode: () => 'shadow', record: () => ({ refs: { request: '5', readback: '7' }, inline: null }),
+    pickedThisWeek: () => 0, close: () => 'closed',
+  };
+  const TEXT: LabelCardMessages = { messageById: () => ({ kind: 'measured', value: { text: 'Add the button.' } }) };
+  const MAIL: LabelCardMail = { mailOrigin: () => ({ body: 'I will add it.' }) };
+  async function read(messages: LabelCardMessages | undefined, mailRead: LabelCardMail | undefined): Promise<LabelCardsAnswer> {
+    const app = Fastify({ logger: false });
+    registerLabelCardRoutes(app, { gate: passGate, store: () => store, messages: () => messages, mail: () => mailRead, now: () => 5 });
+    await app.ready();
+    apps.push(app);
+    const res = await app.inject({ method: 'GET', url: '/api/labels' });
+    expect(res.statusCode, res.body).toBe(200);
+    return res.json() as LabelCardsAnswer;
+  }
+  const UNMEASURED = { absent: 0, unmeasured: 1, noReader: 0 };
+
+  it('both reads answering: the card is drawn (the control)', async () => {
+    const body = await read(TEXT, MAIL);
+    expect(body.cards.map((c) => c.id)).toEqual([2]);
+    expect(body.skipped).toEqual({ absent: 0, unmeasured: 0, noReader: 0 });
+  });
+  it('no private store wired: unmeasured, never absent', async () => {
+    expect(await read(undefined, MAIL)).toMatchObject({ cards: [], skipped: UNMEASURED });
+  });
+  it('a message read answering unmeasured: unmeasured, never absent', async () => {
+    expect(await read({ messageById: () => ({ kind: 'unmeasured', why: 'locked' }) }, MAIL)).toMatchObject({ cards: [], skipped: UNMEASURED });
+  });
+  it('a mail read that throws: unmeasured, never absent', async () => {
+    expect(await read(TEXT, { mailOrigin: () => { throw new Error('busy'); } })).toMatchObject({ cards: [], skipped: UNMEASURED });
   });
 });

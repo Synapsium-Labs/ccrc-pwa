@@ -1,7 +1,9 @@
 // Overlord W2, the label queue's deciders (spec 2026-11-09 §3.7 H6, "The label queue"; plan
 // docs/superpowers/plans/2026-11-16-overlord-w2/w2-label-queue.md, Task 2, LQ2 to LQ8 and LQ13). Ring: L1, context Coordination
 // (C5): pure, no store, no clock, no I/O; the week, the counts and each row's facts are arguments. The weekly lane (L4) and the
-// store (L3) ask these and decide nothing themselves; the card doors (C6, `labelCards.ts`) import `LabelCardRow` as a type.
+// store (L3) ask these and decide nothing themselves. The C6 files import from here across the context, each a pure function
+// or a type, inward (departure `cross-context-pure-import`): `labelCards.ts` takes `cardRefNeeds`, `refKey` and `LabelCardRow`,
+// and the doors (`labelCardRoutes.ts`) take `cardRefNeeds`, `cardShown`, `handOverOrder`, `readDraws`, `refKey` and `LabelCardRow`.
 import { upperBound95 } from '../../../shared/binomialBound.js';
 import {
   DECISION_LABEL_SOURCES, DECISION_LINE_CANDIDATES, DECISION_QUESTIONS, DECISION_ROW_IDS,
@@ -184,6 +186,26 @@ export function labelFor(labels: readonly { source: LabelSource; label: Labelled
 /** LQ13 (F12): the one filter of open cards. Hidden while the row is `off` or its revision is not the card's. */
 export function cardShown(card: { row: DecisionRowId; revision: string }, rowNow: { mode: DecisionRowMode; revision: string }): 'shown' | 'hidden' {
   return rowNow.mode === 'off' || card.revision !== rowNow.revision ? 'hidden' : 'shown';
+}
+
+// ── the cards the read hands over (the coordinator's ruling C1, call 1975) ──────────────────────────────────────────────
+//
+// The budget (`labelBudget`) is a pick-time cap: it stops new picks while ten are open, but a hidden card holds no slot, so a
+// row going off and back on, or a build rolled back across a revision, brings its cards back beside the ones picked meanwhile.
+// LQ2's sentence, "the operator is never handed more than ten open cards", is kept where cards are handed over: the read draws
+// the shown cards in this order and stops at the weekly constant, and answers how many it held back.
+
+/** The order the read hands shown open cards over in: oldest pick week first (a week key sorts as text), then the card's id,
+ *  so the same cards are drawn first at every read, and an answered one makes room for the next. */
+export function handOverOrder<C extends { readonly week: string; readonly id: number }>(cards: readonly C[]): C[] {
+  return [...cards].sort((a, b) => (a.week < b.week ? -1 : a.week > b.week ? 1 : 0) || a.id - b.id);
+}
+
+/** Whether the read draws one more card, given how many it has drawn: while fewer than `LABEL_CARDS_PER_WEEK`, the weekly
+ *  budget's own constant, never a second number. A card skipped as absent, unmeasured or no-reader is not drawn, so it takes
+ *  none of the ten (an absent card is never answered, so counting it would hold the read short for good). */
+export function readDraws(drawn: number): boolean {
+  return drawn < LABEL_CARDS_PER_WEEK;
 }
 
 // ── a state's refs (the coordinator's ruling on the gap, call 1913) ─────────────────────────────────────────────────────

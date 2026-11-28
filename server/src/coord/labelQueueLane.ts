@@ -34,10 +34,11 @@ export interface LabelLanePass {
   readonly failed: readonly DecisionRowId[];
 }
 
-/** One word for a state's refs, asking each ref's existence once (`LabelRefFacts`), then `stateDrawability`. */
+/** One word for a state's refs, asking each ref's existence once (`LabelRefFacts`), then `stateDrawability`. A record this
+ *  build cannot read (`null`) is `unmeasured`, as the open-card arm and the read count it, never `absent` (review 4185, C3). */
 function drawabilityOf(refs: LabelRefFacts, row: DecisionRowId, stateRefs: Readonly<Record<string, string | readonly string[]>> | null):
   'drawable' | LabelSkipWord {
-  if (stateRefs === null) return 'absent';
+  if (stateRefs === null) return 'unmeasured';
   const needs = cardRefNeeds(DECISION_QUESTIONS[row], stateRefs);
   const found = new Map<string, RefFound>();
   if (needs.kind === 'reads') for (const r of needs.reads) for (const id of r.ids) found.set(refKey(r.refKind, id), refs.found(r.refKind, id));

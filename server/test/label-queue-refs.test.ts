@@ -1,12 +1,15 @@
 // Overlord W2, the label queue's refs (the coordinator's ruling on the gap, call 1913): which refs a card's state names, whether
 // the state can be drawn (resolved, absent, unmeasured, or a ref kind with no reader), the lane's row facts, which cards hold
-// a slot of the ten, and a card's fields rebuilt from its record and the texts the door read. Pure: no store, no clock.
+// a slot of the ten, the order and the cap of the cards the read hands over (the coordinator's ruling C1, call 1975), and a card's
+// fields rebuilt from its record and the texts the door read. Pure: no store, no clock.
 import { describe, expect, it } from 'vitest';
 import { DECISION_QUESTIONS as Q } from '../../shared/decisionModel.js';
 import { cardFieldsOf, cardOptionsOf, type CardRefText } from '../src/coord/labelCards.js';
 import {
-  cardHoldsSlot, cardRefNeeds, labelBudget, labelsNeeded, nextCandidate, openSlotsHeld, pickRowFactsOf, stateDrawability, type RefFound,
+  cardHoldsSlot, cardRefNeeds, handOverOrder, labelBudget, labelsNeeded, nextCandidate, openSlotsHeld, pickRowFactsOf, readDraws,
+  stateDrawability, type RefFound,
 } from '../src/coord/labelQueue.js';
+import { LABEL_CARDS_PER_WEEK } from '../../shared/labelQueue.js';
 
 const found = (entries: Record<string, RefFound>): ReadonlyMap<string, RefFound> => new Map(Object.entries(entries));
 
@@ -76,6 +79,12 @@ describe('labelBudget and openSlotsHeld', () => {
     expect(labelBudget(10, 0)).toBe(0);
     expect(labelBudget(12, 0)).toBe(0);
   });
+  it('twenty shown cards make it zero, clamped and never negative, so nothing is picked until fewer than ten are open', () => {
+    expect(labelBudget(0, 20)).toBe(0);
+    expect(labelBudget(3, 20)).toBe(0);
+    expect(labelBudget(0, 11)).toBe(0);
+    expect(labelBudget(0, 9)).toBe(1);
+  });
   it('only shown cards whose state can still be drawn hold a slot; an unreadable row\'s card holds one', () => {
     const card = { row: 'relay.method' as const, revision: 'r1' };
     expect(openSlotsHeld([
@@ -87,6 +96,25 @@ describe('labelBudget and openSlotsHeld', () => {
       { card, mode: 'shadow', revision: 'r2', drawability: 'drawable' },
       { card, mode: 'unreadable', revision: 'r1', drawability: 'absent' },
     ])).toBe(3);
+  });
+});
+
+describe('handOverOrder and readDraws: at most ten cards are handed over (the coordinator\'s ruling C1, call 1975)', () => {
+  it('orders the shown cards oldest pick week first, then by the card\'s id, whatever order they arrive in', () => {
+    const cards = [
+      { id: 4, week: '2026-W49' }, { id: 9, week: '2026-W48' }, { id: 2, week: '2026-W49' }, { id: 7, week: '2026-W48' },
+      { id: 1, week: '2027-W01' }, { id: 3, week: '2026-W53' },
+    ];
+    expect(handOverOrder(cards).map((c) => c.id)).toEqual([7, 9, 2, 4, 3, 1]);
+    expect(handOverOrder([...cards].reverse()).map((c) => c.id)).toEqual([7, 9, 2, 4, 3, 1]);
+    expect(cards.map((c) => c.id)).toEqual([4, 9, 2, 7, 1, 3]);
+  });
+  it('draws while fewer than the weekly budget\'s own constant are drawn, never a second number', () => {
+    expect(LABEL_CARDS_PER_WEEK).toBe(10);
+    expect(readDraws(0)).toBe(true);
+    expect(readDraws(LABEL_CARDS_PER_WEEK - 1)).toBe(true);
+    expect(readDraws(LABEL_CARDS_PER_WEEK)).toBe(false);
+    expect(readDraws(LABEL_CARDS_PER_WEEK + 5)).toBe(false);
   });
 });
 
