@@ -439,8 +439,10 @@ describe('a closed comment is its own cut candidate (review F3)', { timeout: 120
 // The block cutter never cuts inside a unit (a top-level block and the text after it up to the next cut candidate, a list item or a
 // quote's own block, a paragraph) whose text holds a comment opener `<!--`: such a unit, when it alone is larger than a part, goes
 // whole into one part, above the part size. Cuts between units stay as they are, and a top-level comment is still closed and
-// reopened as before (`cutComment`), the unit kept whole only where that cut has no room. Each case holds the library's render of
-// the whole document as its control: what it hides no part shows, and what it shows the parts show as often.
+// reopened as before (`cutComment`), the unit kept whole only where that cut has no room. Each leak case (`cutsByRule`) holds the
+// library's render of the whole document as its control: what it hides no part shows, and what it shows the parts show as often. The
+// cases on a part's shape and size (the fence, the dashes, a tail, the text before the first block, the gate's answer, the cost) hold
+// the parts' bounds and offsets instead (review 4221 A2).
 
 const GATE = DOCS_RENDER_GATE_BYTES;
 const lines = (prefix: string, n: number, word = HIDDEN): string => `${prefix}${word} line\n`.repeat(n);
@@ -643,6 +645,12 @@ describe('the conservative rule: no cut inside a unit that holds a comment opene
     const p2 = splitMarkdownPartsAt(t2, 120, [{ start: 0, end: plain.length - 2, kind: 'other' }], plain.length).parts;
     checkCover(t2, p2, 120);
     expect(p2.length, 'cut by the line cutter').toBeGreaterThan(20);
+    // Byte for byte as on main (review 4221 F2): main cut that unit, which runs into the tail, by the line cutter from the text's
+    // start, as it cuts the whole text; the corpus digest reads only whole texts, so this is the case that holds this branch.
+    expect(p2, 'the cut main makes: the line cutter over the whole text').toEqual(splitMarkdownParts(t2, 120).parts);
+    // And a read that stopped at offset 0 on a text with no opener: the line cutter over the whole text, as on main.
+    const t0 = '--- x\n'.repeat(300) + 'plain words\n'.repeat(40);
+    expect(splitMarkdownPartsAt(t0, 120, [], 0).parts, 'tailFrom 0, no opener: as on main').toEqual(splitMarkdownParts(t0, 120).parts);
   });
 
   it('md parts rule: the part before such a tail is cut by the rule as any unit is: a top-level comment closed and reopened, a list cut between its items (review of wave 64)', () => {
@@ -888,6 +896,138 @@ describe('P1\'s own paths, measured against the rule (wave 64, item 2)', { timeo
       const m = new MarkdownCutter(text, 200);
       const got = [...m.feed(blocks, tailFrom), ...m.finish(tailFrom)];
       expect(got, `incremental at tailFrom ${tailFrom}`).toEqual(splitMarkdownPartsAt(text, 200, blocks, tailFrom).parts);
+    }
+  });
+
+  it('md parts P1 paths: a tail comment whose closer line is exactly what fits beside the reopen line is cut, not the line cutter\'s (review 4221 A4)', () => {
+    // The bound is `cutComment`'s: the reopen line and the closer's line, its terminator counted, at most a part. At 120 bytes a
+    // closer line of 115 bytes fits, with an LF end (`-->`, 111 spaces, LF) and with no terminator at the text's end (112 spaces).
+    for (const [name, closer] of [['an LF end', '-->' + ' '.repeat(111) + '\n'], ['no terminator', '-->' + ' '.repeat(112)]] as const) {
+      const text = 'Intro.\n\n<!--\n' + lines('', 40) + closer;
+      const parts = splitMarkdownPartsAt(text, 120, [{ start: 0, end: 6, kind: 'other' }], 8).parts;
+      checkCover(text, parts, 120);
+      expect(parts.some((p) => p.reopen === '<!--\n'), `${name}: closed and reopened`).toBe(true);
+      const per = parts.map((p) => shown(partText(text, p), HIDDEN));
+      expect(per.every((n) => n === 0), `${name}: no part shows the comment (per part: ${per.join(',')})`).toBe(true);
+      // One byte more and the closer line does not fit: the tail is the line cutter's, as before (not closed and reopened).
+      const over = text.replace('-->', '--> ');
+      const po = splitMarkdownPartsAt(over, 120, [{ start: 0, end: 6, kind: 'other' }], 8).parts;
+      checkCover(over, po, 120);
+      expect(po.some((p) => p.reopen === '<!--\n'), `${name}, one byte over: not closed and reopened`).toBe(false);
+    }
+  });
+});
+
+// ---- Wave 64, fix round 1 (review 4221 F1): a comment opened in a footnote definition ----------------------------------------------
+// The footnote rule reads a definition's lines with the document's end as theirs, so `[^1]: <!--` hides everything up to its closer,
+// top-level headings included, as a comment opened in a list item does. In a blocks window that does not hold the closer, the opener is
+// footnote text and the lines after it ordinary blocks, so the window must end before the definition, as it does before a list item
+// that opens one (`containerPrefix` reads the label `[^label]:` as a container prefix).
+
+describe('a comment opened in a footnote definition (wave 64, fix round 1, review 4221 F1)', { timeout: 600000 }, () => {
+  const region = (n: number): string => '\n\n' + '# Private heading\n\nSECRETW one\n\n'.repeat(n) + '-->\n\nPublic end.\n';
+  const filler = 'lorem ipsum dolor sit amet\n\n'.repeat(14300);
+
+  it('md parts footnote: at the real part size, a footnote definition\'s comment across the blocks window\'s end shows none of it, both forms, with and without a reference', async () => {
+    const forms: [string, string][] = [
+      ['a definition', 'Intro.\n\n' + filler + '[^1]: <!-- private' + region(9400)],
+      ['a referenced definition', 'Intro[^1].\n\n' + filler + '[^1]: <!-- private' + region(9400)],
+      ['a definition in a list item', 'Intro.\n\n' + filler + '- [^1]: <!-- private' + region(9400)],
+      ['a referenced definition in a list item', 'Intro[^1].\n\n' + filler + '- [^1]: <!-- private' + region(9400)],
+      // Its first line draws no block, so its block starts at the opener's indented line (review of fix round 1, measured: two
+      // parts showed all 9 400 hidden lines).
+      ['a referenced definition with an empty first line', 'Intro.\n\n' + filler + 'See[^1].\n\n[^1]:\n    <!--' + region(9400)],
+    ];
+    for (const [name, text] of forms) {
+      const opener = text.indexOf('<!--');
+      expect(opener, `${name}: the opener is inside the first window`).toBeLessThan(GATE);
+      expect(text.indexOf('-->'), `${name}: the closer is past it`).toBeGreaterThan(GATE);
+      const parts = await cutsByRule(text, GATE, 'SECRETW', 'Public');
+      expect(parts.some((p) => text.startsWith('# Private', p.start)), `${name}: no part starts at a heading in the comment`).toBe(false);
+    }
+  });
+
+  it('md parts footnote: the shapes that hide past their own container read as one comment across every window, and cut with none shown', async () => {
+    // Measured on the library: each hides the marker in the whole render. A window that ends inside one confirms only the blocks
+    // before it, so the blocks are the whole read's at every window size, and a cut at 700 bytes shows none.
+    const lead = 'lorem ipsum dolor sit amet\n\n'.repeat(70);
+    const body = (n: number): string => '\n\n' + '## Private heading\n\nSECRETW one\n\n'.repeat(n) + '-->\n\nPublic end.\n';
+    const shapes: [string, string][] = [
+      ['a footnote definition', '[^1]: <!-- note'],
+      ['its label, then the opener with no space', '[^n]:<!--'],
+      ['a label of other characters', '[^a.b_c-1]: <!--'],
+      ['a label that holds an opener, then an opener', '[^a<!--b]: <!--'],
+      ['indented by two spaces', '  [^1]: <!--'],
+      ['a list marker inside the definition', '[^1]: - <!--'],
+      ['in a list item', '- [^1]: <!--'],
+      ['an opener on a later line of the definition', '[^1]: note\n\n    <!--'],
+      ['an opener on a later line of a referenced definition', 'See[^1].\n\n[^1]: note\n\n    <!--'],
+      // A named definition whose first line draws no block: its block starts at the opener's own line (review of fix round 1).
+      ['a referenced definition with an empty first line', 'See[^1].\n\n[^1]:\n    <!--'],
+      ['a referenced definition with an empty first line, the opener after a tab', 'See[^1].\n\n[^1]:\n\t<!--'],
+      ['a referenced definition, a blank line, then the opener', 'See[^1].\n\n[^1]:\n\n    <!--'],
+      ['a referenced definition whose first line is a closed comment', 'See[^1].\n\n[^1]: <!-- a -->\n\n    <!--'],
+      ['a referenced definition whose first line is a link reference definition', 'See[^1].\n\n[^1]: [a]: /u\n\n    <!--'],
+      ['a list item\'s first line', '- <!--'],
+      ['a list item\'s later line', '- item\n\n  <!--'],
+      ['a details line, then the opener', '<details>\n<!--'],
+    ];
+    for (const [name, open] of shapes) {
+      const referenced = open.startsWith('See[^1]');
+      const text = lead + open + body(40) + 'after the comment.\n\n'.repeat(60);
+      expect(shown(text, 'SECRETW'), `${name}: the library hides it in the whole`).toBe(0);
+      const whole = await blocksOf(text, READER_BLOCKS_MAX_BYTES);
+      for (const w of [1024, 2048, 3000]) {
+        const small = await blocksOf(text, w);
+        // A definition whose reference stands in an earlier window is drawn in no block in its own (the window does not hold the
+        // reference), so for that shape the blocks are not the whole read's, by the windows and not by the comment; the cut below
+        // still shows none.
+        if (!referenced) expect(small, `${name}: window ${w}`).toEqual(whole);
+        const [o, c] = [text.indexOf('<!--', lead.length), text.indexOf('-->', lead.length)];
+        const inside = small.blocks.filter((b) => b.start > o && b.start <= c).map((b) => `${b.start}:${b.kind}`);
+        expect(inside, `${name}: window ${w}: no block starts inside the comment`).toEqual([]);
+        const parts = splitMarkdownPartsAt(text, 700, small.blocks, small.tailFrom).parts;
+        coverByRule(text, parts, 700);
+        const per = parts.map((p) => shown(partText(text, p), 'SECRETW'));
+        expect(per.every((n) => n === 0), `${name}: window ${w}: no part shows it (per part: ${per.join(',')})`).toBe(true);
+      }
+    }
+  });
+
+  it('md parts footnote: KNOWN LEAK, ticket x2-fu-footnote-item-block-start: a named definition whose first line draws no block, then content indented under it, then an opener, shows the comment (pinned as it is today; the cure turns this case over)', async () => {
+    // Measured by the round's review and the worker: the whole render hides all 40 hidden lines, and every part size measured (400,
+    // 700, 2 000 bytes and the gate) shows all of them, with the whole text read in one window too. The cause is the blocks, and both
+    // paths follow from it: the render's tree takes a footnote item's block from its inner blocks, so when the label line draws none
+    // the definition's block starts at its first drawn line, indented four columns, which is a cut candidate that a part starting
+    // there reads as code, and a window's cap lands at that start, so the next window reads the comment's inner lines as blocks.
+    // Older than wave 64.
+    // The control (a first line that draws a block) shows none. This case passes while the leak stands: green here is NOT closed.
+    const lead = 'lorem ipsum dolor sit amet\n\n'.repeat(70);
+    const body = '\n\n' + '## Private heading\n\nSECRETW one\n\n'.repeat(40) + '-->\n\nPublic end.\n';
+    const sum = (text: string, blocks: readonly TextBlock[], tf: number | null, max: number): number =>
+      splitMarkdownPartsAt(text, max, blocks, tf).parts.reduce((n, p) => n + shown(partText(text, p), 'SECRETW'), 0);
+    const forms = ['See[^1].\n\n[^1]:\n    para\n\n    <!--', 'See[^1].\n\n[^1]:\n    - a\n\n      <!--', 'See[^1].\n\n[^1]:\n    - a\n    - <!--', 'See[^1].\n\n[^1]:\n\tpara\n\n\t<!--', 'See[^1].\n\n[^1]:\n    - <!--', 'See[^1].\n\n[^1]: <!-- a -->\n\n    para\n\n    <!--', 'See[^1].\n\n[^1]: [a]: /u\n\n    para\n\n    <!--', 'See[^1].\n\n[^1]:\n    > q\n\n    <!--'];
+    for (const open of forms) {
+      const text = lead + open + body + 'after the comment.\n\n'.repeat(60);
+      expect(shown(text, 'SECRETW'), `${JSON.stringify(open)}: the library hides it in the whole`).toBe(0);
+      const whole = await blocksOf(text, READER_BLOCKS_MAX_BYTES);
+      const w1024 = await blocksOf(text, 1024);
+      for (const [label, got] of [['whole read, 700', sum(text, whole.blocks, whole.tailFrom, 700)], ['whole read, 2000', sum(text, whole.blocks, whole.tailFrom, 2000)], ['window 1024, 700', sum(text, w1024.blocks, w1024.tailFrom, 700)]] as const) {
+        expect(got, `${JSON.stringify(open)}, ${label}: KNOWN LEAK (x2-fu-footnote-item-block-start), all 40 shown`).toBe(40);
+      }
+    }
+    const control = lead + 'See[^1].\n\n[^1]: note\n\n    para\n\n    <!--' + body + 'after the comment.\n\n'.repeat(60);
+    const cw = await blocksOf(control, READER_BLOCKS_MAX_BYTES);
+    expect(sum(control, cw.blocks, cw.tailFrom, 700), 'CONTROL: a first line that draws a block shows none').toBe(0);
+  });
+
+  it('md parts footnote: measured, the shapes whose opener the library confines to its own line or container need no cure', () => {
+    // The library shows the marker after each of these (its comment ends with its container, or is no comment), so a cut after the
+    // container cannot hide what the whole shows: a quote, a table cell, a link reference definition (its destination or title),
+    // a definition-list shape (no such plugin), a heading, and text before the opener in a paragraph.
+    const body = '\n\n# Private heading\n\nSECRETW one\n\n-->\n\nPublic end.\n';
+    for (const open of ['> <!--', '> [^1]: <!--', '| a |\n|---|\n| <!-- |', '[a]: <!--', '[a]: /u "<!--', 'Term\n: <!--', '# <!--', 'Intro <!--']) {
+      expect(shown('Intro.\n\n' + open + body, 'SECRETW'), `${JSON.stringify(open)}: the library shows what follows`).toBeGreaterThan(0);
     }
   });
 });

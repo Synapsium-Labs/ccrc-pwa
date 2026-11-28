@@ -93,15 +93,42 @@
 //     line indented six columns or more in an item. The fuzz's library judge counts it: 36 lines in 27 of 8 000 documents.
 //   And the unread tail (`tailFrom`): all nine, as P1 has them, for the rest of a text whose blocks were not read.
 //   10 (a closed comment cut inside, so its text shows: the block cutter's own class, X2 P6.1 review 4116 F3, ruled a residual on
-//     2026-11-27): NONE on the block cutter since wave 64's conservative rule (above): no unit that holds an opener is cut inside but a
-//     top-level comment, closed and reopened. Measured then, with the library's render of the whole document as control, each now
-//     showing no hidden text and every shown word as often as the whole: a comment in a list item, a lone item, a quote, an item
-//     holding a fence then the comment (P6.1 at 200 bytes: 4 of 5, 4 of 4, 4 of 4 and 4 of 5 parts showed it), each at the gate; the
+//     2026-11-27): none on the block cutter for the shapes measured, but one footnote shape (below), since wave 64's conservative
+//     rule (above): no unit that holds an opener is cut inside but a top-level comment, closed and reopened. That holds where a
+//     comment is inside one block of the render that starts where its container does: the library reads a comment opened in a list
+//     item or a footnote definition up to the document's first closer (the container then runs on through it), one in a quote up to
+//     the quote's end, and a blocks window that ends inside such a comment ends before the block that holds it (`openComment`),
+//     never at an opener's line indented four columns or more, which read from there is code (`foldBlockWindow`). Both since wave
+//     64's fix round 1 (review 4221 F1), which also reads a footnote definition's label `[^label]:` as a container prefix. Before it,
+//     a comment opened on a definition's first line was cut inside across a window's end, and one opened on a later, indented line
+//     of a definition, holding only the opener, with no block of the definition before it, was read from that line as code (a named
+//     definition with an empty first line: two parts showed all 9 400 hidden lines at the gate). Measured,
+//     with the library's render of the whole document as control, each now showing no hidden text and every shown word as often as
+//     the whole: a comment in a list item followed by another item, and in a quote, at the gate; a lone item and an item holding a
+//     fence then the comment at 200 bytes only (P6.1 at 200 bytes: 4 of 5, 4 of 4, 4 of 4 and 4 of 5 parts showed the four); a
+//     footnote definition's comment across the window's end at the gate, the definition alone or in a list item, named by a
+//     reference or not, and named with an empty first line and the opener on the next line; the
 //     paragraph shapes, text after the first `-->` on its line (the 576 089-byte old table) and text before `<!--` on its line (a
 //     `<!--->` or `<!-->` opener there too, every size from 40 to 150); an opener indented four columns, six, or by a tab, that
 //     continues a paragraph; a quote's lazy lines (every size from 30 to 120); a list item whose content column is past its marker
 //     and one space (60 to 170, and at the gate); a closer line longer than a part; and lines of dashes after a top-level comment
-//     whose closer line does not fit beside the reopen line (24 to 200: no part starts at the dashes). It REMAINS on P1's own paths:
+//     whose closer line does not fit beside the reopen line (24 to 200: no part starts at the dashes). Across windows of 1 024 to
+//     3 000 bytes, cut at 700, no block starts inside the comment and no part shows it, for every shape the library reads past its
+//     container: a footnote definition's first line (its label then the opener directly, a label of other characters or one holding
+//     an opener, indented, or holding a list marker), a later indented line of one but for the shape left below (by spaces or a
+//     tab; named or not; its first line text, empty, a closed comment or a link reference definition), a list item's first or
+//     later line, and an opener after a `<details>` line; and the blocks are the whole read's, but for a definition named from an
+//     earlier window, which its own window draws in no block (by the windows, not the comment). The library confines the opener of
+//     a quote, a table cell, a link reference definition, a definition-list shape and a heading to that container or line
+//     (measured: it shows what follows), so they need none. It REMAINS on the block cutter for one footnote shape, older than wave 64
+//     and pinned as a known leak (ticket `x2-fu-footnote-item-block-start`): a named definition whose first line draws no block
+//     (empty, a closed comment or a link reference definition), then any block indented under it (a paragraph, a list, a quote),
+//     then the opener (`[^1]:` then `    para`, `    - a`, `    > q` or a tab, then `    <!--`; or `    - <!--`). The whole render
+//     hides the region; every part size measured (400, 700, 2 000 bytes and the gate) shows all of it, with the whole text read in
+//     one window too. The render's tree takes a footnote item's block from its inner blocks, so the definition's block starts at
+//     its first drawn line, indented four columns: a cut candidate, and a part that starts there reads it as code; a window's cap
+//     lands there too. It
+//     REMAINS on P1's own paths:
 //     the unread tail (but for a tail that starts at a closed top-level comment, which is where the blocks read stops when such a
 //     comment is longer than its cap: since wave 64 that comment is a comment unit, closed and reopened, and the tail starts after
 //     it, `commentAt`), the console with no render job (whose own view shows a comment as text whole or cut, so the cut changes
@@ -586,13 +613,27 @@ const COMMENT_PREFIX_MAX = 256;
 /** The most lines holding a `<!--` that `openComment` examines in one window; past it the next such line is treated as open. */
 const COMMENT_LINES_MAX = 4096;
 
-/** Whether `s[from, to)` is only a container prefix: quote marks (`>`), spaces and tabs, and list markers (`-`, `*`, `+`, or one to
- *  nine digits and `.` or `)`), each marker followed by a space or tab. One forward pass, no backtracking. */
+/** Whether `s[from, to)` is only a container prefix: quote marks (`>`), spaces and tabs, list markers (`-`, `*`, `+`, or one to
+ *  nine digits and `.` or `)`), each marker followed by a space or tab, and footnote-definition labels (`[^label]:`, wave 64 fix
+ *  round 1, review 4221 F1). The footnote rule (markdown-it-footnote, which the library uses) reads a definition's lines with the
+ *  document's end as theirs, so a comment opened in one hides everything up to its closer, top-level blocks included, as one opened
+ *  in a list item does. Its label as that rule reads it: `[^`, then any characters but a space up to the first `]`, at least one,
+ *  then `:`, which may be followed by the opener directly. A label that the opener interrupts (no `]:` before it) is read as a
+ *  prefix too, fail closed: the line may hold a later opener in that definition, and a prefix read wrongly only shortens a window.
+ *  One forward pass, no backtracking. */
 function containerPrefix(s: string, from: number, to: number): boolean {
   let i = from;
   while (i < to) {
     const c = s.charCodeAt(i);
     if (c === 32 || c === 9 || c === 62) { i += 1; continue; }
+    if (c === 91 && s.charCodeAt(i + 1) === 94) {
+      let k = i + 2;
+      while (k < to && s.charCodeAt(k) !== 93 && s.charCodeAt(k) !== 32) k += 1;
+      if (k >= to) return true;
+      if (s.charCodeAt(k) === 32 || k === i + 2 || s.charCodeAt(k + 1) !== 58 || k + 1 >= to) return false;
+      i = k + 2;
+      continue;
+    }
     let j = i;
     if (c === 45 || c === 42 || c === 43) j += 1;
     else if (c >= 48 && c <= 57) {
@@ -640,6 +681,19 @@ function openComment(slice: string, from: number, all: readonly TextBlock[], pro
   return -1;
 }
 
+/** Whether the line that starts at `ls` is indented four columns or more (a tab runs to the next multiple of four), as markdown-it
+ *  reads indented code at the top level. Reads at most four characters. */
+function indentedFour(text: string, ls: number): boolean {
+  let col = 0;
+  for (let i = ls; col < 4; i += 1) {
+    const c = text.charCodeAt(i);
+    if (c === 32) col += 1;
+    else if (c === 9) col += 4 - (col % 4);
+    else return false;
+  }
+  return true;
+}
+
 /** Folds the job's answer for `win` into confirmed blocks in offsets of `text`: the answer's lines (the window's own, one more
  *  than the text's for a `shifted` one) become offsets, and every block but the last is confirmed unless the window reached the
  *  text's end: the last may run past the window, or be cut short by it. A window that ends inside a block comment confirms only
@@ -660,7 +714,16 @@ export function foldBlockWindow(text: string, win: BlockWindow, blocks: readonly
   const open = openComment(slice, win.from, all, probe);
   if (open >= 0) {
     const holding = all.find((b) => b.start <= open && open < b.end);
-    const cap = holding !== undefined ? holding.start : open;
+    // The next window never starts at an opener's line indented four columns or more: read from there it would be code, and the
+    // comment's inner lines blocks. Such a line is a later line of a footnote definition, which may lie in no block (a definition
+    // no reference in the window names draws none) or begin the block that holds it (a named one whose first drawn line it is).
+    // Then the window is capped at the start of the last block before the opener; else at the block that holds it, as before (wave
+    // 64, fix round 1, review 4221 F1). A top-level comment's own line is read the same from there, so its window still ends at it.
+    // A named definition's block may also start at an EARLIER indented line (its first line draws no block, content indented under
+    // it comes first): that start is the known leak the header records (ticket `x2-fu-footnote-item-block-start`), a cut candidate
+    // in the whole read too, so its cure is the block's start, not this cap.
+    const before = (): number => all.reduce((s, b) => (b.start < open && b.start > s ? b.start : s), win.from);
+    const cap = holding !== undefined && (holding.start < open || !indentedFour(text, open)) ? holding.start : before();
     limit = limit < 0 ? cap : Math.min(limit, cap);
   }
   const confirmed = limit < 0 ? [] : all.filter((b) => b.end <= limit);
@@ -1164,10 +1227,12 @@ class BlockCutter {
     let stop = p + 3;
     while (stop < t.length && t.charCodeAt(stop) !== 10 && t.charCodeAt(stop) !== 13) stop += 1;
     if (t.slice(p + 3, stop).trim() !== '') return null;
+    const end = stop >= t.length ? t.length : stop + (t.charCodeAt(stop) === 13 && t.charCodeAt(stop + 1) === 10 ? 2 : 1);
     // A closer line that does not fit a part beside the reopen line is one `cutComment` cannot cut: such a comment would be one part
-    // as long as itself, past a window, so it is left to the unread tail (P1), as before.
-    if (COMMENT_OPEN.length + this.bytesWithin(p, stop + 2, this.max) > this.max) return null;
-    return stop >= t.length ? t.length : stop + (t.charCodeAt(stop) === 13 && t.charCodeAt(stop + 1) === 10 ? 2 : 1);
+    // as long as itself, past a window, so it is left to the unread tail (P1), as before. Measured as `cutComment` measures it, from
+    // the closer to its line's end, the terminator counted (review 4221 A4: it counted a byte past the line, or two past the text).
+    if (COMMENT_OPEN.length + this.bytesWithin(p, end, this.max) > this.max) return null;
+    return end;
   }
 
   /** The parts of the comment unit `[from, to)`: a closed comment that alone is larger than a part, cut as a fence is (X2 P6.1 review
