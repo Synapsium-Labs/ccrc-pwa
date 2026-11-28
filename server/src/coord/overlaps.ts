@@ -433,6 +433,16 @@ export function pairMoves(
 
 export interface RelayFacts { target: string; expectedPaths: readonly string[] }
 
+/** The one place a request's expected paths lose their project (W2 relay plan RL4, slug `relay-paths-drop-their-project`): the
+ *  relay's verdict and the operator's requests read (`blockedBy`) both build their `RelayFacts` here, so the two cannot
+ *  disagree. A path two projects share is kept once, at its first place, and the order is kept. Dropping the project can only
+ *  make a pair match more paths, so it only ever adds a refusal. First caller: the relay door's facts (relay plan Task A4). */
+export function relayFactsOf(target: string, paths: readonly { readonly project: string; readonly path: string }[]): RelayFacts {
+  const expectedPaths: string[] = [];
+  for (const p of paths) if (!expectedPaths.includes(p.path)) expectedPaths.push(p.path);
+  return { target, expectedPaths };
+}
+
 /** Question 7: the pair is a goal conflict, the relay's target is one of its programmes, the evidence is `unreadable`
  *  (fail closed) or shows at least `GOAL_CONFLICT_TRIPLES_MIN` triples (question 5: the refusal reads only pairs that
  *  pass the stricter signal, whatever build wrote the row), and either `expectedPaths` is empty (the relay cannot show it
